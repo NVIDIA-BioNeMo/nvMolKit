@@ -23,8 +23,8 @@
 #include <memory>
 #include <vector>
 
-#include "tfd_common.h"
-#include "tfd_cpu.h"
+#include "src/tfd/tfd_common.h"
+#include "src/tfd/tfd_cpu.h"
 
 namespace {
 

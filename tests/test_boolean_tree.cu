@@ -17,10 +17,10 @@
 
 #include <vector>
 
-#include "boolean_tree.cuh"
-#include "cuda_error_check.h"
-#include "device.h"
-#include "device_vector.h"
+#include "src/substruct/boolean_tree.cuh"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
+#include "src/utils/device_vector.h"
 
 using nvMolKit::AsyncDeviceVector;
 using nvMolKit::AtomDataPacked;

@@ -19,9 +19,9 @@
 #include <cstdint>
 #include <vector>
 
-#include "../hardware_options.h"
-#include "bfgs_minimize.h"
-#include "forcefield_constraints.h"
+#include "src/hardware_options.h"
+#include "src/minimizer/bfgs_minimize.h"
+#include "src/forcefields/forcefield_constraints.h"
 
 namespace RDKit {
 class ROMol;

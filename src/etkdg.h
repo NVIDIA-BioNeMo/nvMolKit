@@ -18,9 +18,9 @@
 
 #include <vector>
 
-#include "bfgs_minimize.h"
-#include "etkdg_impl.h"
-#include "hardware_options.h"
+#include "src/minimizer/bfgs_minimize.h"
+#include "src/etkdg_impl.h"
+#include "src/hardware_options.h"
 
 namespace RDKit {
 class ROMol;

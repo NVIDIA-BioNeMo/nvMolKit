@@ -21,9 +21,9 @@
 #include <memory>
 #include <tuple>
 
-#include "mol_data.h"
-#include "morgan_fingerprint.h"
-#include "rdkit_ownership_wrap.h"
+#include "src/testutils/mol_data.h"
+#include "src/morgan_fingerprint.h"
+#include "src/utils/rdkit_ownership_wrap.h"
 
 namespace {
 

@@ -13,17 +13,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "tfd_cpu.h"
+#include "src/tfd/tfd_cpu.h"
 
 #include <stdexcept>
 
-#include "tfd_detail.h"
+#include "src/tfd/tfd_detail.h"
 
 #ifdef _OPENMP
 #include <omp.h>
 #endif
 
-#include "nvtx.h"
+#include "src/utils/nvtx.h"
 
 namespace nvMolKit {
 

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "mol_data.h"
+#include "src/testutils/mol_data.h"
 
 #include <GraphMol/SmilesParse/SmilesParse.h>
 

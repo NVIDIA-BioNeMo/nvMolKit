@@ -24,7 +24,7 @@
 #include <string>
 #include <tuple>
 
-#include "similarity.h"
+#include "src/similarity.h"
 
 using namespace RDKit;
 using namespace nvMolKit;

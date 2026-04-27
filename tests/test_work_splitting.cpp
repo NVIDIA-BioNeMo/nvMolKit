@@ -14,7 +14,7 @@
 // limitations under the License.
 
 #include "gtest/gtest.h"
-#include "work_splitting.h"
+#include "src/utils/work_splitting.h"
 
 TEST(WorkSplitting, SplitToThreads) {
   EXPECT_EQ(nvMolKit::computeElementsPerThread(10, 2), 5);

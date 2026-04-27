@@ -20,19 +20,19 @@
 #include <memory>
 #include <vector>
 
-#include "bfgs_mmff.h"
-#include "bfgs_uff.h"
-#include "boost_python_utils.h"
-#include "device_vector.h"
-#include "ff_utils.h"
-#include "forcefield_constraints.h"
-#include "hardware_options.h"
-#include "mmff_batched_forcefield.h"
-#include "mmff_flattened_builder.h"
-#include "mmff_properties.h"
-#include "mmff_python_utils.h"
-#include "uff_batched_forcefield.h"
-#include "uff_flattened_builder.h"
+#include "src/minimizer/bfgs_mmff.h"
+#include "src/minimizer/bfgs_uff.h"
+#include "nvmolkit/boost_python_utils.h"
+#include "src/utils/device_vector.h"
+#include "src/forcefields/ff_utils.h"
+#include "src/forcefields/forcefield_constraints.h"
+#include "src/hardware_options.h"
+#include "src/forcefields/mmff_batched_forcefield.h"
+#include "rdkit_extensions/mmff_flattened_builder.h"
+#include "src/forcefields/mmff_properties.h"
+#include "nvmolkit/mmff_python_utils.h"
+#include "src/forcefields/uff_batched_forcefield.h"
+#include "rdkit_extensions/uff_flattened_builder.h"
 
 namespace bp = boost::python;
 

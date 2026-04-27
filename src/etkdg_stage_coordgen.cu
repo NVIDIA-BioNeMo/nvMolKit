@@ -17,7 +17,7 @@
 #include <DistGeom/DistGeomUtils.h>
 #include <GraphMol/ForceFieldHelpers/CrystalFF/TorsionPreferences.h>
 
-#include "etkdg_stage_coordgen.h"
+#include "src/etkdg_stage_coordgen.h"
 
 namespace nvMolKit {
 

@@ -21,8 +21,8 @@
 
 #include <memory>
 
-#include "morgan_fingerprint_common.h"
-#include "morgan_fingerprint_kernels.h"
+#include "src/morgan_fingerprint_common.h"
+#include "src/morgan_fingerprint_kernels.h"
 
 namespace nvMolKit {
 

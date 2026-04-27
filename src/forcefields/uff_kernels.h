@@ -18,7 +18,7 @@
 
 #include <cstdint>
 
-#include "mmff_kernels.h"
+#include "src/forcefields/mmff_kernels.h"
 
 namespace nvMolKit {
 namespace UFF {

@@ -16,17 +16,17 @@
 #include <cub/cub.cuh>
 #include <numeric>
 
-#include "batched_forcefield.h"
-#include "bfgs_hessian.h"
-#include "bfgs_minimize.h"
-#include "bfgs_minimize_permol_kernels.h"
-#include "cub_helpers.cuh"
-#include "device_vector.h"
-#include "dist_geom.h"
-#include "dist_geom_kernels.h"
-#include "mmff.h"
-#include "mmff_kernels.h"
-#include "nvtx.h"
+#include "src/forcefields/batched_forcefield.h"
+#include "src/minimizer/bfgs_hessian.h"
+#include "src/minimizer/bfgs_minimize.h"
+#include "src/minimizer/bfgs_minimize_permol_kernels.h"
+#include "src/utils/cub_helpers.cuh"
+#include "src/utils/device_vector.h"
+#include "src/forcefields/dist_geom.h"
+#include "src/forcefields/dist_geom_kernels.h"
+#include "src/forcefields/mmff.h"
+#include "src/forcefields/mmff_kernels.h"
+#include "src/utils/nvtx.h"
 
 namespace nvMolKit {
 constexpr double FUNCTOL = 1e-4;  //!< Default tolerance for function convergence in the minimizer

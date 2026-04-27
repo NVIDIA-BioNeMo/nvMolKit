@@ -20,7 +20,7 @@
 
 #include <vector>
 
-#include "conformer_rmsd.h"
+#include "src/conformer_rmsd.h"
 
 namespace nvMolKit {
 

@@ -16,8 +16,8 @@
 #ifndef NVMOLKIT_BFGS_HESSIAN_H
 #define NVMOLKIT_BFGS_HESSIAN_H
 
-#include "device_vector.h"
-#include "host_vector.h"
+#include "src/utils/device_vector.h"
+#include "src/utils/host_vector.h"
 
 namespace nvMolKit {
 

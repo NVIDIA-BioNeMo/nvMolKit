@@ -15,7 +15,7 @@
 
 #include <cub/device/device_reduce.cuh>
 
-#include "etkdg_impl.h"
+#include "src/etkdg_impl.h"
 
 __global__ void collectAndFilterFailuresKernel(const int      numTerms,
                                                const uint8_t* stageFailed,

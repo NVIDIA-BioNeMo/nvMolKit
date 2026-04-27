@@ -18,8 +18,8 @@
 #include <boost/python.hpp>
 #include <boost/python/stl_iterator.hpp>
 
-#include "boost_python_utils.h"
-#include "etkdg.h"
+#include "nvmolkit/boost_python_utils.h"
+#include "src/etkdg.h"
 
 static boost::python::list getGpuIdsPy(nvMolKit::BatchHardwareOptions& opts) {
   return nvMolKit::vectorToList(opts.gpuIds);

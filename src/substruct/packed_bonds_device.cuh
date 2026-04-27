@@ -16,7 +16,7 @@
 #ifndef NVMOLKIT_PACKED_BONDS_DEVICE_CUH
 #define NVMOLKIT_PACKED_BONDS_DEVICE_CUH
 
-#include "packed_bonds.h"
+#include "src/substruct/packed_bonds.h"
 
 namespace nvMolKit {
 

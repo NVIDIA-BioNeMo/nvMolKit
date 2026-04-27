@@ -18,7 +18,7 @@
 
 #include <memory>
 
-#include "conformer_checkers.h"
+#include "src/testutils/conformer_checkers.h"
 #include "gtest/gtest.h"
 
 class ConformerCheckersTest : public ::testing::Test {

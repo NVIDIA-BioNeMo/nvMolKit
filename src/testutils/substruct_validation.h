@@ -24,7 +24,7 @@
 #include <tuple>
 #include <vector>
 
-#include "substruct_types.h"
+#include "src/substruct/substruct_types.h"
 
 namespace nvMolKit {
 

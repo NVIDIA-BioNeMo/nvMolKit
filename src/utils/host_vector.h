@@ -28,7 +28,7 @@
 #include <string>
 #include <utility>
 
-#include "cuda_error_check.h"
+#include "src/utils/cuda_error_check.h"
 
 namespace nvMolKit {
 

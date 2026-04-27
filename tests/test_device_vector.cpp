@@ -16,8 +16,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include "cuda_error_check.h"
-#include "device_vector.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device_vector.h"
 
 using namespace nvMolKit;
 

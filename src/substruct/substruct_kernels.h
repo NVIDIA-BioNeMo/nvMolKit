@@ -20,8 +20,8 @@
 
 #include <optional>
 
-#include "molecules.h"
-#include "substruct_types.h"
+#include "src/substruct/molecules.h"
+#include "src/substruct/substruct_types.h"
 
 namespace nvMolKit {
 

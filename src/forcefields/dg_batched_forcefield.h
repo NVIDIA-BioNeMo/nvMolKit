@@ -16,8 +16,8 @@
 #ifndef NVMOLKIT_DG_BATCHED_FORCEFIELD_H
 #define NVMOLKIT_DG_BATCHED_FORCEFIELD_H
 
-#include "batched_forcefield.h"
-#include "dist_geom.h"
+#include "src/forcefields/batched_forcefield.h"
+#include "src/forcefields/dist_geom.h"
 
 namespace nvMolKit {
 

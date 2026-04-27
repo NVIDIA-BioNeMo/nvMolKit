@@ -1,7 +1,7 @@
 #ifndef NVMOLKIT_UFF_FLATTENED_BUILDER_H
 #define NVMOLKIT_UFF_FLATTENED_BUILDER_H
 
-#include "uff.h"
+#include "src/forcefields/uff.h"
 
 namespace RDKit {
 class ROMol;

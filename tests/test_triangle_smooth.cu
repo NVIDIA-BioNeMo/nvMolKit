@@ -29,8 +29,8 @@
 #include <memory>
 #include <vector>
 
-#include "test_utils.h"
-#include "triangle_smooth.h"
+#include "tests/test_utils.h"
+#include "src/triangle_smooth.h"
 
 namespace {
 void initETKDG(const RDKit::ROMol*                         mol,

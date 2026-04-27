@@ -15,12 +15,12 @@
 
 #include <cub/cub.cuh>
 
-#include "bfgs_minimize_permol_kernels.h"
-#include "cub_helpers.cuh"
-#include "device_vector.h"
-#include "dist_geom_kernels_device.cuh"
-#include "mmff_kernels.h"
-#include "mmff_kernels_device.cuh"
+#include "src/minimizer/bfgs_minimize_permol_kernels.h"
+#include "src/utils/cub_helpers.cuh"
+#include "src/utils/device_vector.h"
+#include "src/forcefields/dist_geom_kernels_device.cuh"
+#include "src/forcefields/mmff_kernels.h"
+#include "src/forcefields/mmff_kernels_device.cuh"
 
 namespace nvMolKit {
 

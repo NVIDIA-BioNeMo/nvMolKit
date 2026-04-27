@@ -1,4 +1,4 @@
-#include "conformer_pruning.h"
+#include "rdkit_extensions/conformer_pruning.h"
 
 #include <GraphMol/DistGeomHelpers/Embedder.h>
 #include <GraphMol/MolAlign/AlignMolecules.h>

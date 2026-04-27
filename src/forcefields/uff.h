@@ -20,12 +20,12 @@
 #include <functional>
 #include <vector>
 
-#include "batched_forcefield.h"
-#include "device_vector.h"
+#include "src/forcefields/batched_forcefield.h"
+#include "src/utils/device_vector.h"
 // TODO: Constraint types and kernels (DistanceConstraintTerms, launchReduceEnergiesKernel, etc.)
 // should be extracted from MMFF into shared forcefield-generic headers so UFF doesn't depend on MMFF.
-#include "mmff.h"
-#include "uff_kernels.h"
+#include "src/forcefields/mmff.h"
+#include "src/forcefields/uff_kernels.h"
 
 namespace nvMolKit {
 namespace UFF {

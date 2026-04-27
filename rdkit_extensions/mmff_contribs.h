@@ -6,7 +6,7 @@
 #include <GraphMol/ROMol.h>
 #include <RDGeneral/export.h>
 
-#include "../src/forcefields/mmff.h"
+#include "src/forcefields/mmff.h"
 
 namespace nvMolKit {
 namespace MMFF {

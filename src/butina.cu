@@ -17,10 +17,10 @@
 
 #include <cub/cub.cuh>
 
-#include "butina.h"
-#include "cub_helpers.cuh"
-#include "host_vector.h"
-#include "nvtx.h"
+#include "src/butina.h"
+#include "src/utils/cub_helpers.cuh"
+#include "src/utils/host_vector.h"
+#include "src/utils/nvtx.h"
 
 /**
  * TODO: Future optimizations

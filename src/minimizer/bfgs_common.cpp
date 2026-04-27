@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "bfgs_common.h"
+#include "src/minimizer/bfgs_common.h"
 
 #include <GraphMol/Conformer.h>
 #include <GraphMol/ROMol.h>

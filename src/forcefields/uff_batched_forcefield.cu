@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "uff_batched_forcefield.h"
+#include "src/forcefields/uff_batched_forcefield.h"
 
 namespace nvMolKit {
 namespace {

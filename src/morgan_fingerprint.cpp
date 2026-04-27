@@ -13,14 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "morgan_fingerprint.h"
+#include "src/morgan_fingerprint.h"
 
 #include <DataStructs/ExplicitBitVect.h>
 
 #include <boost/dynamic_bitset.hpp>
 #include <set>
 
-#include "device.h"
+#include "src/utils/device.h"
 
 namespace nvMolKit {
 

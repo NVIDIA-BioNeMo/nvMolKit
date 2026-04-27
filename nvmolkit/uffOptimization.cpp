@@ -15,8 +15,8 @@
 
 #include <boost/python.hpp>
 
-#include "bfgs_uff.h"
-#include "boost_python_utils.h"
+#include "src/minimizer/bfgs_uff.h"
+#include "nvmolkit/boost_python_utils.h"
 
 namespace bp = boost::python;
 

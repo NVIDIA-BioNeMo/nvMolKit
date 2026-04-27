@@ -13,20 +13,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "bfgs_uff.h"
+#include "src/minimizer/bfgs_uff.h"
 
 #include <GraphMol/ROMol.h>
 #include <omp.h>
 
 #include <vector>
 
-#include "bfgs_common.h"
-#include "bfgs_minimize.h"
-#include "ff_utils.h"
-#include "nvtx.h"
-#include "openmp_helpers.h"
-#include "uff_batched_forcefield.h"
-#include "uff_flattened_builder.h"
+#include "src/minimizer/bfgs_common.h"
+#include "src/minimizer/bfgs_minimize.h"
+#include "src/forcefields/ff_utils.h"
+#include "src/utils/nvtx.h"
+#include "src/utils/openmp_helpers.h"
+#include "src/forcefields/uff_batched_forcefield.h"
+#include "rdkit_extensions/uff_flattened_builder.h"
 
 namespace nvMolKit::UFF {
 

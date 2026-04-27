@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "mmff_flattened_builder.h"
+#include "rdkit_extensions/mmff_flattened_builder.h"
 
 #include <ForceField/MMFF/Contribs.h>
 #include <ForceField/MMFF/Params.h>

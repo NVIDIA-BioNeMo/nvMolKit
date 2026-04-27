@@ -16,7 +16,7 @@
 #ifndef NVMOLKIT_BUTINA_H
 #define NVMOLKIT_BUTINA_H
 
-#include "device_vector.h"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 

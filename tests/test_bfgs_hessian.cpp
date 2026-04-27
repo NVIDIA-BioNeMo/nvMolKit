@@ -19,8 +19,8 @@
 #include <random>
 #include <vector>
 
-#include "../src/minimizer/bfgs_hessian.h"
-#include "device_vector.h"
+#include "src/minimizer/bfgs_hessian.h"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 

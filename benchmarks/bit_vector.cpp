@@ -19,7 +19,7 @@
 #include <array>
 #include <random>
 
-#include "flat_bit_vect.h"
+#include "src/data_structures/flat_bit_vect.h"
 
 constexpr std::array<std::size_t, 5> kNBits           = {1, 10, 100, 1000, 10000};
 constexpr std::array<std::size_t, 5> kNumBitsInVector = {1, 10, 100, 1000, 10000};

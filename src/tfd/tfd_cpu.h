@@ -18,7 +18,7 @@
 
 #include <vector>
 
-#include "tfd_common.h"
+#include "src/tfd/tfd_common.h"
 
 namespace nvMolKit {
 

@@ -34,8 +34,8 @@
 #include <memory>
 #include <string>
 
-#include "molecules.h"
-#include "testutils/mol_data.h"
+#include "src/substruct/molecules.h"
+#include "src/testutils/mol_data.h"
 
 namespace {
 

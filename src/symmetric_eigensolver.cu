@@ -20,9 +20,9 @@
 #include <cub/cub.cuh>
 #include <stdexcept>
 
-#include "cuda_error_check.h"
-#include "device_vector.h"
-#include "symmetric_eigensolver.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device_vector.h"
+#include "src/symmetric_eigensolver.h"
 
 namespace nvMolKit {
 

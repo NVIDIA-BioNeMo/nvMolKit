@@ -15,7 +15,7 @@
 
 #include <cub/cub.cuh>
 
-#include "kernel_utils.cuh"
+#include "src/forcefields/kernel_utils.cuh"
 
 namespace nvMolKit {
 namespace FFKernelUtils {

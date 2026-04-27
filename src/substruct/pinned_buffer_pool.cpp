@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "pinned_buffer_pool.h"
+#include "src/substruct/pinned_buffer_pool.h"
 
 #include <optional>
 

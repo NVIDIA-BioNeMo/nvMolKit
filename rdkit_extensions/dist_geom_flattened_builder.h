@@ -7,7 +7,7 @@
 
 #include <map>
 
-#include "dist_geom.h"
+#include "src/forcefields/dist_geom.h"
 namespace nvMolKit {
 namespace DistGeom {
 

@@ -21,7 +21,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "../minimizer/bfgs_types.h"
+#include "src/minimizer/bfgs_types.h"
 
 namespace nvMolKit {
 

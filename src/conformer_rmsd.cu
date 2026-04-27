@@ -18,8 +18,8 @@
 #include <cub/cub.cuh>
 #include <cuda/std/span>
 
-#include "conformer_rmsd.h"
-#include "cuda_error_check.h"
+#include "src/conformer_rmsd.h"
+#include "src/utils/cuda_error_check.h"
 
 namespace nvMolKit {
 

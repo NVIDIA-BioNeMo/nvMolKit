@@ -20,7 +20,7 @@
 #include <cstring>
 #include <stdexcept>
 
-#include "pinned_host_allocator.h"
+#include "src/utils/pinned_host_allocator.h"
 
 using namespace nvMolKit;
 

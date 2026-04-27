@@ -19,10 +19,10 @@
 #include <cub/cub.cuh>
 #include <vector>
 
-#include "bfgs_hessian.h"
-#include "cuda_error_check.h"
-#include "device_vector.h"
-#include "host_vector.h"
+#include "src/minimizer/bfgs_hessian.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device_vector.h"
+#include "src/utils/host_vector.h"
 namespace cg = cooperative_groups;
 
 namespace nvMolKit {

@@ -16,8 +16,8 @@
 #include <cassert>
 #include <vector>
 
-#include "kernel_utils.cuh"
-#include "uff.h"
+#include "src/forcefields/kernel_utils.cuh"
+#include "src/forcefields/uff.h"
 
 namespace nvMolKit {
 namespace UFF {

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "benchmark_utils.h"
+#include "benchmarks/benchmark_utils.h"
 
 #include <GraphMol/DistGeomHelpers/Embedder.h>
 #include <GraphMol/FileParsers/FileParsers.h>
@@ -29,7 +29,7 @@
 #include <iostream>
 #include <random>
 
-#include "../tests/test_utils.h"
+#include "tests/test_utils.h"
 
 namespace BenchUtils {
 

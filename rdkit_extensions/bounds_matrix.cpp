@@ -1,4 +1,4 @@
-#include "bounds_matrix.h"
+#include "rdkit_extensions/bounds_matrix.h"
 
 #include <DistGeom/TriangleSmooth.h>
 #include <GraphMol/DistGeomHelpers/Embedder.h>

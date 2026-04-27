@@ -20,8 +20,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "etkdg_impl.h"
-#include "host_vector.h"
+#include "src/etkdg_impl.h"
+#include "src/utils/host_vector.h"
 
 namespace nvMolKit {
 namespace detail {

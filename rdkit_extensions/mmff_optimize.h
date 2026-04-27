@@ -5,7 +5,7 @@
 #include <GraphMol/ForceFieldHelpers/FFConvenience.h>
 #include <GraphMol/ROMol.h>
 
-#include "mmff_builder.h"
+#include "rdkit_extensions/mmff_builder.h"
 
 namespace nvMolKit {
 namespace MMFF {

@@ -1,4 +1,4 @@
-#include "mmff_contribs.h"
+#include "rdkit_extensions/mmff_contribs.h"
 
 #include <ForceField/ForceField.h>
 #include <GraphMol/ROMol.h>
@@ -6,9 +6,9 @@
 
 #include <vector>
 
-#include "ff_utils.h"
-#include "mmff.h"
-#include "mmff_flattened_builder.h"
+#include "src/forcefields/ff_utils.h"
+#include "src/forcefields/mmff.h"
+#include "rdkit_extensions/mmff_flattened_builder.h"
 
 namespace nvMolKit {
 namespace MMFF {

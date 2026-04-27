@@ -21,7 +21,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "../src/etkdg_impl.h"
+#include "src/etkdg_impl.h"
 
 using namespace nvMolKit::detail;
 

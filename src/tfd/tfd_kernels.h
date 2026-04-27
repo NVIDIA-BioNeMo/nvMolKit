@@ -20,7 +20,7 @@
 
 #include <cstdint>
 
-#include "tfd_types.h"
+#include "src/tfd/tfd_types.h"
 
 namespace nvMolKit {
 

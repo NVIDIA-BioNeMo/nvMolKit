@@ -23,11 +23,11 @@
 #include <string>
 #include <vector>
 
-#include "minibatch_planner.h"
-#include "molecules.h"
-#include "pinned_buffer_pool.h"
-#include "recursive_preprocessor.h"
-#include "thread_worker_context.h"
+#include "src/substruct/minibatch_planner.h"
+#include "src/substruct/molecules.h"
+#include "src/substruct/pinned_buffer_pool.h"
+#include "src/substruct/recursive_preprocessor.h"
+#include "src/substruct/thread_worker_context.h"
 
 using nvMolKit::kMaxSmartsNestingDepth;
 using nvMolKit::LeafSubpatterns;

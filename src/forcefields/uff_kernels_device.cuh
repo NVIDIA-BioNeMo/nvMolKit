@@ -18,7 +18,7 @@
 
 #include <cmath>
 
-#include "mmff_kernels_device.cuh"
+#include "src/forcefields/mmff_kernels_device.cuh"
 
 using namespace nvMolKit::FFKernelUtils;
 

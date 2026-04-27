@@ -22,8 +22,8 @@
 // TODO: Constraint term types, constraint kernels, and launchReduceEnergiesKernel currently live in
 // mmff.h / mmff_kernels.h but are forcefield-generic. They should be extracted into shared headers
 // so that UFF (and future forcefields) don't depend on MMFF.
-#include "mmff.h"
-#include "uff.h"
+#include "src/forcefields/mmff.h"
+#include "src/forcefields/uff.h"
 
 namespace nvMolKit::ForceFieldConstraints {
 

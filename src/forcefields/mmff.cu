@@ -16,9 +16,9 @@
 #include <cassert>
 #include <vector>
 
-#include "kernel_utils.cuh"
-#include "mmff.h"
-#include "mmff_kernels.h"
+#include "src/forcefields/kernel_utils.cuh"
+#include "src/forcefields/mmff.h"
+#include "src/forcefields/mmff_kernels.h"
 
 namespace nvMolKit {
 namespace MMFF {

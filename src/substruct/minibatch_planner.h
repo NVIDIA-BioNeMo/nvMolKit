@@ -19,8 +19,8 @@
 #include <array>
 #include <vector>
 
-#include "pinned_buffer_pool.h"
-#include "substruct_types.h"
+#include "src/substruct/pinned_buffer_pool.h"
+#include "src/substruct/substruct_types.h"
 
 namespace nvMolKit {
 

@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "test_utils.h"
+#include "tests/test_utils.h"
 
 #include <Geometry/point.h>
 #include <GraphMol/DistGeomHelpers/Embedder.h>

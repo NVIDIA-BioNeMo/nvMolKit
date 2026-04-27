@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "pinned_host_allocator.h"
+#include "src/utils/pinned_host_allocator.h"
 
 #include <stdexcept>
 

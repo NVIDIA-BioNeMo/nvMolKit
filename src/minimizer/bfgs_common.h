@@ -19,9 +19,9 @@
 #include <cstdint>
 #include <vector>
 
-#include "../hardware_options.h"
-#include "device.h"
-#include "host_vector.h"
+#include "src/hardware_options.h"
+#include "src/utils/device.h"
+#include "src/utils/host_vector.h"
 
 namespace RDKit {
 class ROMol;

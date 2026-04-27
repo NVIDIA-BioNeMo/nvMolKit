@@ -27,7 +27,7 @@
 #include <string>
 #include <vector>
 
-#include "morgan_fingerprint.h"
+#include "src/morgan_fingerprint.h"
 
 using namespace RDKit;
 

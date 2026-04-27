@@ -20,7 +20,7 @@
 
 #include <vector>
 
-#include "substruct_types.h"
+#include "src/substruct/substruct_types.h"
 
 namespace RDKit {
 class ROMol;

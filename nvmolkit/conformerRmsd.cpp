@@ -21,9 +21,9 @@
 #include <stdexcept>
 #include <vector>
 
-#include "array_helpers.h"
-#include "conformer_rmsd_mol.h"
-#include "device.h"
+#include "nvmolkit/array_helpers.h"
+#include "src/conformer_rmsd_mol.h"
+#include "src/utils/device.h"
 
 namespace {
 

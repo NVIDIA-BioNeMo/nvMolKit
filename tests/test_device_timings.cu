@@ -16,8 +16,8 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
-#include "cuda_error_check.h"
-#include "device_timings.cuh"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device_timings.cuh"
 
 using namespace nvMolKit;
 
