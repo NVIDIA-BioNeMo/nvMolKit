@@ -210,6 +210,7 @@ Guides
 
    similarity
    forcefield
+   agent_skill
 
 
 API Reference

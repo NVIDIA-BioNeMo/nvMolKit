@@ -3,6 +3,10 @@
 ## Documentation
 Please see the official [NVIDIA nvMolKit Documentation](https://nvidia-digital-bio.github.io/nvMolKit/) for an overview of features, examples, and a detailed API reference.
 
+## Cursor / agent skill
+
+If you use [Cursor](https://cursor.com/) (or another agent that supports the `SKILL.md` format) to write code that calls nvMolKit, you can copy [`agent-skills/nvmolkit-usage/`](agent-skills/nvmolkit-usage/) into your project's `.cursor/skills/` (or `~/.cursor/skills/` for personal use). It gives the agent the public Python entry-point map, runtime requirements, and runnable recipes.
+
 ## Installation Guide
 
 **IMPORTANT**: nvMolKit requires an NVIDIA GPU with compute capability 7.0 (V100) or higher to run. Check your GPU's compute capability [here](https://developer.nvidia.com/cuda-gpus).
