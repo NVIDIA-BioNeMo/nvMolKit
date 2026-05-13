@@ -18,7 +18,7 @@
 This module provides GPU-accelerated implementations of ETKDG (Experimental-Torsion-Knowledge Distance-Geometry) conformer generation for multiple molecules using CUDA and OpenMP.
 """
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Literal, Optional, overload
 
 if TYPE_CHECKING:
     from rdkit.Chem import Mol
@@ -27,16 +27,40 @@ if TYPE_CHECKING:
 __all__ = ["EmbedMolecules"]
 
 from nvmolkit import _embedMolecules  # type: ignore
-from nvmolkit.types import HardwareOptions
+from nvmolkit._arrayHelpers import *  # noqa: F403  # registers PyArray for DEVICE-mode returns
+from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions
 
 
+@overload
 def EmbedMolecules(
     molecules: list["Mol"],
     params: "EmbedParameters",
     confsPerMolecule: int = 1,
     maxIterations: int = -1,
     hardwareOptions: Optional[HardwareOptions] = None,
-) -> None:
+    output: Literal[CoordinateOutput.RDKIT_CONFORMERS] = CoordinateOutput.RDKIT_CONFORMERS,
+    targetGpu: int = -1,
+) -> None: ...
+@overload
+def EmbedMolecules(
+    molecules: list["Mol"],
+    params: "EmbedParameters",
+    confsPerMolecule: int = 1,
+    maxIterations: int = -1,
+    hardwareOptions: Optional[HardwareOptions] = None,
+    *,
+    output: Literal[CoordinateOutput.DEVICE],
+    targetGpu: int = -1,
+) -> Device3DResult: ...
+def EmbedMolecules(
+    molecules: list["Mol"],
+    params: "EmbedParameters",
+    confsPerMolecule: int = 1,
+    maxIterations: int = -1,
+    hardwareOptions: Optional[HardwareOptions] = None,
+    output: CoordinateOutput = CoordinateOutput.RDKIT_CONFORMERS,
+    targetGpu: int = -1,
+):
     """Embed multiple molecules with multiple conformers on GPUs.
 
     This function performs GPU-accelerated ETKDG conformer generation on multiple molecules.
@@ -59,9 +83,18 @@ def EmbedMolecules(
         confsPerMolecule: Number of conformers to generate per molecule (default: 1)
         maxIterations: Maximum ETKDG iterations, -1 for automatic calculation (default: -1)
         hardwareOptions: HardwareOptions with hardware settings. If None, uses defaults.
+        output: ``RDKIT_CONFORMERS`` (default) writes generated conformers back into each input
+            molecule in-place and returns ``None``. ``DEVICE`` retains conformer coordinates on
+            GPU and returns a :class:`Device3DResult`; RDKit conformers are NOT modified.
+            DEVICE mode is incompatible with ``params.pruneRmsThresh > 0``.
+        targetGpu: In DEVICE mode, the GPU to consolidate the result onto. ``-1`` selects the
+            first configured execution GPU.
 
     Returns:
-        None. Input molecules are modified in-place with generated conformers.
+        For ``RDKIT_CONFORMERS``: ``None``; input molecules are modified in-place with
+        generated conformers.
+        For ``DEVICE``: a :class:`Device3DResult` whose ``values`` field carries
+        ``(total_atoms, 3)`` coordinates plus CSR indices.
 
     Raises:
         ValueError: If any molecule in the input list is invalid, or if hardware
@@ -96,13 +129,15 @@ def EmbedMolecules(
         >>> mol2.GetNumConformers()  # Should be 5
 
     Note:
-        - Input molecules are modified in-place with generated conformers
+        - In ``RDKIT_CONFORMERS`` mode (default), input molecules are modified in-place with
+          generated conformers. In ``DEVICE`` mode, RDKit conformers are not touched.
         - params.useRandomCoords must be True for ETKDG algorithm
         - If gpuIds is empty, all available GPUs (0 to N-1) will be used automatically
     """
-    # Validate input
     if not molecules:
-        return
+        if output == CoordinateOutput.DEVICE:
+            raise ValueError("EmbedMolecules(output=DEVICE) requires at least one molecule")
+        return None
 
     for i, mol in enumerate(molecules):
         if mol is None:
@@ -111,10 +146,13 @@ def EmbedMolecules(
     if not params.useRandomCoords:
         raise ValueError("ETKDG requires useRandomCoords=True in EmbedParameters")
 
-    # Use default hardware options if none provided
     if hardwareOptions is None:
         hardwareOptions = HardwareOptions()
     native_options = hardwareOptions._as_native()
 
-    # Call the C++ implementation
+    if output == CoordinateOutput.DEVICE:
+        return _embedMolecules.EmbedMoleculesDevice(
+            molecules, params, confsPerMolecule, maxIterations, native_options, int(targetGpu)
+        )
     _embedMolecules.EmbedMolecules(molecules, params, confsPerMolecule, maxIterations, native_options)
+    return None

@@ -21,7 +21,7 @@ from rdkit.Chem import rdDistGeom, AllChem
 from rdkit.Chem.rdDistGeom import EmbedParameters
 
 import nvmolkit.embedMolecules as embed
-from nvmolkit.types import HardwareOptions
+from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions
 
 
 @pytest.fixture
@@ -427,3 +427,53 @@ def test_embed_molecules_prune_rmsthresh():
     embed.EmbedMolecules(mols, params, confsPerMolecule=5)
     assert mols[0].GetNumConformers() == 1
     assert mols[1].GetNumConformers() == 5
+
+
+def test_embed_molecules_device_output_returns_device3d_no_writeback():
+    """EmbedMolecules(output=DEVICE) returns Device3DResult and does NOT modify RDKit conformers."""
+    mols = [Chem.AddHs(Chem.MolFromSmiles("CCO")), Chem.AddHs(Chem.MolFromSmiles("CCCC"))]
+    params = EmbedParameters()
+    params.useRandomCoords = True
+    params.randomSeed = 42
+
+    confs_per_mol = 3
+    result = embed.EmbedMolecules(
+        mols,
+        params,
+        confsPerMolecule=confs_per_mol,
+        output=CoordinateOutput.DEVICE,
+    )
+    assert isinstance(result, Device3DResult)
+    assert result.n_mols == 2
+
+    for mol in mols:
+        assert mol.GetNumConformers() == 0
+
+    torch.cuda.synchronize()
+    mol_indices = result.mol_indices.torch().tolist()
+    atom_starts = result.atom_starts.torch().tolist()
+    assert atom_starts[0] == 0
+    assert len(mol_indices) == len(atom_starts) - 1
+
+    cursor = 0
+    for mol_idx, mol in enumerate(mols):
+        natoms = mol.GetNumAtoms()
+        n_conf_for_mol = sum(1 for m in mol_indices if m == mol_idx)
+        assert n_conf_for_mol > 0
+        for _ in range(n_conf_for_mol):
+            cursor += natoms
+        # Total atoms accounted for so far must match the cumulative atom_starts entry
+        # for this molecule's last conformer.
+    assert atom_starts[-1] == cursor
+
+    # ETKDG does not produce energies / convergence flags - those Optional fields must be None,
+    # not AsyncGpuResults wrapping empty tensors.
+    assert result.energies is None
+    assert result.converged is None
+
+
+def test_embed_molecules_device_output_empty_input_raises():
+    params = EmbedParameters()
+    params.useRandomCoords = True
+    with pytest.raises(ValueError, match="requires at least one molecule"):
+        embed.EmbedMolecules([], params, output=CoordinateOutput.DEVICE)

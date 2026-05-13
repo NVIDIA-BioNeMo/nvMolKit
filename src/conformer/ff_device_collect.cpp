@@ -49,6 +49,26 @@ void appendBatch(const std::vector<ConformerInfo>& batchConformers,
 
   const WithDevice withDevice(collector.gpuId);
 
+  // Make collector.stream wait on whatever stream produced positionsDevice / energiesDevice so the
+  // device-to-device copies below see the minimizer's writes. When the producer stream and
+  // collector.stream are the same the cross-stream sync is unnecessary; skip it. The `statusesDevice`
+  // stream is synced fully on the host immediately below because we read its bytes on host.
+  const cudaStream_t collectorStream = collector.stream;
+  const cudaStream_t positionsStream = positionsDevice.stream();
+  const cudaStream_t energiesStream  = energiesDevice.stream();
+  const auto         waitOnStream    = [collectorStream](cudaStream_t producerStream) {
+    if (producerStream == collectorStream) {
+      return;
+    }
+    ScopedCudaEvent ready;
+    cudaCheckError(cudaEventRecord(ready.event(), producerStream));
+    cudaCheckError(cudaStreamWaitEvent(collectorStream, ready.event(), 0));
+  };
+  waitOnStream(positionsStream);
+  if (energiesStream != positionsStream) {
+    waitOnStream(energiesStream);
+  }
+
   std::vector<int16_t> statusesHost(numConformers);
   statusesDevice.copyToHost(statusesHost.data(), static_cast<size_t>(numConformers));
   cudaCheckError(cudaStreamSynchronize(statusesDevice.stream()));
@@ -134,12 +154,19 @@ DeviceInputIndex buildDeviceInputIndex(const DeviceCoordResult&          deviceI
   }
 
   // Build a quick lookup from (molIdx, confIdx) -> source conformer index, then validate that
-  // the host-flattened list maps one-to-one onto the source list.
+  // the host-flattened list maps one-to-one onto the source list. A duplicate (molIdx, confIdx)
+  // pair on the source side would silently let multiple destination slots resolve to the same
+  // source position; reject it loudly here.
   std::unordered_map<long long, int> srcLookup;
   srcLookup.reserve(molIdxHost.size());
   for (size_t i = 0; i < molIdxHost.size(); ++i) {
-    const long long key = (static_cast<long long>(molIdxHost[i]) << 32) | static_cast<uint32_t>(confIdxHost[i]);
-    srcLookup.insert({key, static_cast<int>(i)});
+    const long long key      = (static_cast<long long>(molIdxHost[i]) << 32) | static_cast<uint32_t>(confIdxHost[i]);
+    const auto      inserted = srcLookup.insert({key, static_cast<int>(i)});
+    if (!inserted.second) {
+      throw std::invalid_argument("device_input contains duplicate (molIdx=" + std::to_string(molIdxHost[i]) +
+                                  ", confIdx=" + std::to_string(confIdxHost[i]) + ") at source indices " +
+                                  std::to_string(inserted.first->second) + " and " + std::to_string(i));
+    }
   }
   index.conformerIndexBy.resize(allConformers.size());
   for (size_t i = 0; i < allConformers.size(); ++i) {

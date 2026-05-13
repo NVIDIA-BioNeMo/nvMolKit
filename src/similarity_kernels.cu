@@ -56,6 +56,9 @@ bool supportsTensorOps(const int major, const int minor) {
   if (NVMOLKIT_CUDA_CC_100 && major == 10 && minor == 0) {
     return true;
   }
+  if (NVMOLKIT_CUDA_CC_103 && major == 10 && minor == 3) {
+    return true;
+  }
   if (NVMOLKIT_CUDA_CC_120 && major == 12 && minor == 0) {
     return true;
   }

@@ -168,46 +168,47 @@ class CoordinateOutput(Enum):
     - ``RDKIT_CONFORMERS``: Optimized coordinates are written back into each input molecule's
       RDKit conformer list and energies (where applicable) are returned as Python lists.
     - ``DEVICE``: coordinates and (where applicable) energies stay on the GPU and are returned
-      as a :class:`DeviceCoordResult`. Use this to chain GPU-accelerated workflows (e.g. ETKDG
-      followed by MMFF) without host round-trips.
+      as a :class:`Device3DResult`. Use this to chain GPU-accelerated workflows without host
+      round-trips.
     """
 
     RDKIT_CONFORMERS = "rdkit"
     DEVICE = "device"
 
 
-class DenseCoordResult(NamedTuple):
-    """Dense padded view of a :class:`DeviceCoordResult`.
+class Dense3DResult(NamedTuple):
+    """Dense padded view of a :class:`Device3DResult`.
 
     All three tensors share the same ``(n_mols, max_confs, max_atoms[, 3])`` batch shape.
 
-    - ``coords``: float64, shape ``(n_mols, max_confs, max_atoms, 3)``. Padded entries hold
-      the ``pad_value`` passed to :meth:`DeviceCoordResult.dense` (default NaN).
+    - ``values``: float64, shape ``(n_mols, max_confs, max_atoms, 3)``. Padded entries hold
+      the ``pad_value`` passed to :meth:`Device3DResult.dense` (default NaN).
     - ``conf_mask``: bool, shape ``(n_mols, max_confs)``. ``True`` where a real conformer
       exists; ``False`` for pad slots (molecules with fewer conformers than ``max_confs``).
     - ``atom_mask``: bool, shape ``(n_mols, max_confs, max_atoms)``. ``True`` where a real
-      atom position exists; ``False`` where the atom or conformer slot is padded.
+      atom-vector exists; ``False`` where the atom or conformer slot is padded.
     """
 
-    coords: "torch.Tensor"
+    values: "torch.Tensor"
     conf_mask: "torch.Tensor"
     atom_mask: "torch.Tensor"
 
 
-class DeviceCoordResult:
-    """On-device, flat CSR-style result of a conformer-producing GPU pipeline.
+class Device3DResult:
+    """On-device, flat CSR-style result of a per-atom 3-vector pipeline.
 
-    All buffers live on a single GPU identified by :attr:`gpu_id`. Sizes are linked as follows:
+    Used for conformer coordinates produced by ETKDG and MMFF/UFF minimization. All buffers
+    live on a single GPU identified by :attr:`gpu_id`. Sizes are linked as follows:
 
-    - :attr:`positions` has shape ``(total_atoms, 3)`` (float64).
+    - :attr:`values` has shape ``(total_atoms, 3)`` (float64). Holds conformer positions.
     - :attr:`atom_starts` has shape ``(n_conformers + 1,)`` (int32). The slice
-      ``positions[atom_starts[i]:atom_starts[i+1]]`` holds conformer ``i``'s atoms.
+      ``values[atom_starts[i]:atom_starts[i+1]]`` holds conformer ``i``'s atoms.
     - :attr:`mol_indices` has shape ``(n_conformers,)`` (int32) and maps each conformer to its
       input molecule index.
     - :attr:`conf_indices` has shape ``(n_conformers,)`` (int32) and gives each conformer's
       per-molecule conformer index.
-    - :attr:`energies` (MMFF/UFF only) has shape ``(n_conformers,)`` (float64).
-    - :attr:`converged` (MMFF/UFF only) has shape ``(n_conformers,)`` (int8; 1 = converged).
+    - :attr:`energies` (MMFF/UFF minimization only) has shape ``(n_conformers,)`` (float64).
+    - :attr:`converged` (MMFF/UFF minimization only) has shape ``(n_conformers,)`` (int8; 1 = converged).
     - :attr:`n_mols` is the number of molecules in the original input batch, including those that
       produced zero conformers. This is the authoritative outer-list length for per-molecule views.
 
@@ -217,7 +218,7 @@ class DeviceCoordResult:
 
     def __init__(
         self,
-        positions: AsyncGpuResult,
+        values: AsyncGpuResult,
         atom_starts: AsyncGpuResult,
         mol_indices: AsyncGpuResult,
         conf_indices: AsyncGpuResult,
@@ -226,7 +227,7 @@ class DeviceCoordResult:
         energies: Optional[AsyncGpuResult] = None,
         converged: Optional[AsyncGpuResult] = None,
     ) -> None:
-        self.positions = positions
+        self.values = values
         self.atom_starts = atom_starts
         self.mol_indices = mol_indices
         self.conf_indices = conf_indices
@@ -241,25 +242,25 @@ class DeviceCoordResult:
         return int(self.atom_starts.torch().numel()) - 1
 
     def per_molecule(self) -> List[List["torch.Tensor"]]:
-        """Return a nested list of per-molecule, per-conformer position views.
+        """Return a nested list of per-molecule, per-conformer atom-vector views.
 
         The outer list has length :attr:`n_mols` and is indexed by input molecule index.
         Molecules that produced zero conformers have an empty inner list. The inner list
         contains one ``(n_atoms, 3)`` torch view per conformer. Views share storage with
-        :attr:`positions` (no copy). Reading the index tensors via ``.tolist()`` implicitly
-        synchronizes; reading position values still requires the caller to synchronize.
+        :attr:`values` (no copy). Reading the index tensors via ``.tolist()`` implicitly
+        synchronizes; reading values still requires the caller to synchronize.
         """
-        positions = self.positions.torch()
+        values = self.values.torch()
         atom_starts = self.atom_starts.torch().tolist()
         mol_indices = self.mol_indices.torch().tolist()
         result: List[List[torch.Tensor]] = [[] for _ in range(self.n_mols)]
         for conf_idx, mol_idx in enumerate(mol_indices):
             start = atom_starts[conf_idx]
             stop = atom_starts[conf_idx + 1]
-            result[mol_idx].append(positions[start:stop])
+            result[mol_idx].append(values[start:stop])
         return result
 
-    def dense(self, pad_value: float = float("nan")) -> "DenseCoordResult":
+    def dense(self, pad_value: float = float("nan")) -> "Dense3DResult":
         """Materialize a padded dense ``(n_mols, max_confs, max_atoms, 3)`` tensor.
 
         Axes are padded as follows:
@@ -269,33 +270,32 @@ class DeviceCoordResult:
         - **atom axis**: conformers with fewer than ``max_atoms`` atoms are padded with
           ``pad_value``.
 
-        Returns a :class:`DenseCoordResult` with ``coords``, ``conf_mask``
+        Returns a :class:`Dense3DResult` with ``values``, ``conf_mask``
         ``(n_mols, max_confs)`` and ``atom_mask`` ``(n_mols, max_confs, max_atoms)``.
         Both masks are ``True`` where the data is real, ``False`` where padded.
         Reading the index tensors synchronizes implicitly.
         """
-        positions = self.positions.torch()
+        values = self.values.torch()
         atom_starts = self.atom_starts.torch().to(torch.int64)
         mol_indices = self.mol_indices.torch().to(torch.int64)
         conf_indices = self.conf_indices.torch().to(torch.int64)
 
-        device = positions.device
-        dtype = positions.dtype
+        device = values.device
+        dtype = values.dtype
         n_conformers = mol_indices.numel()
 
-        # No conformers case could be a complete conf gen failure, but error handling for that is not our responsibility.
         if n_conformers == 0:
-            coords = torch.full((self.n_mols, 0, 0, 3), pad_value, dtype=dtype, device=device)
+            dense_vals = torch.full((self.n_mols, 0, 0, 3), pad_value, dtype=dtype, device=device)
             conf_mask = torch.zeros((self.n_mols, 0), dtype=torch.bool, device=device)
             atom_mask = torch.zeros((self.n_mols, 0, 0), dtype=torch.bool, device=device)
-            return DenseCoordResult(coords=coords, conf_mask=conf_mask, atom_mask=atom_mask)
+            return Dense3DResult(values=dense_vals, conf_mask=conf_mask, atom_mask=atom_mask)
 
         sizes = atom_starts[1:] - atom_starts[:-1]
         confs_per_mol = torch.bincount(mol_indices, minlength=self.n_mols)
         max_confs = int(confs_per_mol.max().item())
         max_atoms = int(sizes.max().item())
 
-        coords = torch.full(
+        dense_vals = torch.full(
             (self.n_mols, max_confs, max_atoms, 3),
             pad_value,
             dtype=dtype,
@@ -304,18 +304,16 @@ class DeviceCoordResult:
         conf_mask = torch.zeros((self.n_mols, max_confs), dtype=torch.bool, device=device)
         atom_mask = torch.zeros((self.n_mols, max_confs, max_atoms), dtype=torch.bool, device=device)
 
-        # Scatter conformer-level mask in one shot.
         conf_mask[mol_indices, conf_indices] = True
 
-        # Build per-atom (mol, conf, atom-within-conf)
         mol_idx_per_atom = mol_indices.repeat_interleave(sizes)
         conf_idx_per_atom = conf_indices.repeat_interleave(sizes)
-        total_atoms = positions.shape[0]
+        total_atoms = values.shape[0]
         atom_within_conf = torch.arange(total_atoms, device=device, dtype=torch.int64) - atom_starts[
             :-1
         ].repeat_interleave(sizes)
 
-        coords[mol_idx_per_atom, conf_idx_per_atom, atom_within_conf, :] = positions
+        dense_vals[mol_idx_per_atom, conf_idx_per_atom, atom_within_conf, :] = values
         atom_mask[mol_idx_per_atom, conf_idx_per_atom, atom_within_conf] = True
 
-        return DenseCoordResult(coords=coords, conf_mask=conf_mask, atom_mask=atom_mask)
+        return Dense3DResult(values=dense_vals, conf_mask=conf_mask, atom_mask=atom_mask)

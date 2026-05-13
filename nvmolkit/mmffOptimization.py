@@ -20,7 +20,7 @@ optimization for multiple molecules and conformers using CUDA and OpenMP.
 """
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, overload
 
 from rdkit.Chem import AllChem
 
@@ -29,10 +29,12 @@ if TYPE_CHECKING:
     from rdkit.ForceField.rdForceField import MMFFMolProperties
 
 from nvmolkit import _mmffOptimization
+from nvmolkit._arrayHelpers import *  # noqa: F403  # registers PyArray for DEVICE-mode returns
 from nvmolkit._mmff_bridge import default_rdkit_mmff_properties, make_internal_mmff_properties
-from nvmolkit.types import HardwareOptions
+from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions
 
 
+@overload
 def MMFFOptimizeMoleculesConfs(
     molecules: list["Mol"],
     maxIters: int = 200,
@@ -40,7 +42,31 @@ def MMFFOptimizeMoleculesConfs(
     nonBondedThreshold: float | Sequence[float] = 100.0,
     ignoreInterfragInteractions: bool | Sequence[bool] = True,
     hardwareOptions: HardwareOptions | None = None,
-) -> list[list[float]]:
+    output: Literal[CoordinateOutput.RDKIT_CONFORMERS] = CoordinateOutput.RDKIT_CONFORMERS,
+    targetGpu: int = -1,
+) -> list[list[float]]: ...
+@overload
+def MMFFOptimizeMoleculesConfs(
+    molecules: list["Mol"],
+    maxIters: int = 200,
+    properties: "MMFFMolProperties | Sequence[MMFFMolProperties | None] | None" = None,
+    nonBondedThreshold: float | Sequence[float] = 100.0,
+    ignoreInterfragInteractions: bool | Sequence[bool] = True,
+    hardwareOptions: HardwareOptions | None = None,
+    *,
+    output: Literal[CoordinateOutput.DEVICE],
+    targetGpu: int = -1,
+) -> Device3DResult: ...
+def MMFFOptimizeMoleculesConfs(
+    molecules: list["Mol"],
+    maxIters: int = 200,
+    properties: "MMFFMolProperties | Sequence[MMFFMolProperties | None] | None" = None,
+    nonBondedThreshold: float | Sequence[float] = 100.0,
+    ignoreInterfragInteractions: bool | Sequence[bool] = True,
+    hardwareOptions: HardwareOptions | None = None,
+    output: CoordinateOutput = CoordinateOutput.RDKIT_CONFORMERS,
+    targetGpu: int = -1,
+):
     """Optimize conformers for multiple molecules using MMFF force field with BFGS minimization.
 
     This function performs GPU-accelerated MMFF optimization on multiple molecules with
@@ -58,11 +84,18 @@ def MMFFOptimizeMoleculesConfs(
         ignoreInterfragInteractions: If ``True``, omit non-bonded terms between
             fragments. May also be provided as a per-molecule sequence.
         hardwareOptions: Configures CPU and GPU batching, threading, and device selection. Will attempt to use reasonable defaults if not set.
+        output: ``RDKIT_CONFORMERS`` (default) writes optimized coordinates back into each input
+            molecule's RDKit conformers and returns nested host-side energy lists. ``DEVICE``
+            keeps optimized coordinates and energies on GPU and returns a :class:`Device3DResult`.
+        targetGpu: In DEVICE mode, the GPU to consolidate the result onto. ``-1`` selects the
+            first configured execution GPU.
 
     Returns:
-        List of lists of energies, where each inner list contains the optimized energies
-        for all conformers of the corresponding molecule. The order matches the input
-        molecule order and conformer iteration order.
+        For ``RDKIT_CONFORMERS``: list of lists of energies, where each inner list contains the
+        optimized energies for all conformers of the corresponding molecule. The order matches
+        the input molecule order and conformer iteration order.
+        For ``DEVICE``: a :class:`Device3DResult` whose ``values`` field carries optimized
+        coordinates ``(total_atoms, 3)``, plus ``energies``, ``converged``, and CSR indices.
 
     Raises:
         ValueError: If any molecules in the input list are None or lack MMFF atom types.
@@ -104,8 +137,9 @@ def MMFFOptimizeMoleculesConfs(
     Note:
         - Input molecules are modified in-place with optimized conformer coordinates
     """
-    # Validate input
     if not molecules:
+        if output == CoordinateOutput.DEVICE:
+            raise ValueError("MMFFOptimizeMoleculesConfs(output=DEVICE) requires at least one molecule")
         return []
 
     none_indices = []
@@ -160,4 +194,8 @@ def MMFFOptimizeMoleculesConfs(
         )
         for props, threshold, ignore_interfrag in zip(properties_list, thresholds, interfrag_flags)
     ]
+    if output == CoordinateOutput.DEVICE:
+        return _mmffOptimization.MMFFOptimizeMoleculesConfsDevice(
+            molecules, maxIters, native_properties, native_options, targetGpu
+        )
     return _mmffOptimization.MMFFOptimizeMoleculesConfs(molecules, maxIters, native_properties, native_options)

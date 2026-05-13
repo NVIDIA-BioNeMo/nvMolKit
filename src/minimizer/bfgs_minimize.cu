@@ -1126,6 +1126,7 @@ bool BfgsBatchMinimizer::minimizeWithMMFF(const int                            n
                                                    inverseHessian_.data(),
                                                    scratchBuffersDevice_.data(),
                                                    systemDevice.energyOuts.data(),
+                                                   MMFF::batchHasConstraints(systemDevice.contribs),
                                                    statuses_.data(),
                                                    stream_);
 

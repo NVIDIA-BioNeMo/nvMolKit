@@ -26,6 +26,7 @@
 #include "bfgs_uff.h"
 #include "boost_python_utils.h"
 #include "device_coord_result.h"
+#include "device_result_python.h"
 #include "device_vector.h"
 #include "ff_utils.h"
 #include "forcefield_constraints.h"
@@ -103,7 +104,7 @@ void throwIfCudaError(cudaError_t err, const std::string& context) {
 template <typename T> std::vector<T> copyDeviceVector(nvMolKit::AsyncDeviceVector<T>& deviceVec) {
   std::vector<T> hostVec(deviceVec.size());
   deviceVec.copyToHost(hostVec);
-  cudaStreamSynchronize(deviceVec.stream());
+  throwIfCudaError(cudaStreamSynchronize(deviceVec.stream()), "copyDeviceVector/sync");
   return hostVec;
 }
 
@@ -118,7 +119,7 @@ void uploadConformerPositions(const std::vector<RDKit::ROMol*>&    mols,
     }
   }
   positionsDevice.copyFromHost(allPositions.data(), allPositions.size());
-  cudaStreamSynchronize(positionsDevice.stream());
+  throwIfCudaError(cudaStreamSynchronize(positionsDevice.stream()), "uploadConformerPositions/sync");
 }
 
 bp::list computeBatchedEnergy(nvMolKit::BatchedForcefield&         forcefield,
@@ -282,7 +283,7 @@ class NativeMMFFBatchedForcefield {
                               const bp::list&                       torsionConstraints,
                               const nvMolKit::BatchHardwareOptions& hwOpts)
       : hwOpts_(hwOpts) {
-    cudaGetDevice(&gpuId_);
+    throwIfCudaError(cudaGetDevice(&gpuId_), "MMFF wrapper/cudaGetDevice");
     mols_             = nvMolKit::extractMolecules(molecules);
     const int numMols = static_cast<int>(mols_.size());
     properties_       = nvMolKit::extractMMFFPropertiesList(properties, numMols);
@@ -310,29 +311,16 @@ class NativeMMFFBatchedForcefield {
                           nestedToList(result.converged, [](int8_t v) { return v != 0; }));
   }
 
-  // -- DEVICE-mode accessors. All buffers borrow from the wrapper's persistent allocations and
-  // -- remain valid only for the lifetime of this NativeMMFFBatchedForcefield instance. --
-
-  nvMolKit::PyArray* computeEnergyDevice() {
-    energyOutsDevice_.zero();
-    throwIfCudaError(forcefield_->computeEnergy(energyOutsDevice_.data(), positionsDevice_.data()), "computeEnergy");
-    return nvMolKit::makePyArrayBorrowed(energyOutsDevice_);
-  }
-
-  nvMolKit::PyArray* computeGradientsDevice() {
-    gradDevice_.zero();
-    throwIfCudaError(forcefield_->computeGradients(gradDevice_.data(), positionsDevice_.data()), "computeGradients");
-    return nvMolKit::makePyArrayBorrowed(gradDevice_);
-  }
-
-  nvMolKit::PyArray* positionsDevicePy() {
-    const int natoms = static_cast<int>(positionsDevice_.size() / 3);
-    return nvMolKit::makePyArrayBorrowed(positionsDevice_, "f8", bp::make_tuple(natoms, 3));
-  }
-
   bp::object minimizeDevice(int maxIters, double gradTol, int targetGpu) {
-    if (targetGpu < 0) {
-      targetGpu = gpuId_;
+    if (targetGpu >= 0 && targetGpu != gpuId_) {
+      throw std::invalid_argument(
+        "MMFFBatchedForcefield.minimize(output=DEVICE) does not support target_gpu != wrapper GPU "
+        "(" +
+        std::to_string(targetGpu) + " vs " + std::to_string(gpuId_) +
+        "). The wrapper's persistent device state lives on a single GPU; consolidating elsewhere "
+        "would leave subsequent compute_energy/compute_gradients calls operating on stale "
+        "coordinates. Use the standalone MMFFOptimizeMoleculesConfs(output=DEVICE, targetGpu=...) "
+        "API for cross-GPU consolidation, or construct the wrapper on the desired GPU.");
     }
     auto result = nvMolKit::MMFF::MMFFMinimizeMoleculesConfs(mols_,
                                                              maxIters,
@@ -342,53 +330,24 @@ class NativeMMFFBatchedForcefield {
                                                              hwOpts_,
                                                              nvMolKit::BfgsBackend::HYBRID,
                                                              nvMolKit::CoordinateOutput::DEVICE,
-                                                             targetGpu);
+                                                             gpuId_);
     if (!result.device.has_value()) {
       throw std::runtime_error("MMFFMinimizeMoleculesConfs(DEVICE) returned no device result");
     }
     auto& dev = *result.device;
-    // Refresh the persistent positions buffer in-place so subsequent compute_energy /
-    // compute_gradients calls see the optimized coords without a host roundtrip. The result's
-    // GPU and the wrapper's GPU are the same when the user defaults targetGpu.
-    if (dev.gpuId == gpuId_ && dev.positions.size() == positionsDevice_.size()) {
-      cudaMemcpyAsync(positionsDevice_.data(),
-                      dev.positions.data(),
-                      positionsDevice_.size() * sizeof(double),
-                      cudaMemcpyDeviceToDevice,
-                      positionsDevice_.stream());
-      cudaStreamSynchronize(positionsDevice_.stream());
+    if (dev.positions.size() != positionsDevice_.size()) {
+      throw std::runtime_error("MMFFMinimizeMoleculesConfs(DEVICE) positions size does not match wrapper");
     }
-    // Return a Python DeviceCoordResult that owns the device data via boost::python's normal
-    // PyArray ownership semantics. We construct the Python object directly here.
-    bp::object types_module = bp::import("nvmolkit.types");
-    bp::object dcr_cls      = types_module.attr("DeviceCoordResult");
-    bp::object async_cls    = types_module.attr("AsyncGpuResult");
-
-    const int natoms       = static_cast<int>(dev.positions.size() / 3);
-    auto      posPy        = nvMolKit::makePyArray(dev.positions, "f8", bp::make_tuple(natoms, 3));
-    auto      atomStartsPy = nvMolKit::makePyArray(dev.atomStarts);
-    auto      molIdxPy     = nvMolKit::makePyArray(dev.molIndices);
-    auto      confIdxPy    = nvMolKit::makePyArray(dev.confIndices);
-    auto      energiesPy   = nvMolKit::makePyArray(dev.energies);
-    auto      convergedPy  = nvMolKit::makePyArray(dev.converged);
-    return dcr_cls(async_cls(bp::object(boost::python::ptr(posPy)), dev.gpuId),
-                   async_cls(bp::object(boost::python::ptr(atomStartsPy)), dev.gpuId),
-                   async_cls(bp::object(boost::python::ptr(molIdxPy)), dev.gpuId),
-                   async_cls(bp::object(boost::python::ptr(confIdxPy)), dev.gpuId),
-                   dev.gpuId,
-                   async_cls(bp::object(boost::python::ptr(energiesPy)), dev.gpuId),
-                   async_cls(bp::object(boost::python::ptr(convergedPy)), dev.gpuId));
-  }
-
-  bp::object indexBuffers() {
-    bp::object types_module = bp::import("nvmolkit.types");
-    bp::object async_cls    = types_module.attr("AsyncGpuResult");
-    auto       atomStartsPy = nvMolKit::makePyArrayBorrowed(persistentIndexBuffers_.atomStarts);
-    auto       molIdxPy     = nvMolKit::makePyArrayBorrowed(persistentIndexBuffers_.molIndices);
-    auto       confIdxPy    = nvMolKit::makePyArrayBorrowed(persistentIndexBuffers_.confIndices);
-    return bp::make_tuple(async_cls(bp::object(boost::python::ptr(atomStartsPy)), gpuId_),
-                          async_cls(bp::object(boost::python::ptr(molIdxPy)), gpuId_),
-                          async_cls(bp::object(boost::python::ptr(confIdxPy)), gpuId_));
+    // Refresh the persistent positions buffer in-place so subsequent compute_energy /
+    // compute_gradients calls see the optimized coords without a host roundtrip.
+    throwIfCudaError(cudaMemcpyAsync(positionsDevice_.data(),
+                                     dev.positions.data(),
+                                     positionsDevice_.size() * sizeof(double),
+                                     cudaMemcpyDeviceToDevice,
+                                     positionsDevice_.stream()),
+                     "MMFF minimizeDevice/positions refresh");
+    throwIfCudaError(cudaStreamSynchronize(positionsDevice_.stream()), "MMFF minimizeDevice/positions refresh sync");
+    return nvMolKit::buildOwningDevice3DResult(dev);
   }
 
   int gpuId() const { return gpuId_; }
@@ -435,7 +394,6 @@ class NativeMMFFBatchedForcefield {
   nvMolKit::AsyncDeviceVector<double>              gradDevice_;
   nvMolKit::AsyncDeviceVector<double>              energyOutsDevice_;
   std::vector<int>                                 numConformersPerMol_;
-  PersistentIndexBuffers                           persistentIndexBuffers_;
   int                                              gpuId_ = 0;
 };
 
@@ -450,7 +408,7 @@ class NativeUFFBatchedForcefield {
                              const bp::list&                       torsionConstraints,
                              const nvMolKit::BatchHardwareOptions& hwOpts)
       : hwOpts_(hwOpts) {
-    cudaGetDevice(&gpuId_);
+    throwIfCudaError(cudaGetDevice(&gpuId_), "UFF wrapper/cudaGetDevice");
     mols_             = nvMolKit::extractMolecules(molecules);
     const int numMols = static_cast<int>(mols_.size());
     vdwThresholds_    = nvMolKit::extractDoubleList(vdwThresholds, numMols, "vdwThreshold");
@@ -485,26 +443,16 @@ class NativeUFFBatchedForcefield {
                           nestedToList(result.converged, [](int8_t v) { return v != 0; }));
   }
 
-  nvMolKit::PyArray* computeEnergyDevice() {
-    energyOutsDevice_.zero();
-    throwIfCudaError(forcefield_->computeEnergy(energyOutsDevice_.data(), positionsDevice_.data()), "computeEnergy");
-    return nvMolKit::makePyArrayBorrowed(energyOutsDevice_);
-  }
-
-  nvMolKit::PyArray* computeGradientsDevice() {
-    gradDevice_.zero();
-    throwIfCudaError(forcefield_->computeGradients(gradDevice_.data(), positionsDevice_.data()), "computeGradients");
-    return nvMolKit::makePyArrayBorrowed(gradDevice_);
-  }
-
-  nvMolKit::PyArray* positionsDevicePy() {
-    const int natoms = static_cast<int>(positionsDevice_.size() / 3);
-    return nvMolKit::makePyArrayBorrowed(positionsDevice_, "f8", bp::make_tuple(natoms, 3));
-  }
-
   bp::object minimizeDevice(int maxIters, double gradTol, int targetGpu) {
-    if (targetGpu < 0) {
-      targetGpu = gpuId_;
+    if (targetGpu >= 0 && targetGpu != gpuId_) {
+      throw std::invalid_argument(
+        "UFFBatchedForcefield.minimize(output=DEVICE) does not support target_gpu != wrapper GPU "
+        "(" +
+        std::to_string(targetGpu) + " vs " + std::to_string(gpuId_) +
+        "). The wrapper's persistent device state lives on a single GPU; consolidating elsewhere "
+        "would leave subsequent compute_energy/compute_gradients calls operating on stale "
+        "coordinates. Use the standalone UFFOptimizeMoleculesConfs(output=DEVICE, targetGpu=...) "
+        "API for cross-GPU consolidation, or construct the wrapper on the desired GPU.");
     }
     auto result = nvMolKit::UFF::UFFMinimizeMoleculesConfs(mols_,
                                                            maxIters,
@@ -514,48 +462,22 @@ class NativeUFFBatchedForcefield {
                                                            constraints_,
                                                            hwOpts_,
                                                            nvMolKit::CoordinateOutput::DEVICE,
-                                                           targetGpu);
+                                                           gpuId_);
     if (!result.device.has_value()) {
       throw std::runtime_error("UFFMinimizeMoleculesConfs(DEVICE) returned no device result");
     }
     auto& dev = *result.device;
-    if (dev.gpuId == gpuId_ && dev.positions.size() == positionsDevice_.size()) {
-      cudaMemcpyAsync(positionsDevice_.data(),
-                      dev.positions.data(),
-                      positionsDevice_.size() * sizeof(double),
-                      cudaMemcpyDeviceToDevice,
-                      positionsDevice_.stream());
-      cudaStreamSynchronize(positionsDevice_.stream());
+    if (dev.positions.size() != positionsDevice_.size()) {
+      throw std::runtime_error("UFFMinimizeMoleculesConfs(DEVICE) positions size does not match wrapper");
     }
-    bp::object types_module = bp::import("nvmolkit.types");
-    bp::object dcr_cls      = types_module.attr("DeviceCoordResult");
-    bp::object async_cls    = types_module.attr("AsyncGpuResult");
-
-    const int natoms       = static_cast<int>(dev.positions.size() / 3);
-    auto      posPy        = nvMolKit::makePyArray(dev.positions, "f8", bp::make_tuple(natoms, 3));
-    auto      atomStartsPy = nvMolKit::makePyArray(dev.atomStarts);
-    auto      molIdxPy     = nvMolKit::makePyArray(dev.molIndices);
-    auto      confIdxPy    = nvMolKit::makePyArray(dev.confIndices);
-    auto      energiesPy   = nvMolKit::makePyArray(dev.energies);
-    auto      convergedPy  = nvMolKit::makePyArray(dev.converged);
-    return dcr_cls(async_cls(bp::object(boost::python::ptr(posPy)), dev.gpuId),
-                   async_cls(bp::object(boost::python::ptr(atomStartsPy)), dev.gpuId),
-                   async_cls(bp::object(boost::python::ptr(molIdxPy)), dev.gpuId),
-                   async_cls(bp::object(boost::python::ptr(confIdxPy)), dev.gpuId),
-                   dev.gpuId,
-                   async_cls(bp::object(boost::python::ptr(energiesPy)), dev.gpuId),
-                   async_cls(bp::object(boost::python::ptr(convergedPy)), dev.gpuId));
-  }
-
-  bp::object indexBuffers() {
-    bp::object types_module = bp::import("nvmolkit.types");
-    bp::object async_cls    = types_module.attr("AsyncGpuResult");
-    auto       atomStartsPy = nvMolKit::makePyArrayBorrowed(persistentIndexBuffers_.atomStarts);
-    auto       molIdxPy     = nvMolKit::makePyArrayBorrowed(persistentIndexBuffers_.molIndices);
-    auto       confIdxPy    = nvMolKit::makePyArrayBorrowed(persistentIndexBuffers_.confIndices);
-    return bp::make_tuple(async_cls(bp::object(boost::python::ptr(atomStartsPy)), gpuId_),
-                          async_cls(bp::object(boost::python::ptr(molIdxPy)), gpuId_),
-                          async_cls(bp::object(boost::python::ptr(confIdxPy)), gpuId_));
+    throwIfCudaError(cudaMemcpyAsync(positionsDevice_.data(),
+                                     dev.positions.data(),
+                                     positionsDevice_.size() * sizeof(double),
+                                     cudaMemcpyDeviceToDevice,
+                                     positionsDevice_.stream()),
+                     "UFF minimizeDevice/positions refresh");
+    throwIfCudaError(cudaStreamSynchronize(positionsDevice_.stream()), "UFF minimizeDevice/positions refresh sync");
+    return nvMolKit::buildOwningDevice3DResult(dev);
   }
 
   int gpuId() const { return gpuId_; }
@@ -604,7 +526,6 @@ class NativeUFFBatchedForcefield {
   nvMolKit::AsyncDeviceVector<double>             gradDevice_;
   nvMolKit::AsyncDeviceVector<double>             energyOutsDevice_;
   std::vector<int>                                numConformersPerMol_;
-  PersistentIndexBuffers                          persistentIndexBuffers_;
   int                                             gpuId_ = 0;
 };
 
@@ -639,17 +560,7 @@ BOOST_PYTHON_MODULE(_batchedForcefield) {
     .def("computeEnergy", &NativeMMFFBatchedForcefield::computeEnergy)
     .def("computeGradients", &NativeMMFFBatchedForcefield::computeGradients)
     .def("minimize", &NativeMMFFBatchedForcefield::minimize)
-    .def("computeEnergyDevice",
-         &NativeMMFFBatchedForcefield::computeEnergyDevice,
-         bp::return_value_policy<bp::manage_new_object>())
-    .def("computeGradientsDevice",
-         &NativeMMFFBatchedForcefield::computeGradientsDevice,
-         bp::return_value_policy<bp::manage_new_object>())
-    .def("positionsDevice",
-         &NativeMMFFBatchedForcefield::positionsDevicePy,
-         bp::return_value_policy<bp::manage_new_object>())
     .def("minimizeDevice", &NativeMMFFBatchedForcefield::minimizeDevice)
-    .def("indexBuffers", &NativeMMFFBatchedForcefield::indexBuffers)
     .def("gpuId", &NativeMMFFBatchedForcefield::gpuId);
 
   bp::class_<NativeUFFBatchedForcefield, boost::noncopyable>("NativeUFFBatchedForcefield",
@@ -664,16 +575,6 @@ BOOST_PYTHON_MODULE(_batchedForcefield) {
     .def("computeEnergy", &NativeUFFBatchedForcefield::computeEnergy)
     .def("computeGradients", &NativeUFFBatchedForcefield::computeGradients)
     .def("minimize", &NativeUFFBatchedForcefield::minimize)
-    .def("computeEnergyDevice",
-         &NativeUFFBatchedForcefield::computeEnergyDevice,
-         bp::return_value_policy<bp::manage_new_object>())
-    .def("computeGradientsDevice",
-         &NativeUFFBatchedForcefield::computeGradientsDevice,
-         bp::return_value_policy<bp::manage_new_object>())
-    .def("positionsDevice",
-         &NativeUFFBatchedForcefield::positionsDevicePy,
-         bp::return_value_policy<bp::manage_new_object>())
     .def("minimizeDevice", &NativeUFFBatchedForcefield::minimizeDevice)
-    .def("indexBuffers", &NativeUFFBatchedForcefield::indexBuffers)
     .def("gpuId", &NativeUFFBatchedForcefield::gpuId);
 }

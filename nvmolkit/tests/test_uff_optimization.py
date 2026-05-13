@@ -16,13 +16,14 @@
 import os
 
 import pytest
+import torch
 from rdkit import Chem
 from rdkit.Chem import rdDistGeom, rdForceFieldHelpers
 from rdkit.ForceField import rdForceField as _rdForceField  # noqa: F401
 from rdkit.Geometry import Point3D
 
 import nvmolkit.uffOptimization as nvmolkit_uff
-from nvmolkit.types import HardwareOptions
+from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions
 
 
 @pytest.fixture
@@ -198,3 +199,29 @@ def test_uff_optimization_threshold_and_interfrag_vs_rdkit():
                 f"Molecule {mol_idx}, conformer {conf_idx}: "
                 f"RDKit={rdkit_energy:.6f} nvMolKit={nvmolkit_energy:.6f} rel={rel:.6f}"
             )
+
+
+def test_uff_optimization_device_output_matches_host(uff_test_mols):
+    """UFFOptimizeMoleculesConfs(output=DEVICE) returns Device3DResult; energies match host path."""
+    host_mols = create_hard_copy_mols(uff_test_mols)
+    device_mols = create_hard_copy_mols(uff_test_mols)
+
+    host_energies = nvmolkit_uff.UFFOptimizeMoleculesConfs(host_mols, maxIters=200)
+
+    result = nvmolkit_uff.UFFOptimizeMoleculesConfs(
+        device_mols,
+        maxIters=200,
+        output=CoordinateOutput.DEVICE,
+    )
+    assert isinstance(result, Device3DResult)
+    torch.cuda.synchronize()
+    device_energies_flat = result.energies.torch().tolist()
+
+    expected_n = sum(m.GetNumConformers() for m in device_mols)
+    assert len(device_energies_flat) == expected_n
+
+    host_flat = [e for inner in host_energies for e in inner]
+    assert len(host_flat) == len(device_energies_flat)
+    for h, d in zip(host_flat, device_energies_flat):
+        rel = abs(h - d) / max(abs(h), 1e-10)
+        assert rel < 1e-2, f"host {h} vs device {d}"

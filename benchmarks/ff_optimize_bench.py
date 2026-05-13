@@ -31,6 +31,7 @@ Usage:
 import argparse
 import gc
 import math
+import random
 import statistics
 import sys
 
@@ -44,9 +45,12 @@ from bench_utils import (
     prep_mols,
     time_it,
 )
+from nvmolkit import autotune as nv_autotune
 from nvmolkit.types import HardwareOptions
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdDistGeom
+
+OPTUNA_AVAILABLE = nv_autotune.is_available()
 
 
 def _embed_conformers(mols: list[Chem.Mol], confs_per_mol: int, seed: int) -> list[Chem.Mol]:
@@ -210,7 +214,7 @@ def _build_hardware_options(
 
 CSV_HEADER = (
     "method,ff,input_file,input_type,num_mols,confs_per_mol,max_iters,"
-    "batch_size,batches_per_gpu,prep_threads,num_gpus,"
+    "batch_size,batches_per_gpu,prep_threads,num_gpus,nvmolkit_config_source,"
     "rdkit_threads,time_ms,std_ms,energies_compared,mean_abs_energy_diff,max_abs_energy_diff"
 )
 
@@ -264,6 +268,58 @@ def main() -> None:
     parser.add_argument("--num_gpus", type=int, default=1, help="Number of GPUs to use (default: 1)")
 
     parser.add_argument(
+        "--autotune",
+        action="store_true",
+        help=(
+            "Tune nvmolkit HardwareOptions (batchSize/batchesPerGpu) before timing using "
+            "tune_mmff_optimize or tune_uff_optimize (depending on --ff). Requires the "
+            "[autotune] extra (optuna)."
+        ),
+    )
+    parser.add_argument(
+        "--autotune_save",
+        type=str,
+        default=None,
+        help="Path to save the tuned HardwareOptions as JSON (only with --autotune)",
+    )
+    parser.add_argument(
+        "--autotune_load",
+        type=str,
+        default=None,
+        help=(
+            "Path to a previously-saved HardwareOptions JSON. "
+            "Overrides --batch_size/--batches_per_gpu/--prep_threads (and --num_gpus if gpuIds present in the file)."
+        ),
+    )
+    parser.add_argument(
+        "--autotune_trials",
+        type=int,
+        default=20,
+        help="Number of Optuna trials when --autotune is set (default: 20)",
+    )
+    parser.add_argument(
+        "--autotune_time_budget",
+        type=float,
+        default=10.0,
+        help="Target wall-clock seconds per Optuna trial (default: 10.0)",
+    )
+    parser.add_argument(
+        "--autotune_calibration_size",
+        type=int,
+        default=0,
+        help=(
+            "Number of molecules to use per autotune trial. "
+            "0 = auto-subsample (~10%% of the workload, capped at 2000). Default: 0"
+        ),
+    )
+    parser.add_argument(
+        "--autotune_seed",
+        type=int,
+        default=42,
+        help="Seed for the Optuna sampler (default: 42)",
+    )
+
+    parser.add_argument(
         "--validate", action="store_true", dest="validate", help="Compute absolute energy diffs vs RDKit (default)"
     )
     parser.add_argument("--no_validate", action="store_false", dest="validate", help="Skip energy validation")
@@ -285,6 +341,15 @@ def main() -> None:
         sys.exit(1)
     if args.no_nvmolkit and args.no_rdkit:
         print("Error: cannot disable both nvmolkit and RDKit")
+        sys.exit(1)
+    if args.autotune and args.no_nvmolkit:
+        print("Error: --autotune requires nvmolkit; remove --no_nvmolkit")
+        sys.exit(1)
+    if args.autotune_save and not args.autotune:
+        print("Error: --autotune_save requires --autotune")
+        sys.exit(1)
+    if args.autotune and args.autotune_load:
+        print("Error: --autotune and --autotune_load are mutually exclusive")
         sys.exit(1)
     input_file = input_paths[0]
     if args.smiles:
@@ -343,10 +408,70 @@ def main() -> None:
     results: dict[str, tuple[float, float, list[float]]] = {}
 
     hardware_options = None
+    config_source = "cli"
     if not args.no_nvmolkit:
-        hardware_options = _build_hardware_options(
-            args.batch_size, args.batches_per_gpu, args.prep_threads, args.num_gpus
-        )
+        gpu_ids = list(range(args.num_gpus))
+        if args.autotune_load:
+            print(f"\nLoading tuned HardwareOptions from {args.autotune_load}...")
+            loaded = nv_autotune.load(args.autotune_load)
+            if not isinstance(loaded, HardwareOptions):
+                print(f"Error: {args.autotune_load} contains {type(loaded).__name__}, expected HardwareOptions")
+                sys.exit(1)
+            hardware_options = loaded
+            if not hardware_options.gpuIds:
+                hardware_options.gpuIds = gpu_ids
+            config_source = "loaded"
+            print(
+                f"  Loaded: batchSize={hardware_options.batchSize}, "
+                f"batchesPerGpu={hardware_options.batchesPerGpu}, "
+                f"preprocessingThreads={hardware_options.preprocessingThreads}, "
+                f"gpuIds={list(hardware_options.gpuIds) if hardware_options.gpuIds else []}"
+            )
+        elif args.autotune:
+            if not OPTUNA_AVAILABLE:
+                print(
+                    "Error: --autotune requires the optional 'optuna' dependency. "
+                    "Install with `pip install nvmolkit[autotune]` or `conda install -c conda-forge optuna`."
+                )
+                sys.exit(1)
+            print(
+                f"\nAutotuning HardwareOptions for {args.ff.upper()} "
+                f"(n_trials={args.autotune_trials}, per-trial target={args.autotune_time_budget:.1f}s)..."
+            )
+            explicit_calibration = None
+            if args.autotune_calibration_size > 0:
+                rng = random.Random(args.autotune_seed)
+                size = min(args.autotune_calibration_size, len(mols))
+                explicit_calibration = rng.sample(range(len(mols)), size)
+            tune_kwargs = dict(
+                maxIters=args.max_iters,
+                gpuIds=gpu_ids,
+                n_trials=args.autotune_trials,
+                target_seconds_per_trial=args.autotune_time_budget,
+                calibration_set=explicit_calibration,
+                seed=args.autotune_seed,
+                verbose=True,
+            )
+            if args.ff == "mmff":
+                tune_result = nv_autotune.tune_mmff_optimize(mols, **tune_kwargs)
+            else:
+                tune_result = nv_autotune.tune_uff_optimize(mols, **tune_kwargs)
+            hardware_options = tune_result.best_config
+            config_source = "autotuned"
+            print(
+                f"  Best: batchSize={hardware_options.batchSize}, "
+                f"batchesPerGpu={hardware_options.batchesPerGpu} "
+                f"(throughput={tune_result.best_throughput:.2f} confs/s, "
+                f"trials_run={tune_result.n_trials_run}, "
+                f"calibration_size={tune_result.calibration_size})"
+            )
+            if args.autotune_save:
+                nv_autotune.save(hardware_options, args.autotune_save)
+                print(f"  Saved tuned config to {args.autotune_save}")
+        else:
+            hardware_options = _build_hardware_options(
+                args.batch_size, args.batches_per_gpu, args.prep_threads, args.num_gpus
+            )
 
         torch.cuda.cudart().cudaProfilerStart()
         print(f"\nRunning nvmolkit {args.ff.upper()} optimize benchmark...")
@@ -410,6 +535,7 @@ def main() -> None:
         batches_per_gpu = applied_batches_per_gpu if is_nv else "N/A"
         prep_threads = applied_prep_threads if is_nv else "N/A"
         num_gpus = applied_num_gpus if is_nv else "N/A"
+        nvmolkit_config_source = config_source if is_nv else "N/A"
         rdkit_threads = args.rdkit_threads if name == "rdkit" else "N/A"
         mean_diff = energy_mean if (args.validate and is_nv) else "N/A"
         max_diff = energy_max if (args.validate and is_nv) else "N/A"
@@ -417,7 +543,7 @@ def main() -> None:
         csv_rows.append(
             f"{name},{args.ff},{input_file},{input_type},{len(mols)},{args.confs_per_mol},"
             f"{args.max_iters},{batch_size},{batches_per_gpu},{prep_threads},{num_gpus},"
-            f"{rdkit_threads},{avg_ms:.2f},{std_ms:.2f},"
+            f"{nvmolkit_config_source},{rdkit_threads},{avg_ms:.2f},{std_ms:.2f},"
             f"{pairs},{mean_diff},{max_diff}"
         )
 

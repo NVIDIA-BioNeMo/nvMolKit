@@ -66,7 +66,7 @@ struct SubstructSearchConfig {
 struct SubstructSearchResults {
   /// Sparse storage: pairIndex -> vector of matches
   /// Each match is a vector<int> of target atom indices (one per query atom)
-  std::unordered_map<int, std::vector<std::vector<int>>> matches;
+  std::unordered_map<int64_t, std::vector<std::vector<int>>> matches;
 
   int numTargets = 0;
   int numQueries = 0;
@@ -81,7 +81,9 @@ struct SubstructSearchResults {
   }
 
   /// Compute flat pair index
-  [[nodiscard]] int pairIndex(int targetIdx, int queryIdx) const { return targetIdx * numQueries + queryIdx; }
+  [[nodiscard]] int64_t pairIndex(int targetIdx, int queryIdx) const {
+    return static_cast<int64_t>(targetIdx) * numQueries + queryIdx;
+  }
 
   /// Number of matches for this pair
   [[nodiscard]] int matchCount(int targetIdx, int queryIdx) const {
@@ -120,15 +122,19 @@ struct HasSubstructMatchResults {
   }
 
   /// Compute flat pair index
-  [[nodiscard]] int pairIndex(int targetIdx, int queryIdx) const { return targetIdx * numQueries + queryIdx; }
+  [[nodiscard]] int64_t pairIndex(int targetIdx, int queryIdx) const {
+    return static_cast<int64_t>(targetIdx) * numQueries + queryIdx;
+  }
 
   /// Check if target contains query as substructure
   [[nodiscard]] bool matches(int targetIdx, int queryIdx) const {
-    return hasMatch[pairIndex(targetIdx, queryIdx)] != 0;
+    return hasMatch[static_cast<size_t>(pairIndex(targetIdx, queryIdx))] != 0;
   }
 
   /// Set match result for a pair
-  void setMatch(int targetIdx, int queryIdx, bool value) { hasMatch[pairIndex(targetIdx, queryIdx)] = value ? 1 : 0; }
+  void setMatch(int targetIdx, int queryIdx, bool value) {
+    hasMatch[static_cast<size_t>(pairIndex(targetIdx, queryIdx))] = value ? 1 : 0;
+  }
 };
 
 }  // namespace nvMolKit

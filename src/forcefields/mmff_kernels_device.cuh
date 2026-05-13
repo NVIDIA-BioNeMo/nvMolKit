@@ -1035,7 +1035,7 @@ static __device__ __forceinline__ void torsionConstraintGrad(const double* pos,
 namespace nvMolKit {
 namespace MMFF {
 
-template <int stride>
+template <int stride, bool HasConstraints>
 static __device__ __inline__ double molEnergy(const EnergyForceContribsDevicePtr& terms,
                                               const BatchedIndicesDevicePtr&      systemIndices,
                                               const double*                       molCoords,
@@ -1133,67 +1133,70 @@ static __device__ __inline__ double molEnergy(const EnergyForceContribsDevicePtr
     energy += eleEnergy(molCoords, localIdx1, localIdx2, chargeTerms[i], dielModel, is14);
   }
 
-  const auto& [dc_idx1s, dc_idx2s, minLens, maxLens, dcForceConstants] = terms.distanceConstraintTerms;
-  const int dcStart = systemIndices.distanceConstraintTermStarts[molIdx];
-  const int dcEnd   = systemIndices.distanceConstraintTermStarts[molIdx + 1];
+  if constexpr (HasConstraints) {
+    const auto& [dc_idx1s, dc_idx2s, minLens, maxLens, dcForceConstants] = terms.distanceConstraintTerms;
+    const int dcStart = systemIndices.distanceConstraintTermStarts[molIdx];
+    const int dcEnd   = systemIndices.distanceConstraintTermStarts[molIdx + 1];
 #pragma unroll 1
-  for (int i = dcStart + tid; i < dcEnd; i += stride) {
-    const int localIdx1 = dc_idx1s[i] - atomStart;
-    const int localIdx2 = dc_idx2s[i] - atomStart;
-    energy += distanceConstraintEnergy(molCoords, localIdx1, localIdx2, minLens[i], maxLens[i], dcForceConstants[i]);
-  }
+    for (int i = dcStart + tid; i < dcEnd; i += stride) {
+      const int localIdx1 = dc_idx1s[i] - atomStart;
+      const int localIdx2 = dc_idx2s[i] - atomStart;
+      energy += distanceConstraintEnergy(molCoords, localIdx1, localIdx2, minLens[i], maxLens[i], dcForceConstants[i]);
+    }
 
-  const auto& [pc_idxs, refXs, refYs, refZs, maxDispls, pcForceConstants] = terms.positionConstraintTerms;
-  const int pcStart = systemIndices.positionConstraintTermStarts[molIdx];
-  const int pcEnd   = systemIndices.positionConstraintTermStarts[molIdx + 1];
+    const auto& [pc_idxs, refXs, refYs, refZs, maxDispls, pcForceConstants] = terms.positionConstraintTerms;
+    const int pcStart = systemIndices.positionConstraintTermStarts[molIdx];
+    const int pcEnd   = systemIndices.positionConstraintTermStarts[molIdx + 1];
 #pragma unroll 1
-  for (int i = pcStart + tid; i < pcEnd; i += stride) {
-    const int localIdx = pc_idxs[i] - atomStart;
-    energy +=
-      positionConstraintEnergy(molCoords, localIdx, refXs[i], refYs[i], refZs[i], maxDispls[i], pcForceConstants[i]);
-  }
+    for (int i = pcStart + tid; i < pcEnd; i += stride) {
+      const int localIdx = pc_idxs[i] - atomStart;
+      energy +=
+        positionConstraintEnergy(molCoords, localIdx, refXs[i], refYs[i], refZs[i], maxDispls[i], pcForceConstants[i]);
+    }
 
-  const auto& [ac_idx1s, ac_idx2s, ac_idx3s, minAngleDegs, maxAngleDegs, acForceConstants] = terms.angleConstraintTerms;
-  const int acStart = systemIndices.angleConstraintTermStarts[molIdx];
-  const int acEnd   = systemIndices.angleConstraintTermStarts[molIdx + 1];
+    const auto& [ac_idx1s, ac_idx2s, ac_idx3s, minAngleDegs, maxAngleDegs, acForceConstants] =
+      terms.angleConstraintTerms;
+    const int acStart = systemIndices.angleConstraintTermStarts[molIdx];
+    const int acEnd   = systemIndices.angleConstraintTermStarts[molIdx + 1];
 #pragma unroll 1
-  for (int i = acStart + tid; i < acEnd; i += stride) {
-    const int localIdx1 = ac_idx1s[i] - atomStart;
-    const int localIdx2 = ac_idx2s[i] - atomStart;
-    const int localIdx3 = ac_idx3s[i] - atomStart;
-    energy += angleConstraintEnergy(molCoords,
-                                    localIdx1,
-                                    localIdx2,
-                                    localIdx3,
-                                    minAngleDegs[i],
-                                    maxAngleDegs[i],
-                                    acForceConstants[i]);
-  }
-
-  const auto& [tc_idx1s, tc_idx2s, tc_idx3s, tc_idx4s, minDihedralDegs, maxDihedralDegs, tcForceConstants] =
-    terms.torsionConstraintTerms;
-  const int tcStart = systemIndices.torsionConstraintTermStarts[molIdx];
-  const int tcEnd   = systemIndices.torsionConstraintTermStarts[molIdx + 1];
-#pragma unroll 1
-  for (int i = tcStart + tid; i < tcEnd; i += stride) {
-    const int localIdx1 = tc_idx1s[i] - atomStart;
-    const int localIdx2 = tc_idx2s[i] - atomStart;
-    const int localIdx3 = tc_idx3s[i] - atomStart;
-    const int localIdx4 = tc_idx4s[i] - atomStart;
-    energy += torsionConstraintEnergy(molCoords,
+    for (int i = acStart + tid; i < acEnd; i += stride) {
+      const int localIdx1 = ac_idx1s[i] - atomStart;
+      const int localIdx2 = ac_idx2s[i] - atomStart;
+      const int localIdx3 = ac_idx3s[i] - atomStart;
+      energy += angleConstraintEnergy(molCoords,
                                       localIdx1,
                                       localIdx2,
                                       localIdx3,
-                                      localIdx4,
-                                      minDihedralDegs[i],
-                                      maxDihedralDegs[i],
-                                      tcForceConstants[i]);
+                                      minAngleDegs[i],
+                                      maxAngleDegs[i],
+                                      acForceConstants[i]);
+    }
+
+    const auto& [tc_idx1s, tc_idx2s, tc_idx3s, tc_idx4s, minDihedralDegs, maxDihedralDegs, tcForceConstants] =
+      terms.torsionConstraintTerms;
+    const int tcStart = systemIndices.torsionConstraintTermStarts[molIdx];
+    const int tcEnd   = systemIndices.torsionConstraintTermStarts[molIdx + 1];
+#pragma unroll 1
+    for (int i = tcStart + tid; i < tcEnd; i += stride) {
+      const int localIdx1 = tc_idx1s[i] - atomStart;
+      const int localIdx2 = tc_idx2s[i] - atomStart;
+      const int localIdx3 = tc_idx3s[i] - atomStart;
+      const int localIdx4 = tc_idx4s[i] - atomStart;
+      energy += torsionConstraintEnergy(molCoords,
+                                        localIdx1,
+                                        localIdx2,
+                                        localIdx3,
+                                        localIdx4,
+                                        minDihedralDegs[i],
+                                        maxDihedralDegs[i],
+                                        tcForceConstants[i]);
+    }
   }
 
   return energy;
 }
 
-template <int stride>
+template <int stride, bool HasConstraints>
 static __device__ __inline__ void molGrad(const EnergyForceContribsDevicePtr& terms,
                                           const BatchedIndicesDevicePtr&      systemIndices,
                                           const double*                       molCoords,
@@ -1290,62 +1293,72 @@ static __device__ __inline__ void molGrad(const EnergyForceContribsDevicePtr& te
     eleGrad(molCoords, localIdx1, localIdx2, chargeTerms[i], dielModels[i], is14, grad);
   }
 
-  const auto& [dc_idx1s, dc_idx2s, minLens, maxLens, dcForceConstants] = terms.distanceConstraintTerms;
-  const int dcStart = systemIndices.distanceConstraintTermStarts[molIdx];
-  const int dcEnd   = systemIndices.distanceConstraintTermStarts[molIdx + 1];
+  if constexpr (HasConstraints) {
+    const auto& [dc_idx1s, dc_idx2s, minLens, maxLens, dcForceConstants] = terms.distanceConstraintTerms;
+    const int dcStart = systemIndices.distanceConstraintTermStarts[molIdx];
+    const int dcEnd   = systemIndices.distanceConstraintTermStarts[molIdx + 1];
 #pragma unroll 1
-  for (int i = dcStart + tid; i < dcEnd; i += stride) {
-    const int localIdx1 = dc_idx1s[i] - atomStart;
-    const int localIdx2 = dc_idx2s[i] - atomStart;
-    distanceConstraintGrad(molCoords, localIdx1, localIdx2, minLens[i], maxLens[i], dcForceConstants[i], grad);
-  }
+    for (int i = dcStart + tid; i < dcEnd; i += stride) {
+      const int localIdx1 = dc_idx1s[i] - atomStart;
+      const int localIdx2 = dc_idx2s[i] - atomStart;
+      distanceConstraintGrad(molCoords, localIdx1, localIdx2, minLens[i], maxLens[i], dcForceConstants[i], grad);
+    }
 
-  const auto& [pc_idxs, refXs, refYs, refZs, maxDispls, pcForceConstants] = terms.positionConstraintTerms;
-  const int pcStart = systemIndices.positionConstraintTermStarts[molIdx];
-  const int pcEnd   = systemIndices.positionConstraintTermStarts[molIdx + 1];
+    const auto& [pc_idxs, refXs, refYs, refZs, maxDispls, pcForceConstants] = terms.positionConstraintTerms;
+    const int pcStart = systemIndices.positionConstraintTermStarts[molIdx];
+    const int pcEnd   = systemIndices.positionConstraintTermStarts[molIdx + 1];
 #pragma unroll 1
-  for (int i = pcStart + tid; i < pcEnd; i += stride) {
-    const int localIdx = pc_idxs[i] - atomStart;
-    positionConstraintGrad(molCoords, localIdx, refXs[i], refYs[i], refZs[i], maxDispls[i], pcForceConstants[i], grad);
-  }
+    for (int i = pcStart + tid; i < pcEnd; i += stride) {
+      const int localIdx = pc_idxs[i] - atomStart;
+      positionConstraintGrad(molCoords,
+                             localIdx,
+                             refXs[i],
+                             refYs[i],
+                             refZs[i],
+                             maxDispls[i],
+                             pcForceConstants[i],
+                             grad);
+    }
 
-  const auto& [ac_idx1s, ac_idx2s, ac_idx3s, minAngleDegs, maxAngleDegs, acForceConstants] = terms.angleConstraintTerms;
-  const int acStart = systemIndices.angleConstraintTermStarts[molIdx];
-  const int acEnd   = systemIndices.angleConstraintTermStarts[molIdx + 1];
+    const auto& [ac_idx1s, ac_idx2s, ac_idx3s, minAngleDegs, maxAngleDegs, acForceConstants] =
+      terms.angleConstraintTerms;
+    const int acStart = systemIndices.angleConstraintTermStarts[molIdx];
+    const int acEnd   = systemIndices.angleConstraintTermStarts[molIdx + 1];
 #pragma unroll 1
-  for (int i = acStart + tid; i < acEnd; i += stride) {
-    const int localIdx1 = ac_idx1s[i] - atomStart;
-    const int localIdx2 = ac_idx2s[i] - atomStart;
-    const int localIdx3 = ac_idx3s[i] - atomStart;
-    angleConstraintGrad(molCoords,
-                        localIdx1,
-                        localIdx2,
-                        localIdx3,
-                        minAngleDegs[i],
-                        maxAngleDegs[i],
-                        acForceConstants[i],
-                        grad);
-  }
-
-  const auto& [tc_idx1s, tc_idx2s, tc_idx3s, tc_idx4s, minDihedralDegs, maxDihedralDegs, tcForceConstants] =
-    terms.torsionConstraintTerms;
-  const int tcStart = systemIndices.torsionConstraintTermStarts[molIdx];
-  const int tcEnd   = systemIndices.torsionConstraintTermStarts[molIdx + 1];
-#pragma unroll 1
-  for (int i = tcStart + tid; i < tcEnd; i += stride) {
-    const int localIdx1 = tc_idx1s[i] - atomStart;
-    const int localIdx2 = tc_idx2s[i] - atomStart;
-    const int localIdx3 = tc_idx3s[i] - atomStart;
-    const int localIdx4 = tc_idx4s[i] - atomStart;
-    torsionConstraintGrad(molCoords,
+    for (int i = acStart + tid; i < acEnd; i += stride) {
+      const int localIdx1 = ac_idx1s[i] - atomStart;
+      const int localIdx2 = ac_idx2s[i] - atomStart;
+      const int localIdx3 = ac_idx3s[i] - atomStart;
+      angleConstraintGrad(molCoords,
                           localIdx1,
                           localIdx2,
                           localIdx3,
-                          localIdx4,
-                          minDihedralDegs[i],
-                          maxDihedralDegs[i],
-                          tcForceConstants[i],
+                          minAngleDegs[i],
+                          maxAngleDegs[i],
+                          acForceConstants[i],
                           grad);
+    }
+
+    const auto& [tc_idx1s, tc_idx2s, tc_idx3s, tc_idx4s, minDihedralDegs, maxDihedralDegs, tcForceConstants] =
+      terms.torsionConstraintTerms;
+    const int tcStart = systemIndices.torsionConstraintTermStarts[molIdx];
+    const int tcEnd   = systemIndices.torsionConstraintTermStarts[molIdx + 1];
+#pragma unroll 1
+    for (int i = tcStart + tid; i < tcEnd; i += stride) {
+      const int localIdx1 = tc_idx1s[i] - atomStart;
+      const int localIdx2 = tc_idx2s[i] - atomStart;
+      const int localIdx3 = tc_idx3s[i] - atomStart;
+      const int localIdx4 = tc_idx4s[i] - atomStart;
+      torsionConstraintGrad(molCoords,
+                            localIdx1,
+                            localIdx2,
+                            localIdx3,
+                            localIdx4,
+                            minDihedralDegs[i],
+                            maxDihedralDegs[i],
+                            tcForceConstants[i],
+                            grad);
+    }
   }
 }
 

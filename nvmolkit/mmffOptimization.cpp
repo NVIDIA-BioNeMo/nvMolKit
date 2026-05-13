@@ -17,27 +17,28 @@
 
 #include "bfgs_mmff.h"
 #include "boost_python_utils.h"
+#include "device_result_python.h"
 #include "mmff_python_utils.h"
 
-BOOST_PYTHON_MODULE(_mmffOptimization) {
-  boost::python::def(
-    "MMFFOptimizeMoleculesConfs",
-    +[](const boost::python::list&            molecules,
-        int                                   maxIters,
-        const boost::python::list&            propertiesList,
-        const nvMolKit::BatchHardwareOptions& hardwareOptions) -> boost::python::list {
-      auto molsVec = nvMolKit::extractMolecules(molecules);
+namespace bp = boost::python;
 
+BOOST_PYTHON_MODULE(_mmffOptimization) {
+  bp::def(
+    "MMFFOptimizeMoleculesConfs",
+    +[](const bp::list&                       molecules,
+        int                                   maxIters,
+        const bp::list&                       propertiesList,
+        const nvMolKit::BatchHardwareOptions& hardwareOptions) -> bp::list {
+      auto       molsVec    = nvMolKit::extractMolecules(molecules);
       const auto properties = nvMolKit::extractMMFFPropertiesList(propertiesList, static_cast<int>(molsVec.size()));
       const auto result =
         nvMolKit::MMFF::MMFFOptimizeMoleculesConfsBfgs(molsVec, maxIters, properties, hardwareOptions);
-
       return nvMolKit::vectorOfVectorsToList(result);
     },
-    (boost::python::arg("molecules"),
-     boost::python::arg("maxIters")        = 200,
-     boost::python::arg("properties")      = boost::python::list(),
-     boost::python::arg("hardwareOptions") = nvMolKit::BatchHardwareOptions()),
+    (bp::arg("molecules"),
+     bp::arg("maxIters")        = 200,
+     bp::arg("properties")      = bp::list(),
+     bp::arg("hardwareOptions") = nvMolKit::BatchHardwareOptions()),
     "Optimize conformers for multiple molecules using MMFF force field.\n"
     "\n"
     "Args:\n"
@@ -48,4 +49,38 @@ BOOST_PYTHON_MODULE(_mmffOptimization) {
     "\n"
     "Returns:\n"
     "    List of lists of energies, where each inner list contains energies for conformers of one molecule");
+
+  bp::def(
+    "MMFFOptimizeMoleculesConfsDevice",
+    +[](const bp::list&                       molecules,
+        int                                   maxIters,
+        const bp::list&                       propertiesList,
+        const nvMolKit::BatchHardwareOptions& hardwareOptions,
+        int                                   targetGpu) -> bp::object {
+      auto       molsVec    = nvMolKit::extractMolecules(molecules);
+      const auto properties = nvMolKit::extractMMFFPropertiesList(propertiesList, static_cast<int>(molsVec.size()));
+      auto       result     = nvMolKit::MMFF::MMFFMinimizeMoleculesConfs(molsVec,
+                                                               maxIters,
+                                                               /*gradTol=*/1e-4,
+                                                               properties,
+                                                               /*constraints=*/{},
+                                                               hardwareOptions,
+                                                               nvMolKit::BfgsBackend::HYBRID,
+                                                               nvMolKit::CoordinateOutput::DEVICE,
+                                                               targetGpu);
+      if (!result.device.has_value()) {
+        throw std::runtime_error("MMFFMinimizeMoleculesConfs(DEVICE) returned no device result");
+      }
+      return nvMolKit::buildOwningDevice3DResult(*result.device);
+    },
+    (bp::arg("molecules"),
+     bp::arg("maxIters")        = 200,
+     bp::arg("properties")      = bp::list(),
+     bp::arg("hardwareOptions") = nvMolKit::BatchHardwareOptions(),
+     bp::arg("targetGpu")       = -1),
+    "Optimize conformers for multiple molecules using MMFF force field, returning device-resident "
+    "results.\n"
+    "\n"
+    "Returns:\n"
+    "    A Device3DResult carrying optimized coordinates, energies, and convergence flags on GPU.");
 }

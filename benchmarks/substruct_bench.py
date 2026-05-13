@@ -64,9 +64,18 @@ from typing import Callable, Iterator
 import nvtx
 import pandas as pd
 from benchmark_timing import time_it as _time_it
+from nvmolkit import autotune as nv_autotune
+from nvmolkit.substructure import (
+    SubstructSearchConfig,
+    countSubstructMatches,
+    getSubstructMatches,
+    hasSubstructMatch,
+)
 from rdkit import Chem, RDLogger
 from rdkit.Chem import rdSubstructLibrary
 from tqdm.contrib.concurrent import process_map
+
+OPTUNA_AVAILABLE = nv_autotune.is_available()
 
 
 def time_it(func: Callable, runs: int = 1, gpu_sync: bool = False) -> tuple[float, float]:
@@ -353,8 +362,6 @@ def bench_nvmolkit(
     mols: list[Chem.Mol], queries: list[Chem.Mol], runs: int, mode: str, config
 ) -> tuple[float, float, object]:
     """Benchmark nvmolkit GPU substructure search."""
-    from nvmolkit.substructure import countSubstructMatches, getSubstructMatches, hasSubstructMatch
-
     results_data: object = None
 
     @nvtx.annotate("nvmolkit_run", color="orange")
@@ -432,6 +439,56 @@ def main():
     parser.add_argument("--no_warmup", action="store_false", dest="warmup", help="Skip warmup run")
     parser.set_defaults(warmup=True)
     parser.add_argument(
+        "--autotune",
+        action="store_true",
+        help=(
+            "Tune nvmolkit SubstructSearchConfig (batchSize/workerThreads/preprocessingThreads) "
+            "before timing. Requires the [autotune] extra (optuna). Single-config mode only."
+        ),
+    )
+    parser.add_argument(
+        "--autotune_save",
+        type=str,
+        default=None,
+        help="Path to save the tuned SubstructSearchConfig as JSON (only with --autotune)",
+    )
+    parser.add_argument(
+        "--autotune_load",
+        type=str,
+        default=None,
+        help=(
+            "Path to a previously-saved SubstructSearchConfig JSON. "
+            "Overrides --batch_size/--workers/--prep_threads (and --num_gpus if gpuIds present in the file)."
+        ),
+    )
+    parser.add_argument(
+        "--autotune_trials",
+        type=int,
+        default=20,
+        help="Number of Optuna trials when --autotune is set (default: 20)",
+    )
+    parser.add_argument(
+        "--autotune_time_budget",
+        type=float,
+        default=10.0,
+        help="Target wall-clock seconds per Optuna trial (default: 10.0)",
+    )
+    parser.add_argument(
+        "--autotune_calibration_size",
+        type=int,
+        default=0,
+        help=(
+            "Number of target molecules to use per autotune trial. "
+            "0 = auto-subsample (~10%% of the workload, capped at 2000). Default: 0"
+        ),
+    )
+    parser.add_argument(
+        "--autotune_seed",
+        type=int,
+        default=42,
+        help="Seed for the Optuna sampler (default: 42)",
+    )
+    parser.add_argument(
         "--validate", action="store_true", dest="validate", help="Validate nvmolkit vs RDKit (default)"
     )
     parser.add_argument("--no_validate", action="store_false", dest="validate", help="Skip validation checks")
@@ -462,6 +519,25 @@ def main():
 
     if args.num_gpus <= 0:
         print("Error: --num_gpus must be >= 1")
+        sys.exit(1)
+
+    if args.autotune and args.config:
+        print("Error: --autotune is only supported in single-config mode (use --smarts, not --config)")
+        sys.exit(1)
+    if args.autotune_load and args.config:
+        print(
+            "Error: --autotune_load is only supported in single-config mode "
+            "(it would override batch_size/workers/prep_threads/gpuIds on every row)"
+        )
+        sys.exit(1)
+    if args.autotune and args.no_nvmolkit:
+        print("Error: --autotune requires nvmolkit; remove --no_nvmolkit")
+        sys.exit(1)
+    if args.autotune_save and not args.autotune:
+        print("Error: --autotune_save requires --autotune")
+        sys.exit(1)
+    if args.autotune and args.autotune_load:
+        print("Error: --autotune and --autotune_load are mutually exclusive")
         sys.exit(1)
 
     print("\nConfiguration:")
@@ -554,20 +630,79 @@ def main():
             try:
                 import torch
 
-                from nvmolkit.substructure import (
-                    SubstructSearchConfig,
-                    countSubstructMatches,
-                    getSubstructMatches,
-                    hasSubstructMatch,
-                )
+                api_for_mode = {
+                    "hasSubstructMatch": hasSubstructMatch,
+                    "countSubstructMatches": countSubstructMatches,
+                    "getSubstructMatches": getSubstructMatches,
+                }[mode]
+                gpu_ids = list(range(config_row["num_gpus"]))
 
-                config = SubstructSearchConfig()
-                config.batchSize = config_row["batch_size"]
-                config.workerThreads = config_row["workers"]
-                config.preprocessingThreads = config_row["prep_threads"]
-                config.gpuIds = list(range(config_row["num_gpus"]))
-                if args.max_matches > 0:
-                    config.maxMatches = args.max_matches
+                if args.autotune_load:
+                    print(f"\nLoading tuned SubstructSearchConfig from {args.autotune_load}...")
+                    loaded = nv_autotune.load(args.autotune_load)
+                    if not isinstance(loaded, SubstructSearchConfig):
+                        print(
+                            f"Error: {args.autotune_load} contains {type(loaded).__name__}, "
+                            "expected SubstructSearchConfig"
+                        )
+                        sys.exit(1)
+                    config = loaded
+                    if args.max_matches > 0:
+                        config.maxMatches = args.max_matches
+                    if not config.gpuIds:
+                        config.gpuIds = gpu_ids
+                    print(
+                        f"  Loaded: batchSize={config.batchSize}, workerThreads={config.workerThreads}, "
+                        f"preprocessingThreads={config.preprocessingThreads}, gpuIds={list(config.gpuIds)}"
+                    )
+                elif args.autotune:
+                    if not OPTUNA_AVAILABLE:
+                        print(
+                            "Error: --autotune requires the optional 'optuna' dependency. "
+                            "Install with `pip install nvmolkit[autotune]` or `conda install -c conda-forge optuna`."
+                        )
+                        sys.exit(1)
+                    print(
+                        f"\nAutotuning SubstructSearchConfig (mode={mode}, n_trials={args.autotune_trials}, "
+                        f"per-trial target={args.autotune_time_budget:.1f}s)..."
+                    )
+                    explicit_calibration = None
+                    if args.autotune_calibration_size > 0:
+                        rng = random.Random(args.autotune_seed)
+                        size = min(args.autotune_calibration_size, len(mols))
+                        explicit_calibration = rng.sample(range(len(mols)), size)
+                    tune_result = nv_autotune.tune_substructure(
+                        mols,
+                        queries,
+                        api=api_for_mode,
+                        maxMatches=args.max_matches,
+                        gpuIds=gpu_ids,
+                        n_trials=args.autotune_trials,
+                        target_seconds_per_trial=args.autotune_time_budget,
+                        calibration_set=explicit_calibration,
+                        seed=args.autotune_seed,
+                        verbose=True,
+                    )
+                    config = tune_result.best_config
+                    print(
+                        f"  Best: batchSize={config.batchSize}, workerThreads={config.workerThreads}, "
+                        f"preprocessingThreads={config.preprocessingThreads} "
+                        f"(throughput={tune_result.best_throughput:.2f} pairs/s, "
+                        f"trials_run={tune_result.n_trials_run}, "
+                        f"calibration_size={tune_result.calibration_size})"
+                    )
+                    if args.autotune_save:
+                        nv_autotune.save(config, args.autotune_save)
+                        print(f"  Saved tuned config to {args.autotune_save}")
+                else:
+                    config = SubstructSearchConfig()
+                    config.batchSize = config_row["batch_size"]
+                    config.workerThreads = config_row["workers"]
+                    config.preprocessingThreads = config_row["prep_threads"]
+                    config.gpuIds = gpu_ids
+                    if args.max_matches > 0:
+                        config.maxMatches = args.max_matches
+
                 ran_nvmolkit = True
                 torch_module = torch
                 torch.cuda.cudart().cudaProfilerStart()
@@ -667,10 +802,30 @@ def main():
                 pct = 100.0 * matches / total if total > 0 else 0
                 print(f"  Full match agreement: {matches}/{total} ({pct:.1f}%)")
 
+        if ran_nvmolkit:
+            applied_batch_size = int(config.batchSize)
+            applied_workers = int(config.workerThreads)
+            applied_prep_threads = int(config.preprocessingThreads)
+            applied_num_gpus = len(list(config.gpuIds)) if config.gpuIds else config_row["num_gpus"]
+        else:
+            applied_batch_size = config_row["batch_size"]
+            applied_workers = config_row["workers"]
+            applied_prep_threads = config_row["prep_threads"]
+            applied_num_gpus = config_row["num_gpus"]
+
+        if args.autotune:
+            config_source = "autotuned"
+        elif args.autotune_load:
+            config_source = "loaded"
+        else:
+            config_source = "cli"
+
         for name, (avg_ms, std_ms, _) in results.items():
-            batch_size = config_row["batch_size"] if name == "nvmolkit" else "N/A"
-            workers = config_row["workers"] if name == "nvmolkit" else "N/A"
-            prep_threads = config_row["prep_threads"] if name == "nvmolkit" else "N/A"
+            batch_size = applied_batch_size if name == "nvmolkit" else "N/A"
+            workers = applied_workers if name == "nvmolkit" else "N/A"
+            prep_threads = applied_prep_threads if name == "nvmolkit" else "N/A"
+            num_gpus = applied_num_gpus if name == "nvmolkit" else config_row["num_gpus"]
+            nvmolkit_config_source = config_source if name == "nvmolkit" else "N/A"
             rdkit_threads = args.rdkit_threads if name == "rdkit" else "N/A"
             rdkit_match_mode = args.rdkit_match_mode if name == "rdkit" else "N/A"
             csv_rows.append(
@@ -685,9 +840,10 @@ def main():
                     num_patterns,
                     args.max_matches,
                     batch_size,
-                    config_row["num_gpus"],
+                    num_gpus,
                     workers,
                     prep_threads,
+                    nvmolkit_config_source,
                     rdkit_threads,
                     rdkit_match_mode,
                     avg_ms,
@@ -704,7 +860,8 @@ def main():
     print("\n\nCSV Results:")
     print(
         "method,mode,smarts,input_file,input_type,sanitize,num_mols,num_patterns,"
-        "max_matches,batch_size,num_gpus,workers,prep_threads,rdkit_threads,rdkit_match_mode,time_ms,std_ms"
+        "max_matches,batch_size,num_gpus,workers,prep_threads,nvmolkit_config_source,"
+        "rdkit_threads,rdkit_match_mode,time_ms,std_ms"
     )
     for row in csv_rows:
         (
@@ -721,6 +878,7 @@ def main():
             num_gpus,
             workers,
             prep_threads,
+            nvmolkit_config_source,
             rdkit_threads,
             rdkit_match_mode,
             avg_ms,
@@ -729,7 +887,7 @@ def main():
         print(
             f"{name},{mode},{smarts_path},{input_file},{input_type},{sanitize},"
             f"{num_mols},{num_patterns},{max_matches},{batch_size},{num_gpus},{workers},{prep_threads},"
-            f"{rdkit_threads},{rdkit_match_mode},{avg_ms:.2f},{std_ms:.2f}"
+            f"{nvmolkit_config_source},{rdkit_threads},{rdkit_match_mode},{avg_ms:.2f},{std_ms:.2f}"
         )
 
 

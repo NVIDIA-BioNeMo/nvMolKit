@@ -1165,7 +1165,7 @@ void hasSubstructMatch(const std::vector<const RDKit::ROMol*>& targets,
 
   for (auto& [pairIdx, matches] : matchResults.matches) {
     if (!matches.empty()) {
-      results.hasMatch[pairIdx] = 1;
+      results.hasMatch[static_cast<size_t>(pairIdx)] = 1;
     }
   }
 }

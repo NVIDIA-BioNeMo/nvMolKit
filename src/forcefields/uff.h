@@ -261,6 +261,11 @@ EnergyForceContribsDevicePtr toEnergyForceContribsDevicePtr(const BatchedMolecul
 
 BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice);
 
+//! Returns true if any molecule in the batch contributes a distance, position, angle, or torsion
+//! constraint term. Used by per-molecule kernels to dispatch to a specialization that compiles out
+//! the constraint loops, recovering register pressure when no constraints are active.
+bool batchHasConstraints(const EnergyForceContribsDevice& contribs);
+
 }  // namespace UFF
 }  // namespace nvMolKit
 

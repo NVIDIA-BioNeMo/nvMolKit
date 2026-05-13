@@ -16,7 +16,7 @@
 """GPU-accelerated UFF optimization for molecular conformers."""
 
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, overload
 
 from rdkit.Chem import rdForceFieldHelpers
 
@@ -24,16 +24,40 @@ if TYPE_CHECKING:
     from rdkit.Chem import Mol
 
 from nvmolkit import _uffOptimization
-from nvmolkit.types import HardwareOptions
+from nvmolkit._arrayHelpers import *  # noqa: F403  # registers PyArray for DEVICE-mode returns
+from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions
 
 
+@overload
 def UFFOptimizeMoleculesConfs(
     molecules: list["Mol"],
     maxIters: int = 1000,
     vdwThreshold: float | Sequence[float] = 10.0,
     ignoreInterfragInteractions: bool | Sequence[bool] = True,
     hardwareOptions: HardwareOptions | None = None,
-) -> list[list[float]]:
+    output: Literal[CoordinateOutput.RDKIT_CONFORMERS] = CoordinateOutput.RDKIT_CONFORMERS,
+    targetGpu: int = -1,
+) -> list[list[float]]: ...
+@overload
+def UFFOptimizeMoleculesConfs(
+    molecules: list["Mol"],
+    maxIters: int = 1000,
+    vdwThreshold: float | Sequence[float] = 10.0,
+    ignoreInterfragInteractions: bool | Sequence[bool] = True,
+    hardwareOptions: HardwareOptions | None = None,
+    *,
+    output: Literal[CoordinateOutput.DEVICE],
+    targetGpu: int = -1,
+) -> Device3DResult: ...
+def UFFOptimizeMoleculesConfs(
+    molecules: list["Mol"],
+    maxIters: int = 1000,
+    vdwThreshold: float | Sequence[float] = 10.0,
+    ignoreInterfragInteractions: bool | Sequence[bool] = True,
+    hardwareOptions: HardwareOptions | None = None,
+    output: CoordinateOutput = CoordinateOutput.RDKIT_CONFORMERS,
+    targetGpu: int = -1,
+):
     """Optimize conformers for multiple molecules using the UFF force field.
 
     Args:
@@ -46,16 +70,25 @@ def UFFOptimizeMoleculesConfs(
             fragments. May be provided as a scalar or per-molecule sequence.
         hardwareOptions: Configures CPU and GPU batching, threading, and device
             selection. Defaults are chosen automatically when omitted.
+        output: ``RDKIT_CONFORMERS`` (default) writes optimized coordinates back
+            into RDKit conformers and returns nested host energy lists. ``DEVICE``
+            keeps optimized coordinates and energies on GPU and returns a
+            :class:`Device3DResult`.
+        targetGpu: In DEVICE mode, the GPU to consolidate the result onto. ``-1``
+            selects the first configured execution GPU.
 
     Returns:
-        List of lists of energies, where each inner list contains optimized
-        conformer energies for the corresponding molecule.
+        For ``RDKIT_CONFORMERS``: list of lists of optimized conformer energies.
+        For ``DEVICE``: a :class:`Device3DResult` with ``values`` (positions),
+        ``energies``, ``converged``, and CSR indices.
 
     Raises:
         ValueError: If molecules contains ``None`` entries or molecules lacking UFF
             atom types. ``e.args[1]`` contains keys ``"none"`` and ``"no_params"``.
     """
     if not molecules:
+        if output == CoordinateOutput.DEVICE:
+            raise ValueError("UFFOptimizeMoleculesConfs(output=DEVICE) requires at least one molecule")
         return []
 
     none_indices = []
@@ -91,6 +124,15 @@ def UFFOptimizeMoleculesConfs(
 
     if hardwareOptions is None:
         hardwareOptions = HardwareOptions()
+    if output == CoordinateOutput.DEVICE:
+        return _uffOptimization.UFFOptimizeMoleculesConfsDevice(
+            molecules,
+            int(maxIters),
+            thresholds,
+            interfrag_flags,
+            hardwareOptions._as_native(),
+            int(targetGpu),
+        )
     return _uffOptimization.UFFOptimizeMoleculesConfs(
         molecules,
         int(maxIters),

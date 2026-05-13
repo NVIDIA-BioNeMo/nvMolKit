@@ -1063,6 +1063,7 @@ cudaError_t launchReduceEnergiesKernel(const int      numBlocks,
 
 constexpr int blockSizePerMol = 128;
 
+template <bool HasConstraints>
 __global__ void combinedEnergiesKernel(const EnergyForceContribsDevicePtr* terms,
                                        const BatchedIndicesDevicePtr*      systemIndices,
                                        const double*                       coords,
@@ -1073,16 +1074,18 @@ __global__ void combinedEnergiesKernel(const EnergyForceContribsDevicePtr* terms
   using BlockReduce = cub::BlockReduce<double, blockSizePerMol>;
   __shared__ typename BlockReduce::TempStorage tempStorage;
 
-  const int     atomStart    = systemIndices->atomStarts[molIdx];
-  const double* molCoords    = coords + atomStart * 3;
-  const double  threadEnergy = molEnergy<blockSizePerMol>(*terms, *systemIndices, molCoords, molIdx, tid);
-  const double  blockEnergy  = BlockReduce(tempStorage).Sum(threadEnergy);
+  const int     atomStart = systemIndices->atomStarts[molIdx];
+  const double* molCoords = coords + atomStart * 3;
+  const double  threadEnergy =
+    molEnergy<blockSizePerMol, HasConstraints>(*terms, *systemIndices, molCoords, molIdx, tid);
+  const double blockEnergy = BlockReduce(tempStorage).Sum(threadEnergy);
 
   if (tid == 0) {
     energies[molIdx] = blockEnergy;
   }
 }
 
+template <bool HasConstraints>
 __global__ void combinedGradKernel(const EnergyForceContribsDevicePtr* terms,
                                    const BatchedIndicesDevicePtr*      systemIndices,
                                    const double*                       coords,
@@ -1106,7 +1109,7 @@ __global__ void combinedGradKernel(const EnergyForceContribsDevicePtr* terms,
   __syncthreads();
 
   const double* molCoords = coords + atomStart * 3;
-  molGrad<blockSizePerMol>(*terms, *systemIndices, molCoords, molGradBase, molIdx, tid);
+  molGrad<blockSizePerMol, HasConstraints>(*terms, *systemIndices, molCoords, molGradBase, molIdx, tid);
   __syncthreads();
 
   if (useSharedMem) {
@@ -1122,10 +1125,17 @@ cudaError_t launchBlockPerMolEnergyKernel(int                                 nu
                                           const BatchedIndicesDevicePtr&      sytemIndices,
                                           const double*                       coords,
                                           double*                             energies,
+                                          bool                                hasConstraints,
                                           cudaStream_t                        stream) {
   const AsyncDevicePtr<EnergyForceContribsDevicePtr> devTerms(terms, stream);
   const AsyncDevicePtr<BatchedIndicesDevicePtr>      devSysIdx(sytemIndices, stream);
-  combinedEnergiesKernel<<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(), devSysIdx.data(), coords, energies);
+  if (hasConstraints) {
+    combinedEnergiesKernel<true>
+      <<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(), devSysIdx.data(), coords, energies);
+  } else {
+    combinedEnergiesKernel<false>
+      <<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(), devSysIdx.data(), coords, energies);
+  }
   return cudaGetLastError();
 }
 
@@ -1134,10 +1144,15 @@ cudaError_t launchBlockPerMolGradKernel(int                                 numM
                                         const BatchedIndicesDevicePtr&      sytemIndices,
                                         const double*                       coords,
                                         double*                             grad,
+                                        bool                                hasConstraints,
                                         cudaStream_t                        stream) {
   const AsyncDevicePtr<EnergyForceContribsDevicePtr> devTerms(terms, stream);
   const AsyncDevicePtr<BatchedIndicesDevicePtr>      devSysIdx(sytemIndices, stream);
-  combinedGradKernel<<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(), devSysIdx.data(), coords, grad);
+  if (hasConstraints) {
+    combinedGradKernel<true><<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(), devSysIdx.data(), coords, grad);
+  } else {
+    combinedGradKernel<false><<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(), devSysIdx.data(), coords, grad);
+  }
   return cudaGetLastError();
 }
 }  // namespace MMFF
