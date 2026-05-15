@@ -13,25 +13,33 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
+# RDKit components nvmolkit actually links against. Used by both code paths
+# below: find_package on the conda/system path, and resolved against
+# rdkit.libs/libRDKit<Name>-*.so.1 on the pip-build path.
+set(NVMOLKIT_RDKIT_COMPONENTS
+    DataStructs
+    Depictor
+    Descriptors
+    DistGeomHelpers
+    FileParsers
+    Fingerprints
+    ForceField
+    ForceFieldHelpers
+    GraphMol
+    MolStandardize
+    MolTransforms
+    PartialCharges
+    RDGeneral
+    RDGeometryLib
+    SmilesParse
+    SubstructMatch)
+
 if(NOT NVMOLKIT_BUILD_AGAINST_PIP_RDKIT)
   find_package(RDKit REQUIRED)
-  set(RDKit_LIBS
-      RDKit::DataStructs
-      RDKit::Depictor
-      RDKit::Descriptors
-      RDKit::DistGeomHelpers
-      RDKit::FileParsers
-      RDKit::Fingerprints
-      RDKit::ForceField
-      RDKit::ForceFieldHelpers
-      RDKit::GraphMol
-      RDKit::MolStandardize
-      RDKit::MolTransforms
-      RDKit::PartialCharges
-      RDKit::RDGeneral
-      RDKit::RDGeometryLib
-      RDKit::SmilesParse
-      RDKit::SubstructMatch)
+  set(RDKit_LIBS "")
+  foreach(component IN LISTS NVMOLKIT_RDKIT_COMPONENTS)
+    list(APPEND RDKit_LIBS RDKit::${component})
+  endforeach()
 
   # For RDKit 2023.5 onwards, the rdkit::rdbase target improperly has hardcoded
   # interface include directories that use the python version they were built
@@ -86,25 +94,36 @@ else()
     )
   endif()
 
-  # make a list of all files ine the libdir
-  file(GLOB RDKIT_FILES ${NVMOLKIT_BUILD_AGAINST_PIP_LIBDIR}/*)
-  # for each file, make an imported library with that lib as source
+  # Resolve each component to its hash-mangled rdkit.libs/ filename. boost.cmake
+  # handles libboost_* separately; everything else in rdkit.libs/ (libcairo,
+  # libfontconfig, libfreetype, libxcb*, libXau, libpixman, libpng16,
+  # libquadmath, libuuid, libbz2) is an auditwheel transitive that nvmolkit does
+  # not consume.
   message(
     STATUS "Searched for RDKit libs in: ${NVMOLKIT_BUILD_AGAINST_PIP_LIBDIR}")
-  message(STATUS "Found RDKit pip libs: ${RDKIT_FILES}")
-  # Populate RDKIT_LIBS with the imported libraries
-  foreach(lib ${RDKIT_FILES})
-    get_filename_component(libname ${lib} NAME_WE)
+  set(RDKit_LIBS "")
+  foreach(component IN LISTS NVMOLKIT_RDKIT_COMPONENTS)
+    file(GLOB MATCHES
+         ${NVMOLKIT_BUILD_AGAINST_PIP_LIBDIR}/libRDKit${component}-*.so.*)
+    list(LENGTH MATCHES NUM_MATCHES)
+    if(NOT NUM_MATCHES EQUAL 1)
+      message(
+        FATAL_ERROR
+          "Expected exactly one libRDKit${component}-*.so.* under "
+          "${NVMOLKIT_BUILD_AGAINST_PIP_LIBDIR}, got ${NUM_MATCHES}: ${MATCHES}"
+      )
+    endif()
+    list(GET MATCHES 0 LIB_PATH)
+    get_filename_component(libname ${LIB_PATH} NAME_WE)
     add_library(${libname} SHARED IMPORTED)
-    set_target_properties(${libname} PROPERTIES IMPORTED_LOCATION ${lib})
-    # Set include dirs to include both NVMOLKIT_BUILD_AGAINST_PIP_INCDIR and
-    # NVMOLKIT_BUILD_AGAINST_PIP_BOOSTINCLUDEDIR
+    set_target_properties(${libname} PROPERTIES IMPORTED_LOCATION ${LIB_PATH})
     target_include_directories(
       ${libname} SYSTEM INTERFACE ${NVMOLKIT_BUILD_AGAINST_PIP_INCDIR}
                                   ${NVMOLKIT_BUILD_AGAINST_PIP_BOOSTINCLUDEDIR})
     list(APPEND RDKit_LIBS ${libname})
   endforeach()
-  # cmake-lint: disable=C0103
-  set(Boost_INCLUDE_DIRS ${NVMOLKIT_BUILD_AGAINST_PIP_BOOSTINCLUDEDIR})
-  message(STATUS "Using boost libs from pip RDKit")
+  message(STATUS "Imported RDKit pip libs: ${RDKit_LIBS}")
+  # cmake-format: off
+  set(Boost_INCLUDE_DIRS ${NVMOLKIT_BUILD_AGAINST_PIP_BOOSTINCLUDEDIR}) # cmake-lint: disable=C0103
+  # cmake-format: on
 endif(NOT NVMOLKIT_BUILD_AGAINST_PIP_RDKIT)

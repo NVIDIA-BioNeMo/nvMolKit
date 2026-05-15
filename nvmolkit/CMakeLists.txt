@@ -40,7 +40,6 @@ target_link_libraries(_arrayHelpers PUBLIC ${Boost_LIBRARIES} device_vector)
 target_include_directories(
   _arrayHelpers PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/utils ${Python_INCLUDE_DIRS})
 target_include_directories(_arrayHelpers SYSTEM PUBLIC ${Boost_INCLUDE_DIRS})
-target_link_libraries(_arrayHelpers PRIVATE ${RDKit_LIBS})
 installpythontarget(_arrayHelpers ./)
 
 add_library(_mmffOptimization MODULE mmffOptimization.cpp)
