@@ -38,26 +38,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Min python + min rdkit + min cuda supported by the feedstock.
           - python: "3.10"
-            rdkit: "2025.3.6"
-            cuda: "12.9"
-            config: linux_64_c_stdlib_version2.17cuda_compiler_version12.9librdkit_dev2025.3.6python3.10.____cpython
-          - python: "3.11"
-            rdkit: "2025.3.2"
-            cuda: "12.9"
-            config: linux_64_c_stdlib_version2.17cuda_compiler_version12.9librdkit_dev2025.3.2python3.11.____cpython
+            rdkit: "2025.3.3"
+            cuda: "12.6"
+            config: linux_64_c_compiler_version13c_stdlib_version2.17cuda_compiler_version12.6cxx_compiler_version13libboost_devel1.86libboost_headers1.86libboost_python_devel1.86librdkit_dev2025.3.3_h4d503be0
+          # Intermediate python + intermediate rdkit, covers the middle cuda.
           - python: "3.12"
-            rdkit: "2025.3.6"
-            cuda: "12.9"
-            config: linux_64_c_stdlib_version2.17cuda_compiler_version12.9librdkit_dev2025.3.6python3.12.____cpython
-          - python: "3.13"
             rdkit: "2025.9.2"
             cuda: "12.9"
-            config: linux_64_c_stdlib_version2.17cuda_compiler_version12.9librdkit_dev2025.9.2python3.13.____cp313
+            config: linux_64_c_compiler_version14c_stdlib_version2.17cuda_compiler_version12.9cxx_compiler_version14libboost_devel1.86libboost_headers1.86libboost_python_devel1.86librdkit_dev2025.9.2_h272ea129
+          # Max python + max rdkit + max cuda supported by the feedstock.
           - python: "3.13"
-            rdkit: "2025.9.5"
+            rdkit: "2026.3.1"
             cuda: "13.0"
-            config: linux_64_c_stdlib_version2.28cuda_compiler_version13.0librdkit_dev2025.9.5python3.13.____cp313
+            config: linux_64_c_compiler_version14c_stdlib_version2.28cuda_compiler_version13.0cxx_compiler_version14libboost_devel1.88libboost_headers1.88libboost_python_devel1.88librdkit_dev2026.3.1_hf8c537c7
 
     steps:
       - name: Check out source tree
