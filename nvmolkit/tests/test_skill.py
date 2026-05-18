@@ -29,6 +29,13 @@ _PY_BLOCK_RE = re.compile(r"```python\n(.*?)```", re.DOTALL)
 
 
 def _extract_python_blocks(skill_path: Path) -> list[str]:
+    if not skill_path.is_file():
+        raise FileNotFoundError(
+            f"nvmolkit-usage agent skill not found at {skill_path}. "
+            f"test_skill expects the skill to live at "
+            f"agent-skills/nvmolkit-usage/SKILL.md relative to the repo root; "
+            f"update SKILL_PATH if the skill has moved."
+        )
     text = skill_path.read_text()
     return [match.group(1) for match in _PY_BLOCK_RE.finditer(text)]
 
