@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-image_name: "ubuntu2022_gcc12_py312_rdkit202409"
+image_name: "ubuntu2022_gcc12_py312_rdkit202503"
 image_base: "nvcr.io/nvidia/cuda:12.5.0-devel-ubuntu22.04"
 cxx_compiler_id: "gcc"
 cxx_compiler_version: "12"
@@ -25,8 +25,8 @@ python_conda_deps:
   - "libboost-headers"
   - "libboost-devel"
   - "pytorch-cuda=12.4"
-  - "rdkit=2024.09.4"
-  - "librdkit-dev=2024.09.4"
+  - "rdkit=2025.03.6"
+  - "librdkit-dev=2025.03.6"
   - "pandas"
   - "scikit-build=0.18"
   - "pytest"

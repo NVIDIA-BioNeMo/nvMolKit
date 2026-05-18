@@ -79,7 +79,7 @@ Conda Forge
 Conda is the recommended way to install nvMolKit, in line with RDKit's recommended installation practice. First, ensure
 you have a conda-based environment manager installed and activated, such as `Miniconda <https://docs.conda.io/en/latest/miniconda.html>`_ or `Miniforge <https://conda-forge.org/download/>`_.
 
-nvMolKit v0.4.0 supports RDKit 2024.09.6 through 2025.09.5.
+nvMolKit v0.5.0 supports RDKit 2025.03.1 through 2026.03.1.
 
 To install with conda, run::
 

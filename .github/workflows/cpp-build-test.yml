@@ -50,7 +50,7 @@ jobs:
 
       - name: Install dependencies
         shell: bash
-        run: bash admin/ci/setup_dependencies.sh 3.12 2024.09.6
+        run: bash admin/ci/setup_dependencies.sh 3.12 2025.03.6
 
       - name: Configure
         shell: bash

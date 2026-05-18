@@ -21,6 +21,7 @@
 #include "dist_geom_kernels_device.cuh"
 #include "mmff_kernels.h"
 #include "mmff_kernels_device.cuh"
+#include "versions.h"
 
 namespace nvMolKit {
 
@@ -233,15 +234,19 @@ __device__ void scaleGrad(const int                                             
                           double*                                                     grad,
                           double&                                                     gradScale,
                           typename cub::BlockReduce<double, BLOCK_SIZE>::TempStorage& tempStorage) {
+  // See scaleGradKernel in bfgs_minimize.cu for the RDKit 5b1d04d23 (2025.09) rationale.
+  constexpr bool kRdkitHasGradScaleFix =
+    RDKIT_VERSION_MAJOR > 2025 || (RDKIT_VERSION_MAJOR == 2025 && RDKIT_VERSION_MINOR >= 9);
   gradScale = scaleGrads ? 0.1 : 1.0;
 
-  double maxGrad = -1e8;
+  double maxGrad = kRdkitHasGradScaleFix ? 0.0 : -1e8;
   for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
     if constexpr (scaleGrads) {
       grad[i] *= gradScale;
     }
-    if (grad[i] > maxGrad) {
-      maxGrad = grad[i];
+    const double cmp = kRdkitHasGradScaleFix ? fabs(grad[i]) : grad[i];
+    if (cmp > maxGrad) {
+      maxGrad = cmp;
     }
   }
 

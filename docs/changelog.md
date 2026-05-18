@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.5.0 - 2026-05-13
+
+### Summary
+
+nvMolKit 0.5.0 adds three new GPU-accelerated APIs: Torsion Fingerprint Deviation (TFD), pairwise conformer RMSD, and UFF force field optimization. It also introduces a `BatchedForcefield` Python API for MMFF and UFF with constraints, custom options, and multi-conformer minimization; a low-memory fused Butina clustering path that avoids the O(N²) distance matrix; a Python autotuning framework for the main APIs; and optional device-side output for ETKDG and forcefield optimization. Blackwell / L-class GPUs (including sm_103/B300) are now supported, the supported RDKit range is now 2025.03.1 through 2026.03.1, and nvMolKit is available via `pip install nvmolkit`.
+
+### Contributors
+- Kevin Boyd (@scal444)
+- Eva Xue (@evasnow1992)
+- Alireza Moradzadeh (@moradza)
+- Andrei Volgin (@volgin)
+
+### Features
+- GPU-accelerated Torsion Fingerprint Deviation (TFD) for batch all-pairs conformer comparison ([#71](https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/71))
+- GPU-accelerated pairwise conformer RMSD matrix computation by @volgin
+- GPU-accelerated UFF force field, supporting all options that the new `BatchedForcefield` Python API provides for MMFF ([#114](https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/114))
+- New `BatchedForcefield` Python API exposing per-molecule control over forcefield minimization (MMFF or UFF), and through it custom MMFF optimization options (max iterations, energy/gradient tolerances, non-bonded cutoff) ([#70](https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/70))
+- Distance and position constraints on forcefield optimization (MMFF and UFF) ([#26](https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/26))
+- Multi-conformer minimization in the `BatchedForcefield` API
+- `HardwareOptions` support for MMFF minimization, matching the ETKDG hardware-targeting API
+- Device-side output for ETKDG and forcefield optimization, allowing GPU tensors to flow between nvMolKit calls without round-tripping through host memory ([#140](https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/140))
+- Python autotuning library for the main APIs (`nvmolkit.autotune`), including ETKDG, forcefield optimization, and substructure search, with configuration serialization ([#141](https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/141))
+- Low-memory fused Butina clustering that computes Tanimoto similarities on the fly with Triton-backed kernels, avoiding the O(N²) distance matrix and enabling clustering of larger fingerprint datasets on a single GPU ([#110](https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/110))
+- Support for Blackwell and L-class GPUs, including sm_103 SASS for B300
+
+### Bug Fixes
+- Fix latent stream-ordering bug in the MMFF/BFGS minimizer that could race with subsequent operations ([#172](https://github.com/NVIDIA-Digital-Bio/nvMolKit/pull/172))
+- Fix `int32` overflow in substructure pair indexing for batches where `numTargets * numQueries` exceeds `INT32_MAX`, which previously caused out-of-bounds writes in `hasSubstructMatch` and `countSubstructMatches` ([#169](https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/169))
+- Fix shared-memory overflow in the substructure recursive preprocessor caused by an incorrect config setting ([#98](https://github.com/NVIDIA-Digital-Bio/nvMolKit/pull/98))
+- Fix empty result handling in substructure search with `uniquify` when all matches were already unique ([#112](https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/112))
+
+### Miscellaneous
+- pip wheel distribution pipeline (`pip install nvmolkit`) with manylinux_2_28 wheels for CPython 3.11-3.14 ([#15](https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/15))
+- RDKit support range is now 2025.03.1 through 2026.03.1
+- Validate `batchesPerGpu` in `HardwareOptions` so every consumer gets a clean `ValueError` instead of a cryptic C++ error from the MMFF / ETKDG layer ([#103](https://github.com/NVIDIA-Digital-Bio/nvMolKit/pull/103))
+- Validate `neighborlist_max_size` in `butina()` before reaching the GPU ([#104](https://github.com/NVIDIA-Digital-Bio/nvMolKit/pull/104))
+- Validate MMFF atom types up front and report every failing molecule instead of hitting a `PRECONDITION` assertion mid-batch ([#106](https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/106))
+
 ## 0.4.0 - 2026-02-23
 
 ### Summary

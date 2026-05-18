@@ -33,10 +33,10 @@ if(NOT NVMOLKIT_BUILD_AGAINST_PIP_RDKIT)
       RDKit::SmilesParse
       RDKit::SubstructMatch)
 
-  # For RDKit 2023.5 onwards (currently 2024.09), the rdkit::rdbase target
-  # improperly has hardcoded interface include directories that use the python
-  # version they were built against. We replace these with the right python
-  # version or remove if in a C++ build.
+  # For RDKit 2023.5 onwards, the rdkit::rdbase target improperly has hardcoded
+  # interface include directories that use the python version they were built
+  # against. We replace these with the right python version or remove if in a
+  # C++ build.
   function(replace_or_remove_python_version list_var user_input remove)
     set(new_list "")
     foreach(item IN LISTS ${list_var})

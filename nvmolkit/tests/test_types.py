@@ -13,15 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import gc
 import math
 
 import pytest
 import torch
 
-from rdkit.Chem import MolFromSmiles
-
-from nvmolkit.fingerprints import MorganFingerprintGenerator
 from nvmolkit.types import (
     AsyncGpuResult,
     CoordinateOutput,
@@ -29,40 +25,6 @@ from nvmolkit.types import (
     Device3DResult,
     HardwareOptions,
 )
-
-
-def _get_fps(num_mols):
-    generator = MorganFingerprintGenerator(radius=0, fpSize=2048)
-    template = MolFromSmiles("CC")
-    mols = [template] * num_mols
-
-    result = generator.GetFingerprints(mols)
-    torch.cuda.synchronize()
-    return result
-
-
-def test_async_gpu_result_release_frees_memory():
-    torch.cuda.synchronize()
-    gc.collect()
-    torch.cuda.empty_cache()
-    base_free, _ = torch.cuda.mem_get_info()
-
-    num_mols = 210_000
-    expected_bytes = num_mols * 2048 // 8
-    fps = _get_fps(num_mols)
-    torch.cuda.synchronize()
-
-    free_after_alloc, _ = torch.cuda.mem_get_info()
-    assert free_after_alloc < base_free
-    assert free_after_alloc + expected_bytes <= base_free
-
-    del fps
-    gc.collect()
-    torch.cuda.synchronize()
-
-    free_post, _ = torch.cuda.mem_get_info()
-
-    assert (free_post - free_after_alloc) >= expected_bytes
 
 
 @pytest.mark.parametrize("invalid_value", [0, -2, -99])

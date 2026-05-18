@@ -24,6 +24,10 @@ add_subdirectory(utils)
 configure_file(${CMAKE_CURRENT_SOURCE_DIR}/versions.h.in
                ${CMAKE_CURRENT_BINARY_DIR}/versions.h @ONLY)
 
+add_library(nvmolkit_versions INTERFACE)
+target_include_directories(nvmolkit_versions
+                           INTERFACE ${CMAKE_CURRENT_BINARY_DIR})
+
 add_library(similarity_kernels similarity_kernels.cu)
 target_link_libraries(similarity_kernels PRIVATE cuda_error_check device
                                                  cccl_interface)
@@ -77,9 +81,8 @@ target_include_directories(triangle_smooth PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(embedder_utils embedder_utils.cpp)
 target_link_libraries(embedder_utils PRIVATE ${RDKit_LIBS} device_vector
-                                             triangle_smooth)
+                                             triangle_smooth nvmolkit_versions)
 target_include_directories(embedder_utils PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_include_directories(embedder_utils PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 add_library(etkdg_impl etkdg_impl.cpp etkdg_kernels.cu)
 target_link_libraries(

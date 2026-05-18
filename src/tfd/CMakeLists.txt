@@ -17,7 +17,7 @@
 add_library(tfd_cpu tfd_common.cpp tfd_cpu.cpp tfd_transfer.cu)
 target_link_libraries(
   tfd_cpu
-  PRIVATE ${RDKit_LIBS} OpenMP::OpenMP_CXX openmp_helpers nvtx
+  PRIVATE ${RDKit_LIBS} OpenMP::OpenMP_CXX openmp_helpers nvtx nvmolkit_versions
   PUBLIC device_vector)
 target_include_directories(tfd_cpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 

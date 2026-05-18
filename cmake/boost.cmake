@@ -29,7 +29,7 @@ if(NVMOLKIT_BUILD_AGAINST_PIP_RDKIT)
   endforeach()
   set(Boost_LIBRARIES ${BOOST_LIBRARIES_FROM_PIP})
 else()
-  set(BOOST_TARGET_LIBS system serialization iostreams)
+  set(BOOST_TARGET_LIBS serialization iostreams)
   if(NVMOLKIT_BUILD_PYTHON_BINDINGS)
     list(APPEND BOOST_TARGET_LIBS
          "python${Python_VERSION_MAJOR}${Python_VERSION_MINOR}")

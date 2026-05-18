@@ -260,8 +260,8 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>&       
           cudaStreamSynchronize(streamPtr);
         }
       } else {
-        nvMolKit::MMFF::sendContribsAndIndicesToDevice(systemHost, systemDevice);
         nvMolKit::MMFF::setStreams(systemDevice, streamPtr);
+        nvMolKit::MMFF::sendContribsAndIndicesToDevice(systemHost, systemDevice);
         nvMolKit::MMFF::allocateIntermediateBuffers(systemHost, systemDevice);
         systemDevice.positions.resize(systemHost.positions.size());
         systemDevice.positions.copyFromHost(buffers.initialPositions.data(), systemHost.positions.size());

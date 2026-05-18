@@ -17,7 +17,7 @@ cmake_policy(SET CMP0167 NEW)
 
 project(
   nvmolkit
-  VERSION 0.4.0
+  VERSION 0.5.0
   LANGUAGES CXX CUDA)
 set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CXX_STANDARD 20)

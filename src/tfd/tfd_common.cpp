@@ -30,6 +30,7 @@
 #include <unordered_set>
 
 #include "nvtx.h"
+#include "versions.h"
 
 namespace nvMolKit {
 
@@ -294,16 +295,18 @@ std::pair<int, int> findCentralBond(const RDKit::ROMol& mol, const double* distM
 double calculateBeta(const RDKit::ROMol& mol, const double* distMat, int aid1) {
   int numAtoms = mol.getNumAtoms();
 
-  // Get all non-terminal bonds
-  // NOTE: RDKit has a typo in _calculateBeta (TorsionFingerprints.py ~line 391):
-  //   `if len(nb2) > 1 and len(nb2) > 1` checks nb2 twice instead of nb1 and nb2.
-  //   This includes bonds where only the end atom is non-terminal, inflating dmax.
-  //   We replicate this behavior for RDKit compatibility.
-  // TODO: Fix once RDKit corrects this, or add a flag for "correct" behavior.
+  // Match RDKit's _calculateBeta (TorsionFingerprints.py) version-for-version.
+  // Pre-2026.03.1 RDKit had a typo that checked nb2 twice, inflating dmax by
+  // including bonds where only the end atom was non-terminal. Commit b56f3dc68
+  // (RDKit 2026.03.1) fixed it to check both endpoints. We match the RDKit version installed against.
+  constexpr bool kRdkitHasBetaTypoFix =
+    RDKIT_VERSION_MAJOR > 2026 || (RDKIT_VERSION_MAJOR == 2026 && RDKIT_VERSION_MINOR >= 3);
   double dmax = 0.0;
   for (const auto* bond : mol.bonds()) {
-    auto nb2 = getHeavyAtomNeighbors(bond->getEndAtom());
-    if (nb2.size() > 1 && nb2.size() > 1) {
+    auto       nb1                = getHeavyAtomNeighbors(bond->getBeginAtom());
+    auto       nb2                = getHeavyAtomNeighbors(bond->getEndAtom());
+    const bool beginIsNonTerminal = kRdkitHasBetaTypoFix ? (nb1.size() > 1) : (nb2.size() > 1);
+    if (beginIsNonTerminal && nb2.size() > 1) {
       int    bid1 = bond->getBeginAtomIdx();
       int    bid2 = bond->getEndAtomIdx();
       double d    = std::max(distMat[aid1 * numAtoms + bid1], distMat[aid1 * numAtoms + bid2]);

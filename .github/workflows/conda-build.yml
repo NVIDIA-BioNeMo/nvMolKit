@@ -39,9 +39,9 @@ jobs:
       matrix:
         include:
           - python: "3.10"
-            rdkit: "2024.9.6"
+            rdkit: "2025.3.6"
             cuda: "12.9"
-            config: linux_64_c_stdlib_version2.17cuda_compiler_version12.9librdkit_dev2024.9.6python3.10.____cpython
+            config: linux_64_c_stdlib_version2.17cuda_compiler_version12.9librdkit_dev2025.3.6python3.10.____cpython
           - python: "3.11"
             rdkit: "2025.3.2"
             cuda: "12.9"

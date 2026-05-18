@@ -18,8 +18,13 @@ add_library(bfgs bfgs_minimize.cu bfgs_hessian.cu
 target_link_libraries(
   bfgs
   PUBLIC host_vector device_vector
-  PRIVATE ${RDKit_LIBS} batched_forcefield rdkit_mmff_flattened dist_geom
-          cub_helpers cccl_interface)
+  PRIVATE ${RDKit_LIBS}
+          batched_forcefield
+          rdkit_mmff_flattened
+          dist_geom
+          cub_helpers
+          cccl_interface
+          nvmolkit_versions)
 target_include_directories(bfgs PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(bfgs_common bfgs_common.cpp)

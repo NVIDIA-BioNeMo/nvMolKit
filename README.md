@@ -18,7 +18,7 @@ Conda is the recommended way to install nvMolKit, matching the recommended distr
 you have a variant of conda installed and activated, such as [Miniconda](https://docs.conda.io/en/latest/miniconda.html) 
 or [Miniforge](https://conda-forge.org/download/).
 
-nvMolKit v0.2.0 supports RDKit 2024.09.6 and 2025.03.1. To install:
+nvMolKit v0.5.0 supports RDKit 2025.03.1 through 2026.03.1. To install:
 
 ```bash
 conda install -c conda-forge nvmolkit
@@ -102,7 +102,7 @@ conda create --name nvmolkit_dev_py312 python=3.12.1
 conda activate nvmolkit_dev_py312
 
 # Install RDKit with development headers
-conda install -c conda-forge rdkit=2024.09.6 rdkit-dev=2024.09.6
+conda install -c conda-forge rdkit=2025.03.6 rdkit-dev=2025.03.6
 
 # Install Boost subpackages in case RDKit install did not include them transitively
 conda install -c conda-forge libboost libboost-python libboost-devel libboost-headers libboost-python-devel
