@@ -399,51 +399,27 @@ class _BatchedForcefieldBase:
         """Rebuild the forcefield after changing constraints or settings."""
         self._build()
 
-    def compute_energy(self, output: CoordinateOutput = CoordinateOutput.RDKIT_CONFORMERS):
+    def compute_energy(self) -> list[list[float]]:
         """Return forcefield energies for all conformers of all molecules.
-
-        Args:
-            output: ``RDKIT_CONFORMERS`` (default) returns a nested list with
-                one float per conformer. ``DEVICE`` returns an
-                :class:`AsyncGpuResult` view of the on-device energy buffer
-                (length ``n_total_conformers``) borrowed from the wrapper. The
-                view is valid for the lifetime of this forcefield instance and
-                until the next ``compute_energy(output=DEVICE)`` call.
 
         Returns:
             ``result[mol_idx][conf_idx]`` -- one energy per conformer.
         """
         if not self._molecules:
-            if output == CoordinateOutput.DEVICE:
-                raise ValueError("compute_energy(output=DEVICE) requires at least one molecule")
             return []
         self._ensure_built()
-        if output == CoordinateOutput.DEVICE:
-            return AsyncGpuResult(self._native_ff.computeEnergyDevice(), gpu_id=self._native_ff.gpuId())
         return self._native_ff.computeEnergy()
 
-    def compute_gradients(self, output: CoordinateOutput = CoordinateOutput.RDKIT_CONFORMERS):
+    def compute_gradients(self) -> list[list[list[float]]]:
         """Return forcefield gradients for all conformers of all molecules.
-
-        Args:
-            output: ``RDKIT_CONFORMERS`` (default) returns a nested list per
-                conformer. ``DEVICE`` returns a flat
-                :class:`AsyncGpuResult` of shape ``(total_positions,)`` (one
-                contiguous ``[x, y, z, ...]`` block per conformer in batch
-                order). Index information is available via :meth:`positions`
-                and :meth:`indices`.
 
         Returns:
             ``result[mol_idx][conf_idx]`` -- one flattened ``[x0, y0, z0, ...]``
             gradient vector per conformer.
         """
         if not self._molecules:
-            if output == CoordinateOutput.DEVICE:
-                raise ValueError("compute_gradients(output=DEVICE) requires at least one molecule")
             return []
         self._ensure_built()
-        if output == CoordinateOutput.DEVICE:
-            return AsyncGpuResult(self._native_ff.computeGradientsDevice(), gpu_id=self._native_ff.gpuId())
         return self._native_ff.computeGradients()
 
     def _minimize(

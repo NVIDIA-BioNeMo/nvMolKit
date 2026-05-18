@@ -6,10 +6,7 @@ Cursor / agent skill
 If you use `Cursor <https://cursor.com/>`_ (or another agent that supports the
 ``SKILL.md`` format) to write code that calls nvMolKit, the repository ships an
 agent skill you can copy into your own project. The skill teaches the agent the
-public Python entry-point map, runtime requirements, the :class:`AsyncGpuResult`
-contract, and a handful of runnable recipes covering Morgan fingerprints,
-similarity, ETKDG embedding, MMFF/UFF minimization, and ``HardwareOptions``
-tuning.
+public Python API surface with runnable recipes for common workflows.
 
 Get the skill
 -------------
@@ -32,5 +29,5 @@ Scope
 -----
 
 The skill is aimed at developers calling the installed nvMolKit Python API.
-Building nvMolKit from source is out of scope; for that, see the install
-section above.
+Building nvMolKit from source is out of scope; for that, see the
+:ref:`Installation <installation>` section of the overview page.

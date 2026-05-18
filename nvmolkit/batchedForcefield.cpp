@@ -18,10 +18,8 @@
 #include <boost/python.hpp>
 #include <cstdint>
 #include <memory>
-#include <numeric>
 #include <vector>
 
-#include "array_helpers.h"
 #include "bfgs_mmff.h"
 #include "bfgs_uff.h"
 #include "boost_python_utils.h"
@@ -241,38 +239,6 @@ static std::vector<FC::PerMolConstraints> extractAllConstraints(const bp::list& 
   return result;
 }
 
-// Helpers for the persistent index arrays exposed alongside DEVICE-mode outputs of the batched
-// forcefield wrappers. atom_starts/mol_indices/conf_indices match the host-flattened layout one
-// to one (molecule-major, conformer-major within each molecule).
-struct PersistentIndexBuffers {
-  nvMolKit::AsyncDeviceVector<int32_t> atomStarts;
-  nvMolKit::AsyncDeviceVector<int32_t> molIndices;
-  nvMolKit::AsyncDeviceVector<int32_t> confIndices;
-};
-
-void buildPersistentIndexBuffers(const std::vector<RDKit::ROMol*>& mols,
-                                 const std::vector<int>&           numConformersPerMol,
-                                 PersistentIndexBuffers&           buffers) {
-  std::vector<int32_t> atomStartsHost = {0};
-  std::vector<int32_t> molIndicesHost;
-  std::vector<int32_t> confIndicesHost;
-  int                  cursor = 0;
-  for (size_t molIdx = 0; molIdx < mols.size(); ++molIdx) {
-    const int natoms = static_cast<int>(mols[molIdx]->getNumAtoms());
-    const int nconfs = numConformersPerMol[molIdx];
-    for (int confIdx = 0; confIdx < nconfs; ++confIdx) {
-      cursor += natoms;
-      atomStartsHost.push_back(cursor);
-      molIndicesHost.push_back(static_cast<int32_t>(molIdx));
-      confIndicesHost.push_back(static_cast<int32_t>(confIdx));
-    }
-  }
-  buffers.atomStarts.setFromVector(atomStartsHost);
-  buffers.molIndices.setFromVector(molIndicesHost);
-  buffers.confIndices.setFromVector(confIndicesHost);
-  cudaStreamSynchronize(buffers.atomStarts.stream());
-}
-
 class NativeMMFFBatchedForcefield {
  public:
   NativeMMFFBatchedForcefield(const bp::list&                       molecules,
@@ -381,7 +347,6 @@ class NativeMMFFBatchedForcefield {
     positionsDevice_.setFromVector(systemHost.positions);
     gradDevice_.resize(forcefield_->totalPositions());
     energyOutsDevice_.resize(forcefield_->numMolecules());
-    buildPersistentIndexBuffers(mols_, numConformersPerMol_, persistentIndexBuffers_);
   }
 
   std::vector<RDKit::ROMol*>            mols_;
@@ -512,7 +477,6 @@ class NativeUFFBatchedForcefield {
     positionsDevice_.setFromVector(systemHost.positions);
     gradDevice_.resize(forcefield_->totalPositions());
     energyOutsDevice_.resize(forcefield_->numMolecules());
-    buildPersistentIndexBuffers(mols_, numConformersPerMol_, persistentIndexBuffers_);
   }
 
   std::vector<RDKit::ROMol*>         mols_;

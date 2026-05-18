@@ -65,6 +65,8 @@ Source Code
 -----------
 nvMolKit is open source under the Apache License, and is available on `GitHub <https://github.com/NVIDIA-Digital-Bio/nvMolKit>`_.
 
+.. _installation:
+
 Installation
 ------------
 
@@ -211,6 +213,7 @@ Guides
    similarity
    forcefield
    autotune
+   agent_skill
 
 
 API Reference
