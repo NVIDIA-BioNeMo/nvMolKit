@@ -65,6 +65,29 @@ bool supportsTensorOps(const int major, const int minor) {
   return false;
 }
 
+// Per-device cache for tensor-op capability: 0=unknown, 1=unsupported, 2=supported.
+// Indexed by device ordinal; supports up to kMaxDevices GPUs in a single process.
+// Initialized to zero by C++ static-storage rules (all unknown at startup).
+constexpr int kMaxDevices = 16;
+int8_t        g_tensorOpsCache[kMaxDevices];
+
+//! Returns whether the current CUDA device supports BMMA tensor ops,
+//! querying cudaGetDeviceProperties at most once per device per process.
+bool isTensorOpsSupportedCached() {
+  int device;
+  cudaGetDevice(&device);
+  if (device >= 0 && device < kMaxDevices && g_tensorOpsCache[device] != 0) {
+    return g_tensorOpsCache[device] == 2;
+  }
+  cudaDeviceProp props;
+  cudaGetDeviceProperties(&props, device);
+  const bool result = supportsTensorOps(props.major, props.minor);
+  if (device >= 0 && device < kMaxDevices) {
+    g_tensorOpsCache[device] = result ? 2 : 1;
+  }
+  return result;
+}
+
 //! Cast a device vector to a span of a type smaller or equal to self.
 //! Does some basic checking of compatibility between types.
 template <typename T, typename OtherT>
@@ -423,17 +446,10 @@ void launchCrossTanimotoSimilarity(const AsyncDeviceVector<internal::kBlockType>
                                    const size_t                                   numBitsPerMolecule,
                                    AsyncDeviceVector<double>&                     results,
                                    const size_t                                   offset) {
-  int device;
-  cudaGetDevice(&device);
-  cudaCheckError(cudaGetLastError());
-
-  cudaDeviceProp deviceProp;
-  cudaCheckError(cudaGetDeviceProperties(&deviceProp, device));
-
   size_t m = bitsOne.size();
   size_t n = bitsTwo.size();
 
-  if (supportsTensorOps(deviceProp.major, deviceProp.minor)) {
+  if (isTensorOpsSupportedCached()) {
     constexpr unsigned int BLOCK_TILE_SIZE_X{64U};
     constexpr unsigned int BLOCK_TILE_SIZE_Y{64U};
 
@@ -508,17 +524,10 @@ void launchCrossTanimotoSimilarity(const cuda::std::span<const std::uint32_t> bi
                                    const cuda::std::span<double>              results,
                                    const size_t                               offset,
                                    cudaStream_t                               stream) {
-  int device;
-  cudaGetDevice(&device);
-  cudaCheckError(cudaGetLastError());
-
-  cudaDeviceProp deviceProp;
-  cudaCheckError(cudaGetDeviceProperties(&deviceProp, device));
-
   size_t m = bitsOne.size() / numBitsPerMolecule;
   size_t n = bitsTwo.size() / numBitsPerMolecule;
 
-  if (supportsTensorOps(deviceProp.major, deviceProp.minor)) {
+  if (isTensorOpsSupportedCached()) {
     constexpr unsigned int BLOCK_TILE_SIZE_X{64U};
     constexpr unsigned int BLOCK_TILE_SIZE_Y{64U};
 
@@ -645,17 +654,10 @@ void launchCrossCosineSimilarity(const AsyncDeviceVector<internal::kBlockType>& 
                                  const size_t                                   numBitsPerMolecule,
                                  AsyncDeviceVector<double>&                     results,
                                  const size_t                                   offset) {
-  int device;
-  cudaGetDevice(&device);
-  cudaCheckError(cudaGetLastError());
-
-  cudaDeviceProp deviceProp;
-  cudaCheckError(cudaGetDeviceProperties(&deviceProp, device));
-
   size_t m = bitsOne.size();
   size_t n = bitsTwo.size();
 
-  if (supportsTensorOps(deviceProp.major, deviceProp.minor)) {
+  if (isTensorOpsSupportedCached()) {
     constexpr unsigned int BLOCK_TILE_SIZE_X{64U};
     constexpr unsigned int BLOCK_TILE_SIZE_Y{64U};
 
@@ -730,17 +732,10 @@ void launchCrossCosineSimilarity(const cuda::std::span<const std::uint32_t> bits
                                  const cuda::std::span<double>              results,
                                  const size_t                               offset,
                                  cudaStream_t                               stream) {
-  int device;
-  cudaGetDevice(&device);
-  cudaCheckError(cudaGetLastError());
-
-  cudaDeviceProp deviceProp;
-  cudaCheckError(cudaGetDeviceProperties(&deviceProp, device));
-
   size_t m = bitsOne.size() / numBitsPerMolecule;
   size_t n = bitsTwo.size() / numBitsPerMolecule;
 
-  if (supportsTensorOps(deviceProp.major, deviceProp.minor)) {
+  if (isTensorOpsSupportedCached()) {
     constexpr unsigned int BLOCK_TILE_SIZE_X{64U};
     constexpr unsigned int BLOCK_TILE_SIZE_Y{64U};
 

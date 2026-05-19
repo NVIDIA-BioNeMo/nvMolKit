@@ -908,7 +908,9 @@ __global__ void updateDGradKernel(const double  gradTol,
   double blockMax = cub::BlockReduce<double, 128>(tempStorage).Reduce(localMax, cubMax());
 
   if (idxWithinSystem == 0) {
-    const double term = max(energies[sysIdx] * gradScales[sysIdx], 1.0);
+    // Use |energy| so negative-energy geometries (possible mid-minimization)
+    // don't clamp the denominator to 1 and artificially tighten convergence.
+    const double term = max(fabs(energies[sysIdx]) * gradScales[sysIdx], 1.0);
     blockMax /= term;
     if (blockMax < gradTol) {
       // Converged

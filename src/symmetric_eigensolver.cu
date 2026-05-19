@@ -198,6 +198,7 @@ void launchBatchEigensolverKernel(const int      numEigs,
                                   double*        eigenvaluesOut,
                                   double*        eigenvectorsOut,
                                   uint8_t*       converged,
+                                  curandState*   states,
                                   const uint8_t* active,
                                   const int      seed = 42) {
   const int numBlocks          = numSystems;
@@ -205,15 +206,13 @@ void launchBatchEigensolverKernel(const int      numEigs,
   if (matrixDim > 256) {
     throw std::runtime_error("Matrix dimension is too large for the kernel");
   }
-  // TODO: reuse.
-  AsyncDeviceVector<curandState> states(numSystems * matrixDim);
   batchEigensolverKernel<<<numBlocks, numThreadsPerBlock>>>(numEigs,
                                                             matrixDim,
                                                             mutableBoundsMatrices,
                                                             eigenvaluesOut,
                                                             eigenvectorsOut,
                                                             converged,
-                                                            states.data(),
+                                                            states,
                                                             active,
                                                             seed);
   cudaCheckError(cudaGetLastError());
@@ -234,7 +233,11 @@ class BatchedEigenSolver::Impl {
     converged_.resize(batch_size);
     cudaCheckError(cudaMemsetAsync(converged_.data(), 0, batch_size * sizeof(uint8_t)));
 
-    // Solve batched eigenvalue problem
+    const size_t statesNeeded = static_cast<size_t>(batch_size) * static_cast<size_t>(matrixDim);
+    if (statesNeeded > states_.size()) {
+      states_.resize(statesNeeded);
+    }
+
     launchBatchEigensolverKernel(numEigs,
                                  batch_size,
                                  matrixDim,
@@ -242,6 +245,7 @@ class BatchedEigenSolver::Impl {
                                  eigenvalues,
                                  eigenvectors,
                                  converged_.data(),
+                                 states_.data(),
                                  active,
                                  randomSeed);
   }
@@ -249,7 +253,8 @@ class BatchedEigenSolver::Impl {
   const uint8_t* converged() const { return converged_.data(); }
 
  private:
-  AsyncDeviceVector<uint8_t> converged_;
+  AsyncDeviceVector<uint8_t>     converged_;
+  AsyncDeviceVector<curandState> states_;
 };
 
 BatchedEigenSolver::BatchedEigenSolver() : pimpl_(std::make_unique<Impl>()) {}

@@ -330,7 +330,7 @@ void DeviceBoundsMatrixBatch::copyToHost(std::vector<::DistGeom::BoundsMatPtr>& 
   // Copy device data to host vector first
   std::vector<double> hostData(totalElements_);
   data_.copyToHost(hostData);
-  cudaDeviceSynchronize();
+  cudaCheckError(cudaStreamSynchronize(data_.stream()));
 
   // Distribute data to individual matrices
   size_t globalOffset = 0;
