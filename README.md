@@ -62,7 +62,7 @@ pip install nvmolkit==${NVMOLKIT_VERSION}+rdkit${RDKIT_VERSION} \
     --extra-index-url https://nvidia-digital-bio.github.io/nvMolKit/wheels/rdkit${RDKIT_VERSION}/simple/
 ```
 
-Replace `2025.9.6`  with the RDKit version you want. Variants published for nvMolKit v0.5.0 include every version between 2025.03.6 and 2026.03.1.
+Replace `2025.9.6` with the RDKit version you want. Variants published for nvMolKit v0.5.0 include every version between 2025.03.6 and 2026.03.1.
 
 
 ### Installation from Source
