@@ -161,10 +161,9 @@ def fused_butina(
 
             # Batch max and last-argmax into one D2H transfer (sync 1 of 2).
             neigh_flipped = neigh.flip(0)
-            batch_ma = torch.stack([
-                neigh.max().to(torch.int64),
-                neigh_flipped.argmax().to(torch.int64),
-            ]).tolist()
+            batch_ma = torch.stack(
+                [neigh.max().to(torch.int64), neigh_flipped.argmax().to(torch.int64)]
+            ).tolist()
             max_val = int(batch_ma[0])
             if max_val == 0:
                 break

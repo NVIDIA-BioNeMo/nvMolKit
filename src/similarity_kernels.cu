@@ -69,6 +69,7 @@ bool supportsTensorOps(const int major, const int minor) {
 // Indexed by device ordinal; supports up to kMaxDevices GPUs in a single process.
 // Initialized to zero by C++ static-storage rules (all unknown at startup).
 constexpr int kMaxDevices = 16;
+
 std::atomic<int8_t> g_tensorOpsCache[kMaxDevices]{};
 
 //! Returns whether the current CUDA device supports BMMA tensor ops,
