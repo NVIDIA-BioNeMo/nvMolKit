@@ -38,7 +38,7 @@ keywords = [
     "molecules",
     "pytorch",
 ]
-requires-python = ">=3.11,<3.15"
+requires-python = ">=3.10,<3.15"
 
 dependencies = [
     "numpy>=1.23",
