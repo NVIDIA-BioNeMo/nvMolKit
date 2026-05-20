@@ -9,21 +9,64 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nvMolKit"
 version = "0.5.0"
-description = "Python bindings for the nvMolKit project"
-requires-python = ">=3.10,<3.15"
+description = "CUDA-backed python library for accelerating common RDKit molecular operations"
+readme = { text = """
+nvMolKit is a CUDA-backed Python library that accelerates common
+[RDKit](https://www.rdkit.org/) molecular operations. It links against RDKit and
+operates on standard RDKit molecular representations.
 
+nvMolKit mirrors RDKit's APIs but exposes batch-oriented
+variants so many molecules can be processed in parallel on the GPU. Operations
+that do not modify structures return asynchronous GPU results that can be
+converted to PyTorch tensors or NumPy arrays; APIs that modify molecules apply
+changes in place, consistent with RDKit.
+
+An NVIDIA GPU with compute capability 7.0 (Volta) or newer and a Linux
+environment with CUDA 12 are required. For installation options, API reference, and
+examples, see the
+[project documentation](https://nvidia-digital-bio.github.io/nvMolKit/).
+""", content-type = "text/markdown" }
+license = "Apache-2.0"
+authors = [
+    { name = "NVIDIA BioNeMo", email = "bionemofeedback@nvidia.com" },
+]
+keywords = [
+    "cheminformatics",
+    "rdkit",
+    "cuda",
+    "gpu",
+    "molecules",
+    "pytorch",
+]
+requires-python = ">=3.10,<3.15"
 
 dependencies = [
     "numpy>=1.23",
     "torch>=2.1",
     "triton",
-    "rdkit",
+    "rdkit",  # nvmolkit-rdkit-pin: pinned to RDKIT_VERSION by admin/deploy/build_pip_wheels.sh during cibuildwheel
     "nvidia-cuda-runtime-cu12>=12.0",
 ]
 classifiers = [
-    "Environment :: GPU :: NVIDIA CUDA :: 12",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
     "Operating System :: POSIX :: Linux",
+    "Environment :: GPU :: NVIDIA CUDA :: 12",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: C++",
+    "Topic :: Scientific/Engineering :: Chemistry",
 ]
+
+[project.urls]
+Homepage = "https://nvidia-digital-bio.github.io/nvMolKit/"
+Documentation = "https://nvidia-digital-bio.github.io/nvMolKit/"
+Repository = "https://github.com/NVIDIA-Digital-Bio/nvMolKit"
+Issues = "https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues"
+Changelog = "https://github.com/NVIDIA-Digital-Bio/nvMolKit/releases"
 
 [project.optional-dependencies]
 test = [
@@ -61,7 +104,7 @@ build = [
 # only re-emits it on success, which makes diagnosing scikit-build failures
 # painful.
 build-frontend = "build"
-environment-pass = ["RDKIT_VERSION"]
+environment-pass = ["RDKIT_VERSION", "CMAKE_BUILD_PARALLEL_LEVEL", "MAKEFLAGS", "CONAN_CPU_COUNT"]
 # container-engine (network mode + cache bind-mounts) is set at runtime by
 # admin/deploy/build_pip_wheels.sh so it can interpolate $HOME for the cache
 # paths. cibuildwheel's TOML config does not support env-var substitution in
