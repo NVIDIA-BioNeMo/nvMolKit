@@ -44,7 +44,7 @@ pip install nvmolkit
 
 The wheel published to PyPI is built against a single RDKit release per
 nvMolKit version (RDKit 2026.03.1 for nvMolKit v0.5.0), due to versioning
-limitations in PyPI's depenedency management system.
+limitations in PyPI's dependency management system.
 
 Use this path if you do not have a constraint on which RDKit version to use;
 pip will pull a compatible RDKit from PyPI alongside nvMolKit.
