@@ -908,9 +908,11 @@ __global__ void updateDGradKernel(const double  gradTol,
   double blockMax = cub::BlockReduce<double, 128>(tempStorage).Reduce(localMax, cubMax());
 
   if (idxWithinSystem == 0) {
-    // Use |energy| so negative-energy geometries (possible mid-minimization)
-    // don't clamp the denominator to 1 and artificially tighten convergence.
-    const double term = max(fabs(energies[sysIdx]) * gradScales[sysIdx], 1.0);
+    // Matches RDKit's signed-energy convergence denominator in ForceField::minimize.
+    // Negative-energy geometries can clamp this to 1, artificially tightening the
+    // check — but fixing it unconditionally diverges from reference behavior.
+    // TODO: file upstream RDKit bug; gate fix on RDKit version once merged there.
+    const double term = max(energies[sysIdx] * gradScales[sysIdx], 1.0);
     blockMax /= term;
     if (blockMax < gradTol) {
       // Converged

@@ -76,12 +76,12 @@ std::atomic<int8_t> g_tensorOpsCache[kMaxDevices]{};
 //! querying cudaGetDeviceProperties at most once per device per process.
 bool isTensorOpsSupportedCached() {
   int device;
-  cudaGetDevice(&device);
+  cudaCheckError(cudaGetDevice(&device));
   if (device >= 0 && device < kMaxDevices && g_tensorOpsCache[device] != 0) {
     return g_tensorOpsCache[device] == 2;
   }
   cudaDeviceProp props;
-  cudaGetDeviceProperties(&props, device);
+  cudaCheckError(cudaGetDeviceProperties(&props, device));
   const bool result = supportsTensorOps(props.major, props.minor);
   if (device >= 0 && device < kMaxDevices) {
     g_tensorOpsCache[device] = result ? 2 : 1;

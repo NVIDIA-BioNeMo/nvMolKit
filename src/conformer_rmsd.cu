@@ -101,12 +101,7 @@ __device__ __forceinline__ double det3x3(const double* H) {
 constexpr int kRmsdBlockSize = 128;
 constexpr int kRmsdWarps     = kRmsdBlockSize / 32;  // 4 warps per block
 
-// Warp-level double-precision sum via shuffle; lane 0 holds the result.
-__device__ __forceinline__ double warpSumDouble(double v) {
-  for (int offs = 16; offs > 0; offs >>= 1)
-    v += __shfl_down_sync(0xffffffffU, v, offs);
-  return v;
-}
+using RmsdWarpReduce = cub::WarpReduce<double>;
 
 __device__ __forceinline__ void computePairRmsd(const double* __restrict__ coordI,
                                                 const double* __restrict__ coordJ,
@@ -118,14 +113,15 @@ __device__ __forceinline__ void computePairRmsd(const double* __restrict__ coord
   const int laneId = tid % 32;
 
   // Shared buffers for warp→block reduction.
-  //   warpBuf[w][f]: field f's warp-partial sum for warp w.
-  //   sCent[6]:      broadcast centroid buffer written by thread 0 after sync 1.
+  //   warpReduceTemp[w]: CUB WarpReduce scratch for warp w (empty for full 32-thread warps).
+  //   warpBuf[w][f]:     field f's warp-partial sum for warp w.
+  //   sCent[6]:          broadcast centroid buffer written by thread 0 after sync 1.
   // prealigned path uses only warpBuf[w][0].
   // Alignment path phase-1 uses fields 0-5 (centroid sums);
   //              phase-2 uses fields 0-10 (Sp, Sq, H[0..8]).
-  // Total shared: 4*11*8 + 6*8 = 400 bytes.
-  __shared__ double warpBuf[kRmsdWarps][11];
-  __shared__ double sCent[6];
+  __shared__ typename RmsdWarpReduce::TempStorage warpReduceTemp[kRmsdWarps];
+  __shared__ double                               warpBuf[kRmsdWarps][11];
+  __shared__ double                               sCent[6];
 
   if (prealigned) {
     // ---- Simple RMSD without alignment (no centering, matches RDKit behavior) ----
@@ -136,7 +132,7 @@ __device__ __forceinline__ void computePairRmsd(const double* __restrict__ coord
       const double dz = coordI[a * 3 + 2] - coordJ[a * 3 + 2];
       sumSqDiff += dx * dx + dy * dy + dz * dz;
     }
-    sumSqDiff = warpSumDouble(sumSqDiff);
+    sumSqDiff = RmsdWarpReduce(warpReduceTemp[warpId]).Sum(sumSqDiff);
     if (laneId == 0)
       warpBuf[warpId][0] = sumSqDiff;
     __syncthreads();
@@ -162,12 +158,12 @@ __device__ __forceinline__ void computePairRmsd(const double* __restrict__ coord
     sumJy += coordJ[a * 3 + 1];
     sumJz += coordJ[a * 3 + 2];
   }
-  sumIx = warpSumDouble(sumIx);
-  sumIy = warpSumDouble(sumIy);
-  sumIz = warpSumDouble(sumIz);
-  sumJx = warpSumDouble(sumJx);
-  sumJy = warpSumDouble(sumJy);
-  sumJz = warpSumDouble(sumJz);
+  sumIx = RmsdWarpReduce(warpReduceTemp[warpId]).Sum(sumIx);
+  sumIy = RmsdWarpReduce(warpReduceTemp[warpId]).Sum(sumIy);
+  sumIz = RmsdWarpReduce(warpReduceTemp[warpId]).Sum(sumIz);
+  sumJx = RmsdWarpReduce(warpReduceTemp[warpId]).Sum(sumJx);
+  sumJy = RmsdWarpReduce(warpReduceTemp[warpId]).Sum(sumJy);
+  sumJz = RmsdWarpReduce(warpReduceTemp[warpId]).Sum(sumJz);
 
   if (laneId == 0) {
     warpBuf[warpId][0] = sumIx;
@@ -230,10 +226,10 @@ __device__ __forceinline__ void computePairRmsd(const double* __restrict__ coord
     localH[8] += pz * qz;
   }
 
-  localSp = warpSumDouble(localSp);
-  localSq = warpSumDouble(localSq);
+  localSp = RmsdWarpReduce(warpReduceTemp[warpId]).Sum(localSp);
+  localSq = RmsdWarpReduce(warpReduceTemp[warpId]).Sum(localSq);
   for (int i = 0; i < 9; ++i)
-    localH[i] = warpSumDouble(localH[i]);
+    localH[i] = RmsdWarpReduce(warpReduceTemp[warpId]).Sum(localH[i]);
 
   if (laneId == 0) {
     warpBuf[warpId][0] = localSp;

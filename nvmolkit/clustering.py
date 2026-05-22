@@ -182,11 +182,13 @@ def fused_butina(
 
             cluster_sizes.append(cc[0])
 
-            # Update GPU tensors using CPU-derived mask (H2D, cheap).
-            is_free_tensor = torch.tensor(is_free_host, dtype=torch.bool, device=device)
-            x, y = x[is_free_tensor, :].contiguous(), x[~is_free_tensor, :].contiguous()
-            indices = indices[is_free_tensor].contiguous()
-            neigh = neigh[is_free_tensor].contiguous()
+            # is_free is already updated in-place on GPU by extract_cluster_and_singletons;
+            # use it directly to avoid a H2D→CPU→H2D roundtrip.
+            # is_free_host (from the combined download above) is still needed for indices_host.
+            y = x[~is_free, :].contiguous()
+            x = x[is_free, :].contiguous()
+            indices = indices[is_free].contiguous()
+            neigh = neigh[is_free].contiguous()
             is_free = torch.ones(x.shape[0], dtype=torch.bool, device=x.device)
             indices_host = [idx for idx, keep in zip(indices_host, is_free_host) if keep]
 
