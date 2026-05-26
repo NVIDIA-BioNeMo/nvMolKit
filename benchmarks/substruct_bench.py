@@ -276,7 +276,7 @@ def bench_rdkit_substruct(
     if max_matches > 0:
         params.maxMatches = max_matches
 
-    results_data: list = []
+    results_data = []
     pairs_done_this_run = 0
 
     if threads > 1:
@@ -291,15 +291,21 @@ def bench_rdkit_substruct(
         chunksize = max(1, len(mol_binaries) // (threads * 4))
 
         @nvtx.annotate("substruct_run_mp", color="yellow")
-        def run() -> None:
+        def run():
             nonlocal results_data, pairs_done_this_run
             with Pool(threads, initializer=_rdkit_worker_init, initargs=(query_binaries, max_matches)) as pool:
                 results_data = pool.map(worker_func, mol_binaries, chunksize=chunksize)
             pairs_done_this_run = pairs_total
     else:
+        if mode == "hasSubstructMatch":
+            match_fn = lambda mol, query: mol.HasSubstructMatch(query, params)  # noqa: E731
+        elif mode == "countSubstructMatches":
+            match_fn = lambda mol, query: len(mol.GetSubstructMatches(query, params))  # noqa: E731
+        else:
+            match_fn = lambda mol, query: mol.GetSubstructMatches(query, params)  # noqa: E731
 
         @nvtx.annotate("substruct_run", color="yellow")
-        def run() -> None:
+        def run():
             nonlocal results_data, pairs_done_this_run
             results_data = []
             pairs_done_this_run = 0
@@ -307,17 +313,7 @@ def bench_rdkit_substruct(
             for mol in mols:
                 if run_deadline.expired():
                     break
-                mol_results: list = []
-                if mode == "hasSubstructMatch":
-                    for query in queries:
-                        mol_results.append(mol.HasSubstructMatch(query, params))
-                elif mode == "countSubstructMatches":
-                    for query in queries:
-                        mol_results.append(len(mol.GetSubstructMatches(query, params)))
-                else:
-                    for query in queries:
-                        mol_results.append(mol.GetSubstructMatches(query, params))
-                results_data.append(mol_results)
+                results_data.append([match_fn(mol, query) for query in queries])
                 pairs_done_this_run += num_queries
 
     avg_ms, std_ms, last_pairs = time_it_bounded(run, runs, max_seconds, lambda: pairs_done_this_run, pairs_total)
@@ -354,8 +350,30 @@ def bench_rdkit_substructlib(
     results_data = [[None] * num_queries for _ in range(num_mols)]
     pairs_done_this_run = 0
 
+    if mode == "hasSubstructMatch":
+
+        def fill_column(q_idx, query, matching_set):
+            for m_idx in range(num_mols):
+                results_data[m_idx][q_idx] = m_idx in matching_set
+    elif mode == "countSubstructMatches":
+
+        def fill_column(q_idx, query, matching_set):
+            for m_idx in range(num_mols):
+                if m_idx in matching_set:
+                    results_data[m_idx][q_idx] = len(mols[m_idx].GetSubstructMatches(query, params))
+                else:
+                    results_data[m_idx][q_idx] = 0
+    else:
+
+        def fill_column(q_idx, query, matching_set):
+            for m_idx in range(num_mols):
+                if m_idx in matching_set:
+                    results_data[m_idx][q_idx] = mols[m_idx].GetSubstructMatches(query, params)
+                else:
+                    results_data[m_idx][q_idx] = ()
+
     @nvtx.annotate("substructlib_run", color="yellow")
-    def run() -> None:
+    def run():
         nonlocal results_data, pairs_done_this_run
 
         mol_holder = rdSubstructLibrary.CachedMolHolder()
@@ -371,23 +389,8 @@ def bench_rdkit_substructlib(
         for q_idx, query in enumerate(queries):
             if run_deadline.expired():
                 break
-            matching_indices = lib.GetMatches(query, numThreads=threads)
-            matching_set = set(matching_indices)
-            if mode == "hasSubstructMatch":
-                for m_idx in range(num_mols):
-                    results_data[m_idx][q_idx] = m_idx in matching_set
-            elif mode == "countSubstructMatches":
-                for m_idx in range(num_mols):
-                    if m_idx in matching_set:
-                        results_data[m_idx][q_idx] = len(mols[m_idx].GetSubstructMatches(query, params))
-                    else:
-                        results_data[m_idx][q_idx] = 0
-            else:
-                for m_idx in range(num_mols):
-                    if m_idx in matching_set:
-                        results_data[m_idx][q_idx] = mols[m_idx].GetSubstructMatches(query, params)
-                    else:
-                        results_data[m_idx][q_idx] = ()
+            matching_set = set(lib.GetMatches(query, numThreads=threads))
+            fill_column(q_idx, query, matching_set)
             pairs_done_this_run += num_mols
 
     avg_ms, std_ms, last_pairs = time_it_bounded(run, runs, max_seconds, lambda: pairs_done_this_run, pairs_total)
@@ -417,6 +420,34 @@ def bench_nvmolkit(
 
 def _load_config_dataframe(config_path: str) -> list[dict]:
     return pd.read_csv(config_path).to_dict("records")
+
+
+def _validate_matches(mode: str, nvmolkit_data, rdkit_data, num_mols: int, num_queries: int) -> None:
+    """Print per-cell agreement between nvmolkit and RDKit results for ``mode``."""
+    matches = 0
+    total = num_mols * num_queries
+    if mode == "hasSubstructMatch":
+        for t in range(num_mols):
+            for q in range(num_queries):
+                if bool(nvmolkit_data[t][q]) == rdkit_data[t][q]:
+                    matches += 1
+        label = "Boolean match agreement"
+    elif mode == "countSubstructMatches":
+        for t in range(num_mols):
+            for q in range(num_queries):
+                if int(nvmolkit_data[t][q]) == int(rdkit_data[t][q]):
+                    matches += 1
+        label = "Count agreement"
+    else:
+        for t in range(num_mols):
+            for q in range(num_queries):
+                nv_matches = set(tuple(m) for m in nvmolkit_data[t][q])
+                rd_matches = set(rdkit_data[t][q])
+                if nv_matches == rd_matches:
+                    matches += 1
+        label = "Full match agreement"
+    pct = 100.0 * matches / total if total > 0 else 0
+    print(f"  {label}: {matches}/{total} ({pct:.1f}%)")
 
 
 def main():
@@ -867,44 +898,7 @@ def main():
                 )
             else:
                 print(f"  Validating against {validation_key}")
-                nvmolkit_data = results["nvmolkit"][2]
-                rdkit_data = results[validation_key][2]
-                if mode == "hasSubstructMatch":
-                    matches = 0
-                    total = 0
-                    for t in range(len(mols)):
-                        for q in range(len(queries)):
-                            nv_match = bool(nvmolkit_data[t][q])
-                            rd_match = rdkit_data[t][q]
-                            if nv_match == rd_match:
-                                matches += 1
-                            total += 1
-                    pct = 100.0 * matches / total if total > 0 else 0
-                    print(f"  Boolean match agreement: {matches}/{total} ({pct:.1f}%)")
-                elif mode == "countSubstructMatches":
-                    matches = 0
-                    total = 0
-                    for t in range(len(mols)):
-                        for q in range(len(queries)):
-                            nv_count = int(nvmolkit_data[t][q])
-                            rd_count = int(rdkit_data[t][q])
-                            if nv_count == rd_count:
-                                matches += 1
-                            total += 1
-                    pct = 100.0 * matches / total if total > 0 else 0
-                    print(f"  Count agreement: {matches}/{total} ({pct:.1f}%)")
-                else:
-                    matches = 0
-                    total = 0
-                    for t in range(len(mols)):
-                        for q in range(len(queries)):
-                            nv_matches = set(tuple(m) for m in nvmolkit_data[t][q])
-                            rd_matches = set(rdkit_data[t][q])
-                            if nv_matches == rd_matches:
-                                matches += 1
-                            total += 1
-                    pct = 100.0 * matches / total if total > 0 else 0
-                    print(f"  Full match agreement: {matches}/{total} ({pct:.1f}%)")
+                _validate_matches(mode, results["nvmolkit"][2], results[validation_key][2], len(mols), len(queries))
 
         if ran_nvmolkit:
             applied_batch_size = int(config.batchSize)
