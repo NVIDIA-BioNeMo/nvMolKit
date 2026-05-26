@@ -20,9 +20,10 @@ import sys
 import numpy as np
 import pandas as pd
 import torch
+from bench_utils import load_smiles
 from benchmark_timing import time_it
 from rdkit import DataStructs
-from rdkit.Chem import AllChem, MolFromSmiles
+from rdkit.Chem import AllChem
 from rdkit.DataStructs import BulkTanimotoSimilarity
 from rdkit.ML.Cluster.Butina import ClusterData
 
@@ -207,10 +208,7 @@ if __name__ == "__main__":
 
     max_size = max(e["size"] for e in run_plan)
 
-    with open(args.input_smiles_file, "r") as f:
-        smis = [line.strip() for line in f.readlines()]
-    mols = [MolFromSmiles(smi, sanitize=True) for smi in smis[: max_size + 100]]
-    mols = [mol for mol in mols if mol is not None]
+    mols = load_smiles(args.input_smiles_file, max_count=max_size + 100, sanitize=True)
 
     if include_tanimoto and len(mols) < max_size:
         print(

@@ -95,6 +95,10 @@ def load_smiles(
     does not have to fit in memory and only the sampled SMILES are parsed. A
     10% buffer is read past ``max_count`` to absorb parse failures, after which
     the result is trimmed back to ``max_count``.
+
+    The returned list is always shuffled (deterministic with ``seed``) so
+    benches that consume a head slice get a representative cross-section
+    rather than file-order bias (some upstream files are sorted by size).
     """
     read_limit = int(max_count * 1.1) if max_count > 0 else 0
     rng = random.Random(seed)
@@ -127,6 +131,8 @@ def load_smiles(
 
     if max_count > 0 and len(mols) > max_count:
         mols = rng.sample(mols, max_count)
+    else:
+        rng.shuffle(mols)
 
     print(f"  Loaded {len(mols)} molecules from {filepath}")
     return mols
