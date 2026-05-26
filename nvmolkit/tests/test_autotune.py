@@ -266,11 +266,13 @@ def test_default_ff_search_space_caps_batches_per_gpu_by_cpu_count():
     assert space_64gpu["batchesPerGpu"] == (1, 1)
 
 
-def test_default_ff_search_space_batch_size_is_categorical_multiples_of_64():
-    """``batchSize`` is a list of multiples of 64 (categorical)."""
+def test_default_ff_search_space_batch_size_is_stepped_multiples_of_64():
+    """``batchSize`` is a stepped int range in multiples of 64."""
     space = _ff_common.default_ff_search_space(num_gpus=1, cpus=32)
-    assert isinstance(space["batchSize"], list)
-    assert all(isinstance(s, int) and s % 64 == 0 for s in space["batchSize"])
+    low, high, step = space["batchSize"]
+    assert step == 64
+    assert low % 64 == 0 and high % 64 == 0
+    assert low <= high
 
 
 def test_default_substruct_search_space_caps_per_pool():
@@ -287,8 +289,10 @@ def test_default_substruct_search_space_caps_per_pool():
     assert space_4gpu["preprocessingThreads"] == (1, 16)
     assert space_64gpu["preprocessingThreads"] == (1, 16)
 
-    assert isinstance(space_1gpu["batchSize"], list)
-    assert all(isinstance(s, int) and s % 64 == 0 for s in space_1gpu["batchSize"])
+    low, high, step = space_1gpu["batchSize"]
+    assert step % 64 == 0
+    assert low % step == 0 and high % step == 0
+    assert low <= high
 
 
 class _RecordingTrial:
@@ -298,8 +302,8 @@ class _RecordingTrial:
         self.calls: list[dict] = []
         self.picker = picker
 
-    def suggest_int(self, name: str, low: int, high: int, log: bool = False) -> int:
-        self.calls.append({"name": name, "low": low, "high": high, "log": log})
+    def suggest_int(self, name: str, low: int, high: int, log: bool = False, step: int = 1) -> int:
+        self.calls.append({"name": name, "low": low, "high": high, "log": log, "step": step})
         return int(self.picker(low, high))
 
 
@@ -308,7 +312,7 @@ def test_suggest_preprocessing_threads_clamps_to_remaining_cpu_budget():
     trial = _RecordingTrial()
     spec = (1, 32)
     value = _suggest_preprocessing_threads(trial, spec, worker_threads=6, num_gpus=2, cpus=16)
-    assert trial.calls == [{"name": "preprocessingThreads", "low": 1, "high": 4, "log": False}]
+    assert trial.calls == [{"name": "preprocessingThreads", "low": 1, "high": 4, "log": False, "step": 1}]
     assert value == 1
 
 
@@ -317,7 +321,7 @@ def test_suggest_preprocessing_threads_respects_low_floor_when_budget_exhausted(
     trial = _RecordingTrial(picker=lambda low, high: high)
     spec = (4, 32)
     value = _suggest_preprocessing_threads(trial, spec, worker_threads=8, num_gpus=2, cpus=16)
-    assert trial.calls == [{"name": "preprocessingThreads", "low": 4, "high": 4, "log": False}]
+    assert trial.calls == [{"name": "preprocessingThreads", "low": 4, "high": 4, "log": False, "step": 1}]
     assert value == 4
 
 
@@ -326,7 +330,7 @@ def test_suggest_preprocessing_threads_does_not_clamp_when_budget_available():
     trial = _RecordingTrial(picker=lambda low, high: high)
     spec = (1, 8)
     value = _suggest_preprocessing_threads(trial, spec, worker_threads=2, num_gpus=2, cpus=32)
-    assert trial.calls == [{"name": "preprocessingThreads", "low": 1, "high": 8, "log": False}]
+    assert trial.calls == [{"name": "preprocessingThreads", "low": 1, "high": 8, "log": False, "step": 1}]
     assert value == 8
 
 
@@ -335,7 +339,7 @@ def test_suggest_preprocessing_threads_propagates_log_flag():
     trial = _RecordingTrial()
     spec = (1, 32, "log")
     _suggest_preprocessing_threads(trial, spec, worker_threads=2, num_gpus=1, cpus=8)
-    assert trial.calls == [{"name": "preprocessingThreads", "low": 1, "high": 6, "log": True}]
+    assert trial.calls == [{"name": "preprocessingThreads", "low": 1, "high": 6, "log": True, "step": 1}]
 
 
 def test_default_embed_search_space_caps_per_pool():
@@ -343,8 +347,10 @@ def test_default_embed_search_space_caps_per_pool():
     space = _default_embed_search_space(num_gpus=4, cpus=16)
     assert space["batchesPerGpu"] == (1, 4)
     assert space["preprocessingThreads"] == (1, 16)
-    assert isinstance(space["batchSize"], list)
-    assert all(isinstance(s, int) and s % 64 == 0 for s in space["batchSize"])
+    low, high, step = space["batchSize"]
+    assert step == 64
+    assert low % 64 == 0 and high % 64 == 0
+    assert low <= high
 
 
 def test_default_embed_search_space_caps_batches_per_gpu_at_eight():

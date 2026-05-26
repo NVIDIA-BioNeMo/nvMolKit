@@ -64,8 +64,8 @@ def _default_substruct_search_space(num_gpus: int, cpus: int) -> dict:
     at trial sampling time by clamping ``preprocessingThreads`` to whatever
     cores are left after ``workerThreads`` is chosen.
 
-    * ``batchSize`` (categorical, multiples of 64): the substructure kernels
-      are tile-tuned for these sizes.
+    * ``batchSize``: stepped int range in multiples of 128 (kernels are
+      tile-tuned for these sizes); stepping preserves numeric ordering for TPE.
     * ``workerThreads`` (per-GPU): max = ``min(8, cpus // num_gpus)``.
       8 is the empirical point of diminishing returns; the physical-core
       floor prevents oversubscribing across GPUs.
@@ -74,7 +74,7 @@ def _default_substruct_search_space(num_gpus: int, cpus: int) -> dict:
     """
     per_gpu_worker_max = max(1, min(8, cpus // max(1, num_gpus)))
     return {
-        "batchSize": [1024, 128, 256, 512, 768],
+        "batchSize": (128, 1024, 128),
         "workerThreads": (1, per_gpu_worker_max),
         "preprocessingThreads": (1, cpus),
     }

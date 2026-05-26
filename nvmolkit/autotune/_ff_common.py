@@ -110,15 +110,16 @@ def resolve_num_gpus(fixed_gpu_ids: list[int]) -> int:
 def default_ff_search_space(num_gpus: int, cpus: int) -> dict:
     """Return the default FF search space scaled to the active hardware.
 
-    ``batchSize`` is restricted to multiples of 64 (categorical) since the
-    underlying kernels are tile-tuned for those sizes. ``batchesPerGpu`` is
-    per-GPU and capped at ``min(8, cpus // num_gpus)``: 8 is the empirical
-    point of diminishing returns for the batched-FF dispatch, and the
-    physical-core floor prevents oversubscribing CPU coordinator threads
-    across all GPUs.
+    ``batchSize`` is a stepped integer range in multiples of 64 since the
+    underlying kernels are tile-tuned for those sizes; the stepped form
+    preserves numeric ordering for TPE (unlike a categorical list).
+    ``batchesPerGpu`` is per-GPU and capped at ``min(8, cpus // num_gpus)``:
+    8 is the empirical point of diminishing returns for the batched-FF
+    dispatch, and the physical-core floor prevents oversubscribing CPU
+    coordinator threads across all GPUs.
     """
     per_gpu_max = max(1, min(8, cpus // max(1, num_gpus)))
     return {
-        "batchSize": [512, 64, 128, 192, 256, 320, 384, 448, 768, 1024],
+        "batchSize": (64, 1024, 64),
         "batchesPerGpu": (1, per_gpu_max),
     }

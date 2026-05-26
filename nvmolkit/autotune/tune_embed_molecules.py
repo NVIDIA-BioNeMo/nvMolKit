@@ -45,8 +45,8 @@ def _default_embed_search_space(num_gpus: int, cpus: int) -> dict:
     EmbedMolecules runs preprocessing and GPU-dispatch threads sequentially,
     so each pool is capped independently:
 
-    * ``batchSize`` (categorical, multiples of 64): the embed kernels are
-      tile-tuned for these sizes.
+    * ``batchSize``: stepped int range in multiples of 64 (kernels are
+      tile-tuned for these sizes); stepping preserves numeric ordering for TPE.
     * ``batchesPerGpu`` (per-GPU GPU-runner threads): max =
       ``min(8, cpus // num_gpus)``. 8 is the empirical point of diminishing
       returns; the physical-core floor prevents oversubscribing across GPUs.
@@ -54,7 +54,7 @@ def _default_embed_search_space(num_gpus: int, cpus: int) -> dict:
     """
     per_gpu_max = max(1, min(8, cpus // max(1, num_gpus)))
     return {
-        "batchSize": [512, 64, 128, 192, 256, 320, 384, 448, 768, 1024],
+        "batchSize": (64, 1024, 64),
         "batchesPerGpu": (1, per_gpu_max),
         "preprocessingThreads": (1, cpus),
     }
