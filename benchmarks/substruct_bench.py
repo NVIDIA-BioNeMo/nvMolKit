@@ -61,14 +61,18 @@ import gc
 import pickle
 import random
 import sys
-import time
 from functools import partial
 from multiprocessing import Pool
-from statistics import mean, pstdev
 from typing import Callable, Iterator
 
 import nvtx
 import pandas as pd
+from bench_utils import (
+    Deadline,
+    add_rdkit_max_seconds_arg,
+    throughput_per_s,
+    time_it_bounded,
+)
 from benchmark_timing import time_it as _time_it
 from nvmolkit import autotune as nv_autotune
 from nvmolkit.substructure import (
@@ -214,49 +218,6 @@ def load_smarts(filepath: str, max_count: int = 0) -> tuple[list[Chem.Mol], list
     return queries, smarts_list
 
 
-def _time_runs_bounded(
-    run: Callable[[], None],
-    runs: int,
-    max_seconds: float,
-    pairs_done_getter: Callable[[], int],
-    pairs_total: int,
-) -> tuple[float, float, int]:
-    """Repeat ``run`` up to ``runs`` times, stopping early once ``max_seconds`` elapses.
-
-    The supplied ``run`` closure is responsible for honouring ``max_seconds``
-    inside a single invocation (e.g. by checking a per-run deadline). After
-    each run we read ``pairs_done_getter()`` to learn how many target/query
-    pairs were actually evaluated; if that's below ``pairs_total`` we treat
-    the run as partial and stop iterating.
-
-    @return tuple of (avg_ms, std_ms, last_pairs_processed). avg/std are
-            computed only over runs that completed end-to-end (or the single
-            partial run if no full run was reached).
-    """
-    deadline = time.perf_counter() + max_seconds if max_seconds > 0 else None
-    completed_times_ms: list[float] = []
-    partial_time_ms: float | None = None
-    last_pairs = 0
-    for _run_index in range(runs):
-        if deadline is not None and time.perf_counter() > deadline:
-            break
-        start = time.perf_counter()
-        run()
-        elapsed_ms = (time.perf_counter() - start) * 1000.0
-        last_pairs = pairs_done_getter()
-        if last_pairs < pairs_total:
-            partial_time_ms = elapsed_ms
-            break
-        completed_times_ms.append(elapsed_ms)
-    if completed_times_ms:
-        avg_ms = mean(completed_times_ms)
-        std_ms = pstdev(completed_times_ms) if len(completed_times_ms) > 1 else 0.0
-        return avg_ms, std_ms, last_pairs
-    if partial_time_ms is not None:
-        return partial_time_ms, 0.0, last_pairs
-    return 0.0, 0.0, last_pairs
-
-
 _worker_queries = None
 _worker_params = None
 
@@ -342,9 +303,9 @@ def bench_rdkit_substruct(
             nonlocal results_data, pairs_done_this_run
             results_data = []
             pairs_done_this_run = 0
-            run_deadline = time.perf_counter() + max_seconds if max_seconds > 0 else None
+            run_deadline = Deadline(max_seconds)
             for mol in mols:
-                if run_deadline is not None and time.perf_counter() > run_deadline:
+                if run_deadline.expired():
                     break
                 mol_results: list = []
                 if mode == "hasSubstructMatch":
@@ -359,7 +320,7 @@ def bench_rdkit_substruct(
                 results_data.append(mol_results)
                 pairs_done_this_run += num_queries
 
-    avg_ms, std_ms, last_pairs = _time_runs_bounded(run, runs, max_seconds, lambda: pairs_done_this_run, pairs_total)
+    avg_ms, std_ms, last_pairs = time_it_bounded(run, runs, max_seconds, lambda: pairs_done_this_run, pairs_total)
     return avg_ms, std_ms, results_data, last_pairs
 
 
@@ -405,10 +366,10 @@ def bench_rdkit_substructlib(
 
         results_data = [[None] * num_queries for _ in range(num_mols)]
         pairs_done_this_run = 0
-        run_deadline = time.perf_counter() + max_seconds if max_seconds > 0 else None
+        run_deadline = Deadline(max_seconds)
 
         for q_idx, query in enumerate(queries):
-            if run_deadline is not None and time.perf_counter() > run_deadline:
+            if run_deadline.expired():
                 break
             matching_indices = lib.GetMatches(query, numThreads=threads)
             matching_set = set(matching_indices)
@@ -429,7 +390,7 @@ def bench_rdkit_substructlib(
                         results_data[m_idx][q_idx] = ()
             pairs_done_this_run += num_mols
 
-    avg_ms, std_ms, last_pairs = _time_runs_bounded(run, runs, max_seconds, lambda: pairs_done_this_run, pairs_total)
+    avg_ms, std_ms, last_pairs = time_it_bounded(run, runs, max_seconds, lambda: pairs_done_this_run, pairs_total)
     return avg_ms, std_ms, results_data, last_pairs
 
 
@@ -516,15 +477,11 @@ def main():
             "(default: 1)"
         ),
     )
-    parser.add_argument(
-        "--rdkit_max_seconds",
-        type=float,
-        default=0.0,
-        help=(
-            "When > 0, cap the RDKit benchmark wall time per run to this many seconds. "
+    add_rdkit_max_seconds_arg(
+        parser,
+        extra_help=(
             "RDKit aborts between queries (substructlib) or molecules (raw, single-thread); "
-            "the threaded raw path can only be bounded between runs. Reported throughput "
-            "uses the actual pairs processed. Default 0 = no limit."
+            "the threaded raw path can only be bounded between runs."
         ),
     )
     parser.add_argument("--batch_size", "-b", type=int, default=1024, help="nvmolkit batch size (default: 1024)")

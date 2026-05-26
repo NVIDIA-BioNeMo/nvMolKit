@@ -38,11 +38,14 @@ import sys
 import nvtx
 import torch
 from bench_utils import (
+    Deadline,
+    add_rdkit_max_seconds_arg,
     clone_mols_with_conformers,
     load_pickle,
     load_sdf,
     load_smiles,
     prep_mols,
+    throughput_per_s,
     time_it,
 )
 from nvmolkit import autotune as nv_autotune
@@ -175,8 +178,6 @@ def bench_rdkit(
     as items / elapsed; the returned timing is over the molecules actually
     processed.
     """
-    import time as _time
-
     if ff == "mmff":
         rdkit_optimize = lambda mol: AllChem.MMFFOptimizeMoleculeConfs(  # noqa: E731
             mol, numThreads=num_threads, maxIters=max_iters
@@ -194,13 +195,13 @@ def bench_rdkit(
     @nvtx.annotate("ff_rdkit_run", color="yellow")
     def run() -> None:
         cloned = clone_mols_with_conformers(mols)
-        deadline = _time.perf_counter() + max_seconds if max_seconds > 0 else None
+        deadline = Deadline(max_seconds)
         out: list[list[tuple[int, float]]] = []
         n_done = 0
         for mol in cloned:
             out.append(rdkit_optimize(mol))
             n_done += 1
-            if deadline is not None and _time.perf_counter() >= deadline:
+            if deadline.expired():
                 break
         last_results[0] = out
         processed_count[0] = n_done
@@ -278,15 +279,9 @@ def main() -> None:
         default=1,
         help="Threads passed to RDKit FF optimizer via numThreads (default: 1)",
     )
-    parser.add_argument(
-        "--rdkit_max_seconds",
-        type=float,
-        default=0.0,
-        help=(
-            "Stop the RDKit comparison after this many wall-clock seconds and "
-            "report throughput on the molecules actually processed. 0 disables "
-            "the cap and runs the full workload (default: 0)."
-        ),
+    add_rdkit_max_seconds_arg(
+        parser,
+        extra_help="The RDKit FF optimizer loop stops at the next molecule boundary once the budget is hit.",
     )
 
     parser.add_argument("--batch_size", "-b", type=int, default=1024, help="nvmolkit batch size (default: 1024)")
@@ -537,15 +532,13 @@ def main() -> None:
 
     print("\n" + "=" * 70)
     print("Summary:")
-    rdkit_throughput_per_s = None
-    if "rdkit" in results:
-        rd_avg = results["rdkit"][0]
-        if rd_avg > 0:
-            rdkit_throughput_per_s = (rdkit_processed_count * args.confs_per_mol) / (rd_avg / 1000.0)
+    rdkit_throughput_per_s: float | None = None
+    if "rdkit" in results and results["rdkit"][0] > 0:
+        rdkit_throughput_per_s = throughput_per_s(rdkit_processed_count * args.confs_per_mol, results["rdkit"][0])
     for name, (avg_ms, std_ms, _) in results.items():
         speedup = ""
         if rdkit_throughput_per_s is not None and name != "rdkit" and avg_ms > 0:
-            method_throughput = (len(mols) * args.confs_per_mol) / (avg_ms / 1000.0)
+            method_throughput = throughput_per_s(len(mols) * args.confs_per_mol, avg_ms)
             speedup = f", {method_throughput / rdkit_throughput_per_s:.1f}x vs RDKit (throughput)"
         print(f"  {name:20s}: {avg_ms:10.2f} ms (+/- {std_ms:.2f} ms){speedup}")
 
@@ -586,7 +579,7 @@ def main() -> None:
         rdkit_threads = args.rdkit_threads if is_rdkit else "N/A"
         rdkit_max_seconds = args.rdkit_max_seconds if is_rdkit else "N/A"
         mols_processed = rdkit_processed_count if is_rdkit else len(mols)
-        confs_per_second = (mols_processed * args.confs_per_mol) / (avg_ms / 1000.0) if avg_ms > 0 else float("nan")
+        confs_per_second = throughput_per_s(mols_processed * args.confs_per_mol, avg_ms)
         if rdkit_throughput_per_s is not None and not is_rdkit and avg_ms > 0:
             vs_rdkit_throughput_ratio = f"{confs_per_second / rdkit_throughput_per_s:.4f}"
         else:
