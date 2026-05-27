@@ -91,6 +91,9 @@ def run_benchmark(smiles, num_confs_list, seed=42):
         if rdDistGeom.EmbedMolecule(mol, params=params) < 0:
             print(f"{num_confs:>8}  {'skipped (embedding failed)':>50}")
             continue
+        if num_confs < 2:
+            print(f"{num_confs:>8}  {'skipped (need >= 2 confs for RMSD)':>50}")
+            continue
         base_conf_id = mol.GetConformer().GetId()
         for conf_idx in range(1, num_confs):
             new_conf = Chem.Conformer(mol.GetConformer(base_conf_id))
