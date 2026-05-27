@@ -305,9 +305,7 @@ def suggest_from_space(trial, name: str, spec: Any) -> Any:
     if isinstance(spec, tuple) and len(spec) == 3 and all(isinstance(v, int) for v in spec):
         low, high, step = spec
         if step <= 0:
-            raise ValueError(
-                f"Search-space override for {name!r}: step must be a positive integer, got {step!r}."
-            )
+            raise ValueError(f"Search-space override for {name!r}: step must be a positive integer, got {step!r}.")
         return trial.suggest_int(name, int(low), int(high), step=int(step))
     if isinstance(spec, list) and len(spec) == 2 and all(isinstance(v, int) for v in spec):
         raise TypeError(
