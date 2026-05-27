@@ -86,7 +86,8 @@ def test_time_it_bounded_stops_when_budget_exhausted_between_runs():
         time.sleep(0.05)
 
     # 5 runs * 50ms = 250ms total, but budget is only 60ms.
-    # First run completes; before run 2 the deadline check kicks in.
+    # Run 1 completes at ~50ms (deadline check before run 2 still passes), run 2
+    # completes at ~100ms, and the deadline check before run 3 stops the loop.
     avg_ms, _std_ms, _progress = time_it_bounded(
         run, runs=5, max_seconds=0.06, progress_getter=lambda: 1, progress_target=1
     )

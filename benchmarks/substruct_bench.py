@@ -930,9 +930,11 @@ def main():
             nvmolkit_config_source = config_source if name == "nvmolkit" else "N/A"
             if is_rdkit:
                 rdkit_match_mode, rdkit_threads = rdkit_variant_meta[name]
+                rdkit_max_seconds = args.rdkit_max_seconds
             else:
                 rdkit_match_mode = "N/A"
                 rdkit_threads = "N/A"
+                rdkit_max_seconds = "N/A"
             throughput = (pairs_done * 1000.0 / avg_ms) if avg_ms > 0 else 0.0
             vs_rdkit = (throughput / baseline_throughput) if (not is_rdkit and baseline_throughput > 0) else "N/A"
             csv_rows.append(
@@ -956,7 +958,7 @@ def main():
                     avg_ms,
                     std_ms,
                     pairs_done,
-                    args.rdkit_max_seconds,
+                    rdkit_max_seconds,
                     throughput,
                     vs_rdkit,
                 )
@@ -1001,11 +1003,14 @@ def main():
             vs_rdkit,
         ) = row
         vs_rdkit_str = f"{vs_rdkit:.4f}" if isinstance(vs_rdkit, float) else str(vs_rdkit)
+        rdkit_max_seconds_str = (
+            f"{rdkit_max_seconds:g}" if isinstance(rdkit_max_seconds, float) else str(rdkit_max_seconds)
+        )
         print(
             f"{name},{mode},{smarts_path},{input_file},{input_type},{sanitize},"
             f"{num_mols},{num_patterns},{max_matches},{batch_size},{num_gpus},{workers},{prep_threads},"
             f"{nvmolkit_config_source},{rdkit_threads},{rdkit_match_mode},{avg_ms:.2f},{std_ms:.2f},"
-            f"{pairs_done},{rdkit_max_seconds:g},{throughput:.2f},{vs_rdkit_str}"
+            f"{pairs_done},{rdkit_max_seconds_str},{throughput:.2f},{vs_rdkit_str}"
         )
 
 
