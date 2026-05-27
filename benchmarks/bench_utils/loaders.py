@@ -44,12 +44,18 @@ def load_pickle(filepath: str, max_count: int = 0, seed: int | None = None) -> l
         seed: Optional seed for the sampling RNG.
 
     Returns:
-        List of parsed RDKit molecules.
+        List of parsed RDKit molecules. The list is always shuffled
+        (deterministic with ``seed``) so benches that consume a head slice
+        get a representative cross-section rather than file-order bias.
     """
     with open(filepath, "rb") as fh:
         binary_mols = pickle.load(fh)
+    rng = random.Random(seed)
     if max_count > 0 and len(binary_mols) > max_count:
-        binary_mols = random.Random(seed).sample(binary_mols, max_count)
+        binary_mols = rng.sample(binary_mols, max_count)
+    else:
+        binary_mols = list(binary_mols)
+        rng.shuffle(binary_mols)
     mols = process_map(
         _mol_from_binary,
         binary_mols,
@@ -174,7 +180,12 @@ def load_sdf(
     removeHs: bool = False,
     sanitize: bool = True,
 ) -> list[Chem.Mol]:
-    """Load molecules from an SDF file with optional reservoir sampling."""
+    """Load molecules from an SDF file with optional reservoir sampling.
+
+    The returned list is always shuffled (deterministic with ``seed``) so
+    benches that consume a head slice get a representative cross-section
+    rather than file-order bias (some upstream files are sorted by size).
+    """
     supplier = Chem.SDMolSupplier(filepath, removeHs=removeHs, sanitize=sanitize)
     read_limit = int(max_count * 1.1) if max_count > 0 else 0
     rng = random.Random(seed)
@@ -205,6 +216,8 @@ def load_sdf(
 
     if max_count > 0 and len(mols) > max_count:
         mols = rng.sample(mols, max_count)
+    else:
+        rng.shuffle(mols)
 
     if parse_failures > 0:
         print(f"    ({parse_failures} parse failures)")
