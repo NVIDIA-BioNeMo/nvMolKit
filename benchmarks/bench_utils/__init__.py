@@ -20,16 +20,18 @@ so individual bench scripts can ``from bench_utils import time_it, load_smiles``
 """
 
 from bench_utils.loaders import load_pickle, load_sdf, load_smarts, load_smiles
-from bench_utils.molprep import clone_mols_with_conformers, prep_mols
+from bench_utils.molprep import clone_mols_with_conformers, embed_and_jitter, perturb_conformer, prep_mols
 from bench_utils.timing import TimingResult, time_it
 
 __all__ = [
     "TimingResult",
     "clone_mols_with_conformers",
+    "embed_and_jitter",
     "load_pickle",
     "load_sdf",
     "load_smarts",
     "load_smiles",
+    "perturb_conformer",
     "prep_mols",
     "time_it",
 ]

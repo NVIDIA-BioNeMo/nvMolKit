@@ -39,6 +39,7 @@ import nvtx
 import torch
 from bench_utils import (
     clone_mols_with_conformers,
+    embed_and_jitter,
     load_pickle,
     load_sdf,
     load_smiles,
@@ -51,32 +52,6 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, rdDistGeom
 
 OPTUNA_AVAILABLE = nv_autotune.is_available()
-
-
-def _embed_conformers(mols: list[Chem.Mol], confs_per_mol: int, seed: int) -> list[Chem.Mol]:
-    """Generate ``confs_per_mol`` conformers per molecule using RDKit ETKDGv3.
-
-    Molecules where embedding fails to produce at least one conformer are
-    dropped; a count is printed.
-    """
-    params = rdDistGeom.ETKDGv3()
-    params.useRandomCoords = True
-    params.randomSeed = seed
-
-    embedded: list[Chem.Mol] = []
-    drop_count = 0
-    for mol in mols:
-        try:
-            conf_ids = rdDistGeom.EmbedMultipleConfs(mol, numConfs=confs_per_mol, params=params)
-            if not conf_ids:
-                drop_count += 1
-                continue
-            embedded.append(mol)
-        except Exception:
-            drop_count += 1
-    if drop_count > 0:
-        print(f"  Dropped {drop_count} molecules during embedding (no conformer generated)")
-    return embedded
 
 
 def _flatten_energies(per_mol: list[list[float]]) -> list[float]:
@@ -398,7 +373,7 @@ def main() -> None:
     print(f"  {len(mols)} molecules ready")
 
     print(f"\nEmbedding {args.confs_per_mol} conformer(s) per molecule with RDKit ETKDGv3...")
-    mols = _embed_conformers(mols, args.confs_per_mol, args.seed)
+    mols = embed_and_jitter(mols, args.confs_per_mol, seed=args.seed, num_workers=args.rdkit_threads)
     if not mols:
         print("Error: No molecules retained after embedding")
         sys.exit(1)
