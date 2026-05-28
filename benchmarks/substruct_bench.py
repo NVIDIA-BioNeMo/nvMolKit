@@ -68,7 +68,6 @@ from typing import Callable, Iterator
 import nvtx
 import pandas as pd
 from bench_utils import (
-    Deadline,
     add_rdkit_max_seconds_arg,
     throughput_per_s,
     time_it_bounded,
@@ -291,7 +290,7 @@ def bench_rdkit_substruct(
         chunksize = max(1, len(mol_binaries) // (threads * 4))
 
         @nvtx.annotate("substruct_run_mp", color="yellow")
-        def run():
+        def run(_deadline):
             nonlocal results_data, pairs_done_this_run
             with Pool(threads, initializer=_rdkit_worker_init, initargs=(query_binaries, max_matches)) as pool:
                 results_data = pool.map(worker_func, mol_binaries, chunksize=chunksize)
@@ -305,13 +304,12 @@ def bench_rdkit_substruct(
             match_fn = lambda mol, query: mol.GetSubstructMatches(query, params)  # noqa: E731
 
         @nvtx.annotate("substruct_run", color="yellow")
-        def run():
+        def run(deadline):
             nonlocal results_data, pairs_done_this_run
             results_data = []
             pairs_done_this_run = 0
-            run_deadline = Deadline(max_seconds)
             for mol in mols:
-                if run_deadline.expired():
+                if deadline.expired():
                     break
                 results_data.append([match_fn(mol, query) for query in queries])
                 pairs_done_this_run += num_queries
@@ -373,7 +371,7 @@ def bench_rdkit_substructlib(
                     results_data[m_idx][q_idx] = ()
 
     @nvtx.annotate("substructlib_run", color="yellow")
-    def run():
+    def run(deadline):
         nonlocal results_data, pairs_done_this_run
 
         mol_holder = rdSubstructLibrary.CachedMolHolder()
@@ -384,10 +382,9 @@ def bench_rdkit_substructlib(
 
         results_data = [[None] * num_queries for _ in range(num_mols)]
         pairs_done_this_run = 0
-        run_deadline = Deadline(max_seconds)
 
         for q_idx, query in enumerate(queries):
-            if run_deadline.expired():
+            if deadline.expired():
                 break
             matching_set = set(lib.GetMatches(query, numThreads=threads))
             fill_column(q_idx, query, matching_set)

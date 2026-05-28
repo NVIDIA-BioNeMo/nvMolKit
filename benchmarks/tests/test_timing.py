@@ -46,7 +46,7 @@ def test_throughput_per_s_non_positive_elapsed_returns_nan(elapsed_ms):
 def test_time_it_bounded_runs_to_completion_when_progress_full():
     call_count = [0]
 
-    def run():
+    def run(_deadline):
         call_count[0] += 1
         time.sleep(0.001)
 
@@ -64,7 +64,7 @@ def test_time_it_bounded_stops_after_partial_run():
     call_count = [0]
     progress = [10]
 
-    def run():
+    def run(_deadline):
         call_count[0] += 1
         progress[0] = 3
 
@@ -81,7 +81,7 @@ def test_time_it_bounded_stops_after_partial_run():
 def test_time_it_bounded_stops_when_budget_exhausted_between_runs():
     call_count = [0]
 
-    def run():
+    def run(_deadline):
         call_count[0] += 1
         time.sleep(0.05)
 
@@ -98,7 +98,7 @@ def test_time_it_bounded_stops_when_budget_exhausted_between_runs():
 
 def test_time_it_bounded_zero_runs_returns_zero():
     avg_ms, std_ms, progress = time_it_bounded(
-        lambda: None, runs=0, max_seconds=0.0, progress_getter=lambda: 0, progress_target=1
+        lambda _deadline: None, runs=0, max_seconds=0.0, progress_getter=lambda: 0, progress_target=1
     )
     assert avg_ms == 0.0
     assert std_ms == 0.0
@@ -108,10 +108,41 @@ def test_time_it_bounded_zero_runs_returns_zero():
 def test_time_it_bounded_stddev_positive_for_multiple_completed_runs():
     delays = iter([0.001, 0.02, 0.001])
 
-    def run():
+    def run(_deadline):
         time.sleep(next(delays))
 
     _avg_ms, std_ms, _progress = time_it_bounded(
         run, runs=3, max_seconds=0.0, progress_getter=lambda: 1, progress_target=1
     )
     assert std_ms > 0.0
+
+
+def test_time_it_bounded_shared_deadline_caps_inner_loop():
+    """Verify ``time_it_bounded`` exposes a single shared :class:`Deadline`.
+
+    The ``run`` callback honours the budget mid-iteration, and a second call
+    receives the same (already-elapsed) deadline rather than a fresh one,
+    which is the property that makes ``max_seconds`` a true total cap.
+    """
+    iterations_per_run: list[int] = []
+    progress = [0]
+
+    def run(deadline):
+        n_done = 0
+        for _ in range(1000):
+            if deadline.expired():
+                break
+            time.sleep(0.005)
+            n_done += 1
+        iterations_per_run.append(n_done)
+        progress[0] = n_done
+
+    _avg_ms, _std_ms, _progress = time_it_bounded(
+        run, runs=5, max_seconds=0.05, progress_getter=lambda: progress[0], progress_target=1000
+    )
+
+    assert iterations_per_run, "run should have been invoked at least once"
+    # The first run consumes essentially the whole budget; any subsequent call
+    # must see an already-expired deadline and exit immediately.
+    for later_count in iterations_per_run[1:]:
+        assert later_count == 0

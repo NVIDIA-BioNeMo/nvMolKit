@@ -120,7 +120,7 @@ def throughput_per_s(items: float, elapsed_ms: float) -> float:
 
 
 def time_it_bounded(
-    run: Callable[[], None],
+    run: Callable[[Deadline], None],
     runs: int,
     max_seconds: float,
     progress_getter: Callable[[], int],
@@ -128,11 +128,12 @@ def time_it_bounded(
 ) -> tuple[float, float, int]:
     """Repeat ``run`` up to ``runs`` times, stopping early on budget exhaustion.
 
-    The supplied ``run`` closure is responsible for honouring the per-run
-    deadline internally (e.g. by checking a :class:`Deadline`). After each
-    invocation, ``progress_getter()`` reports how much of the workload was
-    actually completed; a value below ``progress_target`` is treated as a
-    partial run and further iterations are skipped.
+    A single :class:`Deadline` covering the whole call is constructed from
+    ``max_seconds`` and passed to ``run`` on every invocation; the closure
+    must poll it inside its inner work loop to honour the budget mid-run.
+    After each invocation, ``progress_getter()`` reports how much of the
+    workload was actually completed; a value below ``progress_target`` is
+    treated as a partial run and further iterations are skipped.
 
     Returns ``(avg_ms, std_ms, last_progress)``. ``avg`` and ``std`` are
     computed only over runs that completed end-to-end; if no full run
@@ -146,7 +147,7 @@ def time_it_bounded(
         if deadline.expired():
             break
         start = time.perf_counter()
-        run()
+        run(deadline)
         elapsed_ms = (time.perf_counter() - start) * 1000.0
         last_progress = progress_getter()
         if last_progress < progress_target:
