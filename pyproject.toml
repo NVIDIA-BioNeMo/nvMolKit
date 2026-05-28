@@ -24,7 +24,7 @@ changes in place, consistent with RDKit.
 An NVIDIA GPU with compute capability 7.0 (Volta) or newer and a Linux
 environment with CUDA 12 are required. For installation options, API reference, and
 examples, see the
-[project documentation](https://nvidia-digital-bio.github.io/nvMolKit/).
+[project documentation](https://nvidia-bionemo.github.io/nvMolKit/).
 """, content-type = "text/markdown" }
 license = "Apache-2.0"
 authors = [
@@ -62,11 +62,11 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://nvidia-digital-bio.github.io/nvMolKit/"
-Documentation = "https://nvidia-digital-bio.github.io/nvMolKit/"
-Repository = "https://github.com/NVIDIA-Digital-Bio/nvMolKit"
-Issues = "https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues"
-Changelog = "https://github.com/NVIDIA-Digital-Bio/nvMolKit/releases"
+Homepage = "https://nvidia-bionemo.github.io/nvMolKit/"
+Documentation = "https://nvidia-bionemo.github.io/nvMolKit/"
+Repository = "https://github.com/NVIDIA-BioNeMo/nvMolKit"
+Issues = "https://github.com/NVIDIA-BioNeMo/nvMolKit/issues"
+Changelog = "https://github.com/NVIDIA-BioNeMo/nvMolKit/releases"
 
 [project.optional-dependencies]
 test = [

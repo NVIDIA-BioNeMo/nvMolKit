@@ -12,7 +12,7 @@ Get the skill
 -------------
 
 The skill lives at
-`agent-skills/nvmolkit-usage/ <https://github.com/NVIDIA-Digital-Bio/nvMolKit/tree/main/agent-skills/nvmolkit-usage>`_
+`agent-skills/nvmolkit-usage/ <https://github.com/NVIDIA-BioNeMo/nvMolKit/tree/main/agent-skills/nvmolkit-usage>`_
 in the nvMolKit GitHub repo.
 
 Copy that directory into one of:
