@@ -292,7 +292,12 @@ __device__ void updateDGrad(const int                                           
   float blockMax = cub::BlockReduce<double, BLOCK_SIZE>(tempStorage).Reduce(localMax, cubMax());
 
   if (threadIdx.x == 0) {
-    const float term = max(energy * gradScale, 1.0);
+    // rdkit/rdkit#9298 (merged RDKit 2026.03): use |energy| to avoid clamping the
+    // denominator to 1 when energy is negative; match signed behavior on older RDKit.
+    constexpr bool kRdkitHasGradDenomFix =
+      RDKIT_VERSION_MAJOR > 2026 || (RDKIT_VERSION_MAJOR == 2026 && RDKIT_VERSION_MINOR >= 3);
+    const double energyMag = kRdkitHasGradDenomFix ? fabs(energy) : energy;
+    const float  term      = max(energyMag * gradScale, 1.0);
     blockMax /= term;
     if (blockMax < gradTol) {
       converged = true;
