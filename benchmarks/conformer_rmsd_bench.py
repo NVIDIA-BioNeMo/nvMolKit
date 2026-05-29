@@ -15,19 +15,14 @@
 
 """Benchmark: GPU vs single-threaded CPU pairwise conformer RMSD on Enamine.
 
-Mirrors the sampling strategy used by the FF / TFD benches: load a slice of
-Enamine REAL, embed one ETKDGv3 base conformer per molecule in parallel, and
-derive the remaining conformers by jittering the base structure. The two
-implementations being compared then process the *batch* of molecules:
+Loads a slice of Enamine REAL, embeds one ETKDGv3 base conformer per molecule
+and jitters it to produce the remaining conformers, then compares two
+implementations over the batch of molecules:
 
-* nvMolKit GPU: a single ``GetConformerRMSMatrixBatch`` call covers every mol.
-* RDKit CPU:    ``AllChem.GetConformerRMSMatrix`` called in a serial loop,
-  matching the head-to-head convention of the other single-GPU benches
-  (butina, cross_similarity, tfd) which all compare against single-threaded
-  RDKit.
+* nvMolKit GPU: a single ``GetConformerRMSMatrixBatch`` call.
+* RDKit CPU: ``AllChem.GetConformerRMSMatrix`` in a serial loop.
 
-Throughput is reported in molecules/s and pair-RMSDs/s so configurations with
-different conformer counts can be compared apples-to-apples.
+Throughput is reported in molecules/s and pair-RMSDs/s.
 """
 
 import argparse
@@ -53,9 +48,7 @@ def prepare_mols(
 ) -> list[Chem.Mol]:
     """Embed one base conformer per mol, then perturb to ``confs_per_mol``.
 
-    Thin wrapper over :func:`bench_utils.embed_and_jitter` that enforces
-    confs_per_mol >= 2 (RMSD needs at least one pair) and adds explicit
-    hydrogens during embedding so ETKDG sees a chemically reasonable graph.
+    Requires ``confs_per_mol >= 2`` since RMSD needs at least one conformer pair.
     """
     if confs_per_mol < 2:
         raise ValueError(f"confs_per_mol must be >= 2, got {confs_per_mol}")
@@ -72,13 +65,11 @@ def prepare_mols(
 
 
 def bench_rdkit_batch(payloads: list[bytes], max_seconds: float) -> tuple[float, int]:
-    """One RDKit timing iteration: serial loop, returns ``(elapsed_s, n_done)``.
+    """One RDKit timing iteration over ``payloads``; returns ``(elapsed_s, n_done)``.
 
-    When ``max_seconds > 0`` the loop breaks after the deadline is exceeded;
-    callers compute throughput as ``n_done / elapsed_s`` so a truncated run
-    is still extrapolated to a fair pairs/s figure. ``GetConformerRMSMatrix``
-    mutates conformer coordinates in-place during Kabsch alignment, so each
-    call gets a fresh deserialization.
+    Stops once ``max_seconds`` is exceeded (``0`` means no cap). Each iteration
+    deserializes a fresh mol because ``GetConformerRMSMatrix`` mutates conformer
+    coordinates in-place during Kabsch alignment.
     """
     deadline = time.perf_counter() + max_seconds if max_seconds > 0 else None
     start = time.perf_counter()
@@ -100,11 +91,9 @@ def bench_gpu_batch(mols: list[Chem.Mol]) -> None:
 
 
 def validate(mols: list[Chem.Mol], num_check: int, tol: float) -> None:
-    """Diff GPU RMSD matrices against RDKit on the first ``num_check`` mols.
+    """Compare GPU RMSD matrices against RDKit on the first ``num_check`` mols.
 
-    Untimed; runs once before the sweep. Each pair of conformers in each mol
-    is compared element-wise; mismatches abort the benchmark so we never
-    publish a number for a broken kernel.
+    Raises ``RuntimeError`` on the first pair whose absolute diff exceeds ``tol``.
     """
     subset = mols[:num_check]
     if not subset:
@@ -135,12 +124,7 @@ def validate(mols: list[Chem.Mol], num_check: int, tol: float) -> None:
 
 
 def _slice_to_confs(mols: list[Chem.Mol], target: int) -> list[Chem.Mol]:
-    """Return copies of ``mols`` keeping only the first ``target`` conformers each.
-
-    The shared base set is prepared once at the maximum conformer count; this
-    helper produces the per-sweep-point view without re-embedding so every
-    sweep row sees the exact same molecule selection and base geometries.
-    """
+    """Return copies of ``mols`` keeping only the first ``target`` conformers each."""
     out: list[Chem.Mol] = []
     for mol in mols:
         copy_mol = Chem.Mol(mol, True)  # quickCopy: keeps graph, drops conformers
@@ -263,8 +247,8 @@ def run(
             for key in row:
                 if key not in fieldnames:
                     fieldnames.append(key)
-        with out_path.open("w", newline="") as fh:
-            writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        with out_path.open("w", newline="") as csv_file:
+            writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
             writer.writeheader()
             writer.writerows(rows)
         print(f"\nWrote {out_path}")
