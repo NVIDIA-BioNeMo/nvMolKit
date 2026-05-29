@@ -44,12 +44,10 @@ def nvmolkit_sim_gpu_only(fps, sim_type):
     torch.cuda.synchronize()
 
 
-# Strip --no-rdkit / --no-nvmolkit from argv before handing the rest to
-# pyperf. pyperf's own argparser passes registered flags through correctly on
-# the parent's parse_args() but does not consistently propagate them to its
-# child worker processes (each child re-imports this module and re-parses
-# sys.argv). Doing the checks here once, at import time, gives every process
-# the same answer.
+# --no-rdkit / --no-nvmolkit gate the module-level fingerprint setup below,
+# which runs at import time before pyperf's Runner parses args. Read them
+# directly from argv and strip them so pyperf's argparser doesn't reject the
+# unknown flags.
 NO_RDKIT = "--no-rdkit" in sys.argv
 if NO_RDKIT:
     sys.argv = [a for a in sys.argv if a != "--no-rdkit"]
