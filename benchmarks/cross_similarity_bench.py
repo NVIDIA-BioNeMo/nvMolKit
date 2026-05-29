@@ -48,6 +48,7 @@ runner.argparser.add_argument(
     "--input", type=str, default="data/benchmark_smiles.csv", help="Path to input SMILES file (.smi/.csv/.cxsmiles)"
 )
 runner.argparser.add_argument("--cosine", action="store_true", help="Include cosine similarity benchmarks")
+runner.argparser.add_argument("--seed", type=int, default=42, help="Random seed for sampling SMILES (default: 42)")
 args = runner.parse_args()
 
 sim_types = ("tanimoto", "cosine") if args.cosine else ("tanimoto",)
@@ -55,7 +56,7 @@ fpsize = 1024
 max_size = max(SIZES)
 default_values = runner.args.values
 
-mols = load_smiles(args.input, max_count=max_size)
+mols = load_smiles(args.input, max_count=max_size, seed=args.seed)
 if not mols:
     raise ValueError(f"No molecules parsed from {args.input}")
 while len(mols) < max_size:

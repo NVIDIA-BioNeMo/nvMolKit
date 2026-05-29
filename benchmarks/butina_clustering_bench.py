@@ -164,6 +164,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--cutoff", type=float, default=None, help="Run only this cutoff value")
     parser.add_argument("--runs", type=int, default=3, help="Number of timed repetitions (default: 3)")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for sampling SMILES (default: 42)")
     parser.add_argument(
         "-o", "--output", type=str, default="results.csv", help="Output CSV file path (default: results.csv)"
     )
@@ -208,7 +209,7 @@ if __name__ == "__main__":
 
     max_size = max(e["size"] for e in run_plan)
 
-    mols = load_smiles(args.input_smiles_file, max_count=max_size + 100, sanitize=True)
+    mols = load_smiles(args.input_smiles_file, max_count=max_size + 100, sanitize=True, seed=args.seed)
 
     if include_tanimoto and len(mols) < max_size:
         print(
