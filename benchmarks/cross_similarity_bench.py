@@ -13,6 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
+
 import pyperf
 import torch
 from bench_utils import load_smiles
@@ -42,6 +44,21 @@ def nvmolkit_sim_gpu_only(fps, sim_type):
     torch.cuda.synchronize()
 
 
+# Strip --no-rdkit / --no-nvmolkit from argv before handing the rest to
+# pyperf. pyperf's own argparser passes registered flags through correctly on
+# the parent's parse_args() but does not consistently propagate them to its
+# child worker processes (each child re-imports this module and re-parses
+# sys.argv). Doing the checks here once, at import time, gives every process
+# the same answer.
+NO_RDKIT = "--no-rdkit" in sys.argv
+if NO_RDKIT:
+    sys.argv = [a for a in sys.argv if a != "--no-rdkit"]
+NO_NVMOLKIT = "--no-nvmolkit" in sys.argv
+if NO_NVMOLKIT:
+    sys.argv = [a for a in sys.argv if a != "--no-nvmolkit"]
+if NO_RDKIT and NO_NVMOLKIT:
+    raise SystemExit("cross_similarity_bench: cannot pass both --no-rdkit and --no-nvmolkit")
+
 runner = pyperf.Runner(min_time=0.01, values=3, processes=1, loops=3)
 runner.metadata["description"] = "Cross Similarity benchmark"
 runner.argparser.add_argument(
@@ -63,20 +80,23 @@ while len(mols) < max_size:
     mols += mols
 mols = mols[:max_size]
 
-rdkit_fpgen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=fpsize)
-rdkit_fps_all = [rdkit_fpgen.GetFingerprint(mol) for mol in mols]
-nvmolkit_fpgen = MorganFingerprintGenerator(radius=3, fpSize=fpsize)
-nvmolkit_fps_all = torch.as_tensor(nvmolkit_fpgen.GetFingerprints(mols), device="cuda")
+if not NO_RDKIT:
+    rdkit_fpgen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=fpsize)
+    rdkit_fps_all = [rdkit_fpgen.GetFingerprint(mol) for mol in mols]
+if not NO_NVMOLKIT:
+    nvmolkit_fpgen = MorganFingerprintGenerator(radius=3, fpSize=fpsize)
+    nvmolkit_fps_all = torch.as_tensor(nvmolkit_fpgen.GetFingerprints(mols), device="cuda")
 
 for sim_type in sim_types:
     for molNum in SIZES:
-        fps = rdkit_fps_all[:molNum]
-        nvmolkit_fps_cu = nvmolkit_fps_all[:molNum].contiguous()
+        if not NO_RDKIT:
+            fps = rdkit_fps_all[:molNum]
+            runner.args.values = 1 if molNum > CPU_SINGLE_VALUE_ABOVE else default_values
+            name = f"rdkit_{sim_type}sim_fpsize_{fpsize}_{molNum}mols"
+            runner.bench_func(name, rdkit_sim, fps, sim_type, metadata={"name": name})
 
-        runner.args.values = 1 if molNum > CPU_SINGLE_VALUE_ABOVE else default_values
-        name = f"rdkit_{sim_type}sim_fpsize_{fpsize}_{molNum}mols"
-        runner.bench_func(name, rdkit_sim, fps, sim_type, metadata={"name": name})
-
-        runner.args.values = default_values
-        name2 = f"nvmolkit_gpu-only_{sim_type}sim_fpsize_{fpsize}_{molNum}mols_gpu_only"
-        runner.bench_func(name2, nvmolkit_sim_gpu_only, nvmolkit_fps_cu, sim_type, metadata={"name": name2})
+        if not NO_NVMOLKIT:
+            nvmolkit_fps_cu = nvmolkit_fps_all[:molNum].contiguous()
+            runner.args.values = default_values
+            name2 = f"nvmolkit_gpu-only_{sim_type}sim_fpsize_{fpsize}_{molNum}mols_gpu_only"
+            runner.bench_func(name2, nvmolkit_sim_gpu_only, nvmolkit_fps_cu, sim_type, metadata={"name": name2})

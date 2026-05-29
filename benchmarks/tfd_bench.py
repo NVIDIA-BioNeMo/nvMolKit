@@ -226,6 +226,7 @@ def load_pkl_files(pkl_paths: List[str]) -> List[Chem.Mol]:
 def run_benchmarks(
     input_mols: List[Chem.Mol] | None = None,
     skip_rdkit: bool = False,
+    skip_nvmolkit: bool = False,
     output_file: str = "tfd_results.csv",
     smiles_file: str = None,
     mol_counts: List[int] = None,
@@ -238,6 +239,7 @@ def run_benchmarks(
     Args:
         input_mols: Parsed RDKit molecules without conformers (unused when preloaded_mols given).
         skip_rdkit: If True, skip RDKit benchmarks (faster for large runs)
+        skip_nvmolkit: If True, skip nvMolKit GPU benchmarks (RDKit-only mode)
         output_file: Output CSV file path
         smiles_file: Path to SMILES file (used to locate sibling pickle files)
         mol_counts: List of molecule counts to benchmark
@@ -250,6 +252,9 @@ def run_benchmarks(
     Returns:
         DataFrame with benchmark results
     """
+    if skip_rdkit and skip_nvmolkit:
+        raise ValueError("cannot disable both RDKit and nvMolKit")
+
     if mol_counts is None:
         mol_counts = [1, 5, 10, 25, 50, 100]
 
@@ -322,44 +327,49 @@ def run_benchmarks(
                 result["rdkit_time_ms"] = None
                 result["rdkit_std_ms"] = None
 
-            try:
-                t, s = time_it(lambda: bench_nvmol_gpu_list(mols))
-                result["nvmol_gpu_list_time_ms"] = t
-                result["nvmol_gpu_list_std_ms"] = s
-                print(f"  nvMolKit (GPU list):  {t:8.2f} ms (+/- {s:.2f})")
-            except Exception as e:
-                print(f"  nvMolKit GPU list failed: {e}")
+            if not skip_nvmolkit:
+                try:
+                    t, s = time_it(lambda: bench_nvmol_gpu_list(mols))
+                    result["nvmol_gpu_list_time_ms"] = t
+                    result["nvmol_gpu_list_std_ms"] = s
+                    print(f"  nvMolKit (GPU list):  {t:8.2f} ms (+/- {s:.2f})")
+                except Exception as e:
+                    print(f"  nvMolKit GPU list failed: {e}")
+                    result["nvmol_gpu_list_time_ms"] = None
+
+                try:
+                    t, s = time_it(lambda: bench_nvmol_gpu_numpy(mols))
+                    result["nvmol_gpu_numpy_time_ms"] = t
+                    result["nvmol_gpu_numpy_std_ms"] = s
+                    print(f"  nvMolKit (GPU numpy): {t:8.2f} ms (+/- {s:.2f})")
+                except Exception as e:
+                    print(f"  nvMolKit GPU numpy failed: {e}")
+                    result["nvmol_gpu_numpy_time_ms"] = None
+
+                try:
+                    t, s = time_it(lambda: bench_nvmol_gpu_tensor(mols))
+                    result["nvmol_gpu_tensor_time_ms"] = t
+                    result["nvmol_gpu_tensor_std_ms"] = s
+                    print(f"  nvMolKit (GPU ten):  {t:8.2f} ms (+/- {s:.2f})")
+                except Exception as e:
+                    print(f"  nvMolKit GPU tensor failed: {e}")
+                    result["nvmol_gpu_tensor_time_ms"] = None
+
+                speedups = {}
+                for key, label in [
+                    ("nvmol_gpu_list_time_ms", "GPU list"),
+                    ("nvmol_gpu_numpy_time_ms", "GPU numpy"),
+                    ("nvmol_gpu_tensor_time_ms", "GPU tensor"),
+                ]:
+                    if result.get("rdkit_time_ms") and result.get(key):
+                        speedups[label] = result["rdkit_time_ms"] / result[key]
+
+                for label, val in speedups.items():
+                    print(f"  Speedup {label:>10s} vs RDKit: {val:.1f}x")
+            else:
                 result["nvmol_gpu_list_time_ms"] = None
-
-            try:
-                t, s = time_it(lambda: bench_nvmol_gpu_numpy(mols))
-                result["nvmol_gpu_numpy_time_ms"] = t
-                result["nvmol_gpu_numpy_std_ms"] = s
-                print(f"  nvMolKit (GPU numpy): {t:8.2f} ms (+/- {s:.2f})")
-            except Exception as e:
-                print(f"  nvMolKit GPU numpy failed: {e}")
                 result["nvmol_gpu_numpy_time_ms"] = None
-
-            try:
-                t, s = time_it(lambda: bench_nvmol_gpu_tensor(mols))
-                result["nvmol_gpu_tensor_time_ms"] = t
-                result["nvmol_gpu_tensor_std_ms"] = s
-                print(f"  nvMolKit (GPU ten):  {t:8.2f} ms (+/- {s:.2f})")
-            except Exception as e:
-                print(f"  nvMolKit GPU tensor failed: {e}")
                 result["nvmol_gpu_tensor_time_ms"] = None
-
-            speedups = {}
-            for key, label in [
-                ("nvmol_gpu_list_time_ms", "GPU list"),
-                ("nvmol_gpu_numpy_time_ms", "GPU numpy"),
-                ("nvmol_gpu_tensor_time_ms", "GPU tensor"),
-            ]:
-                if result.get("rdkit_time_ms") and result.get(key):
-                    speedups[label] = result["rdkit_time_ms"] / result[key]
-
-            for label, val in speedups.items():
-                print(f"  Speedup {label:>10s} vs RDKit: {val:.1f}x")
 
             results.append(result)
 
@@ -409,6 +419,11 @@ def main():
         help="Skip RDKit benchmarks (faster)",
     )
     parser.add_argument(
+        "--skip-nvmolkit",
+        action="store_true",
+        help="Skip nvMolKit GPU benchmarks (RDKit-only mode)",
+    )
+    parser.add_argument(
         "--pkl-file",
         type=str,
         nargs="+",
@@ -433,6 +448,9 @@ def main():
         help="Parallel workers for ETKDG embedding during prep (0 = auto, half of CPUs)",
     )
     args = parser.parse_args()
+
+    if args.skip_rdkit and args.skip_nvmolkit:
+        parser.error("cannot pass both --skip-rdkit and --skip-nvmolkit")
 
     preloaded_mols = None
     input_mols = None
@@ -485,6 +503,7 @@ def main():
     run_benchmarks(
         input_mols=input_mols,
         skip_rdkit=args.skip_rdkit,
+        skip_nvmolkit=args.skip_nvmolkit,
         output_file=args.output,
         smiles_file=args.smiles_file,
         mol_counts=args.num_mols,
