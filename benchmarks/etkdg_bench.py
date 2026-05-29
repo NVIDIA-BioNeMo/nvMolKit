@@ -76,7 +76,7 @@ def _mmff_energies(mol: Chem.Mol) -> list[float | None]:
 
 
 def _mmff_energies_from_binary(mol_bytes: bytes) -> list[float | None]:
-    """Multiprocessing-friendly wrapper: rebuild Mol from bytes then evaluate."""
+    """Evaluate MMFF energies from a serialized Mol (picklable for worker processes)."""
     return _mmff_energies(Chem.Mol(mol_bytes))
 
 
