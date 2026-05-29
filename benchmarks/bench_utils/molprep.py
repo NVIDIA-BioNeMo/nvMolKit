@@ -23,6 +23,10 @@ from rdkit.Chem import rdDistGeom
 from rdkit.Geometry import Point3D
 from tqdm.contrib.concurrent import process_map
 
+# Manually tuned so the per-conformer jitter recreates an ETKDGv3-like pairwise RMSD spread
+JITTER_CENTER = 1.3
+JITTER_SPREAD = 0.6
+
 
 def prep_mols(
     mols: list[Chem.Mol],
@@ -71,22 +75,30 @@ def clone_mols_with_conformers(mols: list[Chem.Mol]) -> list[Chem.RWMol]:
     return [Chem.RWMol(mol) for mol in mols]
 
 
-def perturb_conformer(conf: Chem.Conformer, delta: float, seed: int) -> None:
+def perturb_conformer(
+    conf: Chem.Conformer,
+    seed: int,
+    center: float = JITTER_CENTER,
+    spread: float = JITTER_SPREAD,
+) -> None:
     """Apply per-atom uniform jitter to a conformer in place.
 
-    Each x/y/z coordinate is shifted by ``delta * U(-delta, delta)``, so
-    ``delta=0.5`` produces displacements bounded by 0.25 A. Matches the
-    ``perturbConformer`` helper used by the C++ FF bench.
+    A single half-width is drawn for the conformer as ``center * (1 + spread *
+    U(-1, 1))`` and every x/y/z coordinate is then shifted by ``U(-half_width,
+    half_width)``. Drawing a distinct half-width per conformer (each call uses
+    a distinct ``seed``) gives a jittered ensemble a range of pairwise RMSDs
+    rather than a single structure-independent value.
     """
     rng = random.Random(seed)
+    half_width = max(0.0, center * (1.0 + spread * rng.uniform(-1.0, 1.0)))
     for atom_idx in range(conf.GetNumAtoms()):
         pos = conf.GetAtomPosition(atom_idx)
         conf.SetAtomPosition(
             atom_idx,
             Point3D(
-                pos.x + delta * rng.uniform(-delta, delta),
-                pos.y + delta * rng.uniform(-delta, delta),
-                pos.z + delta * rng.uniform(-delta, delta),
+                pos.x + rng.uniform(-half_width, half_width),
+                pos.y + rng.uniform(-half_width, half_width),
+                pos.z + rng.uniform(-half_width, half_width),
             ),
         )
 
@@ -120,7 +132,6 @@ def embed_and_jitter(
     num_workers: int = 1,
     add_hs: bool = False,
     min_atoms: int = 1,
-    delta: float = 0.5,
     desc: str = "Embedding base conformers",
 ) -> list[Chem.Mol]:
     """Embed one ETKDGv3 base conformer per mol in parallel, then jitter to ``confs_per_mol``.
@@ -161,8 +172,8 @@ def embed_and_jitter(
             base_conf = mol.GetConformer(base_conf_id)
             for conf_idx in range(1, confs_per_mol):
                 new_conf = Chem.Conformer(base_conf)
-                perturb_conformer(new_conf, delta, seed=seed + mol_idx * confs_per_mol + conf_idx)
+                perturb_conformer(new_conf, seed=seed + mol_idx * confs_per_mol + conf_idx)
                 mol.AddConformer(new_conf, assignId=True)
-            perturb_conformer(mol.GetConformer(base_conf_id), delta, seed=seed + mol_idx * confs_per_mol)
+            perturb_conformer(mol.GetConformer(base_conf_id), seed=seed + mol_idx * confs_per_mol)
 
     return out

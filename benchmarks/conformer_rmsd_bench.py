@@ -97,9 +97,9 @@ def run_benchmark(smiles, num_confs_list, seed=42):
         base_conf_id = mol.GetConformer().GetId()
         for conf_idx in range(1, num_confs):
             new_conf = Chem.Conformer(mol.GetConformer(base_conf_id))
-            perturb_conformer(new_conf, 0.5, seed=seed + conf_idx)
+            perturb_conformer(new_conf, seed=seed + conf_idx)
             mol.AddConformer(new_conf, assignId=True)
-        perturb_conformer(mol.GetConformer(base_conf_id), 0.5, seed=seed)
+        perturb_conformer(mol.GetConformer(base_conf_id), seed=seed)
         actual_confs = mol.GetNumConformers()
 
         no_h = Chem.RemoveHs(mol)
