@@ -264,6 +264,6 @@ All conformers of each input molecule are minimized in one batch. Constraints at
 
 ## Going deeper
 
-- Full feature list, API reference, and guides: <https://nvidia-digital-bio.github.io/nvMolKit/>
-- What changed in each release: <https://nvidia-digital-bio.github.io/nvMolKit/changelog.html>
+- Full feature list, API reference, and guides: <https://nvidia-bionemo.github.io/nvMolKit/>
+- What changed in each release: <https://nvidia-bionemo.github.io/nvMolKit/changelog.html>
 - Worked examples (Jupyter notebooks): the `examples/` directory in the GitHub repo

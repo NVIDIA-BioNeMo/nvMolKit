@@ -256,23 +256,32 @@ def test_shrink_halves_within_floor():
 
 
 def test_default_ff_search_space_caps_batches_per_gpu_by_cpu_count():
-    """``batchesPerGpu`` upper bound divides the CPU budget by the GPU count."""
+    """``batchesPerGpu`` upper bound is ``min(8, cpus // num_gpus)``."""
     space_1gpu = _ff_common.default_ff_search_space(num_gpus=1, cpus=32)
     space_4gpu = _ff_common.default_ff_search_space(num_gpus=4, cpus=32)
     space_64gpu = _ff_common.default_ff_search_space(num_gpus=64, cpus=32)
 
-    assert space_1gpu["batchesPerGpu"] == (1, 32)
+    assert space_1gpu["batchesPerGpu"] == (1, 8)
     assert space_4gpu["batchesPerGpu"] == (1, 8)
     assert space_64gpu["batchesPerGpu"] == (1, 1)
 
 
+def test_default_ff_search_space_batch_size_is_stepped_multiples_of_64():
+    """``batchSize`` is a stepped int range in multiples of 64."""
+    space = _ff_common.default_ff_search_space(num_gpus=1, cpus=32)
+    low, high, step = space["batchSize"]
+    assert step == 64
+    assert low % 64 == 0 and high % 64 == 0
+    assert low <= high
+
+
 def test_default_substruct_search_space_caps_per_pool():
-    """Substruct: workerThreads capped per-GPU, preprocessingThreads capped at cpus."""
+    """Substruct: workerThreads capped at min(8, cpus/num_gpus), prep at cpus."""
     space_1gpu = _default_substruct_search_space(num_gpus=1, cpus=16)
     space_4gpu = _default_substruct_search_space(num_gpus=4, cpus=16)
     space_64gpu = _default_substruct_search_space(num_gpus=64, cpus=16)
 
-    assert space_1gpu["workerThreads"] == (1, 16)
+    assert space_1gpu["workerThreads"] == (1, 8)
     assert space_4gpu["workerThreads"] == (1, 4)
     assert space_64gpu["workerThreads"] == (1, 1)
 
@@ -280,7 +289,10 @@ def test_default_substruct_search_space_caps_per_pool():
     assert space_4gpu["preprocessingThreads"] == (1, 16)
     assert space_64gpu["preprocessingThreads"] == (1, 16)
 
-    assert space_1gpu["batchSize"] == (128, 8192, "log")
+    low, high, step = space_1gpu["batchSize"]
+    assert step % 64 == 0
+    assert low % step == 0 and high % step == 0
+    assert low <= high
 
 
 class _RecordingTrial:
@@ -290,8 +302,8 @@ class _RecordingTrial:
         self.calls: list[dict] = []
         self.picker = picker
 
-    def suggest_int(self, name: str, low: int, high: int, log: bool = False) -> int:
-        self.calls.append({"name": name, "low": low, "high": high, "log": log})
+    def suggest_int(self, name: str, low: int, high: int, log: bool = False, step: int = 1) -> int:
+        self.calls.append({"name": name, "low": low, "high": high, "log": log, "step": step})
         return int(self.picker(low, high))
 
 
@@ -300,7 +312,7 @@ def test_suggest_preprocessing_threads_clamps_to_remaining_cpu_budget():
     trial = _RecordingTrial()
     spec = (1, 32)
     value = _suggest_preprocessing_threads(trial, spec, worker_threads=6, num_gpus=2, cpus=16)
-    assert trial.calls == [{"name": "preprocessingThreads", "low": 1, "high": 4, "log": False}]
+    assert trial.calls == [{"name": "preprocessingThreads", "low": 1, "high": 4, "log": False, "step": 1}]
     assert value == 1
 
 
@@ -309,7 +321,7 @@ def test_suggest_preprocessing_threads_respects_low_floor_when_budget_exhausted(
     trial = _RecordingTrial(picker=lambda low, high: high)
     spec = (4, 32)
     value = _suggest_preprocessing_threads(trial, spec, worker_threads=8, num_gpus=2, cpus=16)
-    assert trial.calls == [{"name": "preprocessingThreads", "low": 4, "high": 4, "log": False}]
+    assert trial.calls == [{"name": "preprocessingThreads", "low": 4, "high": 4, "log": False, "step": 1}]
     assert value == 4
 
 
@@ -318,7 +330,7 @@ def test_suggest_preprocessing_threads_does_not_clamp_when_budget_available():
     trial = _RecordingTrial(picker=lambda low, high: high)
     spec = (1, 8)
     value = _suggest_preprocessing_threads(trial, spec, worker_threads=2, num_gpus=2, cpus=32)
-    assert trial.calls == [{"name": "preprocessingThreads", "low": 1, "high": 8, "log": False}]
+    assert trial.calls == [{"name": "preprocessingThreads", "low": 1, "high": 8, "log": False, "step": 1}]
     assert value == 8
 
 
@@ -327,14 +339,24 @@ def test_suggest_preprocessing_threads_propagates_log_flag():
     trial = _RecordingTrial()
     spec = (1, 32, "log")
     _suggest_preprocessing_threads(trial, spec, worker_threads=2, num_gpus=1, cpus=8)
-    assert trial.calls == [{"name": "preprocessingThreads", "low": 1, "high": 6, "log": True}]
+    assert trial.calls == [{"name": "preprocessingThreads", "low": 1, "high": 6, "log": True, "step": 1}]
 
 
 def test_default_embed_search_space_caps_per_pool():
-    """Embed: per-GPU pool capped at cpus/numGpus, total pool capped at cpus."""
+    """Embed: per-GPU pool capped at min(8, cpus/numGpus), total prep pool at cpus."""
     space = _default_embed_search_space(num_gpus=4, cpus=16)
     assert space["batchesPerGpu"] == (1, 4)
     assert space["preprocessingThreads"] == (1, 16)
+    low, high, step = space["batchSize"]
+    assert step == 64
+    assert low % 64 == 0 and high % 64 == 0
+    assert low <= high
+
+
+def test_default_embed_search_space_caps_batches_per_gpu_at_eight():
+    """When cpus/num_gpus exceeds 8, ``batchesPerGpu`` is still capped at 8."""
+    space = _default_embed_search_space(num_gpus=4, cpus=128)
+    assert space["batchesPerGpu"] == (1, 8)
 
 
 def test_resolve_num_gpus_prefers_explicit_list():
@@ -347,6 +369,29 @@ def test_resolve_cpu_budget_falls_back_to_cpu_count(monkeypatch):
     """``cpu_budget=None`` defers to ``cpu_count()``."""
     monkeypatch.setattr(_ff_common, "cpu_count", lambda: 24)
     assert _ff_common.resolve_cpu_budget(None) == 24
+
+
+def test_physical_cpu_count_from_proc_dedupes_smt_siblings(tmp_path, monkeypatch):
+    """``_physical_cpu_count_from_proc`` collapses SMT siblings by ``(physical id, core id)``."""
+    fake_cpuinfo = (
+        "processor\t: 0\nphysical id\t: 0\ncore id\t: 0\n\n"
+        "processor\t: 1\nphysical id\t: 0\ncore id\t: 0\n\n"
+        "processor\t: 2\nphysical id\t: 0\ncore id\t: 1\n\n"
+        "processor\t: 3\nphysical id\t: 0\ncore id\t: 1\n\n"
+        "processor\t: 4\nphysical id\t: 1\ncore id\t: 0\n\n"
+        "processor\t: 5\nphysical id\t: 1\ncore id\t: 0\n\n"
+    )
+    fake_path = tmp_path / "cpuinfo"
+    fake_path.write_text(fake_cpuinfo)
+    real_open = open
+
+    def fake_open(path, *args, **kwargs):
+        if path == "/proc/cpuinfo":
+            return real_open(fake_path, *args, **kwargs)
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    assert _ff_common._physical_cpu_count_from_proc() == 3
 
 
 def test_resolve_cpu_budget_uses_explicit_value():
