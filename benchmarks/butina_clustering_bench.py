@@ -215,11 +215,8 @@ if __name__ == "__main__":
 
     fps = get_fingerprints(mols)
 
-    # rdkit_with_tanimoto and rdkit_lowmem both require real RDKit fingerprints
-    # for every molecule up to the requested size. The precomputed-matrix rdkit
-    # path (rdkit_cluster_only) can still run on synthetic distances when the
-    # input has fewer mols than `size`, but the with_tanimoto / lowmem rows
-    # for that size are skipped in that case.
+    # All three rdkit paths (cluster_only, with_tanimoto, lowmem) need real
+    # RDKit fingerprints, so build them once if any rdkit row is planned.
     max_rdkit_fps_size = max(
         (e["size"] for e in run_plan if "rdkit" in e["run"] or "rdkit_lowmem" in e["run"]),
         default=0,
@@ -246,9 +243,8 @@ if __name__ == "__main__":
             runs = entry["run"]
             max_nl_sizes = entry.get("neighborlist_sizes", default_nl_sizes)
 
-            # rdkit_with_tanimoto and rdkit_lowmem need real fingerprints up to
-            # `size`. If the input has fewer mols, those rows are skipped for
-            # this size (cluster_only and fused still run on synthetic data).
+            # with_tanimoto and lowmem need real fingerprints for every mol up to
+            # `size`; when the input is smaller, those rows are skipped here.
             have_real_fps_for_size = rdkit_fps is not None and len(rdkit_fps) >= size
 
             need_real_fps_mat = "fused" in runs or "nvmolkit" in runs
@@ -284,15 +280,15 @@ if __name__ == "__main__":
                 if cutoff in (1e-10, 1.0) and size > 20000:
                     continue
 
-                rdkit_co_time, rdkit_co_std = float("nan"), float("nan")
-                rdkit_wt_time, rdkit_wt_std = float("nan"), float("nan")
+                rdkit_cluster_only_time, rdkit_cluster_only_std = float("nan"), float("nan")
+                rdkit_with_tanimoto_time, rdkit_with_tanimoto_std = float("nan"), float("nan")
                 if "rdkit" in runs:
                     print(f"Running rdkit_cluster_only size {size} cutoff {cutoff}")
                     dist_mat_numpy = dist_mat.cpu().numpy()
-                    rdkit_co_time, rdkit_co_std = bench_rdkit(dist_mat_numpy, cutoff, runs=n_runs)
+                    rdkit_cluster_only_time, rdkit_cluster_only_std = bench_rdkit(dist_mat_numpy, cutoff, runs=n_runs)
                     if have_real_fps_for_size:
                         print(f"Running rdkit_with_tanimoto size {size} cutoff {cutoff}")
-                        rdkit_wt_time, rdkit_wt_std = bench_rdkit_with_tanimoto(
+                        rdkit_with_tanimoto_time, rdkit_with_tanimoto_std = bench_rdkit_with_tanimoto(
                             rdkit_fps[:size], cutoff, runs=n_runs
                         )
 
@@ -314,24 +310,26 @@ if __name__ == "__main__":
                 if "nvmolkit" in runs:
                     for max_nl in max_nl_sizes:
                         print(f"Running nvmolkit_cluster_only size {size} cutoff {cutoff} max_nl {max_nl}")
-                        nvmol_co_result = time_it(
+                        nvmolkit_cluster_only_result = time_it(
                             lambda: bench_nvmol_inner(dist_mat, cutoff, max_nl),
                             gpu_sync=True,
                             runs=n_runs,
                         )
-                        nvmol_co_time, nvmol_co_std = nvmol_co_result.mean_ms, nvmol_co_result.std_ms
+                        nvmolkit_cluster_only_time = nvmolkit_cluster_only_result.mean_ms
+                        nvmolkit_cluster_only_std = nvmolkit_cluster_only_result.std_ms
 
-                        nvmol_wt_time, nvmol_wt_std = float("nan"), float("nan")
+                        nvmolkit_with_tanimoto_time, nvmolkit_with_tanimoto_std = float("nan"), float("nan")
                         if fps_mat_real is not None:
                             print(
                                 f"Running nvmolkit_with_tanimoto size {size} cutoff {cutoff} max_nl {max_nl}"
                             )
-                            nvmol_wt_result = time_it(
+                            nvmolkit_with_tanimoto_result = time_it(
                                 lambda: bench_nvmol_with_tanimoto(fps_mat_real, cutoff, max_nl),
                                 gpu_sync=True,
                                 runs=n_runs,
                             )
-                            nvmol_wt_time, nvmol_wt_std = nvmol_wt_result.mean_ms, nvmol_wt_result.std_ms
+                            nvmolkit_with_tanimoto_time = nvmolkit_with_tanimoto_result.mean_ms
+                            nvmolkit_with_tanimoto_std = nvmolkit_with_tanimoto_result.std_ms
 
                         nvmol_res = butina_nvmol(dist_mat, cutoff, neighborlist_max_size=max_nl).torch()
                         torch.cuda.synchronize()
@@ -346,16 +344,16 @@ if __name__ == "__main__":
                                 "size": size,
                                 "cutoff": cutoff,
                                 "max_neighborlist_size": max_nl,
-                                "rdkit_cluster_only_time_ms": rdkit_co_time,
-                                "rdkit_cluster_only_std_ms": rdkit_co_std,
-                                "rdkit_with_tanimoto_time_ms": rdkit_wt_time,
-                                "rdkit_with_tanimoto_std_ms": rdkit_wt_std,
+                                "rdkit_cluster_only_time_ms": rdkit_cluster_only_time,
+                                "rdkit_cluster_only_std_ms": rdkit_cluster_only_std,
+                                "rdkit_with_tanimoto_time_ms": rdkit_with_tanimoto_time,
+                                "rdkit_with_tanimoto_std_ms": rdkit_with_tanimoto_std,
                                 "rdkit_lowmem_time_ms": rdkit_lm_time,
                                 "rdkit_lowmem_std_ms": rdkit_lm_std,
-                                "nvmolkit_cluster_only_time_ms": nvmol_co_time,
-                                "nvmolkit_cluster_only_std_ms": nvmol_co_std,
-                                "nvmolkit_with_tanimoto_time_ms": nvmol_wt_time,
-                                "nvmolkit_with_tanimoto_std_ms": nvmol_wt_std,
+                                "nvmolkit_cluster_only_time_ms": nvmolkit_cluster_only_time,
+                                "nvmolkit_cluster_only_std_ms": nvmolkit_cluster_only_std,
+                                "nvmolkit_with_tanimoto_time_ms": nvmolkit_with_tanimoto_time,
+                                "nvmolkit_with_tanimoto_std_ms": nvmolkit_with_tanimoto_std,
                                 "fused_butina_time_ms": fused_time,
                                 "fused_butina_std_ms": fused_std,
                             }
@@ -366,10 +364,10 @@ if __name__ == "__main__":
                             "size": size,
                             "cutoff": cutoff,
                             "max_neighborlist_size": float("nan"),
-                            "rdkit_cluster_only_time_ms": rdkit_co_time,
-                            "rdkit_cluster_only_std_ms": rdkit_co_std,
-                            "rdkit_with_tanimoto_time_ms": rdkit_wt_time,
-                            "rdkit_with_tanimoto_std_ms": rdkit_wt_std,
+                            "rdkit_cluster_only_time_ms": rdkit_cluster_only_time,
+                            "rdkit_cluster_only_std_ms": rdkit_cluster_only_std,
+                            "rdkit_with_tanimoto_time_ms": rdkit_with_tanimoto_time,
+                            "rdkit_with_tanimoto_std_ms": rdkit_with_tanimoto_std,
                             "rdkit_lowmem_time_ms": rdkit_lm_time,
                             "rdkit_lowmem_std_ms": rdkit_lm_std,
                             "nvmolkit_cluster_only_time_ms": float("nan"),
