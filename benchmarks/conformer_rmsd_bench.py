@@ -15,14 +15,9 @@
 
 """Benchmark: GPU vs single-threaded CPU pairwise conformer RMSD on Enamine.
 
-Loads a slice of Enamine REAL, embeds one ETKDGv3 base conformer per molecule
-and jitters it to produce the remaining conformers, then compares two
-implementations over the batch of molecules:
+Measures speedup of nvMolKit's GPU GetConformerRMSMatrix over RDKit's
+CPU GetConformerRMSMatrix across varying conformer counts.
 
-* nvMolKit GPU: a single ``GetConformerRMSMatrixBatch`` call.
-* RDKit CPU: ``AllChem.GetConformerRMSMatrix`` in a serial loop.
-
-Throughput is reported in molecules/s and pair-RMSDs/s.
 """
 
 import argparse
@@ -32,7 +27,7 @@ import time
 from pathlib import Path
 
 import torch
-from bench_utils import embed_and_jitter, load_smiles
+from bench_utils import Deadline, add_rdkit_max_seconds_arg, embed_and_jitter, load_smiles
 from benchmark_timing import time_it
 from rdkit import Chem
 from rdkit.Chem import AllChem
@@ -71,22 +66,20 @@ def bench_rdkit_batch(payloads: list[bytes], max_seconds: float) -> tuple[float,
     deserializes a fresh mol because ``GetConformerRMSMatrix`` mutates conformer
     coordinates in-place during Kabsch alignment.
     """
-    deadline = time.perf_counter() + max_seconds if max_seconds > 0 else None
+    deadline = Deadline(max_seconds)
     start = time.perf_counter()
     n_done = 0
     for mol_bytes in payloads:
         mol = Chem.Mol(mol_bytes)
         AllChem.GetConformerRMSMatrix(mol, prealigned=False)
         n_done += 1
-        if deadline is not None and time.perf_counter() >= deadline:
+        if deadline.expired():
             break
     return time.perf_counter() - start, n_done
 
 
 def bench_gpu_batch(mols: list[Chem.Mol]) -> None:
     results = GetConformerRMSMatrixBatch(mols, prealigned=False)
-    for result in results:
-        result.torch()
     torch.cuda.synchronize()
 
 
@@ -249,8 +242,8 @@ def run(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Conformer RMSD batch benchmark vs Enamine")
-    parser.add_argument("--smiles", required=True, help="Path to Enamine (or any) SMILES/cxsmiles file")
+    parser = argparse.ArgumentParser(description="Conformer RMSD batch benchmark")
+    parser.add_argument("--smiles", required=True, help="Path to smiles file")
     parser.add_argument("--num_mols", type=int, default=2000, help="Number of molecules to sample")
     parser.add_argument(
         "--confs_per_mol",
@@ -262,13 +255,9 @@ def main():
     parser.add_argument(
         "--prep_workers", type=int, default=0, help="Workers for the embed-and-perturb prep step (0 = half of CPUs)"
     )
-    parser.add_argument(
-        "--rdkit_max_seconds",
-        type=float,
-        default=0.0,
-        help="Per-iteration wall-clock cap on the RDKit comparison "
-        "(0 = no cap). When exceeded, throughput is reported "
-        "over the molecules actually processed.",
+    add_rdkit_max_seconds_arg(
+        parser,
+        extra_help="The cap applies per timing iteration and truncates at a molecule boundary.",
     )
     parser.add_argument(
         "--validate_count",
