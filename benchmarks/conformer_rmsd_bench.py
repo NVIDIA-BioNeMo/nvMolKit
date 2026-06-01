@@ -77,6 +77,38 @@ def bench_gpu_batch(mols: list[Chem.Mol]) -> None:
     torch.cuda.synchronize()
 
 
+def validate(mols: list[Chem.Mol], num_check: int, tol: float) -> None:
+    """Compare GPU RMSD matrices against RDKit on the first ``num_check`` mols.
+
+    Raises ``RuntimeError`` on the first pair whose absolute diff exceeds ``tol``.
+    """
+    subset = mols[:num_check]
+    if not subset:
+        return
+    print(f"\nValidation: comparing GPU vs RDKit on {len(subset)} mols (tol={tol})")
+    gpu_results = GetConformerRMSMatrixBatch(subset, prealigned=False)
+    torch.cuda.synchronize()
+    max_abs_diff = 0.0
+    for mol_idx, mol in enumerate(subset):
+        rdkit_mol = Chem.Mol(mol.ToBinary())
+        rdkit_rms = AllChem.GetConformerRMSMatrix(rdkit_mol, prealigned=False)
+        gpu_rms = gpu_results[mol_idx].numpy().tolist()
+        if len(gpu_rms) != len(rdkit_rms):
+            raise RuntimeError(
+                f"validation: mol {mol_idx} pair count mismatch (gpu={len(gpu_rms)}, rdkit={len(rdkit_rms)})"
+            )
+        for pair_idx, (gpu_val, rdkit_val) in enumerate(zip(gpu_rms, rdkit_rms)):
+            diff = abs(float(gpu_val) - float(rdkit_val))
+            if diff > tol:
+                raise RuntimeError(
+                    f"validation: mol {mol_idx} pair {pair_idx} diff {diff:.4f} > {tol} "
+                    f"(gpu={gpu_val:.4f}, rdkit={rdkit_val:.4f})"
+                )
+            if diff > max_abs_diff:
+                max_abs_diff = diff
+    print(f"  OK (max abs diff {max_abs_diff:.5f})")
+
+
 def _slice_to_confs(mols: list[Chem.Mol], target: int) -> list[Chem.Mol]:
     """Return copies of ``mols`` keeping only the first ``target`` conformers each."""
     out: list[Chem.Mol] = []
@@ -96,6 +128,8 @@ def run(
     seed: int,
     prep_workers: int,
     rdkit_max_seconds: float,
+    validate_count: int,
+    validate_tol: float,
     no_rdkit: bool,
     no_nvmolkit: bool,
     output: str | None,
@@ -120,6 +154,10 @@ def run(
 
     avg_atoms = sum(mol.GetNumAtoms() for mol in base_mols) / len(base_mols)
     print(f"  {len(base_mols)} mols, ~{avg_atoms:.1f} heavy atoms/mol")
+    if validate_count > 0 and not no_rdkit and not no_nvmolkit:
+        validate(_slice_to_confs(base_mols, max_confs), validate_count, validate_tol)
+    elif validate_count > 0:
+        print("\nValidation skipped (requires both --rdkit and --nvmolkit enabled)")
 
     print(f"\nSweeping confs_per_mol: {confs_per_mol_list}")
 
@@ -222,6 +260,16 @@ def main():
         parser,
         extra_help="The cap applies per timing iteration and truncates at a molecule boundary.",
     )
+    parser.add_argument(
+        "--validate_count",
+        type=int,
+        default=8,
+        help="Number of mols to compare GPU vs RDKit before timing (0 disables; requires both backends enabled)",
+    )
+    parser.add_argument(
+        "--validate_tol", type=float, default=0.05, help="Absolute tolerance (Angstroms) for per-pair RMSD diff"
+    )
+    parser.add_argument("--no_validate", action="store_true", help="Skip the GPU-vs-RDKit correctness check")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", type=str, default=None, help="Optional CSV output path")
     parser.add_argument("--no_rdkit", action="store_true", help="Skip RDKit CPU benchmark")
@@ -238,6 +286,8 @@ def main():
         seed=args.seed,
         prep_workers=args.prep_workers,
         rdkit_max_seconds=args.rdkit_max_seconds,
+        validate_count=0 if args.no_validate else args.validate_count,
+        validate_tol=args.validate_tol,
         no_rdkit=args.no_rdkit,
         no_nvmolkit=args.no_nvmolkit,
         output=args.output,
