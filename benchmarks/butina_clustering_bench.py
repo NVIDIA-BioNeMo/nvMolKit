@@ -320,9 +320,7 @@ if __name__ == "__main__":
 
                         nvmolkit_with_tanimoto_time, nvmolkit_with_tanimoto_std = float("nan"), float("nan")
                         if fps_mat_real is not None:
-                            print(
-                                f"Running nvmolkit_with_tanimoto size {size} cutoff {cutoff} max_nl {max_nl}"
-                            )
+                            print(f"Running nvmolkit_with_tanimoto size {size} cutoff {cutoff} max_nl {max_nl}")
                             nvmolkit_with_tanimoto_result = time_it(
                                 lambda: bench_nvmol_with_tanimoto(fps_mat_real, cutoff, max_nl),
                                 gpu_sync=True,
