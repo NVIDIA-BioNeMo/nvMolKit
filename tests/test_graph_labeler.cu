@@ -22,12 +22,12 @@
 #include <vector>
 
 #include "src/substruct/atom_data_packed.h"
-#include "src/utils/cuda_error_check.h"
-#include "src/utils/device.h"
 #include "src/substruct/graph_labeler.cuh"
 #include "src/substruct/molecules.h"
 #include "src/substruct/molecules_device.cuh"
 #include "src/testutils/substruct_validation.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
 
 using nvMolKit::addQueryToBatch;
 using nvMolKit::AtomQuery;

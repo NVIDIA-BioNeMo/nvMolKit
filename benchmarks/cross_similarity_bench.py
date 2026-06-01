@@ -13,14 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import pandas as pd
 import pyperf
 import torch
-from rdkit.Chem import MolFromSmiles, rdFingerprintGenerator
+from bench_utils import load_smiles
+from rdkit.Chem import rdFingerprintGenerator
 from rdkit.DataStructs import BulkCosineSimilarity, BulkTanimotoSimilarity
 
-from nvmolkit.similarity import crossCosineSimilarity, crossTanimotoSimilarity
 from nvmolkit.fingerprints import MorganFingerprintGenerator
+from nvmolkit.similarity import crossCosineSimilarity, crossTanimotoSimilarity
 
 
 SIZES = [2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000, 20000, 24000, 28000, 32000]
@@ -45,9 +45,10 @@ def nvmolkit_sim_gpu_only(fps, sim_type):
 runner = pyperf.Runner(min_time=0.01, values=3, processes=1, loops=3)
 runner.metadata["description"] = "Cross Similarity benchmark"
 runner.argparser.add_argument(
-    "--input", type=str, default="data/benchmark_smiles.csv", help="Path to input SMILES CSV file"
+    "--input", type=str, default="data/benchmark_smiles.csv", help="Path to input SMILES file (.smi/.csv/.cxsmiles)"
 )
 runner.argparser.add_argument("--cosine", action="store_true", help="Include cosine similarity benchmarks")
+runner.argparser.add_argument("--seed", type=int, default=42, help="Random seed for sampling SMILES (default: 42)")
 args = runner.parse_args()
 
 sim_types = ("tanimoto", "cosine") if args.cosine else ("tanimoto",)
@@ -55,10 +56,7 @@ fpsize = 1024
 max_size = max(SIZES)
 default_values = runner.args.values
 
-df = pd.read_csv(args.input)
-smis = df.iloc[:, 0].to_list()
-mols = [MolFromSmiles(smi) for smi in smis]
-mols = [mol for mol in mols if mol is not None]
+mols = load_smiles(args.input, max_count=max_size, seed=args.seed)
 if not mols:
     raise ValueError(f"No molecules parsed from {args.input}")
 while len(mols) < max_size:

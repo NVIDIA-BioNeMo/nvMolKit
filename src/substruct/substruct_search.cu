@@ -32,13 +32,10 @@
 #include <utility>
 #include <vector>
 
-#include "src/utils/cuda_error_check.h"
 #include "src/substruct/gpu_executor.h"
 #include "src/substruct/graph_labeler.cuh"
-#include "src/utils/host_vector.h"
 #include "src/substruct/minibatch_planner.h"
 #include "src/substruct/molecules_device.cuh"
-#include "src/utils/nvtx.h"
 #include "src/substruct/pinned_buffer_pool.h"
 #include "src/substruct/recursive_preprocessor.h"
 #include "src/substruct/sm_shared_mem_config.cuh"
@@ -48,6 +45,9 @@
 #include "src/substruct/substruct_launch_config.h"
 #include "src/substruct/substruct_search.h"
 #include "src/substruct/substruct_search_internal.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/host_vector.h"
+#include "src/utils/nvtx.h"
 #include "src/utils/thread_safe_queue.h"
 
 namespace nvMolKit {
@@ -1165,7 +1165,7 @@ void hasSubstructMatch(const std::vector<const RDKit::ROMol*>& targets,
 
   for (auto& [pairIdx, matches] : matchResults.matches) {
     if (!matches.empty()) {
-      results.hasMatch[pairIdx] = 1;
+      results.hasMatch[static_cast<size_t>(pairIdx)] = 1;
     }
   }
 }

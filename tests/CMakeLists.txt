@@ -34,6 +34,10 @@ target_link_libraries(test_cuda_error_check PRIVATE cuda_error_check)
 add_executable(test_device test_device.cpp)
 target_link_libraries(test_device PRIVATE device cuda_error_check CUDA::cudart)
 
+add_executable(test_p2p test_p2p.cpp)
+target_link_libraries(test_p2p PRIVATE p2p device device_vector
+                                       cuda_error_check CUDA::cudart)
+
 add_executable(test_device_timings test_device_timings.cu)
 target_link_libraries(test_device_timings PRIVATE device_timings)
 block()
@@ -168,6 +172,38 @@ target_link_libraries(
           etkdg
           embedder_utils
           conformer_pruning)
+
+add_executable(test_etkdg_device_output test_etkdg_device_output.cu)
+target_link_libraries(
+  test_etkdg_device_output
+  PRIVATE etkdg
+          device_coord_collector
+          etkdg_stages
+          dist_geom
+          device
+          device_vector
+          cuda_error_check
+          ${RDKit_LIBS})
+
+add_executable(test_ff_device_output test_ff_device_output.cu)
+target_link_libraries(
+  test_ff_device_output
+  PRIVATE bfgs_mmff
+          bfgs_uff
+          bfgs_common
+          mmff
+          uff
+          mmff_batched_forcefield
+          uff_batched_forcefield
+          rdkit_mmff_flattened
+          rdkit_uff_flattened
+          ff_utils
+          ff_kernel_utils
+          forcefield_constraints
+          device
+          device_vector
+          cuda_error_check
+          ${RDKit_LIBS})
 
 add_executable(test_etkdg_coordgen test_etkdg_coordgen.cu)
 target_link_libraries(
@@ -307,12 +343,15 @@ set(TEST_LIST
     test_openmp_helpers
     test_conformer_checkers
     test_coordgen
+    test_p2p
     test_cuda_error_check
     test_device
     test_device_timings
     test_device_vector
     test_distgeom_kernels
     test_etkdg
+    test_etkdg_device_output
+    test_ff_device_output
     test_etkdg_coordgen
     test_etkdg_etk_minimize
     test_etkdg_stereochem_checks

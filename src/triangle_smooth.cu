@@ -13,12 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "src/utils/cuda_error_check.h"
 #include <cuda_runtime.h>
 
 #include <cmath>
 
 #include "src/triangle_smooth.h"
+#include "src/utils/cuda_error_check.h"
 
 namespace nvMolKit {
 
@@ -330,7 +330,7 @@ void DeviceBoundsMatrixBatch::copyToHost(std::vector<::DistGeom::BoundsMatPtr>& 
   // Copy device data to host vector first
   std::vector<double> hostData(totalElements_);
   data_.copyToHost(hostData);
-  cudaDeviceSynchronize();
+  cudaCheckError(cudaStreamSynchronize(data_.stream()));
 
   // Distribute data to individual matrices
   size_t globalOffset = 0;

@@ -31,11 +31,11 @@
 
 #include "rdkit_extensions/mmff_flattened_builder.h"
 #include "src/forcefields/batched_forcefield.h"
-#include "src/minimizer/bfgs_minimize.h"
-#include "src/utils/device.h"
 #include "src/forcefields/forcefield_constraints.h"
 #include "src/forcefields/mmff.h"
 #include "src/forcefields/mmff_batched_forcefield.h"
+#include "src/minimizer/bfgs_minimize.h"
+#include "src/utils/device.h"
 #include "tests/test_utils.h"
 
 using ::nvMolKit::MMFF::BatchedMolecularDeviceBuffers;

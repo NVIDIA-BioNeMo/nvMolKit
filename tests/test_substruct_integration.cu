@@ -26,12 +26,12 @@
 #include <tuple>
 #include <vector>
 
-#include "src/utils/device.h"
 #include "src/substruct/graph_labeler.cuh"
 #include "src/substruct/substruct_search.h"
-#include "tests/test_utils.h"
 #include "src/testutils/mol_data.h"
 #include "src/testutils/substruct_validation.h"
+#include "src/utils/device.h"
+#include "tests/test_utils.h"
 
 using nvMolKit::countCudaDevices;
 

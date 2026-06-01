@@ -17,12 +17,12 @@
 
 #include <omp.h>
 
+#include "src/similarity_kernels.h"
 #include "src/utils/device.h"
 #include "src/utils/device_vector.h"
 #include "src/utils/host_vector.h"
-#include "src/utils/openmp_helpers.h"
-#include "src/similarity_kernels.h"
 #include "src/utils/nvtx.h"
+#include "src/utils/openmp_helpers.h"
 namespace nvMolKit {
 
 using internal::kBlockType;

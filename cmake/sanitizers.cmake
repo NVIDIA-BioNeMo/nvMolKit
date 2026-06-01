@@ -13,33 +13,50 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-set(NVMOLKIT_ASAN_FLAGS "-fsanitize=address -g -O0")
-# cmake-lint: disable=C0301
-set(NVMOLKIT_CTEST_ASAN_ENV_VARS
-    "ASAN_OPTIONS=protect_shadow_gap=0:report_globals=1:check_initialization_order=true:detect_stack_use_after_return=true:strict_string_checks=true"
-)
-set(CMAKE_C_FLAGS_ASAN
-    ${NVMOLKIT_ASAN_FLAGS}
-    CACHE STRING "Flags used during ASAN builds" FORCE)
-set(CMAKE_CXX_FLAGS_ASAN
-    ${NVMOLKIT_ASAN_FLAGS}
-    CACHE STRING "Flags used during ASAN builds" FORCE)
+# Sanitizers are driven by the NVMOLKIT_SANITIZER cache variable. For backwards
+# compatibility, a build type of asan / tsan / ubsan auto-selects the matching
+# sanitizer when NVMOLKIT_SANITIZER is unset.
+set(NVMOLKIT_SANITIZER
+    "none"
+    CACHE STRING "Active sanitizer (none, asan, tsan, ubsan)")
+set_property(CACHE NVMOLKIT_SANITIZER PROPERTY STRINGS none asan tsan ubsan)
 
-set(NVMOLKIT_TSAN_FLAGS "-fsanitize=thread -g -O1")
-set(CMAKE_C_FLAGS_TSAN
-    ${NVMOLKIT_TSAN_FLAGS}
-    CACHE STRING "Flags used during TSAN builds" FORCE)
-set(CMAKE_CXX_FLAGS_TSAN
-    ${NVMOLKIT_TSAN_FLAGS}
-    CACHE STRING "Flags used during TSAN builds" FORCE)
+if(NVMOLKIT_SANITIZER STREQUAL "none" AND CMAKE_BUILD_TYPE)
+  string(TOLOWER "${CMAKE_BUILD_TYPE}" _nvmolkit_lc_build_type)
+  if(_nvmolkit_lc_build_type MATCHES "^(asan|tsan|ubsan)$")
+    set(NVMOLKIT_SANITIZER "${_nvmolkit_lc_build_type}")
+    message(
+      STATUS
+        "NVMOLKIT_SANITIZER not set; deriving '${NVMOLKIT_SANITIZER}' from CMAKE_BUILD_TYPE"
+    )
+  endif()
+endif()
 
-set(NVMOLKIT_UBSAN_FLAGS
-    "-fsanitize=undefined,float-divide-by-zero,implicit-conversion,local-bounds,nullability -g -O1" # cmake-lint:
-    # disable=C0301
-)
-set(CMAKE_C_FLAGS_UBSAN
-    ${NVMOLKIT_UBSAN_FLAGS}
-    CACHE STRING "Flags used during UBSAN builds" FORCE)
-set(CMAKE_CXX_FLAGS_UBSAN
-    ${NVMOLKIT_UBSAN_FLAGS}
-    CACHE STRING "Flags used during UBSAN builds" FORCE)
+# cmake-format: off
+string(CONCAT NVMOLKIT_CTEST_ASAN_ENV_VARS
+       "ASAN_OPTIONS=protect_shadow_gap=0"
+       ":report_globals=1"
+       ":check_initialization_order=true"
+       ":detect_stack_use_after_return=true"
+       ":strict_string_checks=true")
+# cmake-format: on
+
+add_library(nvmolkit_sanitizers INTERFACE)
+if(NVMOLKIT_SANITIZER STREQUAL "asan")
+  target_compile_options(nvmolkit_sanitizers INTERFACE -fsanitize=address -g
+                                                       -O0)
+  target_link_options(nvmolkit_sanitizers INTERFACE -fsanitize=address)
+elseif(NVMOLKIT_SANITIZER STREQUAL "tsan")
+  target_compile_options(nvmolkit_sanitizers INTERFACE -fsanitize=thread -g -O1)
+  target_link_options(nvmolkit_sanitizers INTERFACE -fsanitize=thread)
+elseif(NVMOLKIT_SANITIZER STREQUAL "ubsan")
+  set(_nvmolkit_ubsan_checks
+      "undefined,float-divide-by-zero,implicit-conversion,local-bounds,nullability"
+  ) # cmake-lint: disable=C0301
+  target_compile_options(nvmolkit_sanitizers
+                         INTERFACE -fsanitize=${_nvmolkit_ubsan_checks} -g -O1)
+  target_link_options(nvmolkit_sanitizers INTERFACE
+                      -fsanitize=${_nvmolkit_ubsan_checks})
+elseif(NOT NVMOLKIT_SANITIZER STREQUAL "none")
+  message(FATAL_ERROR "Unknown NVMOLKIT_SANITIZER value: ${NVMOLKIT_SANITIZER}")
+endif()

@@ -18,19 +18,25 @@ add_library(bfgs bfgs_minimize.cu bfgs_hessian.cu
 target_link_libraries(
   bfgs
   PUBLIC host_vector device_vector
-  PRIVATE ${RDKit_LIBS} batched_forcefield rdkit_mmff_flattened dist_geom
-          cub_helpers cccl_interface)
+  PRIVATE ${RDKit_LIBS}
+          batched_forcefield
+          rdkit_mmff_flattened
+          dist_geom
+          cub_helpers
+          cccl_interface
+          nvmolkit_versions)
 add_library(bfgs_common bfgs_common.cpp)
 target_link_libraries(
   bfgs_common
-  PUBLIC host_vector device
+  PUBLIC host_vector device conformer_types
   PRIVATE ${RDKit_LIBS} OpenMP::OpenMP_CXX)
 add_library(bfgs_mmff bfgs_mmff.cpp)
 target_link_libraries(
   bfgs_mmff
-  PUBLIC bfgs
+  PUBLIC bfgs conformer_types
   PRIVATE ${RDKit_LIBS}
           bfgs_common
+          ff_device_collect
           mmff_batched_forcefield
           rdkit_mmff_flattened
           forcefield_constraints
@@ -41,9 +47,10 @@ target_link_libraries(
 add_library(bfgs_uff bfgs_uff.cpp)
 target_link_libraries(
   bfgs_uff
-  PUBLIC bfgs
+  PUBLIC bfgs conformer_types
   PRIVATE ${RDKit_LIBS}
           bfgs_common
+          ff_device_collect
           uff_batched_forcefield
           rdkit_uff_flattened
           forcefield_constraints

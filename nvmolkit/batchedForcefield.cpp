@@ -20,19 +20,21 @@
 #include <memory>
 #include <vector>
 
-#include "src/minimizer/bfgs_mmff.h"
-#include "src/minimizer/bfgs_uff.h"
 #include "nvmolkit/boost_python_utils.h"
-#include "src/utils/device_vector.h"
+#include "nvmolkit/device_result_python.h"
+#include "nvmolkit/mmff_python_utils.h"
+#include "rdkit_extensions/mmff_flattened_builder.h"
+#include "rdkit_extensions/uff_flattened_builder.h"
+#include "src/conformer/device_coord_result.h"
 #include "src/forcefields/ff_utils.h"
 #include "src/forcefields/forcefield_constraints.h"
-#include "src/hardware_options.h"
 #include "src/forcefields/mmff_batched_forcefield.h"
-#include "rdkit_extensions/mmff_flattened_builder.h"
 #include "src/forcefields/mmff_properties.h"
-#include "nvmolkit/mmff_python_utils.h"
 #include "src/forcefields/uff_batched_forcefield.h"
-#include "rdkit_extensions/uff_flattened_builder.h"
+#include "src/hardware_options.h"
+#include "src/minimizer/bfgs_mmff.h"
+#include "src/minimizer/bfgs_uff.h"
+#include "src/utils/device_vector.h"
 
 namespace bp = boost::python;
 
@@ -100,7 +102,7 @@ void throwIfCudaError(cudaError_t err, const std::string& context) {
 template <typename T> std::vector<T> copyDeviceVector(nvMolKit::AsyncDeviceVector<T>& deviceVec) {
   std::vector<T> hostVec(deviceVec.size());
   deviceVec.copyToHost(hostVec);
-  cudaStreamSynchronize(deviceVec.stream());
+  throwIfCudaError(cudaStreamSynchronize(deviceVec.stream()), "copyDeviceVector/sync");
   return hostVec;
 }
 
@@ -115,7 +117,7 @@ void uploadConformerPositions(const std::vector<RDKit::ROMol*>&    mols,
     }
   }
   positionsDevice.copyFromHost(allPositions.data(), allPositions.size());
-  cudaStreamSynchronize(positionsDevice.stream());
+  throwIfCudaError(cudaStreamSynchronize(positionsDevice.stream()), "uploadConformerPositions/sync");
 }
 
 bp::list computeBatchedEnergy(nvMolKit::BatchedForcefield&         forcefield,
@@ -247,6 +249,7 @@ class NativeMMFFBatchedForcefield {
                               const bp::list&                       torsionConstraints,
                               const nvMolKit::BatchHardwareOptions& hwOpts)
       : hwOpts_(hwOpts) {
+    throwIfCudaError(cudaGetDevice(&gpuId_), "MMFF wrapper/cudaGetDevice");
     mols_             = nvMolKit::extractMolecules(molecules);
     const int numMols = static_cast<int>(mols_.size());
     properties_       = nvMolKit::extractMMFFPropertiesList(properties, numMols);
@@ -273,6 +276,47 @@ class NativeMMFFBatchedForcefield {
     return bp::make_tuple(nestedToList(result.energies, [](double v) { return v; }),
                           nestedToList(result.converged, [](int8_t v) { return v != 0; }));
   }
+
+  bp::object minimizeDevice(int maxIters, double gradTol, int targetGpu) {
+    if (targetGpu >= 0 && targetGpu != gpuId_) {
+      throw std::invalid_argument(
+        "MMFFBatchedForcefield.minimize(output=DEVICE) does not support target_gpu != wrapper GPU "
+        "(" +
+        std::to_string(targetGpu) + " vs " + std::to_string(gpuId_) +
+        "). The wrapper's persistent device state lives on a single GPU; consolidating elsewhere "
+        "would leave subsequent compute_energy/compute_gradients calls operating on stale "
+        "coordinates. Use the standalone MMFFOptimizeMoleculesConfs(output=DEVICE, targetGpu=...) "
+        "API for cross-GPU consolidation, or construct the wrapper on the desired GPU.");
+    }
+    auto result = nvMolKit::MMFF::MMFFMinimizeMoleculesConfs(mols_,
+                                                             maxIters,
+                                                             gradTol,
+                                                             properties_,
+                                                             constraints_,
+                                                             hwOpts_,
+                                                             nvMolKit::BfgsBackend::HYBRID,
+                                                             nvMolKit::CoordinateOutput::DEVICE,
+                                                             gpuId_);
+    if (!result.device.has_value()) {
+      throw std::runtime_error("MMFFMinimizeMoleculesConfs(DEVICE) returned no device result");
+    }
+    auto& dev = *result.device;
+    if (dev.positions.size() != positionsDevice_.size()) {
+      throw std::runtime_error("MMFFMinimizeMoleculesConfs(DEVICE) positions size does not match wrapper");
+    }
+    // Refresh the persistent positions buffer in-place so subsequent compute_energy /
+    // compute_gradients calls see the optimized coords without a host roundtrip.
+    throwIfCudaError(cudaMemcpyAsync(positionsDevice_.data(),
+                                     dev.positions.data(),
+                                     positionsDevice_.size() * sizeof(double),
+                                     cudaMemcpyDeviceToDevice,
+                                     positionsDevice_.stream()),
+                     "MMFF minimizeDevice/positions refresh");
+    throwIfCudaError(cudaStreamSynchronize(positionsDevice_.stream()), "MMFF minimizeDevice/positions refresh sync");
+    return nvMolKit::buildOwningDevice3DResult(dev);
+  }
+
+  int gpuId() const { return gpuId_; }
 
  private:
   void buildForcefield() {
@@ -315,6 +359,7 @@ class NativeMMFFBatchedForcefield {
   nvMolKit::AsyncDeviceVector<double>              gradDevice_;
   nvMolKit::AsyncDeviceVector<double>              energyOutsDevice_;
   std::vector<int>                                 numConformersPerMol_;
+  int                                              gpuId_ = 0;
 };
 
 class NativeUFFBatchedForcefield {
@@ -328,6 +373,7 @@ class NativeUFFBatchedForcefield {
                              const bp::list&                       torsionConstraints,
                              const nvMolKit::BatchHardwareOptions& hwOpts)
       : hwOpts_(hwOpts) {
+    throwIfCudaError(cudaGetDevice(&gpuId_), "UFF wrapper/cudaGetDevice");
     mols_             = nvMolKit::extractMolecules(molecules);
     const int numMols = static_cast<int>(mols_.size());
     vdwThresholds_    = nvMolKit::extractDoubleList(vdwThresholds, numMols, "vdwThreshold");
@@ -361,6 +407,45 @@ class NativeUFFBatchedForcefield {
     return bp::make_tuple(nestedToList(result.energies, [](double v) { return v; }),
                           nestedToList(result.converged, [](int8_t v) { return v != 0; }));
   }
+
+  bp::object minimizeDevice(int maxIters, double gradTol, int targetGpu) {
+    if (targetGpu >= 0 && targetGpu != gpuId_) {
+      throw std::invalid_argument(
+        "UFFBatchedForcefield.minimize(output=DEVICE) does not support target_gpu != wrapper GPU "
+        "(" +
+        std::to_string(targetGpu) + " vs " + std::to_string(gpuId_) +
+        "). The wrapper's persistent device state lives on a single GPU; consolidating elsewhere "
+        "would leave subsequent compute_energy/compute_gradients calls operating on stale "
+        "coordinates. Use the standalone UFFOptimizeMoleculesConfs(output=DEVICE, targetGpu=...) "
+        "API for cross-GPU consolidation, or construct the wrapper on the desired GPU.");
+    }
+    auto result = nvMolKit::UFF::UFFMinimizeMoleculesConfs(mols_,
+                                                           maxIters,
+                                                           gradTol,
+                                                           vdwThresholds_,
+                                                           ignoreInterfragInteractions_,
+                                                           constraints_,
+                                                           hwOpts_,
+                                                           nvMolKit::CoordinateOutput::DEVICE,
+                                                           gpuId_);
+    if (!result.device.has_value()) {
+      throw std::runtime_error("UFFMinimizeMoleculesConfs(DEVICE) returned no device result");
+    }
+    auto& dev = *result.device;
+    if (dev.positions.size() != positionsDevice_.size()) {
+      throw std::runtime_error("UFFMinimizeMoleculesConfs(DEVICE) positions size does not match wrapper");
+    }
+    throwIfCudaError(cudaMemcpyAsync(positionsDevice_.data(),
+                                     dev.positions.data(),
+                                     positionsDevice_.size() * sizeof(double),
+                                     cudaMemcpyDeviceToDevice,
+                                     positionsDevice_.stream()),
+                     "UFF minimizeDevice/positions refresh");
+    throwIfCudaError(cudaStreamSynchronize(positionsDevice_.stream()), "UFF minimizeDevice/positions refresh sync");
+    return nvMolKit::buildOwningDevice3DResult(dev);
+  }
+
+  int gpuId() const { return gpuId_; }
 
  private:
   void buildForcefield() {
@@ -405,6 +490,7 @@ class NativeUFFBatchedForcefield {
   nvMolKit::AsyncDeviceVector<double>             gradDevice_;
   nvMolKit::AsyncDeviceVector<double>             energyOutsDevice_;
   std::vector<int>                                numConformersPerMol_;
+  int                                             gpuId_ = 0;
 };
 
 BOOST_PYTHON_MODULE(_batchedForcefield) {
@@ -437,7 +523,9 @@ BOOST_PYTHON_MODULE(_batchedForcefield) {
                                                                        const nvMolKit::BatchHardwareOptions&>())
     .def("computeEnergy", &NativeMMFFBatchedForcefield::computeEnergy)
     .def("computeGradients", &NativeMMFFBatchedForcefield::computeGradients)
-    .def("minimize", &NativeMMFFBatchedForcefield::minimize);
+    .def("minimize", &NativeMMFFBatchedForcefield::minimize)
+    .def("minimizeDevice", &NativeMMFFBatchedForcefield::minimizeDevice)
+    .def("gpuId", &NativeMMFFBatchedForcefield::gpuId);
 
   bp::class_<NativeUFFBatchedForcefield, boost::noncopyable>("NativeUFFBatchedForcefield",
                                                              bp::init<const bp::list&,
@@ -450,5 +538,7 @@ BOOST_PYTHON_MODULE(_batchedForcefield) {
                                                                       const nvMolKit::BatchHardwareOptions&>())
     .def("computeEnergy", &NativeUFFBatchedForcefield::computeEnergy)
     .def("computeGradients", &NativeUFFBatchedForcefield::computeGradients)
-    .def("minimize", &NativeUFFBatchedForcefield::minimize);
+    .def("minimize", &NativeUFFBatchedForcefield::minimize)
+    .def("minimizeDevice", &NativeUFFBatchedForcefield::minimizeDevice)
+    .def("gpuId", &NativeUFFBatchedForcefield::gpuId);
 }

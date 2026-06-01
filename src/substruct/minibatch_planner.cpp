@@ -17,9 +17,9 @@
 
 #include <algorithm>
 
-#include "src/utils/nvtx.h"
 #include "src/substruct/recursive_preprocessor.h"
 #include "src/substruct/thread_worker_context.h"
+#include "src/utils/nvtx.h"
 
 namespace nvMolKit {
 

@@ -17,7 +17,7 @@ cmake_policy(SET CMP0167 NEW)
 
 project(
   nvmolkit
-  VERSION 0.4.0
+  VERSION 0.5.0
   LANGUAGES CXX CUDA)
 set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CXX_STANDARD 20)
@@ -114,6 +114,9 @@ endif()
 # ------------------------
 # Apply the project-rooted include search path to every first-party target created in the subdirectories below.
 link_libraries(nvmolkit_include_root)
+
+# Apply project-wide compile options to every first-party target created in the subdirectories below.
+link_libraries(nvmolkit_warnings nvmolkit_release_opts nvmolkit_cuda_options nvmolkit_sanitizers nvmolkit_cuda_caps)
 add_subdirectory(rdkit_extensions)
 add_subdirectory(src)
 if(NVMOLKIT_BUILD_PYTHON_BINDINGS)

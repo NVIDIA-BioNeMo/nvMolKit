@@ -1,0 +1,87 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Build-time pin manifest for the pip wheel path.
+#
+# For each supported rdkit pip version, records:
+#   - rdkit_pypi_tag:   the kuelumbus/rdkit-pypi git tag whose setup.py recipe
+#                       built the corresponding PyPI wheel. We clone rdkit-pypi
+#                       at this tag and re-run its build to obtain headers and
+#                       libs that exactly match the published wheel.
+#   - boost_version:    the boost version that kuelumbus/rdkit-pypi linked the
+#                       rdkit shared libraries against. Tracked here for
+#                       documentation; the recipe build resolves it via conan.
+#   - python_versions:  the CPython minor versions for which kuelumbus publishes
+#                       a manylinux_2_28_x86_64 wheel. nvMolKit can only target
+#                       a (rdkit, python) pair if a matching rdkit wheel exists.
+#
+# Sources of truth: kuelumbus/rdkit-pypi tag list and that tag's conanfile.py.
+#
+# Python coverage policy: target the latest four CPython minors (3.11-3.14).
+# rdkit 2025.3.1, 2025.3.2, and 2025.3.3 predate the upstream cp314 manylinux
+# wheel, so their python_versions list stops at 3.13.
+
+"2025.3.1":
+  rdkit_pypi_tag: "2025.03.1"
+  boost_version: "1.85.0"
+  python_versions: ["3.11", "3.12", "3.13"]
+
+"2025.3.2":
+  rdkit_pypi_tag: "2025.03.2"
+  boost_version: "1.85.0"
+  python_versions: ["3.11", "3.12", "3.13"]
+
+"2025.3.3":
+  rdkit_pypi_tag: "2025.03.3"
+  boost_version: "1.85.0"
+  python_versions: ["3.11", "3.12", "3.13"]
+
+"2025.3.4":
+  rdkit_pypi_tag: "2025.03.4"
+  boost_version: "1.85.0"
+  python_versions: ["3.11", "3.12", "3.13", "3.14"]
+
+"2025.3.5":
+  rdkit_pypi_tag: "2025.03.5"
+  boost_version: "1.85.0"
+  python_versions: ["3.11", "3.12", "3.13", "3.14"]
+
+"2025.3.6":
+  rdkit_pypi_tag: "2025.03.6"
+  boost_version: "1.85.0"
+  python_versions: ["3.11", "3.12", "3.13", "3.14"]
+
+"2025.9.1":
+  rdkit_pypi_tag: "2025.09.1"
+  boost_version: "1.85.0"
+  python_versions: ["3.11", "3.12", "3.13", "3.14"]
+
+"2025.9.2":
+  rdkit_pypi_tag: "2025.09.2"
+  boost_version: "1.85.0"
+  python_versions: ["3.11", "3.12", "3.13", "3.14"]
+
+"2025.9.3":
+  rdkit_pypi_tag: "2025.09.3"
+  boost_version: "1.85.0"
+  python_versions: ["3.11", "3.12", "3.13", "3.14"]
+
+"2025.9.4":
+  rdkit_pypi_tag: "2025.09.4"
+  boost_version: "1.85.0"
+  python_versions: ["3.11", "3.12", "3.13", "3.14"]
+
+"2025.9.5":
+  rdkit_pypi_tag: "2025.09.5"
+  boost_version: "1.85.0"
+  python_versions: ["3.11", "3.12", "3.13", "3.14"]
+
+"2025.9.6":
+  rdkit_pypi_tag: "2025.09.6"
+  boost_version: "1.85.0"
+  python_versions: ["3.11", "3.12", "3.13", "3.14"]
+
+"2026.3.1":
+  rdkit_pypi_tag: "2026.03.01"
+  boost_version: "1.85.0"
+  python_versions: ["3.11", "3.12", "3.13", "3.14"]

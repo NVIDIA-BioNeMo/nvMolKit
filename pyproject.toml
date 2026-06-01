@@ -8,15 +8,65 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nvMolKit"
-version = "0.4.0"
-description = "Python bindings for the nvMolKit project"
+version = "0.5.0"
+description = "CUDA-backed python library for accelerating common RDKit molecular operations"
+readme = { text = """
+nvMolKit is a CUDA-backed Python library that accelerates common
+[RDKit](https://www.rdkit.org/) molecular operations. It links against RDKit and
+operates on standard RDKit molecular representations.
 
+nvMolKit mirrors RDKit's APIs but exposes batch-oriented
+variants so many molecules can be processed in parallel on the GPU. Operations
+that do not modify structures return asynchronous GPU results that can be
+converted to PyTorch tensors or NumPy arrays; APIs that modify molecules apply
+changes in place, consistent with RDKit.
+
+An NVIDIA GPU with compute capability 7.0 (Volta) or newer and a Linux
+environment with CUDA 12 are required. For installation options, API reference, and
+examples, see the
+[project documentation](https://nvidia-bionemo.github.io/nvMolKit/).
+""", content-type = "text/markdown" }
+license = "Apache-2.0"
+authors = [
+    { name = "NVIDIA BioNeMo", email = "bionemofeedback@nvidia.com" },
+]
+keywords = [
+    "cheminformatics",
+    "rdkit",
+    "cuda",
+    "gpu",
+    "molecules",
+    "pytorch",
+]
+requires-python = ">=3.10,<3.15"
 
 dependencies = [
-    "numpy",
-    "torch",
+    "numpy>=1.23",
+    "torch>=2.1",
     "triton",
+    "rdkit",  # nvmolkit-rdkit-pin: pinned to RDKIT_VERSION by admin/deploy/build_pip_wheels.sh during cibuildwheel
+    "nvidia-cuda-runtime-cu12>=12.0",
 ]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: GPU :: NVIDIA CUDA :: 12",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: C++",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
+
+[project.urls]
+Homepage = "https://nvidia-bionemo.github.io/nvMolKit/"
+Documentation = "https://nvidia-bionemo.github.io/nvMolKit/"
+Repository = "https://github.com/NVIDIA-BioNeMo/nvMolKit"
+Issues = "https://github.com/NVIDIA-BioNeMo/nvMolKit/issues"
+Changelog = "https://github.com/NVIDIA-BioNeMo/nvMolKit/releases"
 
 [project.optional-dependencies]
 test = [
@@ -32,6 +82,47 @@ docs = [
     "myst-parser",
     "jupyter-sphinx",
 ]
+autotune = [
+    "optuna",
+]
+
+# cibuildwheel orchestration for the pip wheel pipeline. The CI workflow sets
+# RDKIT_VERSION to a value present in admin/distribute/rdkit_build_matrix.yaml.
+# before-build clones rdkit-pypi at the matching tag, reproduces its build to
+# obtain headers + boost, and stages those plus pip-installed rdkit's libs at
+# stable paths read via NVMOLKIT_BUILD_AGAINST_PIP_* env vars by setup.py.
+[tool.cibuildwheel]
+build-verbosity = 3
+build = [
+    "cp311-manylinux_x86_64",
+    "cp312-manylinux_x86_64",
+    "cp313-manylinux_x86_64",
+    "cp314-manylinux_x86_64",
+]
+# Use the "build" frontend instead of "pip": it surfaces setup.py / scikit-build
+# stdout/stderr cleanly. The default "pip" frontend captures backend output and
+# only re-emits it on success, which makes diagnosing scikit-build failures
+# painful.
+build-frontend = "build"
+environment-pass = ["RDKIT_VERSION", "CMAKE_BUILD_PARALLEL_LEVEL", "MAKEFLAGS", "CONAN_CPU_COUNT"]
+# container-engine (network mode + cache bind-mounts) is set at runtime by
+# admin/deploy/build_pip_wheels.sh so it can interpolate $HOME for the cache
+# paths. cibuildwheel's TOML config does not support env-var substitution in
+# create-args.
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64"]
+# RDKit native deps and python build deps (conan, ninja, etc.) are baked into
+# the manylinux+CUDA image at admin/container/manylinux_2_28_cuda12.Dockerfile,
+# so no before-all is needed here.
+before-build = "bash {project}/admin/distribute/cibuildwheel_before_build.sh {project}"
+environment = { NVMOLKIT_BUILD_AGAINST_PIP_RDKIT = "ON", NVMOLKIT_BUILD_AGAINST_PIP_LIBDIR = "/tmp/nvmolkit_pip_inputs/rdkit_libs", NVMOLKIT_BUILD_AGAINST_PIP_INCDIR = "/tmp/nvmolkit_pip_inputs/rdkit_include", NVMOLKIT_BUILD_AGAINST_PIP_BOOSTINCLUDEDIR = "/tmp/nvmolkit_pip_inputs/boost_include" }
+# Wheel repair is delegated to admin/distribute/repair_wheel.sh: it runs
+# auditwheel with the right --exclude list and then patchelf-rewrites RPATH
+# on each nvmolkit/_*.so so the dynamic linker finds the rdkit + boost libs
+# in <site-packages>/rdkit.libs/ and libcudart in
+# <site-packages>/nvidia/cuda_runtime/lib/ at import time.
+repair-wheel-command = "bash {project}/admin/distribute/repair_wheel.sh {dest_dir} {wheel}"
 
 [tool.pytest.ini_options]
 log_cli = true

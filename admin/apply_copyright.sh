@@ -58,6 +58,8 @@ find_included_files() {
         "${REPO_ROOT}/nvmolkit" \
         "${REPO_ROOT}/tests" \
         "${REPO_ROOT}/benchmarks" \
+        "${REPO_ROOT}/admin" \
+        "${REPO_ROOT}/.github" \
         -type f "$@" -not -path "*/rdkit_extensions/*" -print0
 }
 
@@ -196,6 +198,14 @@ done < <(find_included_files -name "*.sh")
 while IFS= read -r -d '' file; do
     process_file "${file}" "#" "CMake" false
 done < <(find_included_files \( -name "CMakeLists.txt" -o -name "*.cmake" \))
+
+while IFS= read -r -d '' file; do
+    process_file "${file}" "#" "Dockerfile" false
+done < <(find_included_files \( -name "Dockerfile" -o -name "Dockerfile.*" -o -name "*.Dockerfile" \))
+
+while IFS= read -r -d '' file; do
+    process_file "${file}" "#" "YAML" false
+done < <(find_included_files \( -name "*.yaml" -o -name "*.yml" \))
 
 if [ "${CHECK_ONLY}" = true ] && [ "${ERRORS}" -ne 0 ]; then
     exit 1

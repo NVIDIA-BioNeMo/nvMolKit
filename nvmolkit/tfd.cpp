@@ -20,8 +20,8 @@
 
 #include "nvmolkit/array_helpers.h"
 #include "nvmolkit/boost_python_utils.h"
-#include "src/utils/nvtx.h"
 #include "src/tfd/tfd_gpu.h"
+#include "src/utils/nvtx.h"
 
 namespace {
 

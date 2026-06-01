@@ -42,10 +42,11 @@ elseif(NVMOLKIT_CUDA_TARGET_MODE STREQUAL "full")
         STATUS "CUDA < 12.8 detected, Blackwell (100-real) arch not enabled")
     endif()
     if(_cuda_version_num GREATER_EQUAL 1209)
+      list(APPEND _nvmolkit_cuda_arch_list "103-real")
       list(APPEND _nvmolkit_cuda_arch_list "120")
       message(
         STATUS
-          "CUDA >= 12.9 detected, enabling Blackwell (120 + PTX) for forward compatibility"
+          "CUDA >= 12.9 detected, enabling Blackwell (103-real) and (120 + PTX) for forward compatibility"
       )
     endif()
   endif()
@@ -84,7 +85,12 @@ else() # default
   endif()
 endif()
 
-# Identify CUDA compute capabilities for similarity tensor core support.
+# Identify CUDA compute capabilities for similarity tensor core support. The
+# resulting NVMOLKIT_CUDA_CC_* defines are exposed to first-party targets via
+# the nvmolkit_cuda_caps INTERFACE library so they don't leak into FetchContent
+# third-party translation units.
+add_library(nvmolkit_cuda_caps INTERFACE)
+
 if(CMAKE_CUDA_ARCHITECTURES STREQUAL "native")
   # Write a small CUDA program to detect compute capability
   file(
@@ -109,7 +115,6 @@ if(CMAKE_CUDA_ARCHITECTURES STREQUAL "native")
     RESULT_VARIABLE _build_result)
 
   if(_build_result EQUAL 0)
-    # Run the program to get the native compute capability
     execute_process(
       COMMAND "${CMAKE_BINARY_DIR}/detect_cuda_arch"
       OUTPUT_VARIABLE _native_cc
@@ -117,22 +122,41 @@ if(CMAKE_CUDA_ARCHITECTURES STREQUAL "native")
   else()
     message(FATAL_ERROR "Failed to build detect_cuda_arch.cu")
   endif()
-  # _native_cc will be something like "86"
-  foreach(cc IN ITEMS 80 86 89 90 100 120)
+  foreach(
+    cc IN
+    ITEMS 80
+          86
+          89
+          90
+          100
+          103
+          120)
     if(_native_cc STREQUAL "${cc}")
-      add_definitions(-DNVMOLKIT_CUDA_CC_${cc}=1)
+      target_compile_definitions(nvmolkit_cuda_caps
+                                 INTERFACE NVMOLKIT_CUDA_CC_${cc}=1)
     else()
-      add_definitions(-DNVMOLKIT_CUDA_CC_${cc}=0)
+      target_compile_definitions(nvmolkit_cuda_caps
+                                 INTERFACE NVMOLKIT_CUDA_CC_${cc}=0)
     endif()
   endforeach()
 else()
-  foreach(cc IN ITEMS 80 86 89 90 100 120)
+  foreach(
+    cc IN
+    ITEMS 80
+          86
+          89
+          90
+          100
+          103
+          120)
     string(REPLACE ";" " " _cuda_arch_str "${CMAKE_CUDA_ARCHITECTURES}")
     string(REGEX MATCH "(^| )${cc}(-real)?( |$)" _match "${_cuda_arch_str}")
     if(_match)
-      add_definitions(-DNVMOLKIT_CUDA_CC_${cc}=1)
+      target_compile_definitions(nvmolkit_cuda_caps
+                                 INTERFACE NVMOLKIT_CUDA_CC_${cc}=1)
     else()
-      add_definitions(-DNVMOLKIT_CUDA_CC_${cc}=0)
+      target_compile_definitions(nvmolkit_cuda_caps
+                                 INTERFACE NVMOLKIT_CUDA_CC_${cc}=0)
     endif()
   endforeach()
 endif()

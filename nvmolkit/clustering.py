@@ -139,6 +139,8 @@ def fused_butina(
         n_start = x.shape[0]
         device = x.device
         indices = torch.arange(n_start, dtype=torch.int32, device=device)
+        # CPU mirror of indices avoids a D2H sync to record each centroid.
+        indices_host = list(range(n_start))
         cluster_count = torch.zeros(2, dtype=torch.int32, device=device)
         cluster_count[1] = n_start - 1
         cluster_indices = torch.zeros(n_start, dtype=torch.int32, device=device)
@@ -149,33 +151,53 @@ def fused_butina(
         threshold = float(1 - cutoff)
         y = x
         first_run = True
-        while cluster_count[0].item() <= cluster_count[1].item() and x.shape[0] > 0:
+        # cc[0] = next cluster start index, cc[1] = last valid index.
+        # Initialized to [0, n_start-1] matching cluster_count, so the initial
+        # while condition is satisfied for n_start > 0 without a D2H sync.
+        cc = [0, n_start - 1]
+        while cc[0] <= cc[1] and x.shape[0] > 0:
             update_neighbor_counts(x, y, neigh, threshold, subtract=not first_run, metric=metric)
             first_run = False
 
-            max_val = neigh.max().item()
+            # Batch max and last-argmax into one D2H transfer (sync 1 of 2).
+            neigh_flipped = neigh.flip(0)
+            batch_ma = torch.stack([neigh.max().to(torch.int64), neigh_flipped.argmax().to(torch.int64)]).tolist()
+            max_val = int(batch_ma[0])
             if max_val == 0:
                 break
-            id_max = neigh.shape[0] - 1 - neigh.flip(0).contiguous().argmax().item()
-            centroids.append(indices[id_max].item())
+            id_max = neigh.shape[0] - 1 - int(batch_ma[1])
+            centroids.append(indices_host[id_max])  # CPU mirror, no sync
 
             extract_cluster_and_singletons(
                 x, id_max, is_free, neigh, cluster_count, cluster_indices, threshold, indices, metric=metric
             )
-            cluster_sizes.append(cluster_count[0].item())
-            x, y = x[is_free, :].contiguous(), x[~is_free, :].contiguous()
+
+            # Batch cluster_count and is_free into one D2H transfer (sync 2 of 2).
+            # combined[:2] = cluster_count, combined[2:] = is_free as int32.
+            combined = torch.cat([cluster_count, is_free.to(torch.int32)]).tolist()
+            cc = [int(combined[0]), int(combined[1])]
+            is_free_host = [bool(v) for v in combined[2:]]
+
+            cluster_sizes.append(cc[0])
+
+            # is_free is already updated in-place on GPU by extract_cluster_and_singletons;
+            # use it directly to avoid a H2D→CPU→H2D roundtrip.
+            # is_free_host (from the combined download above) is still needed for indices_host.
+            y = x[~is_free, :].contiguous()
+            x = x[is_free, :].contiguous()
             indices = indices[is_free].contiguous()
             neigh = neigh[is_free].contiguous()
             is_free = torch.ones(x.shape[0], dtype=torch.bool, device=x.device)
+            indices_host = [idx for idx, keep in zip(indices_host, is_free_host) if keep]
 
         cluster_indices_cpu = cluster_indices.cpu()
+        indices_cpu = cluster_indices_cpu.numpy()
         for i in range(n_start - cluster_sizes[-1]):
             item = cluster_sizes[-1]
             cluster_sizes.append(cluster_sizes[-1] + 1)
-            centroids.append(cluster_indices_cpu[item].item())
+            centroids.append(int(indices_cpu[item]))
 
         clusters = []
-        indices_cpu = cluster_indices.cpu().numpy()
         for i in range(len(cluster_sizes) - 1):
             start_idx = cluster_sizes[i]
             end_idx = cluster_sizes[i + 1]

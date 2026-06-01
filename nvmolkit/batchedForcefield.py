@@ -81,11 +81,12 @@ Constraint terms are added through per-molecule element views:
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, overload
 
 from nvmolkit import _batchedForcefield  # type: ignore
+from nvmolkit._arrayHelpers import *  # noqa: F403  # registers PyArray for DEVICE-mode returns
 from nvmolkit._mmff_bridge import default_rdkit_mmff_properties, make_internal_mmff_properties
-from nvmolkit.types import HardwareOptions
+from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions
 
 if TYPE_CHECKING:
     from rdkit.Chem import Mol
@@ -402,7 +403,7 @@ class _BatchedForcefieldBase:
         """Return forcefield energies for all conformers of all molecules.
 
         Returns:
-            ``result[mol_idx][conf_idx]`` — one energy per conformer.
+            ``result[mol_idx][conf_idx]`` -- one energy per conformer.
         """
         if not self._molecules:
             return []
@@ -413,7 +414,7 @@ class _BatchedForcefieldBase:
         """Return forcefield gradients for all conformers of all molecules.
 
         Returns:
-            ``result[mol_idx][conf_idx]`` — one flattened ``[x0, y0, z0, ...]``
+            ``result[mol_idx][conf_idx]`` -- one flattened ``[x0, y0, z0, ...]``
             gradient vector per conformer.
         """
         if not self._molecules:
@@ -421,10 +422,20 @@ class _BatchedForcefieldBase:
         self._ensure_built()
         return self._native_ff.computeGradients()
 
-    def _minimize(self, maxIters: int, forceTol: float) -> tuple[list[list[float]], list[list[bool]]]:
+    def _minimize(
+        self,
+        maxIters: int,
+        forceTol: float,
+        output: CoordinateOutput = CoordinateOutput.RDKIT_CONFORMERS,
+        target_gpu: int | None = None,
+    ):
         if not self._molecules:
+            if output == CoordinateOutput.DEVICE:
+                raise ValueError("minimize(output=DEVICE) requires at least one molecule")
             return [], []
         self._ensure_built()
+        if output == CoordinateOutput.DEVICE:
+            return self._native_ff.minimizeDevice(maxIters, forceTol, -1 if target_gpu is None else int(target_gpu))
         energies, converged = self._native_ff.minimize(maxIters, forceTol)
         return energies, converged
 
@@ -534,22 +545,57 @@ class MMFFBatchedForcefield(_BatchedForcefieldBase):
             self._hardware_options._as_native(),
         )
 
-    def minimize(self, maxIters: int = 200, forceTol: float = 1e-4) -> tuple[list[list[float]], list[list[bool]]]:
+    @overload
+    def minimize(
+        self,
+        maxIters: int = 200,
+        forceTol: float = 1e-4,
+        output: Literal[CoordinateOutput.RDKIT_CONFORMERS] = CoordinateOutput.RDKIT_CONFORMERS,
+        target_gpu: int | None = None,
+    ) -> tuple[list[list[float]], list[list[bool]]]: ...
+    @overload
+    def minimize(
+        self,
+        maxIters: int = 200,
+        forceTol: float = 1e-4,
+        *,
+        output: Literal[CoordinateOutput.DEVICE],
+        target_gpu: int | None = None,
+    ) -> Device3DResult: ...
+    def minimize(
+        self,
+        maxIters: int = 200,
+        forceTol: float = 1e-4,
+        output: CoordinateOutput = CoordinateOutput.RDKIT_CONFORMERS,
+        target_gpu: int | None = None,
+    ):
         """Run BFGS minimization on all conformers of all molecules.
 
-        Optimized coordinates are written back into the RDKit conformers
-        in-place.
+        In ``RDKIT_CONFORMERS`` mode, optimized coordinates are written back
+        into the RDKit conformers in-place. In ``DEVICE`` mode, optimized
+        coordinates and energies stay on the GPU, the wrapper's persistent
+        on-device positions buffer is updated in-place (no host roundtrip),
+        and a :class:`Device3DResult` is returned.
 
         Args:
             maxIters: Maximum number of BFGS iterations.
             forceTol: Gradient convergence tolerance.
+            output: ``RDKIT_CONFORMERS`` (default) or ``DEVICE``.
+            target_gpu: In DEVICE mode, the GPU to consolidate the result on.
+                ``None`` (the default) selects the wrapper's own GPU. The
+                wrapper is single-GPU - the only supported value is the
+                wrapper's GPU id; passing a different GPU raises
+                ``invalid_argument``. For cross-GPU consolidation use the
+                standalone ``MMFFOptimizeMoleculesConfs(output=DEVICE,
+                targetGpu=...)`` API.
 
         Returns:
-            A tuple ``(energies, converged)`` where both have shape
-            ``[mol_idx][conf_idx]``.  Each *converged* entry is ``True``
-            when that system satisfied *forceTol* within *maxIters*.
+            For RDKit mode: ``(energies, converged)`` nested host lists.
+            For DEVICE mode: a :class:`Device3DResult` whose ``values`` field
+            holds the optimized coordinates, ``energies`` holds final energies,
+            and ``converged`` holds per-conformer convergence flags.
         """
-        return self._minimize(maxIters, forceTol)
+        return self._minimize(maxIters, forceTol, output=output, target_gpu=target_gpu)
 
 
 class UFFBatchedForcefield(_BatchedForcefieldBase):
@@ -615,19 +661,54 @@ class UFFBatchedForcefield(_BatchedForcefieldBase):
             self._hardware_options._as_native(),
         )
 
-    def minimize(self, maxIters: int = 1000, forceTol: float = 1e-4) -> tuple[list[list[float]], list[list[bool]]]:
+    @overload
+    def minimize(
+        self,
+        maxIters: int = 1000,
+        forceTol: float = 1e-4,
+        output: Literal[CoordinateOutput.RDKIT_CONFORMERS] = CoordinateOutput.RDKIT_CONFORMERS,
+        target_gpu: int | None = None,
+    ) -> tuple[list[list[float]], list[list[bool]]]: ...
+    @overload
+    def minimize(
+        self,
+        maxIters: int = 1000,
+        forceTol: float = 1e-4,
+        *,
+        output: Literal[CoordinateOutput.DEVICE],
+        target_gpu: int | None = None,
+    ) -> Device3DResult: ...
+    def minimize(
+        self,
+        maxIters: int = 1000,
+        forceTol: float = 1e-4,
+        output: CoordinateOutput = CoordinateOutput.RDKIT_CONFORMERS,
+        target_gpu: int | None = None,
+    ):
         """Run BFGS minimization on all conformers of all molecules.
 
-        Optimized coordinates are written back into the RDKit conformers
-        in-place.
+        In ``RDKIT_CONFORMERS`` mode, optimized coordinates are written back
+        into the RDKit conformers in-place. In ``DEVICE`` mode, optimized
+        coordinates and energies stay on the GPU, the wrapper's persistent
+        on-device positions buffer is updated in-place (no host roundtrip),
+        and a :class:`Device3DResult` is returned.
 
         Args:
             maxIters: Maximum number of BFGS iterations.
             forceTol: Gradient convergence tolerance.
+            output: ``RDKIT_CONFORMERS`` (default) or ``DEVICE``.
+            target_gpu: In DEVICE mode, the GPU to consolidate the result on.
+                ``None`` (the default) selects the wrapper's own GPU. The
+                wrapper is single-GPU - the only supported value is the
+                wrapper's GPU id; passing a different GPU raises
+                ``invalid_argument``. For cross-GPU consolidation use the
+                standalone ``UFFOptimizeMoleculesConfs(output=DEVICE,
+                targetGpu=...)`` API.
 
         Returns:
-            A tuple ``(energies, converged)`` where both have shape
-            ``[mol_idx][conf_idx]``.  Each *converged* entry is ``True``
-            when that system satisfied *forceTol* within *maxIters*.
+            For RDKit mode: ``(energies, converged)`` nested host lists.
+            For DEVICE mode: a :class:`Device3DResult` whose ``values`` field
+            holds the optimized coordinates, ``energies`` holds final energies,
+            and ``converged`` holds per-conformer convergence flags.
         """
-        return self._minimize(maxIters, forceTol)
+        return self._minimize(maxIters, forceTol, output=output, target_gpu=target_gpu)

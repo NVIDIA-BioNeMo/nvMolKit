@@ -232,6 +232,7 @@ cudaError_t launchBlockPerMolEnergyKernel(int                                 nu
                                           const BatchedIndicesDevicePtr&      sytemIndices,
                                           const double*                       coords,
                                           double*                             energies,
+                                          bool                                hasConstraints,
                                           cudaStream_t                        stream = nullptr);
 
 cudaError_t launchBlockPerMolGradKernel(int                                 numMols,
@@ -239,6 +240,7 @@ cudaError_t launchBlockPerMolGradKernel(int                                 numM
                                         const BatchedIndicesDevicePtr&      sytemIndices,
                                         const double*                       coords,
                                         double*                             grad,
+                                        bool                                hasConstraints,
                                         cudaStream_t                        stream = nullptr);
 
 }  // namespace UFF

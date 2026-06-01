@@ -24,10 +24,10 @@
 #include <iomanip>
 #include <iostream>
 
-#include "src/utils/device_vector.h"
 #include "rdkit_extensions/dist_geom_flattened_builder.h"
-#include "src/utils/nvtx.h"
 #include "src/triangle_smooth.h"
+#include "src/utils/device_vector.h"
+#include "src/utils/nvtx.h"
 
 namespace nvMolKit {
 

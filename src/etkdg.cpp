@@ -17,23 +17,55 @@
 
 #include <omp.h>
 
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <unordered_map>
 
 #include "rdkit_extensions/conformer_pruning.h"
-#include "src/utils/device.h"
+#include "src/conformer/etkdg_device_collect.h"
+#include "src/etkdg_impl.h"
 #include "src/etkdg_stage_coordgen.h"
 #include "src/etkdg_stage_distgeom_minimize.h"
 #include "src/etkdg_stage_etk_minimization.h"
 #include "src/etkdg_stage_stereochem_checks.h"
 #include "src/etkdg_stage_update_conformers.h"
+#include "src/utils/device.h"
 #include "src/utils/host_vector.h"
 #include "src/utils/nvtx.h"
 #include "src/utils/openmp_helpers.h"
 
 namespace nvMolKit {
 namespace {
+
+class ETKDGCollectDeviceCoordsStage final : public detail::ETKDGStage {
+ public:
+  ETKDGCollectDeviceCoordsStage(std::vector<int>                 batchGlobalMolIds,
+                                int                              dim,
+                                detail::DeviceCoordCollectorCap& cap,
+                                detail::DeviceCoordCollector&    collector)
+      : batchGlobalMolIds_(std::move(batchGlobalMolIds)),
+        dim_(dim),
+        cap_(cap),
+        collector_(collector) {}
+
+  void execute(detail::ETKDGContext& ctx) override {
+    detail::appendActive(ctx.systemDevice.positions,
+                         ctx.systemHost.atomStarts,
+                         ctx.activeThisStage,
+                         dim_,
+                         batchGlobalMolIds_,
+                         cap_,
+                         collector_);
+  }
+  std::string name() const override { return "Collect Device Coords"; }
+
+ private:
+  std::vector<int>                 batchGlobalMolIds_;
+  int                              dim_;
+  detail::DeviceCoordCollectorCap& cap_;
+  detail::DeviceCoordCollector&    collector_;
+};
 
 // Helper function to calculate max iterations
 unsigned int calculateMaxIterations(const std::vector<RDKit::ROMol*>& mols, unsigned int maxIterations) {
@@ -55,17 +87,26 @@ unsigned int calculateMaxIterations(const std::vector<RDKit::ROMol*>& mols, unsi
 
 // TODO: The useRDKitCoordGen parameter will be removed once ETKDGCoordGenStage is optimized, after which we will
 // exclusively use ETKDGCoordGenStage.
-void embedMolecules(const std::vector<RDKit::ROMol*>&           mols,
-                    const RDKit::DGeomHelpers::EmbedParameters& params,
-                    int                                         confsPerMolecule,
-                    int                                         maxIterations,
-                    bool                                        debugMode,
-                    std::vector<std::vector<int16_t>>*          failures,
-                    const BatchHardwareOptions&                 hardwareOptions,
-                    BfgsBackend                                 backend) {
+std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>&           mols,
+                                                const RDKit::DGeomHelpers::EmbedParameters& params,
+                                                int                                         confsPerMolecule,
+                                                int                                         maxIterations,
+                                                bool                                        debugMode,
+                                                std::vector<std::vector<int16_t>>*          failures,
+                                                const BatchHardwareOptions&                 hardwareOptions,
+                                                BfgsBackend                                 backend,
+                                                CoordinateOutput                            output,
+                                                int                                         targetGpu) {
   const ScopedNvtxRange fullRange("EmbedMolecules");
   if (!params.useRandomCoords) {
     throw std::runtime_error("ETKDG requires useRandomCoords to be true. Please set it in the EmbedParameters.");
+  }
+
+  const bool deviceOutput = output == CoordinateOutput::DEVICE;
+  if (deviceOutput && params.pruneRmsThresh > 0.0) {
+    throw std::invalid_argument(
+      "ETKDG conformer pruning (params.pruneRmsThresh > 0) is not supported with CoordinateOutput::DEVICE. "
+      "Set pruneRmsThresh to a non-positive value or use CoordinateOutput::RDKIT_CONFORMERS.");
   }
 
   // Validate inputs
@@ -111,6 +152,23 @@ void embedMolecules(const std::vector<RDKit::ROMol*>&           mols,
   std::sort(sortedMols.begin(), sortedMols.end(), [](const RDKit::ROMol* mol1, const RDKit::ROMol* mol2) {
     return mol1->getNumAtoms() > mol2->getNumAtoms();
   });
+
+  // Map from sorted index back to original-input index for device-output reporting. The same
+  // ROMol* may appear multiple times in `mols`, so the mapping uses the first unmatched
+  // original slot per sorted entry.
+  std::vector<int> sortedToOriginal(sortedMols.size(), -1);
+  if (deviceOutput) {
+    std::vector<uint8_t> taken(mols.size(), 0);
+    for (size_t sortedIdx = 0; sortedIdx < sortedMols.size(); ++sortedIdx) {
+      for (size_t originalIdx = 0; originalIdx < mols.size(); ++originalIdx) {
+        if (taken[originalIdx] == 0 && mols[originalIdx] == sortedMols[sortedIdx]) {
+          sortedToOriginal[sortedIdx] = static_cast<int>(originalIdx);
+          taken[originalIdx]          = 1;
+          break;
+        }
+      }
+    }
+  }
 
   // Prepare embedder args for each unique molecule (without duplication)
   detail::OpenMPExceptionRegistry prepareExceptionRegistry;
@@ -160,6 +218,18 @@ void embedMolecules(const std::vector<RDKit::ROMol*>&           mols,
     }
   }
 
+  // Resolve target GPU for device-output mode.
+  if (deviceOutput) {
+    if (targetGpu < 0) {
+      targetGpu = gpuIdsToUse.empty() ? 0 : gpuIdsToUse.front();
+    }
+    if (std::find(gpuIdsToUse.begin(), gpuIdsToUse.end(), targetGpu) == gpuIdsToUse.end()) {
+      throw std::invalid_argument(
+        "targetGpu " + std::to_string(targetGpu) +
+        " is not in the configured set of execution GPUs; pass it via hardwareOptions.gpuIds first.");
+    }
+  }
+
   // Assign streams to the specified GPU devices
   const int numThreadsGpuBatching = effectivebatchesPerGpu * static_cast<int>(gpuIdsToUse.size());
   for (int i = 0; i < numThreadsGpuBatching; ++i) {
@@ -167,6 +237,20 @@ void embedMolecules(const std::vector<RDKit::ROMol*>&           mols,
     const WithDevice dev(deviceId);
     streamsPerThread.emplace_back();
     devicesPerThread.push_back(deviceId);
+  }
+
+  // Per-thread device-output collectors (only used in DEVICE mode).
+  std::vector<detail::DeviceCoordCollector> collectorsPerThread;
+  detail::DeviceCoordCollectorCap           collectorsCap;
+  if (deviceOutput) {
+    collectorsPerThread.resize(static_cast<size_t>(numThreadsGpuBatching));
+    for (int i = 0; i < numThreadsGpuBatching; ++i) {
+      auto& collector  = collectorsPerThread[static_cast<size_t>(i)];
+      collector.gpuId  = devicesPerThread[static_cast<size_t>(i)];
+      collector.stream = streamsPerThread[static_cast<size_t>(i)].stream();
+      collector.positions.setStream(collector.stream);
+    }
+    collectorsCap.maxConformersPerMol = confsPerMolecule;
   }
 
   // Work with original unique molecules, not the duplicated ones
@@ -310,15 +394,29 @@ void embedMolecules(const std::vector<RDKit::ROMol*>&           mols,
             std::make_unique<detail::ETKDGDoubleBondStereoCheckStage>(*context, batchEargs, dim, streamPtr));
         }
 
-        // Writeback
-        stages.push_back(std::make_unique<detail::ETKDGUpdateConformersStage>(batchMolsWithConfs,
-                                                                              batchEargs,
-                                                                              conformers,
-                                                                              positionsScratch,
-                                                                              activeScratch,
-                                                                              streamPtr,
-                                                                              &conformer_mutex,
-                                                                              confsPerMolecule));
+        // Writeback. In RDKIT_CONFORMERS mode we pack into the host conformers map; in DEVICE
+        // mode we append the surviving conformers of this batch onto the thread-local
+        // collector for later cross-GPU collection.
+        if (deviceOutput) {
+          auto&            collector = collectorsPerThread[static_cast<size_t>(omp_get_thread_num())];
+          // molIds index into sortedMols; remap to original-input order for the user-visible
+          // CSR output.
+          std::vector<int> originalMolIds(molIds.size());
+          for (size_t i = 0; i < molIds.size(); ++i) {
+            originalMolIds[i] = sortedToOriginal[static_cast<size_t>(molIds[i])];
+          }
+          stages.push_back(
+            std::make_unique<ETKDGCollectDeviceCoordsStage>(std::move(originalMolIds), dim, collectorsCap, collector));
+        } else {
+          stages.push_back(std::make_unique<detail::ETKDGUpdateConformersStage>(batchMolsWithConfs,
+                                                                                batchEargs,
+                                                                                conformers,
+                                                                                positionsScratch,
+                                                                                activeScratch,
+                                                                                streamPtr,
+                                                                                &conformer_mutex,
+                                                                                confsPerMolecule));
+        }
 
         // Create and run driver
         driver.reset(std::move(context), std::move(stages), debugMode, streamPtr, &allFinished);
@@ -364,6 +462,10 @@ void embedMolecules(const std::vector<RDKit::ROMol*>&           mols,
     }
   }
 
+  if (deviceOutput) {
+    return detail::finalizeOnTarget(collectorsPerThread, targetGpu, static_cast<int>(mols.size()));
+  }
+
   detail::OpenMPExceptionRegistry updateExceptionRegistry;
 #pragma omp parallel for num_threads(numThreads) default(none) schedule(dynamic) \
   shared(mols, conformers, params, updateExceptionRegistry)
@@ -378,6 +480,7 @@ void embedMolecules(const std::vector<RDKit::ROMol*>&           mols,
     }
   }
   updateExceptionRegistry.rethrow();
+  return std::nullopt;
 }
 
 }  // namespace nvMolKit

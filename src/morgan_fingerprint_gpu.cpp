@@ -28,9 +28,9 @@
 #include "src/morgan_fingerprint_common.h"
 #include "src/morgan_fingerprint_cpu.h"
 #include "src/morgan_fingerprint_kernels.h"
+#include "src/utils/host_vector.h"
 #include "src/utils/nvtx.h"
 #include "src/utils/openmp_helpers.h"
-#include "src/utils/host_vector.h"
 namespace nvMolKit {
 
 namespace {

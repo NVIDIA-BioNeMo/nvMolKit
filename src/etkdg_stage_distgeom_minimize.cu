@@ -17,11 +17,11 @@
 
 #include <unordered_map>
 
-#include "src/forcefields/dg_batched_forcefield.h"
-#include "src/forcefields/dist_geom.h"
 #include "rdkit_extensions/dist_geom_flattened_builder.h"
 #include "src/etkdg_impl.h"
 #include "src/etkdg_stage_distgeom_minimize.h"
+#include "src/forcefields/dg_batched_forcefield.h"
+#include "src/forcefields/dist_geom.h"
 #include "src/forcefields/kernel_utils.cuh"
 #include "src/utils/nvtx.h"
 

@@ -36,7 +36,6 @@ installpythontarget(_Fingerprints ./)
 
 add_library(_arrayHelpers MODULE array_helpers.cpp)
 target_link_libraries(_arrayHelpers PUBLIC ${Boost_LIBRARIES} device_vector)
-target_link_libraries(_arrayHelpers PRIVATE ${RDKit_LIBS})
 target_include_directories(_arrayHelpers PUBLIC ${Python_INCLUDE_DIRS})
 target_include_directories(_arrayHelpers SYSTEM PUBLIC ${Boost_INCLUDE_DIRS})
 installpythontarget(_arrayHelpers ./)
@@ -72,6 +71,7 @@ target_link_libraries(
           batched_forcefield
           rdkit_mmff_flattened
           rdkit_uff_flattened
+          device
           device_vector
           ff_utils)
 target_include_directories(_batchedForcefield PUBLIC ${Python_INCLUDE_DIRS})

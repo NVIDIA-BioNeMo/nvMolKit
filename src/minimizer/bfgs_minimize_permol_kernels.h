@@ -18,13 +18,16 @@
 
 #include <cuda_runtime.h>
 
-#include "src/minimizer/bfgs_types.h"
 #include "src/forcefields/dist_geom_kernels.h"
 #include "src/forcefields/mmff_kernels.h"
+#include "src/minimizer/bfgs_types.h"
 
 namespace nvMolKit {
 
-/// Launch per-molecule BFGS minimization kernel - MMFF specialization
+/// Launch per-molecule BFGS minimization kernel - MMFF specialization.
+/// `hasConstraints` selects between two specializations of the kernel: when false, the
+/// distance/position/angle/torsion constraint loops are compiled out, which lowers register
+/// pressure and improves occupancy on the common no-constraint path.
 cudaError_t launchBfgsMinimizePerMolKernel(int                                       numMols,
                                            const int*                                molIds,
                                            int                                       maxAtoms,
@@ -40,6 +43,7 @@ cudaError_t launchBfgsMinimizePerMolKernel(int                                  
                                            double*                                   inverseHessian,
                                            double**                                  scratchBuffers,
                                            double*                                   energyOuts,
+                                           bool                                      hasConstraints,
                                            int16_t*                                  statuses = nullptr,
                                            cudaStream_t                              stream   = nullptr);
 

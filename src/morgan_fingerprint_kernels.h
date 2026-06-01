@@ -18,9 +18,9 @@
 
 #include <memory>
 
-#include "src/utils/device.h"
 #include "src/data_structures/flat_bit_vect.h"
 #include "src/morgan_fingerprint_common.h"
+#include "src/utils/device.h"
 #include "src/utils/device_vector.h"
 #include "src/utils/host_vector.h"
 

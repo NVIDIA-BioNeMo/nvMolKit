@@ -63,7 +63,9 @@ For more fully-fledged examples, check out the Jupyter notebooks in the `example
 
 Source Code
 -----------
-nvMolKit is open source under the Apache License, and is available on `GitHub <https://github.com/NVIDIA-Digital-Bio/nvMolKit>`_.
+nvMolKit is open source under the Apache License, and is available on `GitHub <https://github.com/NVIDIA-BioNeMo/nvMolKit>`_.
+
+.. _installation:
 
 Installation
 ------------
@@ -79,18 +81,50 @@ Conda Forge
 Conda is the recommended way to install nvMolKit, in line with RDKit's recommended installation practice. First, ensure
 you have a conda-based environment manager installed and activated, such as `Miniconda <https://docs.conda.io/en/latest/miniconda.html>`_ or `Miniforge <https://conda-forge.org/download/>`_.
 
-nvMolKit v0.4.0 supports RDKit 2024.09.6 through 2025.09.5.
+nvMolKit v0.5.0 supports RDKit 2025.03.1 through 2026.03.1.
 
 To install with conda, run::
 
     conda install -c conda-forge nvmolkit
 
 
+Pip Installation
+^^^^^^^^^^^^^^^^
+
+.. code-block:: bash
+
+    pip install nvmolkit
+
+The wheel published to PyPI is built against a single RDKit release per
+nvMolKit version (RDKit 2026.03.1 for nvMolKit v0.5.0), due to versioning
+limitations in PyPI's dependency management system.
+
+Use this path if you do not have a constraint on which RDKit version to use;
+pip will pull a compatible RDKit from PyPI alongside nvMolKit.
+
+RDKit-pinned variants
+"""""""""""""""""""""
+
+For projects that need to use a specific RDKit version, per-variant wheels are
+hosted on github.
+
+To install nvMolKit pinned to a particular RDKit:
+
+.. code-block:: bash
+
+    RDKIT_VERSION=2025.9.6
+    NVMOLKIT_VERSION=0.5.0
+    pip install nvmolkit==${NVMOLKIT_VERSION}+rdkit${RDKIT_VERSION} \
+        --extra-index-url https://nvidia-bionemo.github.io/nvMolKit/wheels/rdkit${RDKIT_VERSION}/simple/
+
+Replace ``2025.9.6`` with the RDKit version you want. Variants published for
+nvMolKit v0.5.0 include every version between 2025.03.6 and 2026.03.1.
+
 
 From Source
 ^^^^^^^^^^^
 
-nvMolKit can be installed from source using a C++ and CUDA compiler. See installation instructions in the `GitHub README <https://github.com/NVIDIA-Digital-Bio/nvMolKit>`_.
+nvMolKit can be installed from source using a C++ and CUDA compiler. See installation instructions in the `GitHub README <https://github.com/NVIDIA-BioNeMo/nvMolKit>`_.
 
 
 Features
@@ -210,6 +244,8 @@ Guides
 
    similarity
    forcefield
+   autotune
+   agent_skill
 
 
 API Reference

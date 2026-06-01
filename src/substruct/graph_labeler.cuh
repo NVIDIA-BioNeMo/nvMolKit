@@ -18,9 +18,9 @@
 
 #include <cooperative_groups.h>
 
+#include "src/data_structures/flat_bit_vect.h"
 #include "src/substruct/atom_data_packed.h"
 #include "src/substruct/boolean_tree.cuh"
-#include "src/data_structures/flat_bit_vect.h"
 #include "src/substruct/molecules.h"
 #include "src/substruct/molecules_device.cuh"
 #include "src/substruct/substruct_debug.h"

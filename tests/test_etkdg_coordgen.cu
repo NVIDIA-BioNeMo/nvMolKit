@@ -18,10 +18,10 @@
 #include <GraphMol/ForceFieldHelpers/CrystalFF/TorsionPreferences.h>
 #include <gtest/gtest.h>
 
-#include "src/forcefields/coord_gen.h"
-#include "src/utils/device_vector.h"
 #include "src/etkdg_impl.h"
 #include "src/etkdg_stage_coordgen.h"
+#include "src/forcefields/coord_gen.h"
+#include "src/utils/device_vector.h"
 #include "tests/test_utils.h"
 
 using ::nvMolKit::detail::ETKDGContext;

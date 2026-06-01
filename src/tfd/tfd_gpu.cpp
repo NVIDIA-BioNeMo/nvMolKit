@@ -19,8 +19,8 @@
 
 #include <stdexcept>
 
-#include "src/utils/nvtx.h"
 #include "src/tfd/tfd_kernels.h"
+#include "src/utils/nvtx.h"
 
 namespace nvMolKit {
 

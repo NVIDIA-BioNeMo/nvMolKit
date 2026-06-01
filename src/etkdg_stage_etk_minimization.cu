@@ -17,8 +17,8 @@
 #include <unordered_map>
 
 #include "rdkit_extensions/dist_geom_flattened_builder.h"
-#include "src/forcefields/etk_batched_forcefield.h"
 #include "src/etkdg_stage_etk_minimization.h"
+#include "src/forcefields/etk_batched_forcefield.h"
 #include "src/minimizer/bfgs_minimize.h"
 
 namespace nvMolKit {

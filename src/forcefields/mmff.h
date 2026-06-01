@@ -21,8 +21,8 @@
 #include <vector>
 
 #include "src/forcefields/batched_forcefield.h"
-#include "src/utils/device_vector.h"
 #include "src/forcefields/mmff_kernels.h"
+#include "src/utils/device_vector.h"
 namespace nvMolKit {
 namespace MMFF {
 
@@ -424,6 +424,11 @@ EnergyForceContribsDevicePtr toEnergyForceContribsDevicePtr(const BatchedMolecul
 
 //! Create pointer struct from device indices for use in per-molecule kernels
 BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice);
+
+//! Returns true if any molecule in the batch contributes a distance, position, angle, or torsion
+//! constraint term. Used by per-molecule kernels to dispatch to a specialization that compiles out
+//! the constraint loops, recovering register pressure when no constraints are active.
+bool batchHasConstraints(const EnergyForceContribsDevice& contribs);
 
 }  // namespace MMFF
 }  // namespace nvMolKit

@@ -18,8 +18,8 @@
 
 #include <GraphMol/DistGeomHelpers/Embedder.h>
 
-#include "src/forcefields/dist_geom.h"
 #include "src/etkdg_impl.h"
+#include "src/forcefields/dist_geom.h"
 #include "src/minimizer/bfgs_minimize.h"
 
 using ::nvMolKit::detail::EmbedArgs;

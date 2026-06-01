@@ -21,8 +21,8 @@
 #include <stdexcept>
 
 #include "nvmolkit/array_helpers.h"
-#include "src/utils/device.h"
 #include "src/similarity.h"
+#include "src/utils/device.h"
 
 namespace {
 

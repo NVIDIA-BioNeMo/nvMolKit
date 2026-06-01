@@ -13,23 +13,23 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
+# Per-target host compile options. The CUDA half of nvmolkit_warnings is added
+# in cmake/device_compiler_flags.cmake.
+add_library(nvmolkit_warnings INTERFACE)
 if(NVMOLKIT_EXTRA_DEV_FLAGS)
   message(STATUS "Enabling extra development flags")
-  string(APPEND CMAKE_CXX_FLAGS " -Werror -Wall  -Wextra -Wno-sign-compare")
-  set(NVMOLKIT_HOST_CUDA_FLAGS " --compiler-options \"-Werror -Wall  -Wextra\"")
-else()
-  set(NVMOLKIT_HOST_CUDA_FLAGS "")
-endif()
-if(NVMOLKIT_BUILD_AGAINST_PIP_RDKIT)
-  message(STATUS "Using pre-cxx11 ABI")
-  add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=0)
+  target_compile_options(
+    nvmolkit_warnings
+    INTERFACE $<$<COMPILE_LANGUAGE:CXX>:-Werror;-Wall;-Wextra;-Wno-sign-compare>
+  )
 endif()
 
-set(NVMOLKIT_RELEASE_FLAGS "-ffast-math -O3 -DNDEBUG")
-
-set(CMAKE_C_FLAGS_RELEASE
-    ${NVMOLKIT_RELEASE_FLAGS}
-    CACHE STRING "Flags used during Release builds" FORCE)
-set(CMAKE_CXX_FLAGS_RELEASE
-    ${NVMOLKIT_RELEASE_FLAGS}
-    CACHE STRING "Flags used during Release builds" FORCE)
+# -ffast-math is a project preference for optimized builds and intentionally
+# stays off third-party targets compiled via FetchContent. Host-only; the CUDA
+# equivalent (--use_fast_math) is added by nvmolkit_cuda_options.
+add_library(nvmolkit_release_opts INTERFACE)
+target_compile_options(
+  nvmolkit_release_opts
+  INTERFACE
+    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebInfo>>>:-ffast-math>
+)

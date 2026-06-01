@@ -1,7 +1,11 @@
 # nvMolKit
 
 ## Documentation
-Please see the official [NVIDIA nvMolKit Documentation](https://nvidia-digital-bio.github.io/nvMolKit/) for an overview of features, examples, and a detailed API reference.
+Please see the official [NVIDIA nvMolKit Documentation](https://nvidia-bionemo.github.io/nvMolKit/) for an overview of features, examples, and a detailed API reference.
+
+## Cursor / agent skill
+
+If you use [Cursor](https://cursor.com/) (or another agent that supports the `SKILL.md` format) to write code that calls nvMolKit, you can copy [`agent-skills/nvmolkit-usage/`](agent-skills/nvmolkit-usage/) into your project's `.cursor/skills/` (or `~/.cursor/skills/` for personal use). It gives the agent the public Python entry-point map, runtime requirements, and runnable recipes.
 
 ## Installation Guide
 
@@ -14,7 +18,7 @@ Conda is the recommended way to install nvMolKit, matching the recommended distr
 you have a variant of conda installed and activated, such as [Miniconda](https://docs.conda.io/en/latest/miniconda.html) 
 or [Miniforge](https://conda-forge.org/download/).
 
-nvMolKit v0.2.0 supports RDKit 2024.09.6 and 2025.03.1. To install:
+nvMolKit v0.5.0 supports RDKit 2025.03.1 through 2026.03.1. To install:
 
 ```bash
 conda install -c conda-forge nvmolkit
@@ -31,6 +35,34 @@ Choose a `cuda-version` that is **≤** the CUDA version reported by `nvidia-smi
 has a matching PyTorch build on conda-forge. See the
 [available PyTorch builds](https://anaconda.org/channels/conda-forge/packages/pytorch/files?file_q=cuda)
 to find supported CUDA versions.
+
+### Pip Installation
+
+```bash
+pip install nvmolkit
+```
+
+The wheel published to PyPI is built against a single RDKit release per
+nvMolKit version (RDKit 2026.03.1 for nvMolKit v0.5.0), due to versioning
+limitations in PyPI's dependency management system.
+
+Use this path if you do not have a constraint on which RDKit version to use;
+pip will pull a compatible RDKit from PyPI alongside nvMolKit.
+
+#### RDKit-pinned variants
+
+For projects that need to use a specific RDKit version, per-variant wheels are hosted on github.
+
+To install nvMolKit pinned to a particular RDKit:
+
+```bash
+RDKIT_VERSION=2025.9.6
+NVMOLKIT_VERSION=0.5.0
+pip install nvmolkit==${NVMOLKIT_VERSION}+rdkit${RDKIT_VERSION} \
+    --extra-index-url https://nvidia-bionemo.github.io/nvMolKit/wheels/rdkit${RDKIT_VERSION}/simple/
+```
+
+Replace `2025.9.6` with the RDKit version you want. Variants published for nvMolKit v0.5.0 include every version between 2025.03.6 and 2026.03.1.
 
 
 ### Installation from Source
@@ -98,7 +130,7 @@ conda create --name nvmolkit_dev_py312 python=3.12.1
 conda activate nvmolkit_dev_py312
 
 # Install RDKit with development headers
-conda install -c conda-forge rdkit=2024.09.6 rdkit-dev=2024.09.6
+conda install -c conda-forge rdkit=2025.03.6 rdkit-dev=2025.03.6
 
 # Install Boost subpackages in case RDKit install did not include them transitively
 conda install -c conda-forge libboost libboost-python libboost-devel libboost-headers libboost-python-devel
@@ -185,18 +217,24 @@ nvMolKit supports building for multiple GPU architectures. Build behavior is con
 
 #### Building Against pip-installed RDKit
 
-**Note**: The conda-based setup above is strongly recommended. This section is for advanced users only.
+The pip wheel pipeline reproduces the [kuelumbus/rdkit-pypi](https://github.com/kuelumbus/rdkit-pypi) build at a pinned tag to obtain bit-exact rdkit headers and matching boost headers, links nvMolKit against the pip-installed rdkit's auditwheel-rewritten libraries, and produces a `manylinux_2_28` wheel. The supported (rdkit, python) pairs are listed in [`admin/distribute/rdkit_build_matrix.yaml`](admin/distribute/rdkit_build_matrix.yaml).
 
-If you must build against pip-installed RDKit (not recommended), you'll need to manually provide headers since pip packages don't include them. This requires downloading RDKit source code and boost headers separately:
+The conda-based development setup above is still the recommended path for day-to-day development. The pip pipeline is driven exclusively by [cibuildwheel](https://cibuildwheel.pypa.io/) so the build environment matches kuelumbus/rdkit-pypi's CI exactly (manylinux entrypoint, gcc-toolset activation, and `before-all` system-dep install).
+
+To build wheels locally, use the same path CI uses:
 
 ```bash
-# Set environment variables for pip install
-NVMOLKIT_BUILD_AGAINST_PIP=ON \
-NVMOLKIT_BUILD_AGAINST_PIP_LIBDIR=<path to rdkit.libs> \
-NVMOLKIT_BUILD_AGAINST_PIP_INCDIR=<path to rdkit headers> \
-NVMOLKIT_BUILD_AGAINST_PIP_BOOSTINCLUDEDIR=<path to boost headers> \
-pip install .
+docker build -f admin/container/manylinux_2_28_cuda12.Dockerfile \
+  -t nvmolkit-manylinux-cuda12:test .
+pip install cibuildwheel
+CIBW_MANYLINUX_X86_64_IMAGE=nvmolkit-manylinux-cuda12:test \
+  RDKIT_VERSION=2026.3.1 \
+  bash admin/deploy/build_pip_wheels.sh 2026.3.1 wheelhouse
 ```
 
-This approach is error-prone. We recommend using the conda environment setup instead.
+To narrow the matrix while iterating, set `CIBW_BUILD=cp312-manylinux_x86_64` (or whichever python tag you care about) before invoking the script. Wheels land in `wheelhouse/`.
+
+The full CI pipeline is at [`.github/workflows/pip-build.yml`](.github/workflows/pip-build.yml). It runs on demand (`workflow_dispatch` only), expands the (rdkit, python) matrix from [`admin/distribute/rdkit_build_matrix.yaml`](admin/distribute/rdkit_build_matrix.yaml), and pulls the pre-built manylinux+CUDA image from the org's GHCR (`ghcr.io/nvidia-bionemo/nvmolkit-manylinux-cuda12`). The image is rebuilt and pushed manually when the Dockerfile changes; the build script header documents the push command.
+
+Internally, cibuildwheel's `before-build` hook (see [`admin/distribute/cibuildwheel_before_build.sh`](admin/distribute/cibuildwheel_before_build.sh)) clones rdkit-pypi at the matching tag, runs [`admin/distribute/build_rdkit_recipe.sh`](admin/distribute/build_rdkit_recipe.sh) to reproduce its build (~30-60 min on first invocation; cached afterwards), pip-installs the matching rdkit wheel for runtime SONAME-matching libs, and stages everything at stable paths under `/tmp/nvmolkit_pip_inputs/`. setup.py picks those up via `NVMOLKIT_BUILD_AGAINST_PIP_*` env vars set in pyproject.toml's `[tool.cibuildwheel.linux].environment`.
 

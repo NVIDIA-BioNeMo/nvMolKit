@@ -29,11 +29,11 @@
 #include <stdexcept>
 #include <string>
 
-#include "src/utils/nvtx.h"
 #include "src/substruct/packed_bonds.h"
-#include "src/utils/rdkit_compat.h"
 #include "src/substruct/substruct_debug.h"
 #include "src/substruct/substruct_types.h"
+#include "src/utils/nvtx.h"
+#include "src/utils/rdkit_compat.h"
 
 namespace nvMolKit {
 

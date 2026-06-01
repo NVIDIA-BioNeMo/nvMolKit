@@ -21,7 +21,7 @@
 
 namespace nvMolKit {
 
-//! CuSolver-based eigenvector/eigenvalue solver with shared state and buffers between calls.
+//! Batched symmetric eigensolver implemented as a custom power-iteration CUDA kernel.
 class BatchedEigenSolver {
  public:
   BatchedEigenSolver();

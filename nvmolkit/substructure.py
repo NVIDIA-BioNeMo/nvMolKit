@@ -30,7 +30,7 @@ Execution can be tuned with :class:`SubstructSearchConfig`.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Sequence
 
 import numpy as np
 from rdkit.Chem import Mol
@@ -137,6 +137,26 @@ class SubstructSearchConfig:
     def _as_native(self):
         """Internal: return the underlying native config object."""
         return self._native
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable dictionary of this object's fields."""
+        return {
+            "batchSize": self.batchSize,
+            "workerThreads": self.workerThreads,
+            "preprocessingThreads": self.preprocessingThreads,
+            "maxMatches": self.maxMatches,
+            "uniquify": self.uniquify,
+            "gpuIds": list(self.gpuIds),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SubstructSearchConfig":
+        """Create a :class:`SubstructSearchConfig` from a dictionary produced by :meth:`to_dict`."""
+        known = {"batchSize", "workerThreads", "preprocessingThreads", "maxMatches", "uniquify", "gpuIds"}
+        unknown = set(data) - known
+        if unknown:
+            raise ValueError(f"Unknown SubstructSearchConfig keys: {sorted(unknown)}")
+        return cls(**{key: data[key] for key in known if key in data})
 
 
 @dataclass(frozen=True)

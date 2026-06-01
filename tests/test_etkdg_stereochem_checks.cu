@@ -25,10 +25,10 @@
 #include <filesystem>
 #include <random>
 
-#include "src/forcefields/dist_geom.h"
 #include "src/embedder_utils.h"
 #include "src/etkdg_impl.h"
 #include "src/etkdg_stage_stereochem_checks.h"
+#include "src/forcefields/dist_geom.h"
 #include "tests/test_utils.h"
 
 using namespace ::nvMolKit::detail;

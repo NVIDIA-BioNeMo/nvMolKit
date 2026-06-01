@@ -766,6 +766,7 @@ cudaError_t computeEnergyBlockPerMol(BatchedMolecularDeviceBuffers& molSystemDev
                                        toPointerStruct(molSystemDevice.indices),
                                        coords != nullptr ? coords : molSystemDevice.positions.data(),
                                        molSystemDevice.energyOuts.data(),
+                                       batchHasConstraints(molSystemDevice.contribs),
                                        stream);
 }
 
@@ -775,6 +776,7 @@ cudaError_t computeGradBlockPerMol(BatchedMolecularDeviceBuffers& molSystemDevic
                                      toPointerStruct(molSystemDevice.indices),
                                      molSystemDevice.positions.data(),
                                      molSystemDevice.grad.data(),
+                                     batchHasConstraints(molSystemDevice.contribs),
                                      stream);
 }
 
@@ -784,6 +786,11 @@ EnergyForceContribsDevicePtr toEnergyForceContribsDevicePtr(const BatchedMolecul
 
 BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice) {
   return toPointerStruct(molSystemDevice.indices);
+}
+
+bool batchHasConstraints(const EnergyForceContribsDevice& contribs) {
+  return contribs.distanceConstraintTerms.idx1.size() > 0 || contribs.positionConstraintTerms.idx.size() > 0 ||
+         contribs.angleConstraintTerms.idx1.size() > 0 || contribs.torsionConstraintTerms.idx1.size() > 0;
 }
 
 }  // namespace UFF

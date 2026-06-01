@@ -128,3 +128,25 @@ Types
 
    types.AsyncGpuResult
    types.HardwareOptions
+
+Hardware Autotuning (optional ``optuna`` extra)
+-----------------------------------------------
+
+.. autosummary::
+   :toctree: generated/
+   :template: function_template.rst
+
+   autotune.is_available
+   autotune.tune_embed_molecules
+   autotune.tune_mmff_optimize
+   autotune.tune_uff_optimize
+   autotune.tune_batched_forcefield
+   autotune.tune_substructure
+   autotune.save
+   autotune.load
+
+.. autosummary::
+   :toctree: generated/
+   :template: class_template.rst
+
+   autotune.TuneResult

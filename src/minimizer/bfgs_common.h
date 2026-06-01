@@ -19,13 +19,13 @@
 #include <cstdint>
 #include <vector>
 
+#include "src/conformer/conformer_info.h"
 #include "src/hardware_options.h"
 #include "src/utils/device.h"
 #include "src/utils/host_vector.h"
 
 namespace RDKit {
 class ROMol;
-class Conformer;
 }  // namespace RDKit
 
 namespace nvMolKit {
@@ -37,14 +37,6 @@ struct ThreadLocalBuffers {
   PinnedHostVector<double> initialPositions;
 
   void ensureCapacity(size_t positionsSize, size_t energiesSize);
-};
-
-struct ConformerInfo {
-  RDKit::ROMol*     mol;
-  size_t            molIdx;
-  RDKit::Conformer* conformer;
-  int               conformerId;
-  size_t            confIdx;
 };
 
 struct BatchExecutionContext {

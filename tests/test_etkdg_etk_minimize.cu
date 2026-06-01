@@ -19,10 +19,10 @@
 #include <filesystem>
 #include <random>
 
-#include "src/etkdg_impl.h"
-#include "src/etkdg_stage_etk_minimization.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "src/etkdg_impl.h"
+#include "src/etkdg_stage_etk_minimization.h"
 #include "src/minimizer/bfgs_minimize.h"
 #include "tests/test_utils.h"
 constexpr int DIM = 4;

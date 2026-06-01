@@ -20,12 +20,12 @@
 #include <iostream>
 #include <set>
 
-#include "src/utils/cuda_error_check.h"
-#include "src/utils/device_vector.h"
 #include "src/substruct/graph_labeler.cuh"
 #include "src/substruct/molecules_device.cuh"
 #include "src/substruct/substruct_search_internal.h"
 #include "src/testutils/substruct_validation.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 

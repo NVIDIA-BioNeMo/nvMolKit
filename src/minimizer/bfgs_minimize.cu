@@ -17,16 +17,17 @@
 #include <numeric>
 
 #include "src/forcefields/batched_forcefield.h"
+#include "src/forcefields/dist_geom.h"
+#include "src/forcefields/dist_geom_kernels.h"
+#include "src/forcefields/mmff.h"
+#include "src/forcefields/mmff_kernels.h"
 #include "src/minimizer/bfgs_hessian.h"
 #include "src/minimizer/bfgs_minimize.h"
 #include "src/minimizer/bfgs_minimize_permol_kernels.h"
 #include "src/utils/cub_helpers.cuh"
 #include "src/utils/device_vector.h"
-#include "src/forcefields/dist_geom.h"
-#include "src/forcefields/dist_geom_kernels.h"
-#include "src/forcefields/mmff.h"
-#include "src/forcefields/mmff_kernels.h"
 #include "src/utils/nvtx.h"
+#include "versions.h"
 
 namespace nvMolKit {
 constexpr double FUNCTOL = 1e-4;  //!< Default tolerance for function convergence in the minimizer
@@ -788,7 +789,11 @@ void BfgsBatchMinimizer::setDirection() {
   cudaCheckError(cudaGetLastError());
 }
 
-// TODO: The RDKit scaling code only appears to scale positive gradients, investigate this.
+// Mirrors RDKit's ForceField::minimize gradient cap (calcGradient in
+// Code/ForceField/ForceField.cpp). RDKit historically tracked the signed max of
+// gradient components; commit 5b1d04d23 (RDKit 2025.09) switched to |grad|.
+// Follow whichever rule the linked RDKit uses so weighted MMFF/UFF minimization
+// trajectories agree with the host reference.
 template <bool scaleGrads>
 __global__ void scaleGradKernel(const int16_t* statuses,
                                 const int*     atomStarts,
@@ -796,6 +801,8 @@ __global__ void scaleGradKernel(const int16_t* statuses,
                                 double*        gradScales,
                                 const int*     activeSystemIndices,
                                 const int      DIM) {
+  constexpr bool kRdkitHasGradScaleFix =
+    RDKIT_VERSION_MAJOR > 2025 || (RDKIT_VERSION_MAJOR == 2025 && RDKIT_VERSION_MINOR >= 9);
   const int sysIdx          = activeSystemIndices == nullptr ? blockIdx.x : activeSystemIndices[blockIdx.x];
   const int idxWithinSystem = threadIdx.x;
   const int numTerms        = DIM * (atomStarts[sysIdx + 1] - atomStarts[sysIdx]);
@@ -806,7 +813,7 @@ __global__ void scaleGradKernel(const int16_t* statuses,
 
   double* localGrad = &grads[atomStarts[sysIdx] * DIM];
 
-  double            maxGrad   = -1e8;
+  double            maxGrad   = kRdkitHasGradScaleFix ? 0.0 : -1e8;
   double            gradScale = scaleGrads ? 0.1 : 1.0;
   __shared__ double distributedMax[1];
   if (idxWithinSystem == 0) {
@@ -815,8 +822,9 @@ __global__ void scaleGradKernel(const int16_t* statuses,
 
   for (int i = idxWithinSystem; i < numTerms; i += blockDim.x) {
     localGrad[i] *= gradScale;
-    if (localGrad[i] > maxGrad) {
-      maxGrad = localGrad[i];
+    const double cmp = kRdkitHasGradScaleFix ? fabs(localGrad[i]) : localGrad[i];
+    if (cmp > maxGrad) {
+      maxGrad = cmp;
     }
   }
 
@@ -900,7 +908,13 @@ __global__ void updateDGradKernel(const double  gradTol,
   double blockMax = cub::BlockReduce<double, 128>(tempStorage).Reduce(localMax, cubMax());
 
   if (idxWithinSystem == 0) {
-    const double term = max(energies[sysIdx] * gradScales[sysIdx], 1.0);
+    // rdkit/rdkit#9298 (merged RDKit 2026.03) fixed the signed-energy denominator bug:
+    // raw negative energy clamped the denominator to 1, artificially tightening gradTol.
+    // Use |energy| when linked against a fixed RDKit; keep signed otherwise for parity.
+    constexpr bool kRdkitHasGradDenomFix =
+      RDKIT_VERSION_MAJOR > 2026 || (RDKIT_VERSION_MAJOR == 2026 && RDKIT_VERSION_MINOR >= 3);
+    const double energyMag = kRdkitHasGradDenomFix ? fabs(energies[sysIdx]) : energies[sysIdx];
+    const double term      = max(energyMag * gradScales[sysIdx], 1.0);
     blockMax /= term;
     if (blockMax < gradTol) {
       // Converged
@@ -1126,6 +1140,7 @@ bool BfgsBatchMinimizer::minimizeWithMMFF(const int                            n
                                                    inverseHessian_.data(),
                                                    scratchBuffersDevice_.data(),
                                                    systemDevice.energyOuts.data(),
+                                                   MMFF::batchHasConstraints(systemDevice.contribs),
                                                    statuses_.data(),
                                                    stream_);
 

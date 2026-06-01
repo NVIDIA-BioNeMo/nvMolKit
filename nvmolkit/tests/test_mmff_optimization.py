@@ -24,7 +24,7 @@ from rdkit.Geometry import Point3D
 
 from nvmolkit.embedMolecules import EmbedMolecules
 import nvmolkit.mmffOptimization as nvmolkit_mmff
-from nvmolkit.types import HardwareOptions
+from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions
 
 
 @pytest.fixture
@@ -472,3 +472,28 @@ def test_error_case_throws_properly():
     with pytest.raises(ValueError, match="lacking MMFF atom types") as exc_info:
         nvmolkit_mmff.MMFFOptimizeMoleculesConfs([mol], maxIters=200)
     assert exc_info.value.args[1] == {"none": [], "no_params": [0]}
+
+
+def test_mmff_optimization_device_output_matches_host(mmff_test_mols):
+    """MMFFOptimizeMoleculesConfs(output=DEVICE) returns Device3DResult; energies match host path."""
+    host_mols = create_hard_copy_mols(mmff_test_mols)
+    device_mols = create_hard_copy_mols(mmff_test_mols)
+
+    host_energies = nvmolkit_mmff.MMFFOptimizeMoleculesConfs(host_mols, maxIters=50)
+
+    result = nvmolkit_mmff.MMFFOptimizeMoleculesConfs(
+        device_mols,
+        maxIters=50,
+        output=CoordinateOutput.DEVICE,
+    )
+    assert isinstance(result, Device3DResult)
+    torch.cuda.synchronize()
+    device_energies_flat = result.energies.torch().tolist()
+    expected_n = sum(m.GetNumConformers() for m in device_mols)
+    assert len(device_energies_flat) == expected_n
+
+    host_flat = [e for inner in host_energies for e in inner]
+    assert len(host_flat) == len(device_energies_flat)
+    for h, d in zip(host_flat, device_energies_flat):
+        rel = abs(h - d) / max(abs(h), 1e-10)
+        assert rel < 1e-2, f"host {h} vs device {d}"

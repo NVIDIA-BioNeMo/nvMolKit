@@ -27,8 +27,8 @@
 
 #include "rdkit_extensions/bounds_matrix.h"
 #include "src/forcefields/coord_gen.h"
-#include "src/utils/device_vector.h"
 #include "src/symmetric_eigensolver.h"
+#include "src/utils/device_vector.h"
 #include "tests/test_utils.h"
 
 using namespace nvMolKit;

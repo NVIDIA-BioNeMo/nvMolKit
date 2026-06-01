@@ -41,12 +41,12 @@
 namespace RDKit {
 class ROMol;
 }  // namespace RDKit
-#include "src/utils/device.h"
-#include "src/utils/device_vector.h"
 #include "src/substruct/molecules.h"
 #include "src/substruct/recursive_preprocessor.h"
 #include "src/substruct/substruct_search.h"
 #include "src/substruct/thread_worker_context.h"
+#include "src/utils/device.h"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 

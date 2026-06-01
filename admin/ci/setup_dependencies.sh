@@ -17,7 +17,7 @@
 set -eo pipefail
 
 PYTHON_VERSION="${1:-3.12}"
-RDKIT_VERSION="${2:-2024.09.6}"
+RDKIT_VERSION="${2:-2025.03.6}"
 
 MINIFORGE_VERSION="25.3.0-3"
 MINIFORGE_PREFIX="/usr/local/anaconda"

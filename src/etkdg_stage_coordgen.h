@@ -19,8 +19,8 @@
 #include <DistGeom/DistGeomUtils.h>
 #include <GraphMol/DistGeomHelpers/Embedder.h>
 
-#include "src/forcefields/coord_gen.h"
 #include "src/etkdg_impl.h"
+#include "src/forcefields/coord_gen.h"
 #include "src/utils/host_vector.h"
 
 namespace nvMolKit {

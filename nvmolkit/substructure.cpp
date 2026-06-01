@@ -23,8 +23,8 @@
 #include <vector>
 
 #include "nvmolkit/boost_python_utils.h"
-#include "src/utils/nvtx.h"
 #include "src/substruct/substruct_types.h"
+#include "src/utils/nvtx.h"
 
 // Forward declarations - avoid including CUDA headers
 using cudaStream_t = struct CUstream_st*;

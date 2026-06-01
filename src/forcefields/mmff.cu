@@ -892,24 +892,28 @@ cudaError_t computeGradients(BatchedMolecularDeviceBuffers& molSystemDevice, cud
 cudaError_t computeEnergyBlockPerMol(BatchedMolecularDeviceBuffers& molSystemDevice,
                                      const double*                  coords,
                                      cudaStream_t                   stream) {
-  const auto pointers = toPointerStruct(molSystemDevice.contribs);
-  const auto indices  = toPointerStruct(molSystemDevice.indices);
+  const auto pointers       = toPointerStruct(molSystemDevice.contribs);
+  const auto indices        = toPointerStruct(molSystemDevice.indices);
+  const bool hasConstraints = batchHasConstraints(molSystemDevice.contribs);
   return launchBlockPerMolEnergyKernel(molSystemDevice.indices.atomStarts.size() - 1,
                                        pointers,
                                        indices,
                                        coords != nullptr ? coords : molSystemDevice.positions.data(),
                                        molSystemDevice.energyOuts.data(),
+                                       hasConstraints,
                                        stream);
 }
 
 cudaError_t computeGradBlockPerMol(BatchedMolecularDeviceBuffers& molSystemDevice, cudaStream_t stream) {
-  const auto pointers = toPointerStruct(molSystemDevice.contribs);
-  const auto indices  = toPointerStruct(molSystemDevice.indices);
+  const auto pointers       = toPointerStruct(molSystemDevice.contribs);
+  const auto indices        = toPointerStruct(molSystemDevice.indices);
+  const bool hasConstraints = batchHasConstraints(molSystemDevice.contribs);
   return launchBlockPerMolGradKernel(molSystemDevice.indices.atomStarts.size() - 1,
                                      pointers,
                                      indices,
                                      molSystemDevice.positions.data(),
                                      molSystemDevice.grad.data(),
+                                     hasConstraints,
                                      stream);
 }
 
@@ -919,6 +923,11 @@ EnergyForceContribsDevicePtr toEnergyForceContribsDevicePtr(const BatchedMolecul
 
 BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice) {
   return toPointerStruct(molSystemDevice.indices);
+}
+
+bool batchHasConstraints(const EnergyForceContribsDevice& contribs) {
+  return contribs.distanceConstraintTerms.idx1.size() > 0 || contribs.positionConstraintTerms.idx.size() > 0 ||
+         contribs.angleConstraintTerms.idx1.size() > 0 || contribs.torsionConstraintTerms.idx1.size() > 0;
 }
 }  // namespace MMFF
 }  // namespace nvMolKit

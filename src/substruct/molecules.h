@@ -24,8 +24,8 @@
 
 #include "src/substruct/atom_data_packed.h"
 #include "src/substruct/boolean_tree.cuh"
-#include "src/utils/device_vector.h"
 #include "src/substruct/packed_bonds.h"
+#include "src/utils/device_vector.h"
 
 namespace RDKit {
 class ROMol;

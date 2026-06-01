@@ -21,13 +21,13 @@
 #include <mutex>
 #include <vector>
 
-#include "src/utils/cuda_error_check.h"
 #include "src/substruct/gpu_executor.h"
-#include "src/utils/nvtx.h"
 #include "src/substruct/pinned_buffer_pool.h"
 #include "src/substruct/substruct_launch_config.h"
 #include "src/substruct/substruct_search.h"
 #include "src/substruct/thread_worker_context.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/nvtx.h"
 
 namespace nvMolKit {
 
@@ -155,8 +155,8 @@ void processWithRDKitFallback(const RDKit::ROMol*       target,
   if (boolResults) {
     boolResults->setMatch(targetIdx, queryIdx, true);
   } else if (countResults) {
-    const int pairIdx        = targetIdx * results.numQueries + queryIdx;
-    (*countResults)[pairIdx] = matchCount;
+    const int64_t pairIdx                         = static_cast<int64_t>(targetIdx) * results.numQueries + queryIdx;
+    (*countResults)[static_cast<size_t>(pairIdx)] = matchCount;
   } else {
     std::vector<std::vector<int>> convertedMatches;
     convertedMatches.reserve(rdkitMatches.size());
@@ -399,9 +399,9 @@ void accumulateMiniBatchResultsCounts(GpuExecutor&               executor,
   std::lock_guard<std::mutex> lock(resultsMutex);
 
   for (int i = 0; i < executor.plan.numPairsInMiniBatch; ++i) {
-    const auto [targetIdx, queryIdx] = resolvePairIndices(i, ctx, hostBuffer);
-    const int globalPairIdx          = targetIdx * ctx.numQueries + queryIdx;
-    counts[globalPairIdx]            = hostBuffer.matchCounts[i];
+    const auto [targetIdx, queryIdx]           = resolvePairIndices(i, ctx, hostBuffer);
+    const int64_t globalPairIdx                = static_cast<int64_t>(targetIdx) * ctx.numQueries + queryIdx;
+    counts[static_cast<size_t>(globalPairIdx)] = hostBuffer.matchCounts[i];
   }
 }
 

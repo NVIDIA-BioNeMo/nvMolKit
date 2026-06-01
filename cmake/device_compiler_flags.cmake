@@ -13,34 +13,25 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-# General flags for CUDA compilation Build up all flags in a temporary variable
-# to avoid duplication on reconfigure
-set(NVMOLKIT_NVCC_ALL_FLAGS
-    "-Wno-deprecated-gpu-targets --default-stream per-thread")
+# CUDA half of nvmolkit_warnings (host target is created in
+# cmake/host_compiler_flags.cmake).
 if(NVMOLKIT_EXTRA_DEV_FLAGS)
-  string(APPEND NVMOLKIT_NVCC_ALL_FLAGS " --Werror all-warnings")
+  target_compile_options(
+    nvmolkit_warnings
+    INTERFACE
+      $<$<COMPILE_LANGUAGE:CUDA>:-Werror=all-warnings;-Xcompiler=-Werror,-Wall,-Wextra>
+  )
 endif()
 
-# Combine host flags (from host_compiler_flags.cmake) and device flags
-set(CMAKE_CUDA_FLAGS
-    "${NVMOLKIT_HOST_CUDA_FLAGS} ${NVMOLKIT_NVCC_ALL_FLAGS}"
-    CACHE STRING "All CUDA flags" FORCE)
-
-set(NVMOLKIT_DEBUG_FLAGS "-g -G")
-
-set(NVMOLKIT_RELWITHDEBINFO_FLAGS "-lineinfo --use_fast_math")
-
-set(NVMOLKIT_RELEASE_FLAGS "--use_fast_math")
-
-set(CMAKE_CUDA_FLAGS_DEBUG
-    ${NVMOLKIT_DEBUG_FLAGS}
-    CACHE STRING "Flags to CUDA compiler used during Debug builds" FORCE)
-
-set(CMAKE_CUDA_FLAGS_RELWITHDEBINFO
-    ${NVMOLKIT_RELWITHDEBINFO_FLAGS}
-    CACHE STRING "Flags to CUDA compiler used during RelWithDebInfo builds"
-          FORCE)
-
-set(CMAKE_CUDA_FLAGS_RELEASE
-    ${NVMOLKIT_RELEASE_FLAGS}
-    CACHE STRING "Flags to CUDA compiler used during Release builds" FORCE)
+# Project-specific CUDA options. Per-config flags are layered on top of CMake's
+# defaults (-O3 -DNDEBUG, -O2 -g -DNDEBUG, -g) via generator expressions, rather
+# than overwriting CMAKE_CUDA_FLAGS_<CONFIG>.
+add_library(nvmolkit_cuda_options INTERFACE)
+target_compile_options(
+  nvmolkit_cuda_options
+  INTERFACE
+    $<$<COMPILE_LANGUAGE:CUDA>:-Wno-deprecated-gpu-targets;--default-stream=per-thread>
+    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-g;-G>
+    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:--use_fast_math>
+    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:RelWithDebInfo>>:--use_fast_math;-lineinfo>
+)

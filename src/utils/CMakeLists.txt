@@ -50,3 +50,6 @@ add_library(device_timings INTERFACE)
 target_link_libraries(device_timings INTERFACE cuda_error_check)
 
 add_library(thread_safe_queue INTERFACE)
+
+add_library(p2p p2p.cpp)
+target_link_libraries(p2p PUBLIC CUDA::cudart cuda_error_check device)

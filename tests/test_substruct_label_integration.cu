@@ -27,14 +27,14 @@
 #include <tuple>
 #include <vector>
 
-#include "src/utils/cuda_error_check.h"
-#include "src/utils/device.h"
 #include "src/data_structures/flat_bit_vect.h"
 #include "src/substruct/graph_labeler.cuh"
-#include "src/testutils/mol_data.h"
 #include "src/substruct/molecules.h"
 #include "src/substruct/molecules_device.cuh"
 #include "src/substruct/substruct_search.h"
+#include "src/testutils/mol_data.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
 #include "tests/test_utils.h"
 
 using nvMolKit::addQueryToBatch;
