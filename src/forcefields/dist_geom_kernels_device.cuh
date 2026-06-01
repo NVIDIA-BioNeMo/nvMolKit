@@ -18,6 +18,7 @@
 
 #include <cooperative_groups.h>
 
+#include "src/forcefields/dist_geom_kernels.h"
 #include "src/forcefields/kernel_utils.cuh"
 
 #ifndef M_PI
