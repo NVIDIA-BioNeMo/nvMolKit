@@ -13,11 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Benchmark: GPU vs single-threaded CPU pairwise conformer RMSD on Enamine.
+"""Benchmark: GPU vs single-threaded CPU pairwise conformer RMSD.
 
 Measures speedup of nvMolKit's GPU GetConformerRMSMatrix over RDKit's
 CPU GetConformerRMSMatrix across varying conformer counts.
-
 """
 
 import argparse
@@ -42,12 +41,7 @@ def prepare_mols(
     seed: int,
     num_workers: int,
 ) -> list[Chem.Mol]:
-    """Embed one base conformer per mol, then perturb to ``confs_per_mol``.
-
-    Requires ``confs_per_mol >= 2`` since RMSD needs at least one conformer pair.
-    """
-    if confs_per_mol < 2:
-        raise ValueError(f"confs_per_mol must be >= 2, got {confs_per_mol}")
+    """Embed one base conformer per mol, then perturb to ``confs_per_mol``."""
     workers = num_workers if num_workers > 0 else max(1, mp.cpu_count() // 2)
     return embed_and_jitter(
         raw_mols,
@@ -230,12 +224,12 @@ def main():
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", type=str, default=None, help="Optional CSV output path")
-    parser.add_argument("--no-rdkit", action="store_true", help="Skip RDKit CPU benchmark")
-    parser.add_argument("--no-nvmolkit", action="store_true", help="Skip nvMolKit GPU benchmark")
+    parser.add_argument("--no_rdkit", action="store_true", help="Skip RDKit CPU benchmark")
+    parser.add_argument("--no_nvmolkit", action="store_true", help="Skip nvMolKit GPU benchmark")
     args = parser.parse_args()
 
     if args.no_rdkit and args.no_nvmolkit:
-        parser.error("cannot pass both --no-rdkit and --no-nvmolkit")
+        parser.error("cannot pass both --no_rdkit and --no_nvmolkit")
 
     run(
         smiles_path=args.smiles,
