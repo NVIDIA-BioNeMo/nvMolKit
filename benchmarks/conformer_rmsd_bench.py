@@ -108,8 +108,7 @@ def validate(mols: list[Chem.Mol], num_check: int, tol: float) -> None:
         gpu_rms = gpu_results[mol_idx].numpy().tolist()
         if len(gpu_rms) != len(rdkit_rms):
             raise RuntimeError(
-                f"validation: mol {mol_idx} pair count mismatch "
-                f"(gpu={len(gpu_rms)}, rdkit={len(rdkit_rms)})"
+                f"validation: mol {mol_idx} pair count mismatch (gpu={len(gpu_rms)}, rdkit={len(rdkit_rms)})"
             )
         for pair_idx, (gpu_val, rdkit_val) in enumerate(zip(gpu_rms, rdkit_rms)):
             diff = abs(float(gpu_val) - float(rdkit_val))
@@ -180,10 +179,7 @@ def run(
         mols = _slice_to_confs(base_mols, target_confs)
         actual_confs = [mol.GetNumConformers() for mol in mols]
         total_pairs = sum(count * (count - 1) // 2 for count in actual_confs)
-        print(
-            f"\n=== confs_per_mol={target_confs}: {len(mols)} mols, "
-            f"{total_pairs} RMSD pairs ==="
-        )
+        print(f"\n=== confs_per_mol={target_confs}: {len(mols)} mols, {total_pairs} RMSD pairs ===")
 
         row: dict[str, float | int | str] = {
             "num_mols": len(mols),
@@ -202,9 +198,7 @@ def run(
             samples = [bench_rdkit_batch(payloads, rdkit_max_seconds) for _ in range(3)]
             samples.sort(key=lambda pair: pair[0] / max(pair[1], 1))
             rdkit_time_s, rdkit_done = samples[len(samples) // 2]
-            pair_count_done = sum(
-                count * (count - 1) // 2 for count in actual_confs[:rdkit_done]
-            )
+            pair_count_done = sum(count * (count - 1) // 2 for count in actual_confs[:rdkit_done])
             rdkit_mols_per_s = rdkit_done / rdkit_time_s
             rdkit_pairs_per_s = pair_count_done / rdkit_time_s
             truncated = rdkit_done < len(mols)
@@ -258,21 +252,34 @@ def main():
     parser = argparse.ArgumentParser(description="Conformer RMSD batch benchmark vs Enamine")
     parser.add_argument("--smiles", required=True, help="Path to Enamine (or any) SMILES/cxsmiles file")
     parser.add_argument("--num_mols", type=int, default=2000, help="Number of molecules to sample")
-    parser.add_argument("--confs_per_mol", type=int, nargs="+", default=[10, 25, 50, 100, 200],
-                        help="Conformers-per-molecule sweep points (each >=2)")
-    parser.add_argument("--prep_workers", type=int, default=0,
-                        help="Workers for the embed-and-perturb prep step (0 = half of CPUs)")
-    parser.add_argument("--rdkit_max_seconds", type=float, default=0.0,
-                        help="Per-iteration wall-clock cap on the RDKit comparison "
-                             "(0 = no cap). When exceeded, throughput is reported "
-                             "over the molecules actually processed.")
-    parser.add_argument("--validate_count", type=int, default=8,
-                        help="Number of mols to compare GPU vs RDKit before timing "
-                             "(0 disables; requires both backends enabled)")
-    parser.add_argument("--validate_tol", type=float, default=0.05,
-                        help="Absolute tolerance (Angstroms) for per-pair RMSD diff")
-    parser.add_argument("--no_validate", action="store_true",
-                        help="Skip the GPU-vs-RDKit correctness check")
+    parser.add_argument(
+        "--confs_per_mol",
+        type=int,
+        nargs="+",
+        default=[10, 25, 50, 100, 200],
+        help="Conformers-per-molecule sweep points (each >=2)",
+    )
+    parser.add_argument(
+        "--prep_workers", type=int, default=0, help="Workers for the embed-and-perturb prep step (0 = half of CPUs)"
+    )
+    parser.add_argument(
+        "--rdkit_max_seconds",
+        type=float,
+        default=0.0,
+        help="Per-iteration wall-clock cap on the RDKit comparison "
+        "(0 = no cap). When exceeded, throughput is reported "
+        "over the molecules actually processed.",
+    )
+    parser.add_argument(
+        "--validate_count",
+        type=int,
+        default=8,
+        help="Number of mols to compare GPU vs RDKit before timing (0 disables; requires both backends enabled)",
+    )
+    parser.add_argument(
+        "--validate_tol", type=float, default=0.05, help="Absolute tolerance (Angstroms) for per-pair RMSD diff"
+    )
+    parser.add_argument("--no_validate", action="store_true", help="Skip the GPU-vs-RDKit correctness check")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", type=str, default=None, help="Optional CSV output path")
     parser.add_argument("--no-rdkit", action="store_true", help="Skip RDKit CPU benchmark")
