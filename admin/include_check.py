@@ -188,7 +188,7 @@ def process_line(
     )
     if rewritten is None:
         # Already-correct quoted form, system include, or third-party.
-        if close_char == ">" and rewritten is None and reason is None:
+        if close_char == ">" and reason is None:
             # Detect angle-bracket project headers that should be quoted.
             base = include_str.rsplit("/", 1)[-1]
             matches = header_index.get(base, [])
