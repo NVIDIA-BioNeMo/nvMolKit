@@ -188,7 +188,8 @@ def run(
             samples = [bench_rdkit_batch(payloads, rdkit_max_seconds) for _ in range(3)]
             samples.sort(key=lambda pair: pair[0] / max(pair[1], 1))
             rdkit_time_s, rdkit_done = samples[len(samples) // 2]
-            rdkit_std_s = statistics.stdev([elapsed for elapsed, _ in samples]) if len(samples) > 1 else 0.0
+            per_mol_times = [elapsed / max(done, 1) for elapsed, done in samples]
+            rdkit_std_s = statistics.stdev(per_mol_times) * rdkit_done if len(samples) > 1 else 0.0
             pair_count_done = sum(count * (count - 1) // 2 for count in actual_confs[:rdkit_done])
             rdkit_mols_per_s = rdkit_done / rdkit_time_s
             rdkit_pairs_per_s = pair_count_done / rdkit_time_s
