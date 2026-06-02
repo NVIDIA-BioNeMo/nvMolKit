@@ -271,7 +271,10 @@ def main() -> None:
         "--rdkit_threads",
         type=int,
         default=1,
-        help="Threads passed to RDKit ETKDG via params.numThreads (default: 1)",
+        help=(
+            "Threads for RDKit ETKDG (params.numThreads) and for parallel MMFF "
+            "energy validation worker processes (default: 1)"
+        ),
     )
     add_rdkit_max_seconds_arg(
         parser,
