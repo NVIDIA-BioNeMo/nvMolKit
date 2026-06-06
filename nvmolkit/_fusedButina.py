@@ -125,7 +125,9 @@ def _update_neighbor_count_kernel(
     Atomically adds (SUBTRACT=False) or subtracts (SUBTRACT=True) the per-row
     neighbor counts into ``neighbors_ptr``.
     """
-    pid = tl.program_id(axis=0).to(tl.int64) + tl.program_id(axis=1).to(tl.int64) * tl.num_programs(axis=0).to(tl.int64)
+    pid = tl.program_id(axis=0).to(tl.int64) + tl.program_id(axis=1).to(tl.int64) * tl.num_programs(axis=0).to(
+        tl.int64
+    )
     num_pid_m = tl.cdiv(M, BLOCK_M)
     num_pid_n = tl.cdiv(N, BLOCK_N)
     if pid >= num_pid_m.to(tl.int64) * num_pid_n.to(tl.int64):
@@ -277,6 +279,7 @@ def update_neighbor_counts(
     M = x.shape[0]
     N = y.shape[0]
     K = x.shape[1]
+
     def grid(meta):
         num_tiles = triton.cdiv(M, meta["BLOCK_M"]) * triton.cdiv(N, meta["BLOCK_N"])
         grid_y = min(num_tiles, MAX_GRID_DIM)
