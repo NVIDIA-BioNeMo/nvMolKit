@@ -266,10 +266,18 @@ AsyncDeviceVector<FlatBitVect<fpSize>> computeFingerprintsCuImpl(const std::vect
       workLarge.push_back(i);
     }
   }
-  const size_t                    numThreads32    = (work32.size() + dispatchChunkSize - 1) / dispatchChunkSize;
-  const size_t                    numThreads64    = (work64.size() + dispatchChunkSize - 1) / dispatchChunkSize;
-  const size_t                    numThreads128   = (work128.size() + dispatchChunkSize - 1) / dispatchChunkSize;
-  const size_t                    numThreadsTotal = numThreads32 + numThreads64 + numThreads128;
+  const size_t numThreads32    = (work32.size() + dispatchChunkSize - 1) / dispatchChunkSize;
+  const size_t numThreads64    = (work64.size() + dispatchChunkSize - 1) / dispatchChunkSize;
+  const size_t numThreads128   = (work128.size() + dispatchChunkSize - 1) / dispatchChunkSize;
+  size_t       numThreadsTotal = numThreads32 + numThreads64 + numThreads128;
+  // Large molecules are drained from the shared workLarge queue inside the worker
+  // loop below, which only runs numThreadsTotal iterations. When every molecule is
+  // large there is no small/medium work, so without dedicated iterations the queue
+  // would never be drained and those molecules would get empty fingerprints. Spread
+  // the drain across the available threads in that case.
+  if (numThreadsTotal == 0) {
+    numThreadsTotal = std::min(workLarge.size(), static_cast<size_t>(nThreadsActual));
+  }
   detail::OpenMPExceptionRegistry exceptionRegistry;
 
 #pragma omp parallel for num_threads(nThreadsActual) default(none) shared(numThreadsTotal,     \
