@@ -238,6 +238,42 @@ TEST(MorganFingerprintTest, GpuWithLargeMolecules) {
   }
 }
 
+TEST(MorganFingerprintTest, GpuConsistentAcrossDispatchRounds) {
+  // Regression: the per-thread GPU scratch (allSeenNeighborhoods) is reused across dispatch
+  // rounds. When it was only zeroed at allocation, molecules processed in rounds after the
+  // first saw stale neighborhood data from a prior round's molecule in the same slot, producing
+  // a false duplicate-environment match that dropped a bit. A small batch size over many
+  // molecules forces dozens of rounds and exposes this.
+  const unsigned int radius       = 3;
+  const unsigned int fpSize       = 2048;
+  auto               refGenerator = std::unique_ptr<RDKit::FingerprintGenerator<std::uint32_t>>(
+    RDKit::MorganFingerprint::getMorganGenerator<
+      std::uint32_t>(radius, false, false, true, false, nullptr, nullptr, fpSize, {1, 2, 4, 8}, false, false));
+
+  auto [mols, smiles] = loadNChemblMolecules(100, 128);
+  auto molsView       = makeMolsView(mols);
+
+  std::vector<std::unique_ptr<ExplicitBitVect>> refResults;
+  refResults.reserve(mols.size());
+  for (const auto& mol : mols) {
+    auto refFingerprint = std::unique_ptr<ExplicitBitVect>(refGenerator->getFingerprint(*mol));
+    ASSERT_NE(refFingerprint, nullptr);
+    refResults.push_back(std::move(refFingerprint));
+  }
+
+  auto                                generator = nvMolKit::MorganFingerprintGenerator(radius, fpSize);
+  nvMolKit::FingerprintComputeOptions options;
+  options.backend      = nvMolKit::FingerprintComputeBackend::GPU;
+  options.gpuBatchSize = 8;  // Small batch forces many dispatch rounds that reuse the scratch buffers.
+  auto newResults      = generator.GetFingerprints(molsView, options);
+
+  ASSERT_EQ(newResults.size(), mols.size());
+  for (size_t i = 0; i < mols.size(); i++) {
+    ASSERT_NE(newResults[i], nullptr);
+    ASSERT_EQ(*newResults[i], *refResults[i]) << "on element " << i << " with smiles " << smiles[i];
+  }
+}
+
 TEST(MorganFingerprintGpuTest, ThrowsRequestingCpuBackendGpuBuffer) {
   const unsigned int                  radius    = 3;
   const unsigned int                  fpSize    = 1024;

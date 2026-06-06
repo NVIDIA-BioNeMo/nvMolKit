@@ -122,15 +122,12 @@ void allocateGpuBatch(MorganGPUBuffersBatch& buffers,
   switch (maxAtoms) {
     case 32:
       buffers.allSeenNeighborhoods32 = AsyncDeviceVector<FlatBitVect<32>>(numMols * 32 * (radius + 1), stream);
-      buffers.allSeenNeighborhoods32.zero();
       break;
     case 64:
       buffers.allSeenNeighborhoods64 = AsyncDeviceVector<FlatBitVect<64>>(numMols * 64 * (radius + 1), stream);
-      buffers.allSeenNeighborhoods64.zero();
       break;
     case 128:
       buffers.allSeenNeighborhoods128 = AsyncDeviceVector<FlatBitVect<128>>(numMols * 128 * (radius + 1), stream);
-      buffers.allSeenNeighborhoods128.zero();
       break;
     default:
       throw std::runtime_error("Unsupported max atoms for Morgan fingerprint GPU: " + std::to_string(maxAtoms));
@@ -424,6 +421,15 @@ AsyncDeviceVector<FlatBitVect<fpSize>> computeFingerprintsCuImpl(const std::vect
         buffersToUse->outputIndices.copyFromHost(threadCpuBuffers.h_outputIndices.data(), scopedChunkSize);
         cudaCheckError(cudaEventRecord(threadCpuBuffers.prevMemcpyDoneEvent.event(), stream));
         rangeMemcpy.pop();
+        // The kernel uses allSeenNeighborhoods as scratch that must be zeroed on entry. The buffers are
+        // reused across dispatch rounds, so reset the scratch for this round before launching.
+        if (thisRoundNumAtoms == 32) {
+          buffersToUse->allSeenNeighborhoods32.zero();
+        } else if (thisRoundNumAtoms == 64) {
+          buffersToUse->allSeenNeighborhoods64.zero();
+        } else {
+          buffersToUse->allSeenNeighborhoods128.zero();
+        }
         solveOnGPUBatch<fpSize>(*buffersToUse,
                                 outputAccumulator,
                                 maxRadius,
