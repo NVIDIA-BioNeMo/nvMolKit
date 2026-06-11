@@ -96,6 +96,7 @@ target_link_libraries(
           ff_kernel_utils
           dist_geom
           rdkit_dist_geom_flattened
+          nvmolkit_versions
           etkdg)
 
 add_library(etkdg etkdg.cpp)

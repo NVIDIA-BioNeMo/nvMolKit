@@ -15,6 +15,7 @@
 
 #include "src/etkdg_stage_stereochem_checks.h"
 #include "src/forcefields/kernel_utils.cuh"
+#include "versions.h"
 namespace nvMolKit {
 namespace detail {
 
@@ -466,7 +467,7 @@ void ETKDGChiralCheckBase::loadChiralDataset(const ETKDGContext&           ctx,
       idx2Host.push_back(check->d_idx2 + atomIndexOffset);
       idx3Host.push_back(check->d_idx3 + atomIndexOffset);
       idx4Host.push_back(check->d_idx4 + atomIndexOffset);
-#if (RDKIT_VERSION_MAJOR > 2024 || (RDKIT_VERSION_MAJOR == 2024 && RDKIT_VERSION_MINOR >= 9))
+#if RDKIT_NEW_FLAG_API
       structureFlagsHost.push_back(check->d_structureFlags);
 #else
       structureFlagsHost.push_back(0);

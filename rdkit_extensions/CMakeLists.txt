@@ -44,7 +44,7 @@ target_link_libraries(mmff_optimize INTERFACE ${RDKit_LIBS} CUDA::cudart
 add_library(rdkit_dist_geom_flattened dist_geom_flattened_builder.cpp)
 target_link_libraries(
   rdkit_dist_geom_flattened
-  PRIVATE ${RDKit_LIBS} device_vector
+  PRIVATE ${RDKit_LIBS} device_vector nvmolkit_versions
   PUBLIC dist_geom)
 
 add_library(rdkit_bounds_matrix bounds_matrix.cpp)
