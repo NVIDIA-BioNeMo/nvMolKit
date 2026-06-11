@@ -38,6 +38,16 @@ from nvmolkit.types import ArrayInput, AsyncGpuResult, _as_cuda_tensor, _resolve
 _VALID_NEIGHBORLIST_SIZES = frozenset({8, 16, 24, 32, 64, 128})
 
 
+def _check_distance_matrix(name: str, x: torch.Tensor) -> torch.Tensor:
+    if x.ndim != 2 or x.shape[0] != x.shape[1]:
+        raise ValueError(f"{name} must be a square 2D matrix, got shape={tuple(x.shape)}")
+    if x.dtype != torch.float64:
+        raise ValueError(f"{name} must have dtype float64")
+    if not x.is_contiguous():
+        x = x.contiguous()
+    return x
+
+
 def butina(
     distance_matrix: ArrayInput,
     cutoff: float,
@@ -57,8 +67,8 @@ def butina(
     Args:
         distance_matrix: Square distance matrix of shape (N, N) where N is the number
                         of items. Can be an AsyncGpuResult, torch.Tensor, or numpy.ndarray.
-                        CPU tensors and NumPy arrays are copied to CUDA; inputs are
-                        converted to float64 and made contiguous before clustering.
+                        CPU tensors and NumPy arrays are copied to CUDA. Inputs
+                        must have dtype float64.
         cutoff: Distance threshold for clustering. Items are neighbors if their
                 distance is less than this cutoff.
         neighborlist_max_size: Maximum size of the neighborlist used for small cluster
@@ -84,15 +94,8 @@ def butina(
         )
     active_stream = _resolve_cuda_stream(stream, distance_matrix)
     with torch.cuda.stream(active_stream):
-        distance_matrix_tensor = _as_cuda_tensor(
-            "distance_matrix",
-            distance_matrix,
-            stream=active_stream,
-            dtype=torch.float64,
-            coerce_dtype=True,
-            ndim=2,
-            square=True,
-        )
+        distance_matrix_tensor = _as_cuda_tensor("distance_matrix", distance_matrix, stream=active_stream)
+        distance_matrix_tensor = _check_distance_matrix("distance_matrix", distance_matrix_tensor)
         result = _clustering.butina(
             distance_matrix_tensor.__cuda_array_interface__,
             cutoff,
@@ -147,7 +150,7 @@ def fused_butina(
 
     active_stream = _resolve_cuda_stream(stream, x)
     with torch.cuda.stream(active_stream):
-        x = _as_cuda_tensor("x", x, stream=active_stream, dtype=torch.int32, ndim=2)
+        x = _as_cuda_tensor("x", x, stream=active_stream)
         _check_fingerprint_matrix("x", x)
         n_start = x.shape[0]
         device = x.device

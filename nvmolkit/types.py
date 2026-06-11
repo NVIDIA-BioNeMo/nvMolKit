@@ -198,17 +198,12 @@ def _as_cuda_tensor(
     value: ArrayInput,
     *,
     stream: torch.cuda.Stream,
-    dtype: torch.dtype | None = None,
-    coerce_dtype: bool = False,
-    ndim: int | None = None,
-    square: bool = False,
-    contiguous: bool = True,
 ) -> torch.Tensor:
     """Return *value* as a CUDA tensor ordered on *stream*.
 
-    ``AsyncGpuResult`` and CUDA tensors are zero-copy when they already match the
-    requested dtype/layout. CPU tensors and NumPy arrays are copied to the stream
-    device.
+    ``AsyncGpuResult`` and CUDA tensors are zero-copy. CPU tensors and NumPy
+    arrays are copied to the stream device. API-specific dtype, shape, and
+    layout checks live in the public wrappers that know their native contracts.
     """
     if isinstance(value, AsyncGpuResult):
         tensor = value.torch()
@@ -221,25 +216,11 @@ def _as_cuda_tensor(
             f"{name} must be an AsyncGpuResult, torch.Tensor, or numpy.ndarray, got {type(value).__name__}"
         )
 
-    if ndim is not None and tensor.ndim != ndim:
-        raise ValueError(f"{name} must be {ndim}D, got shape={tuple(tensor.shape)}")
-    if square and (tensor.ndim != 2 or tensor.shape[0] != tensor.shape[1]):
-        raise ValueError(f"{name} must be a square 2D matrix, got shape={tuple(tensor.shape)}")
-
-    if dtype is not None and tensor.dtype != dtype and not coerce_dtype:
-        raise ValueError(f"{name} must have dtype {dtype}, got {tensor.dtype}")
-
     target_device = stream.device
     if not tensor.is_cuda:
-        tensor = tensor.to(device=target_device, dtype=dtype if coerce_dtype else None, non_blocking=True)
-    else:
-        if tensor.device != target_device:
-            raise ValueError(f"{name} is on {tensor.device}, but stream is on {target_device}")
-        if dtype is not None and tensor.dtype != dtype:
-            tensor = tensor.to(dtype=dtype)
-
-    if contiguous and not tensor.is_contiguous():
-        tensor = tensor.contiguous()
+        return tensor.to(device=target_device, non_blocking=True)
+    if tensor.device != target_device:
+        raise ValueError(f"{name} is on {tensor.device}, but stream is on {target_device}")
     return tensor
 
 

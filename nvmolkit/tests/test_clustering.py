@@ -159,6 +159,12 @@ def test_butina_invalid_stream_type():
         butina(dists, 0.1, stream=42)
 
 
+def test_butina_rejects_non_float64_distance_matrix():
+    dists = torch.zeros(10, 10, device="cuda", dtype=torch.float32)
+    with pytest.raises(ValueError, match="distance_matrix must have dtype float64"):
+        butina(dists, 0.1)
+
+
 @pytest.mark.parametrize("invalid_size", [0, 1, 7, 9, 15, 33, 48, 100, 256])
 def test_butina_invalid_neighborlist_max_size(invalid_size):
     """Test that invalid neighborlist_max_size values are rejected before reaching the GPU."""

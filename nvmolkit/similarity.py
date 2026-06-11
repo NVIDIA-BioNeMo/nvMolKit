@@ -31,6 +31,16 @@ from nvmolkit.types import ArrayInput, AsyncGpuResult, _as_cuda_tensor, _resolve
 # --------------------------------
 
 
+def _check_fingerprint_input(name: str, x: torch.Tensor) -> torch.Tensor:
+    if x.ndim != 2:
+        raise ValueError(f"{name} must be 2D, got shape={tuple(x.shape)}")
+    if x.dtype not in (torch.int32, torch.uint32):
+        raise ValueError(f"{name} must have dtype int32 or uint32")
+    if not x.is_contiguous():
+        x = x.contiguous()
+    return x
+
+
 def _fingerprint_inputs(
     fingerprint_group_one: ArrayInput,
     fingerprint_group_two: ArrayInput | None,
@@ -42,22 +52,14 @@ def _fingerprint_inputs(
         else _resolve_cuda_stream(stream, fingerprint_group_one)
     )
     with torch.cuda.stream(active_stream):
-        bits_one = _as_cuda_tensor(
-            "fingerprint_group_one",
-            fingerprint_group_one,
-            stream=active_stream,
-            dtype=torch.int32,
-            ndim=2,
-        )
+        bits_one = _as_cuda_tensor("fingerprint_group_one", fingerprint_group_one, stream=active_stream)
+        bits_one = _check_fingerprint_input("fingerprint_group_one", bits_one)
         bits_two = (
             bits_one
             if fingerprint_group_two is None
-            else _as_cuda_tensor(
+            else _check_fingerprint_input(
                 "fingerprint_group_two",
-                fingerprint_group_two,
-                stream=active_stream,
-                dtype=torch.int32,
-                ndim=2,
+                _as_cuda_tensor("fingerprint_group_two", fingerprint_group_two, stream=active_stream),
             )
         )
     if bits_one.shape[1] != bits_two.shape[1]:
