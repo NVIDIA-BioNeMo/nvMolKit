@@ -202,6 +202,23 @@ class TestEdgeCases:
         assert len(results[0][0]) == 10, f"Should get all 10 matches via RDKit fallback, got {len(results[0][0])}"
         assert matches_equal(results[0][0], rdkit_matches), "Matches should be identical to RDKit results"
 
+    @pytest.mark.parametrize("preprocessing_threads", [1, 2, -1])
+    def test_disconnected_smarts_raises(self, preprocessing_threads: int):
+        """Disconnected (fragment) SMARTS must raise rather than crash the process.
+
+        Regression test for GH issue 203: with more than one preprocessing
+        thread the validation error escaped the OpenMP region and terminated the
+        process. The unsupported-query error must surface as a RuntimeError for
+        every preprocessing-thread count.
+        """
+        targets = [Chem.MolFromSmiles(smi) for smi in ("CC", "CCC", "CCCC")]
+        queries = [Chem.MolFromSmarts("C.C")]
+
+        config = SubstructSearchConfig(preprocessingThreads=preprocessing_threads)
+
+        with pytest.raises(RuntimeError, match="disconnected"):
+            hasSubstructMatch(targets, queries, config)
+
     def test_no_match_possible(self):
         """Test when no match is possible."""
         targets = [Chem.MolFromSmiles("CCCC")]
