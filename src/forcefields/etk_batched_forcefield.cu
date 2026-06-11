@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "etk_batched_forcefield.h"
+#include "src/forcefields/etk_batched_forcefield.h"
 
 namespace nvMolKit {
 

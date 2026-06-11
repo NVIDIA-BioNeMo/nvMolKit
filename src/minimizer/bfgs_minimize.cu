@@ -16,17 +16,17 @@
 #include <cub/cub.cuh>
 #include <numeric>
 
-#include "batched_forcefield.h"
-#include "bfgs_hessian.h"
-#include "bfgs_minimize.h"
-#include "bfgs_minimize_permol_kernels.h"
-#include "cub_helpers.cuh"
-#include "device_vector.h"
-#include "dist_geom.h"
-#include "dist_geom_kernels.h"
-#include "mmff.h"
-#include "mmff_kernels.h"
-#include "nvtx.h"
+#include "src/forcefields/batched_forcefield.h"
+#include "src/forcefields/dist_geom.h"
+#include "src/forcefields/dist_geom_kernels.h"
+#include "src/forcefields/mmff.h"
+#include "src/forcefields/mmff_kernels.h"
+#include "src/minimizer/bfgs_hessian.h"
+#include "src/minimizer/bfgs_minimize.h"
+#include "src/minimizer/bfgs_minimize_permol_kernels.h"
+#include "src/utils/cub_helpers.cuh"
+#include "src/utils/device_vector.h"
+#include "src/utils/nvtx.h"
 #include "versions.h"
 
 namespace nvMolKit {
@@ -908,11 +908,13 @@ __global__ void updateDGradKernel(const double  gradTol,
   double blockMax = cub::BlockReduce<double, 128>(tempStorage).Reduce(localMax, cubMax());
 
   if (idxWithinSystem == 0) {
-    // Matches RDKit's signed-energy convergence denominator in ForceField::minimize.
-    // Negative-energy geometries can clamp this to 1, artificially tightening the
-    // check — but fixing it unconditionally diverges from reference behavior.
-    // TODO: file upstream RDKit bug; gate fix on RDKit version once merged there.
-    const double term = max(energies[sysIdx] * gradScales[sysIdx], 1.0);
+    // rdkit/rdkit#9298 (merged RDKit 2026.03) fixed the signed-energy denominator bug:
+    // raw negative energy clamped the denominator to 1, artificially tightening gradTol.
+    // Use |energy| when linked against a fixed RDKit; keep signed otherwise for parity.
+    constexpr bool kRdkitHasGradDenomFix =
+      RDKIT_VERSION_MAJOR > 2026 || (RDKIT_VERSION_MAJOR == 2026 && RDKIT_VERSION_MINOR >= 3);
+    const double energyMag = kRdkitHasGradDenomFix ? fabs(energies[sysIdx]) : energies[sysIdx];
+    const double term      = max(energyMag * gradScales[sysIdx], 1.0);
     blockMax /= term;
     if (blockMax < gradTol) {
       // Converged

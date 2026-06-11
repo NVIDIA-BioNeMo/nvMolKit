@@ -33,14 +33,14 @@
 #include <string>
 #include <vector>
 
-#include "device_vector.h"
-#include "ff_utils.h"
-#include "forcefield_constraints.h"
-#include "minimizer/bfgs_minimize.h"
-#include "test_utils.h"
-#include "uff.h"
-#include "uff_batched_forcefield.h"
-#include "uff_flattened_builder.h"
+#include "rdkit_extensions/uff_flattened_builder.h"
+#include "src/forcefields/ff_utils.h"
+#include "src/forcefields/forcefield_constraints.h"
+#include "src/forcefields/uff.h"
+#include "src/forcefields/uff_batched_forcefield.h"
+#include "src/minimizer/bfgs_minimize.h"
+#include "src/utils/device_vector.h"
+#include "tests/test_utils.h"
 
 using namespace nvMolKit::UFF;
 using nvMolKit::AsyncDeviceVector;

@@ -19,7 +19,7 @@
 #include <random>
 #include <unordered_set>
 
-#include "flat_bit_vect.h"
+#include "src/data_structures/flat_bit_vect.h"
 
 constexpr std::array<std::size_t, 5> nBitsTest = {3, 32, 33, 1024, 1025};
 constexpr std::array<std::size_t, 5> wantSizes = {1, 1, 2, 32, 33};

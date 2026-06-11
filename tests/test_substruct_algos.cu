@@ -19,17 +19,17 @@
 #include <cstring>
 #include <vector>
 
-#include "atom_data_packed.h"
-#include "cuda_error_check.h"
-#include "device.h"
-#include "device_vector.h"
-#include "flat_bit_vect.h"
-#include "graph_labeler.cuh"
-#include "molecules.h"
-#include "molecules_device.cuh"
-#include "packed_bonds.h"
-#include "substruct_algos.cuh"
-#include "substruct_types.h"
+#include "src/data_structures/flat_bit_vect.h"
+#include "src/substruct/atom_data_packed.h"
+#include "src/substruct/graph_labeler.cuh"
+#include "src/substruct/molecules.h"
+#include "src/substruct/molecules_device.cuh"
+#include "src/substruct/packed_bonds.h"
+#include "src/substruct/substruct_algos.cuh"
+#include "src/substruct/substruct_types.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
+#include "src/utils/device_vector.h"
 
 using nvMolKit::AsyncDeviceVector;
 using nvMolKit::AtomDataPacked;

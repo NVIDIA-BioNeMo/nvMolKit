@@ -1,7 +1,7 @@
 # nvMolKit
 
 ## Documentation
-Please see the official [NVIDIA nvMolKit Documentation](https://nvidia-digital-bio.github.io/nvMolKit/) for an overview of features, examples, and a detailed API reference.
+Please see the official [NVIDIA nvMolKit Documentation](https://nvidia-bionemo.github.io/nvMolKit/) for an overview of features, examples, and a detailed API reference.
 
 ## Cursor / agent skill
 
@@ -59,7 +59,7 @@ To install nvMolKit pinned to a particular RDKit:
 RDKIT_VERSION=2025.9.6
 NVMOLKIT_VERSION=0.5.0
 pip install nvmolkit==${NVMOLKIT_VERSION}+rdkit${RDKIT_VERSION} \
-    --extra-index-url https://nvidia-digital-bio.github.io/nvMolKit/wheels/rdkit${RDKIT_VERSION}/simple/
+    --extra-index-url https://nvidia-bionemo.github.io/nvMolKit/wheels/rdkit${RDKIT_VERSION}/simple/
 ```
 
 Replace `2025.9.6` with the RDKit version you want. Variants published for nvMolKit v0.5.0 include every version between 2025.03.6 and 2026.03.1.
@@ -234,7 +234,7 @@ CIBW_MANYLINUX_X86_64_IMAGE=nvmolkit-manylinux-cuda12:test \
 
 To narrow the matrix while iterating, set `CIBW_BUILD=cp312-manylinux_x86_64` (or whichever python tag you care about) before invoking the script. Wheels land in `wheelhouse/`.
 
-The full CI pipeline is at [`.github/workflows/pip-build.yml`](.github/workflows/pip-build.yml). It runs on demand (`workflow_dispatch` only), expands the (rdkit, python) matrix from [`admin/distribute/rdkit_build_matrix.yaml`](admin/distribute/rdkit_build_matrix.yaml), and pulls the pre-built manylinux+CUDA image from the org's GHCR (`ghcr.io/nvidia-digital-bio/nvmolkit-manylinux-cuda12`). The image is rebuilt and pushed manually when the Dockerfile changes; the build script header documents the push command.
+The full CI pipeline is at [`.github/workflows/pip-build.yml`](.github/workflows/pip-build.yml). It runs on demand (`workflow_dispatch` only), expands the (rdkit, python) matrix from [`admin/distribute/rdkit_build_matrix.yaml`](admin/distribute/rdkit_build_matrix.yaml), and pulls the pre-built manylinux+CUDA image from the org's GHCR (`ghcr.io/nvidia-bionemo/nvmolkit-manylinux-cuda12`). The image is rebuilt and pushed manually when the Dockerfile changes; the build script header documents the push command.
 
 Internally, cibuildwheel's `before-build` hook (see [`admin/distribute/cibuildwheel_before_build.sh`](admin/distribute/cibuildwheel_before_build.sh)) clones rdkit-pypi at the matching tag, runs [`admin/distribute/build_rdkit_recipe.sh`](admin/distribute/build_rdkit_recipe.sh) to reproduce its build (~30-60 min on first invocation; cached afterwards), pip-installs the matching rdkit wheel for runtime SONAME-matching libs, and stages everything at stable paths under `/tmp/nvmolkit_pip_inputs/`. setup.py picks those up via `NVMOLKIT_BUILD_AGAINST_PIP_*` env vars set in pyproject.toml's `[tool.cibuildwheel.linux].environment`.
 

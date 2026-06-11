@@ -15,10 +15,10 @@
 
 #include <boost/python.hpp>
 
-#include "bfgs_mmff.h"
-#include "boost_python_utils.h"
-#include "device_result_python.h"
-#include "mmff_python_utils.h"
+#include "nvmolkit/boost_python_utils.h"
+#include "nvmolkit/device_result_python.h"
+#include "nvmolkit/mmff_python_utils.h"
+#include "src/minimizer/bfgs_mmff.h"
 
 namespace bp = boost::python;
 

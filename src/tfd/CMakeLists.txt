@@ -19,7 +19,6 @@ target_link_libraries(
   tfd_cpu
   PRIVATE ${RDKit_LIBS} OpenMP::OpenMP_CXX openmp_helpers nvtx nvmolkit_versions
   PUBLIC device_vector)
-target_include_directories(tfd_cpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # TFD GPU kernels
 add_library(tfd_kernels tfd_kernels.cu)
@@ -27,7 +26,6 @@ target_link_libraries(
   tfd_kernels
   PRIVATE cuda_error_check
   PUBLIC device_vector)
-target_include_directories(tfd_kernels PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 # TFD GPU orchestration
 add_library(tfd_gpu tfd_gpu.cpp)
@@ -35,4 +33,3 @@ target_link_libraries(
   tfd_gpu
   PRIVATE tfd_kernels tfd_cpu ${RDKit_LIBS} nvtx
   PUBLIC device_vector device)
-target_include_directories(tfd_gpu PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

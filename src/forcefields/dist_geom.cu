@@ -16,11 +16,11 @@
 #include <cassert>
 #include <vector>
 
-#include "device_vector.h"
-#include "dist_geom.h"
-#include "dist_geom_kernels.h"
-#include "dist_geom_kernels_device.cuh"
-#include "kernel_utils.cuh"
+#include "src/forcefields/dist_geom.h"
+#include "src/forcefields/dist_geom_kernels.h"
+#include "src/forcefields/dist_geom_kernels_device.cuh"
+#include "src/forcefields/kernel_utils.cuh"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 namespace DistGeom {

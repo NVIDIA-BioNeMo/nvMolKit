@@ -18,7 +18,7 @@
 
 #include <vector>
 
-#include "etkdg_impl.h"
+#include "src/etkdg_impl.h"
 
 namespace nvMolKit {
 namespace detail {

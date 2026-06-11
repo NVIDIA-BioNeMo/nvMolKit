@@ -35,17 +35,17 @@
 #include <random>
 #include <stdexcept>
 
-#include "bfgs_mmff.h"
-#include "device.h"
-#include "ff_utils.h"
-#include "forcefield_constraints.h"
-#include "kernel_utils.cuh"
-#include "mmff.h"
-#include "mmff_batched_forcefield.h"
-#include "mmff_flattened_builder.h"
-#include "mmff_kernels.h"
-#include "mmff_optimize.h"
-#include "test_utils.h"
+#include "rdkit_extensions/mmff_flattened_builder.h"
+#include "rdkit_extensions/mmff_optimize.h"
+#include "src/forcefields/ff_utils.h"
+#include "src/forcefields/forcefield_constraints.h"
+#include "src/forcefields/kernel_utils.cuh"
+#include "src/forcefields/mmff.h"
+#include "src/forcefields/mmff_batched_forcefield.h"
+#include "src/forcefields/mmff_kernels.h"
+#include "src/minimizer/bfgs_mmff.h"
+#include "src/utils/device.h"
+#include "tests/test_utils.h"
 using namespace nvMolKit::MMFF;
 
 constexpr double GRAD_TOL       = 1.0e-4;

@@ -13,14 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "tfd_gpu.h"
+#include "src/tfd/tfd_gpu.h"
 
 #include <cuda_runtime.h>
 
 #include <stdexcept>
 
-#include "nvtx.h"
-#include "tfd_kernels.h"
+#include "src/tfd/tfd_kernels.h"
+#include "src/utils/nvtx.h"
 
 namespace nvMolKit {
 

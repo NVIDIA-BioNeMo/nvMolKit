@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "ff_utils.h"
+#include "src/forcefields/ff_utils.h"
 
 #include <ForceField/ForceField.h>
 #include <GraphMol/ROMol.h>

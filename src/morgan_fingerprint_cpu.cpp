@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "morgan_fingerprint_cpu.h"
+#include "src/morgan_fingerprint_cpu.h"
 
 #include <GraphMol/Fingerprints/FingerprintUtil.h>
 #include <GraphMol/Fingerprints/MorganGenerator.h>
@@ -21,7 +21,7 @@
 
 #include <RDGeneral/hash/hash.hpp>
 
-#include "openmp_helpers.h"
+#include "src/utils/openmp_helpers.h"
 
 namespace nvMolKit {
 

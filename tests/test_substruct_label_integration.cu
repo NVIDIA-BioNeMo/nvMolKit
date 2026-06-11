@@ -27,15 +27,15 @@
 #include <tuple>
 #include <vector>
 
-#include "cuda_error_check.h"
-#include "device.h"
-#include "flat_bit_vect.h"
-#include "graph_labeler.cuh"
-#include "mol_data.h"
-#include "molecules.h"
-#include "molecules_device.cuh"
-#include "substruct_search.h"
-#include "test_utils.h"
+#include "src/data_structures/flat_bit_vect.h"
+#include "src/substruct/graph_labeler.cuh"
+#include "src/substruct/molecules.h"
+#include "src/substruct/molecules_device.cuh"
+#include "src/substruct/substruct_search.h"
+#include "src/testutils/mol_data.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
+#include "tests/test_utils.h"
 
 using nvMolKit::addQueryToBatch;
 using nvMolKit::addToBatch;

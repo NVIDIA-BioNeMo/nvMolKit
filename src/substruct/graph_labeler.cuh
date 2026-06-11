@@ -18,12 +18,12 @@
 
 #include <cooperative_groups.h>
 
-#include "atom_data_packed.h"
-#include "boolean_tree.cuh"
-#include "flat_bit_vect.h"
-#include "molecules.h"
-#include "molecules_device.cuh"
-#include "substruct_debug.h"
+#include "src/data_structures/flat_bit_vect.h"
+#include "src/substruct/atom_data_packed.h"
+#include "src/substruct/boolean_tree.cuh"
+#include "src/substruct/molecules.h"
+#include "src/substruct/molecules_device.cuh"
+#include "src/substruct/substruct_debug.h"
 
 namespace nvMolKit {
 

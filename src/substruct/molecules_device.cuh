@@ -16,10 +16,10 @@
 #ifndef NVMOLKIT_MOLECULES_DEVICE_CUH
 #define NVMOLKIT_MOLECULES_DEVICE_CUH
 
-#include "atom_data_packed.h"
-#include "boolean_tree.cuh"
-#include "molecules.h"
-#include "packed_bonds.h"
+#include "src/substruct/atom_data_packed.h"
+#include "src/substruct/boolean_tree.cuh"
+#include "src/substruct/molecules.h"
+#include "src/substruct/packed_bonds.h"
 
 namespace nvMolKit {
 

@@ -21,10 +21,10 @@
 
 #include <filesystem>
 
-#include "dist_geom_flattened_builder.h"
-#include "embedder_utils.h"
-#include "mmff_flattened_builder.h"
-#include "test_utils.h"
+#include "rdkit_extensions/dist_geom_flattened_builder.h"
+#include "rdkit_extensions/mmff_flattened_builder.h"
+#include "src/embedder_utils.h"
+#include "tests/test_utils.h"
 
 TEST(FlattenedBuilderTest, NullMolecule) {
   RDKit::ROMol mol;

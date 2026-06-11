@@ -13,8 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "cuda_error_check.h"
-#include "gpu_executor.h"
+#include "src/substruct/gpu_executor.h"
+#include "src/utils/cuda_error_check.h"
 
 namespace nvMolKit {
 

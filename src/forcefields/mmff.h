@@ -20,9 +20,9 @@
 #include <functional>
 #include <vector>
 
-#include "batched_forcefield.h"
-#include "device_vector.h"
-#include "mmff_kernels.h"
+#include "src/forcefields/batched_forcefield.h"
+#include "src/forcefields/mmff_kernels.h"
+#include "src/utils/device_vector.h"
 namespace nvMolKit {
 namespace MMFF {
 

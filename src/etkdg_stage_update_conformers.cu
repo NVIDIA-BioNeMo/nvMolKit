@@ -15,7 +15,7 @@
 
 #include <GraphMol/ROMol.h>
 
-#include "etkdg_stage_update_conformers.h"
+#include "src/etkdg_stage_update_conformers.h"
 
 namespace nvMolKit {
 namespace detail {

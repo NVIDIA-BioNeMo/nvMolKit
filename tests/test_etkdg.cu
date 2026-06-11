@@ -22,17 +22,17 @@
 #include <filesystem>
 #include <unordered_map>
 
-#include "conformer_pruning.h"
-#include "device.h"
-#include "dist_geom.h"
-#include "embedder_utils.h"
-#include "etkdg.h"
-#include "etkdg_impl.h"
-#include "etkdg_stage_coordgen.h"
-#include "etkdg_stage_update_conformers.h"
-#include "minimizer/bfgs_minimize.h"
-#include "test_utils.h"
-#include "utils/host_vector.h"
+#include "rdkit_extensions/conformer_pruning.h"
+#include "src/embedder_utils.h"
+#include "src/etkdg.h"
+#include "src/etkdg_impl.h"
+#include "src/etkdg_stage_coordgen.h"
+#include "src/etkdg_stage_update_conformers.h"
+#include "src/forcefields/dist_geom.h"
+#include "src/minimizer/bfgs_minimize.h"
+#include "src/utils/device.h"
+#include "src/utils/host_vector.h"
+#include "tests/test_utils.h"
 
 using ::nvMolKit::detail::ETKDGContext;
 using ::nvMolKit::detail::ETKDGDriver;

@@ -15,13 +15,9 @@
 
 if(NVMOLKIT_BUILD_TESTS OR NVMOLKIT_BUILD_BENCHMARKS)
   add_library(molData mol_data.cpp)
-  target_include_directories(molData PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(molData PRIVATE ${RDKit_LIBS})
 
   add_library(substruct_validation substruct_validation.cu)
-  target_include_directories(
-    substruct_validation PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
-                                ${PROJECT_SOURCE_DIR}/src)
   target_link_libraries(
     substruct_validation
     PUBLIC ${RDKit_LIBS} substructure_search substruct_definitions
@@ -30,5 +26,3 @@ endif()
 
 add_library(conformer_checkers conformer_checkers.cpp)
 target_link_libraries(conformer_checkers PRIVATE ${RDKit_LIBS})
-target_include_directories(conformer_checkers
-                           PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

@@ -19,7 +19,7 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
-#include "macros_ptx.cuh"
+#include "src/utils/macros_ptx.cuh"
 
 namespace nvMolKit {
 

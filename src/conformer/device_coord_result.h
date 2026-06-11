@@ -18,7 +18,7 @@
 
 #include <cstdint>
 
-#include "device_vector.h"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 

@@ -63,7 +63,7 @@ For more fully-fledged examples, check out the Jupyter notebooks in the `example
 
 Source Code
 -----------
-nvMolKit is open source under the Apache License, and is available on `GitHub <https://github.com/NVIDIA-Digital-Bio/nvMolKit>`_.
+nvMolKit is open source under the Apache License, and is available on `GitHub <https://github.com/NVIDIA-BioNeMo/nvMolKit>`_.
 
 .. _installation:
 
@@ -115,7 +115,7 @@ To install nvMolKit pinned to a particular RDKit:
     RDKIT_VERSION=2025.9.6
     NVMOLKIT_VERSION=0.5.0
     pip install nvmolkit==${NVMOLKIT_VERSION}+rdkit${RDKIT_VERSION} \
-        --extra-index-url https://nvidia-digital-bio.github.io/nvMolKit/wheels/rdkit${RDKIT_VERSION}/simple/
+        --extra-index-url https://nvidia-bionemo.github.io/nvMolKit/wheels/rdkit${RDKIT_VERSION}/simple/
 
 Replace ``2025.9.6`` with the RDKit version you want. Variants published for
 nvMolKit v0.5.0 include every version between 2025.03.6 and 2026.03.1.
@@ -124,7 +124,7 @@ nvMolKit v0.5.0 include every version between 2025.03.6 and 2026.03.1.
 From Source
 ^^^^^^^^^^^
 
-nvMolKit can be installed from source using a C++ and CUDA compiler. See installation instructions in the `GitHub README <https://github.com/NVIDIA-Digital-Bio/nvMolKit>`_.
+nvMolKit can be installed from source using a C++ and CUDA compiler. See installation instructions in the `GitHub README <https://github.com/NVIDIA-BioNeMo/nvMolKit>`_.
 
 
 Features

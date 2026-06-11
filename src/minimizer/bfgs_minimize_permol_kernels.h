@@ -18,9 +18,9 @@
 
 #include <cuda_runtime.h>
 
-#include "bfgs_types.h"
-#include "dist_geom_kernels.h"
-#include "mmff_kernels.h"
+#include "src/forcefields/dist_geom_kernels.h"
+#include "src/forcefields/mmff_kernels.h"
+#include "src/minimizer/bfgs_types.h"
 
 namespace nvMolKit {
 

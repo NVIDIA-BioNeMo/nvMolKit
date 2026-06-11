@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "substruct_search_internal.h"
+#include "src/substruct/substruct_search_internal.h"
 
 #include <GraphMol/ROMol.h>
 #include <GraphMol/Substruct/SubstructMatch.h>
@@ -21,13 +21,13 @@
 #include <mutex>
 #include <vector>
 
-#include "cuda_error_check.h"
-#include "gpu_executor.h"
-#include "nvtx.h"
-#include "pinned_buffer_pool.h"
-#include "substruct_launch_config.h"
-#include "substruct_search.h"
-#include "thread_worker_context.h"
+#include "src/substruct/gpu_executor.h"
+#include "src/substruct/pinned_buffer_pool.h"
+#include "src/substruct/substruct_launch_config.h"
+#include "src/substruct/substruct_search.h"
+#include "src/substruct/thread_worker_context.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/nvtx.h"
 
 namespace nvMolKit {
 

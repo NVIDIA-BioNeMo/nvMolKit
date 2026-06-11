@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "batched_forcefield.h"
+#include "src/forcefields/batched_forcefield.h"
 
 #include <utility>
 

@@ -98,6 +98,26 @@ jobs:
           set -xeuo pipefail
           bash admin/run_cmake_format_lint.sh -d
 
+  include-check:
+    name: include-check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source tree
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run include-path check
+        shell: bash
+        run: |
+          set -xeuo pipefail
+          bash admin/run_include_check.sh -d
+
   ruff-format:
     name: ruff-format
     runs-on: ubuntu-24.04

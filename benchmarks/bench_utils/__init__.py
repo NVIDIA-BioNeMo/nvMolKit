@@ -20,16 +20,29 @@ so individual bench scripts can ``from bench_utils import time_it, load_smiles``
 """
 
 from bench_utils.loaders import load_pickle, load_sdf, load_smarts, load_smiles
-from bench_utils.molprep import clone_mols_with_conformers, prep_mols
-from bench_utils.timing import TimingResult, time_it
+from bench_utils.molprep import clone_mols_with_conformers, embed_and_jitter, perturb_conformer, prep_mols
+from bench_utils.timing import (
+    Deadline,
+    TimingResult,
+    add_rdkit_max_seconds_arg,
+    throughput_per_s,
+    time_it,
+    time_it_bounded,
+)
 
 __all__ = [
+    "Deadline",
     "TimingResult",
+    "add_rdkit_max_seconds_arg",
     "clone_mols_with_conformers",
+    "embed_and_jitter",
     "load_pickle",
     "load_sdf",
     "load_smarts",
     "load_smiles",
+    "perturb_conformer",
     "prep_mols",
+    "throughput_per_s",
     "time_it",
+    "time_it_bounded",
 ]

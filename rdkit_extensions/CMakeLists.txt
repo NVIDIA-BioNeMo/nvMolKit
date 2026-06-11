@@ -18,50 +18,37 @@ target_link_libraries(
   rdkit_mmff_flattened
   PRIVATE ${RDKit_LIBS} device_vector
   PUBLIC mmff)
-target_include_directories(rdkit_mmff_flattened
-                           PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(rdkit_uff_flattened uff_flattened_builder.cpp)
 target_link_libraries(
   rdkit_uff_flattened
   PRIVATE ${RDKit_LIBS} device_vector
   PUBLIC uff)
-target_include_directories(rdkit_uff_flattened
-                           PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(mmff_contribs mmff_contribs.cpp)
 target_link_libraries(
   mmff_contribs
   PRIVATE ${RDKit_LIBS} CUDA::cudart device_vector ff_utils
   PUBLIC mmff)
-target_include_directories(mmff_contribs PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(mmff_builder mmff_builder.cpp)
 target_link_libraries(
   mmff_builder
   PRIVATE ${RDKit_LIBS} CUDA::cudart device_vector ff_utils
   PUBLIC mmff)
-target_include_directories(mmff_builder PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(mmff_optimize INTERFACE)
 target_link_libraries(mmff_optimize INTERFACE ${RDKit_LIBS} CUDA::cudart
                                               rdkit_mmff_flattened)
-target_include_directories(mmff_optimize INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(rdkit_dist_geom_flattened dist_geom_flattened_builder.cpp)
 target_link_libraries(
   rdkit_dist_geom_flattened
   PRIVATE ${RDKit_LIBS} device_vector
   PUBLIC dist_geom)
-target_include_directories(rdkit_dist_geom_flattened
-                           PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(rdkit_bounds_matrix bounds_matrix.cpp)
 target_link_libraries(rdkit_bounds_matrix PRIVATE ${RDKit_LIBS})
-target_include_directories(rdkit_bounds_matrix
-                           PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(conformer_pruning conformer_pruning.cpp)
 target_link_libraries(conformer_pruning PRIVATE ${RDKit_LIBS})
-target_include_directories(conformer_pruning
-        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

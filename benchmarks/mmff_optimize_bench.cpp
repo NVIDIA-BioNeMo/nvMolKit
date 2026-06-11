@@ -24,8 +24,8 @@
 #include <memory>
 #include <random>
 
-#include "../tests/test_utils.h"
-#include "bfgs_mmff.h"
+#include "src/minimizer/bfgs_mmff.h"
+#include "tests/test_utils.h"
 
 void perturbConformer(RDKit::Conformer& conf, const float delta = 0.1, const int seed = 0) {
   std::mt19937                          gen(seed);  // Mersenne Twister engine

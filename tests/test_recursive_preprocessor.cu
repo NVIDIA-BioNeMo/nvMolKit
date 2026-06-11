@@ -23,14 +23,14 @@
 #include <string>
 #include <vector>
 
-#include "cuda_error_check.h"
-#include "device.h"
-#include "device_vector.h"
-#include "molecules.h"
-#include "molecules_device.cuh"
-#include "recursive_preprocessor.h"
-#include "substruct_search_internal.h"
-#include "substruct_types.h"
+#include "src/substruct/molecules.h"
+#include "src/substruct/molecules_device.cuh"
+#include "src/substruct/recursive_preprocessor.h"
+#include "src/substruct/substruct_search_internal.h"
+#include "src/substruct/substruct_types.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
+#include "src/utils/device_vector.h"
 
 using nvMolKit::AsyncDeviceVector;
 using nvMolKit::BatchedPatternEntry;

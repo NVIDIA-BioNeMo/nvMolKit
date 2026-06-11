@@ -18,9 +18,9 @@
 
 #include <GraphMol/DistGeomHelpers/Embedder.h>
 
-#include "dist_geom.h"
-#include "etkdg_impl.h"
-#include "minimizer/bfgs_minimize.h"
+#include "src/etkdg_impl.h"
+#include "src/forcefields/dist_geom.h"
+#include "src/minimizer/bfgs_minimize.h"
 
 using ::nvMolKit::detail::EmbedArgs;
 using ::nvMolKit::detail::ETKDGContext;

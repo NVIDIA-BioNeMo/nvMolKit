@@ -25,14 +25,14 @@
 #include <unordered_map>
 #include <vector>
 
-#include "cuda_error_check.h"
-#include "device.h"
-#include "device_vector.h"
-#include "molecules.h"
-#include "molecules_device.cuh"
-#include "nvtx.h"
-#include "pinned_host_allocator.h"
-#include "substruct_types.h"
+#include "src/substruct/molecules.h"
+#include "src/substruct/molecules_device.cuh"
+#include "src/substruct/substruct_types.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
+#include "src/utils/device_vector.h"
+#include "src/utils/nvtx.h"
+#include "src/utils/pinned_host_allocator.h"
 
 namespace nvMolKit {
 

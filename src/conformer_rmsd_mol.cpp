@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "conformer_rmsd_mol.h"
+#include "src/conformer_rmsd_mol.h"
 
 #include <GraphMol/Conformer.h>
 
@@ -22,7 +22,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "utils/host_vector.h"
+#include "src/utils/host_vector.h"
 
 namespace nvMolKit {
 

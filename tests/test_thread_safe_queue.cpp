@@ -21,7 +21,7 @@
 #include <thread>
 #include <vector>
 
-#include "thread_safe_queue.h"
+#include "src/utils/thread_safe_queue.h"
 
 using nvMolKit::ThreadSafeQueue;
 

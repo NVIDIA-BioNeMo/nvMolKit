@@ -16,7 +16,7 @@
 #ifndef NVMOLKIT_CONFORMER_RMSD_H
 #define NVMOLKIT_CONFORMER_RMSD_H
 
-#include "device_vector.h"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 

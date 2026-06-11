@@ -145,3 +145,31 @@ def test_gh_issue_84():
         gen = MorganFingerprintGenerator(radius=radius, fpSize=fp_size)
         bits = unpack_fingerprint(gen.GetFingerprints([mol]).torch()).sum().item()
         assert bits > 0, f"Got empty fingerprint for BINAP on attempt {i}"
+
+
+def test_gh_issue_195():
+    """Regression test for https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/195.
+
+    A batch containing only molecules larger than the 128 atom/bond GPU buckets
+    used to produce empty fingerprints.
+    """
+    radius = 3
+    fp_size = 2048
+
+    large_mol = Chem.MolFromSmiles("NCC(=O)" * 40)
+    assert large_mol is not None
+    assert large_mol.GetNumAtoms() >= 128 or large_mol.GetNumBonds() >= 128
+
+    rdkit_gen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=fp_size)
+    ref_bits = rdkit_gen.GetFingerprint(large_mol).ToList()
+    assert sum(ref_bits) > 0
+
+    nvmolkit_gen = MorganFingerprintGenerator(radius=radius, fpSize=fp_size)
+
+    for batch in ([large_mol], [large_mol, large_mol]):
+        unpacked = unpack_fingerprint(nvmolkit_gen.GetFingerprints(batch).torch())
+        torch.cuda.synchronize()
+        assert unpacked.shape == (len(batch), fp_size)
+        for row in range(len(batch)):
+            assert unpacked[row].sum().item() > 0, "Large-only batch produced an empty fingerprint"
+            torch.testing.assert_close(ref_bits, unpacked[row].to(int).tolist())

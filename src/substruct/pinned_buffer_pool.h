@@ -21,9 +21,9 @@
 #include <memory>
 #include <vector>
 
-#include "pinned_host_allocator.h"
-#include "substruct_types.h"
-#include "thread_safe_queue.h"
+#include "src/substruct/substruct_types.h"
+#include "src/utils/pinned_host_allocator.h"
+#include "src/utils/thread_safe_queue.h"
 
 namespace nvMolKit {
 

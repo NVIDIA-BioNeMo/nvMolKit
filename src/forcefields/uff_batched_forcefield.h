@@ -16,8 +16,8 @@
 #ifndef NVMOLKIT_UFF_BATCHED_FORCEFIELD_H
 #define NVMOLKIT_UFF_BATCHED_FORCEFIELD_H
 
-#include "batched_forcefield.h"
-#include "uff.h"
+#include "src/forcefields/batched_forcefield.h"
+#include "src/forcefields/uff.h"
 
 namespace nvMolKit {
 

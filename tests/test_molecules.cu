@@ -23,11 +23,11 @@
 #include <stdexcept>
 #include <vector>
 
-#include "cuda_error_check.h"
-#include "device.h"
-#include "molecules_device.cuh"
-#include "packed_bonds_device.cuh"
-#include "rdkit_compat.h"
+#include "src/substruct/molecules_device.cuh"
+#include "src/substruct/packed_bonds_device.cuh"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
+#include "src/utils/rdkit_compat.h"
 
 using nvMolKit::AsyncDeviceVector;
 using nvMolKit::AtomDataPacked;

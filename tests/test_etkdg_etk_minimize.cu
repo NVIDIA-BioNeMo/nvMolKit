@@ -19,12 +19,12 @@
 #include <filesystem>
 #include <random>
 
-#include "etkdg_impl.h"
-#include "etkdg_stage_etk_minimization.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
-#include "minimizer/bfgs_minimize.h"
-#include "test_utils.h"
+#include "src/etkdg_impl.h"
+#include "src/etkdg_stage_etk_minimization.h"
+#include "src/minimizer/bfgs_minimize.h"
+#include "tests/test_utils.h"
 constexpr int DIM = 4;
 void          initTestComponentsCommon(const std::vector<RDKit::ROMol*>&         mols,
                                        ETKDGContext&                             context,

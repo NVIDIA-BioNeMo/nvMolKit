@@ -13,12 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <cuda_error_check.h>
 #include <cuda_runtime.h>
 
 #include <cmath>
 
-#include "triangle_smooth.h"
+#include "src/triangle_smooth.h"
+#include "src/utils/cuda_error_check.h"
 
 namespace nvMolKit {
 

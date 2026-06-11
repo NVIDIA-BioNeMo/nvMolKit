@@ -21,7 +21,7 @@
 #include <memory>
 #include <vector>
 
-#include "device_vector.h"
+#include "src/utils/device_vector.h"
 namespace nvMolKit {
 
 //! GPU-compatible batch bounds matrix buffer for triangle smoothing operations on multiple molecules

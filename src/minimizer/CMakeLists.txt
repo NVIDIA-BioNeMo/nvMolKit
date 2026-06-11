@@ -25,15 +25,11 @@ target_link_libraries(
           cub_helpers
           cccl_interface
           nvmolkit_versions)
-target_include_directories(bfgs PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-
 add_library(bfgs_common bfgs_common.cpp)
 target_link_libraries(
   bfgs_common
   PUBLIC host_vector device conformer_types
   PRIVATE ${RDKit_LIBS} OpenMP::OpenMP_CXX)
-target_include_directories(bfgs_common PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-
 add_library(bfgs_mmff bfgs_mmff.cpp)
 target_link_libraries(
   bfgs_mmff
@@ -48,9 +44,6 @@ target_link_libraries(
           OpenMP::OpenMP_CXX
           openmp_helpers
           cccl_interface)
-target_include_directories(bfgs_mmff PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
-                                            ${CMAKE_SOURCE_DIR}/src/forcefields)
-
 add_library(bfgs_uff bfgs_uff.cpp)
 target_link_libraries(
   bfgs_uff
@@ -65,5 +58,3 @@ target_link_libraries(
           OpenMP::OpenMP_CXX
           openmp_helpers
           cccl_interface)
-target_include_directories(bfgs_uff PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
-                                           ${CMAKE_SOURCE_DIR}/src/forcefields)

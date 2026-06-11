@@ -19,9 +19,9 @@
 #include <mutex>
 #include <stdexcept>
 
-#include "cuda_error_check.h"
-#include "device.h"
-#include "etkdg_device_collect.h"
+#include "src/conformer/etkdg_device_collect.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
 
 namespace nvMolKit {
 namespace detail {

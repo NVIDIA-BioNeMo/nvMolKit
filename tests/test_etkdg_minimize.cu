@@ -23,13 +23,13 @@
 
 #include <filesystem>
 
-#include "dist_geom.h"
-#include "embedder_utils.h"
-#include "etkdg_impl.h"
-#include "etkdg_stage_coordgen.h"
-#include "etkdg_stage_distgeom_minimize.h"
-#include "test_utils.h"
-#include "utils/host_vector.h"
+#include "src/embedder_utils.h"
+#include "src/etkdg_impl.h"
+#include "src/etkdg_stage_coordgen.h"
+#include "src/etkdg_stage_distgeom_minimize.h"
+#include "src/forcefields/dist_geom.h"
+#include "src/utils/host_vector.h"
+#include "tests/test_utils.h"
 
 using namespace ::nvMolKit::detail;
 

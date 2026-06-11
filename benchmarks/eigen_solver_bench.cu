@@ -13,16 +13,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <cuda_error_check.h>
-#include <device_vector.h>
 #include <nanobench.h>
 #include <Numerics/EigenSolvers/PowerEigenSolver.h>
 #include <Numerics/Matrix.h>
-#include <symmetric_eigensolver.h>
 
 #include <iostream>
 #include <random>
 #include <vector>
+
+#include "src/symmetric_eigensolver.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device_vector.h"
 
 using namespace nvMolKit;
 

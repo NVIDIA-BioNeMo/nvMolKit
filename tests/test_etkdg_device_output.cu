@@ -22,11 +22,11 @@
 #include <memory>
 #include <vector>
 
-#include "cuda_error_check.h"
-#include "device.h"
-#include "device_coord_collector.h"
-#include "device_coord_result.h"
-#include "etkdg.h"
+#include "src/conformer/device_coord_collector.h"
+#include "src/conformer/device_coord_result.h"
+#include "src/etkdg.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
 
 using namespace nvMolKit;
 

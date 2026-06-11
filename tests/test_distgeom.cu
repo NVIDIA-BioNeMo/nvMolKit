@@ -29,15 +29,15 @@
 #include <filesystem>
 #include <random>
 
-#include "device_vector.h"
-#include "dg_batched_forcefield.h"
-#include "dist_geom.h"
-#include "dist_geom_flattened_builder.h"
-#include "dist_geom_kernels.h"
-#include "embedder_utils.h"
-#include "ff_utils.h"
-#include "kernel_utils.cuh"
-#include "test_utils.h"
+#include "rdkit_extensions/dist_geom_flattened_builder.h"
+#include "src/embedder_utils.h"
+#include "src/forcefields/dg_batched_forcefield.h"
+#include "src/forcefields/dist_geom.h"
+#include "src/forcefields/dist_geom_kernels.h"
+#include "src/forcefields/ff_utils.h"
+#include "src/forcefields/kernel_utils.cuh"
+#include "src/utils/device_vector.h"
+#include "tests/test_utils.h"
 
 using namespace nvMolKit::DistGeom;
 using nvMolKit::AsyncDeviceVector;

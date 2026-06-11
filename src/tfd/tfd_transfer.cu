@@ -13,8 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "cuda_error_check.h"
-#include "tfd_common.h"
+#include "src/tfd/tfd_common.h"
+#include "src/utils/cuda_error_check.h"
 
 namespace nvMolKit {
 

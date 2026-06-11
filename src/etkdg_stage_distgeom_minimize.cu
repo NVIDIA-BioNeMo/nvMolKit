@@ -17,13 +17,13 @@
 
 #include <unordered_map>
 
-#include "dg_batched_forcefield.h"
-#include "dist_geom.h"
-#include "dist_geom_flattened_builder.h"
-#include "etkdg_impl.h"
-#include "etkdg_stage_distgeom_minimize.h"
-#include "forcefields/kernel_utils.cuh"
-#include "nvtx.h"
+#include "rdkit_extensions/dist_geom_flattened_builder.h"
+#include "src/etkdg_impl.h"
+#include "src/etkdg_stage_distgeom_minimize.h"
+#include "src/forcefields/dg_batched_forcefield.h"
+#include "src/forcefields/dist_geom.h"
+#include "src/forcefields/kernel_utils.cuh"
+#include "src/utils/nvtx.h"
 
 using ::nvMolKit::detail::ETKDGContext;
 using ::nvMolKit::detail::ETKDGStage;

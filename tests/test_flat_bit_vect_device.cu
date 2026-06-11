@@ -15,10 +15,10 @@
 
 #include <gtest/gtest.h>
 
-#include "cuda_error_check.h"
-#include "device.h"
-#include "device_vector.h"
-#include "flat_bit_vect.h"
+#include "src/data_structures/flat_bit_vect.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
+#include "src/utils/device_vector.h"
 
 using nvMolKit::AsyncDeviceVector;
 using nvMolKit::BitMatrix2DView;

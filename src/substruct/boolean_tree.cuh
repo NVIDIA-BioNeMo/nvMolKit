@@ -18,7 +18,7 @@
 
 #include <cstdint>
 
-#include "atom_data_packed.h"
+#include "src/substruct/atom_data_packed.h"
 
 #ifdef __CUDACC__
 #define HD_CALLABLE __host__ __device__ __forceinline__

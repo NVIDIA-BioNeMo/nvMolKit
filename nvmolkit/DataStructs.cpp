@@ -20,9 +20,9 @@
 #include <memory>
 #include <stdexcept>
 
-#include "array_helpers.h"
-#include "device.h"
-#include "similarity.h"
+#include "nvmolkit/array_helpers.h"
+#include "src/similarity.h"
+#include "src/utils/device.h"
 
 namespace {
 

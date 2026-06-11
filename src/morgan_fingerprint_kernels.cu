@@ -21,10 +21,10 @@
 #include <cuda/std/tuple>
 namespace cg = cooperative_groups;
 
-#include "cuda_error_check.h"
-#include "device_vector.h"
-#include "flat_bit_vect.h"
-#include "morgan_fingerprint_kernels.h"
+#include "src/data_structures/flat_bit_vect.h"
+#include "src/morgan_fingerprint_kernels.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 

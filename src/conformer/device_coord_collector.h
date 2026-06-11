@@ -23,8 +23,8 @@
 #include <unordered_map>
 #include <vector>
 
-#include "device_coord_result.h"
-#include "device_vector.h"
+#include "src/conformer/device_coord_result.h"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 namespace detail {

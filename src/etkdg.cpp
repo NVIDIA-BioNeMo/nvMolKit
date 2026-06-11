@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "etkdg.h"
+#include "src/etkdg.h"
 
 #include <omp.h>
 
@@ -22,18 +22,18 @@
 #include <mutex>
 #include <unordered_map>
 
-#include "conformer_pruning.h"
-#include "device.h"
-#include "etkdg_device_collect.h"
-#include "etkdg_impl.h"
-#include "etkdg_stage_coordgen.h"
-#include "etkdg_stage_distgeom_minimize.h"
-#include "etkdg_stage_etk_minimization.h"
-#include "etkdg_stage_stereochem_checks.h"
-#include "etkdg_stage_update_conformers.h"
-#include "host_vector.h"
-#include "nvtx.h"
-#include "openmp_helpers.h"
+#include "rdkit_extensions/conformer_pruning.h"
+#include "src/conformer/etkdg_device_collect.h"
+#include "src/etkdg_impl.h"
+#include "src/etkdg_stage_coordgen.h"
+#include "src/etkdg_stage_distgeom_minimize.h"
+#include "src/etkdg_stage_etk_minimization.h"
+#include "src/etkdg_stage_stereochem_checks.h"
+#include "src/etkdg_stage_update_conformers.h"
+#include "src/utils/device.h"
+#include "src/utils/host_vector.h"
+#include "src/utils/nvtx.h"
+#include "src/utils/openmp_helpers.h"
 
 namespace nvMolKit {
 namespace {

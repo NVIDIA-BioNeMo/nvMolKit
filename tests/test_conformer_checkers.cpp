@@ -18,8 +18,8 @@
 
 #include <memory>
 
-#include "conformer_checkers.h"
 #include "gtest/gtest.h"
+#include "src/testutils/conformer_checkers.h"
 
 class ConformerCheckersTest : public ::testing::Test {
  protected:

@@ -20,17 +20,17 @@
 #include <memory>
 #include <vector>
 
-#include "boolean_tree.cuh"
-#include "cuda_error_check.h"
-#include "device.h"
-#include "device_vector.h"
-#include "graph_labeler.cuh"
-#include "molecules.h"
-#include "molecules_device.cuh"
-#include "substruct_search.h"
-#include "substruct_search_internal.h"
-#include "substruct_types.h"
-#include "testutils/substruct_validation.h"
+#include "src/substruct/boolean_tree.cuh"
+#include "src/substruct/graph_labeler.cuh"
+#include "src/substruct/molecules.h"
+#include "src/substruct/molecules_device.cuh"
+#include "src/substruct/substruct_search.h"
+#include "src/substruct/substruct_search_internal.h"
+#include "src/substruct/substruct_types.h"
+#include "src/testutils/substruct_validation.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
+#include "src/utils/device_vector.h"
 
 using nvMolKit::addQueryToBatch;
 using nvMolKit::addToBatch;

@@ -19,7 +19,7 @@
 #include <boost/python.hpp>
 #include <optional>
 
-#include "device_vector.h"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 

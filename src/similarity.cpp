@@ -13,16 +13,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "similarity.h"
+#include "src/similarity.h"
 
 #include <omp.h>
 
-#include "device.h"
-#include "device_vector.h"
-#include "host_vector.h"
-#include "openmp_helpers.h"
-#include "similarity_kernels.h"
-#include "utils/nvtx.h"
+#include "src/similarity_kernels.h"
+#include "src/utils/device.h"
+#include "src/utils/device_vector.h"
+#include "src/utils/host_vector.h"
+#include "src/utils/nvtx.h"
+#include "src/utils/openmp_helpers.h"
 namespace nvMolKit {
 
 using internal::kBlockType;

@@ -20,14 +20,14 @@
 #include <utility>
 #include <vector>
 
-#include "device.h"
-#include "device_vector.h"
-#include "minibatch_planner.h"
-#include "molecules_device.cuh"
-#include "pinned_buffer_pool.h"
-#include "recursive_preprocessor.h"
-#include "substruct_search_internal.h"
-#include "substruct_types.h"
+#include "src/substruct/minibatch_planner.h"
+#include "src/substruct/molecules_device.cuh"
+#include "src/substruct/pinned_buffer_pool.h"
+#include "src/substruct/recursive_preprocessor.h"
+#include "src/substruct/substruct_search_internal.h"
+#include "src/substruct/substruct_types.h"
+#include "src/utils/device.h"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 

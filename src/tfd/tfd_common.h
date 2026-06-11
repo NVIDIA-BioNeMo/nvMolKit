@@ -21,8 +21,8 @@
 #include <cstdint>
 #include <vector>
 
-#include "device_vector.h"
-#include "tfd_types.h"
+#include "src/tfd/tfd_types.h"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 

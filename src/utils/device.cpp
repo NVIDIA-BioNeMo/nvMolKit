@@ -13,12 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "device.h"
+#include "src/utils/device.h"
 
 #include <cuda_runtime.h>
 
-#include "cuda_error_check.h"
-#include "nvtx.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/nvtx.h"
 
 namespace nvMolKit {
 

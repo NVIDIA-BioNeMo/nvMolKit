@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "exceptions.h"
+#include "src/utils/exceptions.h"
 
 #include <cuda_runtime.h>
 

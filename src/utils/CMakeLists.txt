@@ -15,58 +15,41 @@
 
 add_library(exceptions exceptions.cpp)
 target_link_libraries(exceptions PRIVATE CUDA::cudart)
-target_include_directories(exceptions PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(exceptions PRIVATE "-fPIC")
 
 add_library(cuda_error_check INTERFACE)
 target_link_libraries(cuda_error_check INTERFACE exceptions CUDA::cudart)
-target_include_directories(cuda_error_check
-                           INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(device_vector INTERFACE)
 target_link_libraries(device_vector INTERFACE CUDA::cudart cuda_error_check
                                               cccl_interface)
-target_include_directories(device_vector INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(host_vector INTERFACE)
 target_link_libraries(host_vector INTERFACE CUDA::cudart cuda_error_check)
-target_include_directories(host_vector INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(pinned_host_allocator pinned_host_allocator.cpp)
 target_link_libraries(pinned_host_allocator PUBLIC host_vector)
-target_include_directories(pinned_host_allocator
-                           PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(device device.cpp)
 target_link_libraries(device PRIVATE CUDA::cudart cuda_error_check)
-target_include_directories(device INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(rdkit_utils INTERFACE)
-target_include_directories(rdkit_utils INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(work_splitting INTERFACE)
-target_include_directories(work_splitting INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(nvtx INTERFACE)
 target_link_libraries(nvtx INTERFACE CUDA::nvtx3)
-target_include_directories(nvtx INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(openmp_helpers openmp_helpers.cpp)
 target_link_libraries(openmp_helpers PRIVATE OpenMP::OpenMP_CXX)
-target_include_directories(openmp_helpers INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(cub_helpers INTERFACE)
 target_link_libraries(cub_helpers INTERFACE CUDA::cudart)
-target_include_directories(cub_helpers INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(device_timings INTERFACE)
 target_link_libraries(device_timings INTERFACE cuda_error_check)
-target_include_directories(device_timings INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(thread_safe_queue INTERFACE)
-target_include_directories(thread_safe_queue
-                           INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(p2p p2p.cpp)
 target_link_libraries(p2p PUBLIC CUDA::cudart cuda_error_check device)
-target_include_directories(p2p PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

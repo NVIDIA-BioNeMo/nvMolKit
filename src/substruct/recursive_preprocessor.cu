@@ -18,12 +18,12 @@
 #include <string>
 #include <utility>
 
-#include "molecules_device.cuh"
-#include "recursive_preprocessor.h"
-#include "substruct_debug.h"
-#include "substruct_kernels.h"
-#include "substruct_launch_config.h"
-#include "substruct_search_internal.h"
+#include "src/substruct/molecules_device.cuh"
+#include "src/substruct/recursive_preprocessor.h"
+#include "src/substruct/substruct_debug.h"
+#include "src/substruct/substruct_kernels.h"
+#include "src/substruct/substruct_launch_config.h"
+#include "src/substruct/substruct_search_internal.h"
 
 namespace nvMolKit {
 

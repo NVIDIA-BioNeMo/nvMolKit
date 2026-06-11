@@ -20,10 +20,10 @@
 #include <optional>
 #include <vector>
 
-#include "cuda_error_check.h"
-#include "device.h"
-#include "device_vector.h"
-#include "p2p.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
+#include "src/utils/device_vector.h"
+#include "src/utils/p2p.h"
 
 using namespace nvMolKit;
 

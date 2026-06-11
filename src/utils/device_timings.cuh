@@ -22,7 +22,7 @@
 #include <string>
 #include <vector>
 
-#include "cuda_error_check.h"
+#include "src/utils/cuda_error_check.h"
 
 namespace nvMolKit {
 

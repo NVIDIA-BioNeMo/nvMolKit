@@ -17,9 +17,9 @@
 #include <boost/python/manage_new_object.hpp>
 #include <memory>
 
-#include "array_helpers.h"
-#include "butina.h"
-#include "device.h"
+#include "nvmolkit/array_helpers.h"
+#include "src/butina.h"
+#include "src/utils/device.h"
 
 namespace {
 

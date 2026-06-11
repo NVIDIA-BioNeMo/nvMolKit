@@ -28,12 +28,12 @@
 #include <filesystem>
 #include <random>
 
-#include "../rdkit_extensions/dist_geom_flattened_builder.h"
-#include "bounds_matrix.h"
-#include "dist_geom.h"
-#include "dist_geom_kernels.h"
-#include "embedder_utils.h"
-#include "test_utils.h"
+#include "rdkit_extensions/bounds_matrix.h"
+#include "rdkit_extensions/dist_geom_flattened_builder.h"
+#include "src/embedder_utils.h"
+#include "src/forcefields/dist_geom.h"
+#include "src/forcefields/dist_geom_kernels.h"
+#include "tests/test_utils.h"
 
 namespace {
 

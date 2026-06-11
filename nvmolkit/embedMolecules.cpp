@@ -18,9 +18,9 @@
 #include <boost/python.hpp>
 #include <boost/python/stl_iterator.hpp>
 
-#include "boost_python_utils.h"
-#include "device_result_python.h"
-#include "etkdg.h"
+#include "nvmolkit/boost_python_utils.h"
+#include "nvmolkit/device_result_python.h"
+#include "src/etkdg.h"
 
 namespace bp = boost::python;
 

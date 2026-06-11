@@ -63,6 +63,12 @@ endif()
 # --------------------------------
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
+# Project-rooted include scheme. Every first-party target links this so all in-project includes are written as
+# "src/...", "rdkit_extensions/...", "tests/...", "benchmarks/...", or "nvmolkit/..." relative to the project root.
+# Enforced by admin/run_include_check.sh.
+add_library(nvmolkit_include_root INTERFACE)
+target_include_directories(nvmolkit_include_root INTERFACE ${PROJECT_SOURCE_DIR})
+
 # ------------------------------------------------------
 # All our defines. These are all in the cmake directory.
 # ------------------------------------------------------
@@ -106,6 +112,8 @@ endif()
 # ------------------------
 # Subdirectory includes
 # ------------------------
+# Apply the project-rooted include search path to every first-party target created in the subdirectories below.
+link_libraries(nvmolkit_include_root)
 
 # Apply project-wide compile options to every first-party target created in the subdirectories below.
 link_libraries(nvmolkit_warnings nvmolkit_release_opts nvmolkit_cuda_options nvmolkit_sanitizers nvmolkit_cuda_caps)

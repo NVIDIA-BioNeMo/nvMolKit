@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "openmp_helpers.h"
+#include "src/utils/openmp_helpers.h"
 
 namespace nvMolKit {
 namespace detail {

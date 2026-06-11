@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "forcefield_constraints.h"
+#include "src/forcefields/forcefield_constraints.h"
 
 #include <algorithm>
 #include <cmath>

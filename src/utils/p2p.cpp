@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "p2p.h"
+#include "src/utils/p2p.h"
 
 #include <cuda_runtime.h>
 
@@ -21,8 +21,8 @@
 #include <stdexcept>
 #include <string>
 
-#include "cuda_error_check.h"
-#include "device.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
 
 namespace nvMolKit {
 namespace {

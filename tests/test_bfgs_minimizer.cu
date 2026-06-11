@@ -29,14 +29,14 @@
 
 #include <random>
 
-#include "../rdkit_extensions/mmff_flattened_builder.h"
-#include "batched_forcefield.h"
-#include "bfgs_minimize.h"
-#include "device.h"
-#include "forcefield_constraints.h"
-#include "mmff.h"
-#include "mmff_batched_forcefield.h"
-#include "test_utils.h"
+#include "rdkit_extensions/mmff_flattened_builder.h"
+#include "src/forcefields/batched_forcefield.h"
+#include "src/forcefields/forcefield_constraints.h"
+#include "src/forcefields/mmff.h"
+#include "src/forcefields/mmff_batched_forcefield.h"
+#include "src/minimizer/bfgs_minimize.h"
+#include "src/utils/device.h"
+#include "tests/test_utils.h"
 
 using ::nvMolKit::MMFF::BatchedMolecularDeviceBuffers;
 using ::nvMolKit::MMFF::BatchedMolecularSystemHost;

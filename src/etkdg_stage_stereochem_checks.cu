@@ -13,8 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "etkdg_stage_stereochem_checks.h"
-#include "kernel_utils.cuh"
+#include "src/etkdg_stage_stereochem_checks.h"
+#include "src/forcefields/kernel_utils.cuh"
 namespace nvMolKit {
 namespace detail {
 

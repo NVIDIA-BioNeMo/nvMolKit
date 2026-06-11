@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "tfd_common.h"
+#include "src/tfd/tfd_common.h"
 
 #include <Geometry/point.h>
 #include <GraphMol/Fingerprints/FingerprintGenerator.h>
@@ -29,7 +29,7 @@
 #include <stdexcept>
 #include <unordered_set>
 
-#include "nvtx.h"
+#include "src/utils/nvtx.h"
 #include "versions.h"
 
 namespace nvMolKit {

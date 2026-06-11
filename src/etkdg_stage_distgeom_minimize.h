@@ -20,9 +20,9 @@
 
 #include <unordered_map>
 
-#include "bfgs_minimize.h"
-#include "dist_geom.h"
-#include "etkdg_impl.h"
+#include "src/etkdg_impl.h"
+#include "src/forcefields/dist_geom.h"
+#include "src/minimizer/bfgs_minimize.h"
 
 using ::nvMolKit::detail::EmbedArgs;
 using ::nvMolKit::detail::ETKDGContext;

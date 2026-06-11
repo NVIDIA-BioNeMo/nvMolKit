@@ -20,12 +20,12 @@
 
 #include <cstdint>
 
-#include "device_timings.cuh"
-#include "flat_bit_vect.h"
-#include "molecules_device.cuh"
-#include "packed_bonds_device.cuh"
-#include "substruct_debug.h"
-#include "substruct_types.h"
+#include "src/data_structures/flat_bit_vect.h"
+#include "src/substruct/molecules_device.cuh"
+#include "src/substruct/packed_bonds_device.cuh"
+#include "src/substruct/substruct_debug.h"
+#include "src/substruct/substruct_types.h"
+#include "src/utils/device_timings.cuh"
 
 namespace nvMolKit {
 

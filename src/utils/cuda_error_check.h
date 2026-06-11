@@ -19,7 +19,7 @@
 #include <cstdio>
 
 #include "cuda_runtime.h"
-#include "exceptions.h"
+#include "src/utils/exceptions.h"
 
 //! Checks a CUDA return code, throwing a CudaBadReturnCode error
 //! if nonzero, and printing out line info if in debug mode.

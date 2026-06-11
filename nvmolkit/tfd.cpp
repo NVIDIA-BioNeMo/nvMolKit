@@ -18,10 +18,10 @@
 #include <boost/python.hpp>
 #include <boost/python/manage_new_object.hpp>
 
-#include "array_helpers.h"
-#include "boost_python_utils.h"
-#include "nvtx.h"
-#include "tfd_gpu.h"
+#include "nvmolkit/array_helpers.h"
+#include "nvmolkit/boost_python_utils.h"
+#include "src/tfd/tfd_gpu.h"
+#include "src/utils/nvtx.h"
 
 namespace {
 

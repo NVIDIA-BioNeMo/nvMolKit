@@ -21,9 +21,9 @@
 #include <fstream>
 #include <vector>
 
-#include "mol_data.h"
-#include "morgan_fingerprint.h"
-#include "similarity.h"
+#include "src/morgan_fingerprint.h"
+#include "src/similarity.h"
+#include "src/testutils/mol_data.h"
 
 std::vector<const RDKit::ROMol*> makeMolsView(const std::vector<std::unique_ptr<RDKit::ROMol>>& mols) {
   std::vector<const RDKit::ROMol*> molsView;

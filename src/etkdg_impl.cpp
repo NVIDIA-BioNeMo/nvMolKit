@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "etkdg_impl.h"
+#include "src/etkdg_impl.h"
 
 #include <DistGeom/BoundsMatrix.h>
 #include <GraphMol/DistGeomHelpers/Embedder.h>
@@ -24,10 +24,10 @@
 #include <iomanip>
 #include <iostream>
 
-#include "device_vector.h"
-#include "dist_geom_flattened_builder.h"
-#include "nvtx.h"
-#include "triangle_smooth.h"
+#include "rdkit_extensions/dist_geom_flattened_builder.h"
+#include "src/triangle_smooth.h"
+#include "src/utils/device_vector.h"
+#include "src/utils/nvtx.h"
 
 namespace nvMolKit {
 

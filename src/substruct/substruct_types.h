@@ -18,9 +18,9 @@
 
 #include <cstdint>
 
-#include "substruct_constants.h"
-#include "substruct_results.h"
-#include "substruct_template_config.h"
+#include "src/substruct/substruct_constants.h"
+#include "src/substruct/substruct_results.h"
+#include "src/substruct/substruct_template_config.h"
 
 namespace nvMolKit {
 

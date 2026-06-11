@@ -25,11 +25,11 @@
 #include <filesystem>
 #include <random>
 
-#include "dist_geom.h"
-#include "embedder_utils.h"
-#include "etkdg_impl.h"
-#include "etkdg_stage_stereochem_checks.h"
-#include "test_utils.h"
+#include "src/embedder_utils.h"
+#include "src/etkdg_impl.h"
+#include "src/etkdg_stage_stereochem_checks.h"
+#include "src/forcefields/dist_geom.h"
+#include "tests/test_utils.h"
 
 using namespace ::nvMolKit::detail;
 

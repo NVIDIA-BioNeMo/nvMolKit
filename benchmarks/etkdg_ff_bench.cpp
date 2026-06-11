@@ -23,10 +23,10 @@
 #include <filesystem>
 #include <memory>
 
-#include "../tests/test_utils.h"
-#include "cuda_error_check.h"
-#include "dist_geom_flattened_builder.h"
-#include "embedder_utils.h"
+#include "rdkit_extensions/dist_geom_flattened_builder.h"
+#include "src/embedder_utils.h"
+#include "src/utils/cuda_error_check.h"
+#include "tests/test_utils.h"
 
 using nvMolKit::AsyncDeviceVector;
 using namespace nvMolKit::DistGeom;

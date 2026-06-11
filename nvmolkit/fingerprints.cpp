@@ -18,9 +18,9 @@
 
 #include <boost/python.hpp>
 
-#include "array_helpers.h"
-#include "device.h"
-#include "morgan_fingerprint.h"
+#include "nvmolkit/array_helpers.h"
+#include "src/morgan_fingerprint.h"
+#include "src/utils/device.h"
 
 namespace {
 

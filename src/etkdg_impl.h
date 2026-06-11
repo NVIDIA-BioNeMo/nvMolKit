@@ -29,10 +29,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include "device_vector.h"
-#include "dist_geom.h"
-#include "embedder_utils.h"
-#include "host_vector.h"
+#include "src/embedder_utils.h"
+#include "src/forcefields/dist_geom.h"
+#include "src/utils/device_vector.h"
+#include "src/utils/host_vector.h"
 
 // forward declarations
 

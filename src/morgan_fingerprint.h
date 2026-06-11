@@ -20,10 +20,10 @@
 #include <GraphMol/Fingerprints/FingerprintGenerator.h>
 #include <GraphMol/Fingerprints/MorganGenerator.h>
 
-#include "flat_bit_vect.h"
-#include "morgan_fingerprint_common.h"
-#include "morgan_fingerprint_cpu.h"
-#include "morgan_fingerprint_gpu.h"
+#include "src/data_structures/flat_bit_vect.h"
+#include "src/morgan_fingerprint_common.h"
+#include "src/morgan_fingerprint_cpu.h"
+#include "src/morgan_fingerprint_gpu.h"
 
 namespace nvMolKit {
 

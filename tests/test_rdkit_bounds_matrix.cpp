@@ -19,7 +19,7 @@
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
 
-#include "bounds_matrix.h"
+#include "rdkit_extensions/bounds_matrix.h"
 
 namespace nvMolKit {
 namespace test {

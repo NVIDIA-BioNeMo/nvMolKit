@@ -18,8 +18,8 @@
 
 #include <vector>
 
-#include "device.h"
-#include "tfd_common.h"
+#include "src/tfd/tfd_common.h"
+#include "src/utils/device.h"
 
 namespace nvMolKit {
 

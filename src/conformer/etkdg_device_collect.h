@@ -19,8 +19,8 @@
 #include <cstdint>
 #include <vector>
 
-#include "device_coord_collector.h"
-#include "device_vector.h"
+#include "src/conformer/device_coord_collector.h"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 namespace detail {

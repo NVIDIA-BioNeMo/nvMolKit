@@ -14,4 +14,3 @@
 # the License.
 
 add_library(flatBitVect INTERFACE)
-target_include_directories(flatBitVect INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})

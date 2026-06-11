@@ -32,12 +32,11 @@
 #include <utility>
 #include <vector>
 
-#include "../tests/test_utils.h"
-#include "conformer_checkers.h"
-#include "embedder_utils.h"
-#include "etkdg.h"
-#include "minimizer/bfgs_minimize.h"
-#include "testutils/conformer_checkers.h"
+#include "src/embedder_utils.h"
+#include "src/etkdg.h"
+#include "src/minimizer/bfgs_minimize.h"
+#include "src/testutils/conformer_checkers.h"
+#include "tests/test_utils.h"
 
 constexpr int maxAtoms = 256;
 

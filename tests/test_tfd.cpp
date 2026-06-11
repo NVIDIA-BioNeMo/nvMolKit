@@ -21,8 +21,8 @@
 #include <memory>
 #include <vector>
 
-#include "tfd_cpu.h"
-#include "tfd_gpu.h"
+#include "src/tfd/tfd_cpu.h"
+#include "src/tfd/tfd_gpu.h"
 
 namespace {
 

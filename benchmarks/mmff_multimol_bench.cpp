@@ -27,9 +27,9 @@
 #include <random>
 #include <vector>
 
-#include "../tests/test_utils.h"
-#include "benchmark_utils.h"
-#include "bfgs_mmff.h"
+#include "benchmarks/benchmark_utils.h"
+#include "src/minimizer/bfgs_mmff.h"
+#include "tests/test_utils.h"
 
 namespace {
 

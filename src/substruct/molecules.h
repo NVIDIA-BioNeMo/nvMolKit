@@ -22,10 +22,10 @@
 #include <string>
 #include <vector>
 
-#include "atom_data_packed.h"
-#include "boolean_tree.cuh"
-#include "device_vector.h"
-#include "packed_bonds.h"
+#include "src/substruct/atom_data_packed.h"
+#include "src/substruct/boolean_tree.cuh"
+#include "src/substruct/packed_bonds.h"
+#include "src/utils/device_vector.h"
 
 namespace RDKit {
 class ROMol;

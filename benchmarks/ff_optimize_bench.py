@@ -38,11 +38,15 @@ import sys
 import nvtx
 import torch
 from bench_utils import (
+    Deadline,
+    add_rdkit_max_seconds_arg,
     clone_mols_with_conformers,
+    embed_and_jitter,
     load_pickle,
     load_sdf,
     load_smiles,
     prep_mols,
+    throughput_per_s,
     time_it,
 )
 from nvmolkit import autotune as nv_autotune
@@ -51,32 +55,6 @@ from rdkit import Chem
 from rdkit.Chem import AllChem, rdDistGeom
 
 OPTUNA_AVAILABLE = nv_autotune.is_available()
-
-
-def _embed_conformers(mols: list[Chem.Mol], confs_per_mol: int, seed: int) -> list[Chem.Mol]:
-    """Generate ``confs_per_mol`` conformers per molecule using RDKit ETKDGv3.
-
-    Molecules where embedding fails to produce at least one conformer are
-    dropped; a count is printed.
-    """
-    params = rdDistGeom.ETKDGv3()
-    params.useRandomCoords = True
-    params.randomSeed = seed
-
-    embedded: list[Chem.Mol] = []
-    drop_count = 0
-    for mol in mols:
-        try:
-            conf_ids = rdDistGeom.EmbedMultipleConfs(mol, numConfs=confs_per_mol, params=params)
-            if not conf_ids:
-                drop_count += 1
-                continue
-            embedded.append(mol)
-        except Exception:
-            drop_count += 1
-    if drop_count > 0:
-        print(f"  Dropped {drop_count} molecules during embedding (no conformer generated)")
-    return embedded
 
 
 def _flatten_energies(per_mol: list[list[float]]) -> list[float]:
@@ -166,8 +144,15 @@ def bench_rdkit(
     runs: int,
     warmup: bool,
     num_threads: int,
-) -> tuple[float, float, list[float]]:
-    """Benchmark RDKit MMFF/UFF optimization; return ``(mean_ms, std_ms, energies)``."""
+    max_seconds: float = 0.0,
+) -> tuple[float, float, list[float], int]:
+    """Benchmark RDKit MMFF/UFF optimization; return ``(mean_ms, std_ms, energies, processed_mols)``.
+
+    When ``max_seconds > 0`` the per-molecule loop stops once wall-clock
+    elapsed exceeds the cap. Throughput at the call site should be measured
+    as items / elapsed; the returned timing is over the molecules actually
+    processed.
+    """
     if ff == "mmff":
         rdkit_optimize = lambda mol: AllChem.MMFFOptimizeMoleculeConfs(  # noqa: E731
             mol, numThreads=num_threads, maxIters=max_iters
@@ -180,11 +165,21 @@ def bench_rdkit(
         raise ValueError(f"Unknown ff: {ff!r}")
 
     last_results: list[list[list[tuple[int, float]]]] = [[]]
+    processed_count = [0]
 
     @nvtx.annotate("ff_rdkit_run", color="yellow")
     def run() -> None:
         cloned = clone_mols_with_conformers(mols)
-        last_results[0] = [rdkit_optimize(mol) for mol in cloned]
+        deadline = Deadline(max_seconds)
+        out: list[list[tuple[int, float]]] = []
+        n_done = 0
+        for mol in cloned:
+            out.append(rdkit_optimize(mol))
+            n_done += 1
+            if deadline.expired():
+                break
+        last_results[0] = out
+        processed_count[0] = n_done
 
     if warmup:
         warmup_mols = clone_mols_with_conformers(mols[: min(4, len(mols))])
@@ -195,7 +190,7 @@ def bench_rdkit(
     energies, not_converged = _flatten_rdkit_energies(last_results[0])
     if not_converged > 0:
         print(f"  RDKit: {not_converged} conformer(s) reported non-zero status (not converged)")
-    return result.mean_ms, result.std_ms, energies
+    return result.mean_ms, result.std_ms, energies, processed_count[0]
 
 
 def _build_hardware_options(
@@ -213,9 +208,11 @@ def _build_hardware_options(
 
 
 CSV_HEADER = (
-    "method,ff,input_file,input_type,num_mols,confs_per_mol,max_iters,"
+    "method,ff,input_file,input_type,num_mols,mols_processed,confs_per_mol,max_iters,"
     "batch_size,batches_per_gpu,prep_threads,num_gpus,nvmolkit_config_source,"
-    "rdkit_threads,time_ms,std_ms,energies_compared,mean_abs_energy_diff,max_abs_energy_diff"
+    "rdkit_threads,rdkit_max_seconds,time_ms,std_ms,"
+    "confs_per_second,vs_rdkit_throughput_ratio,"
+    "energies_compared,mean_abs_energy_diff,max_abs_energy_diff"
 )
 
 
@@ -256,6 +253,10 @@ def main() -> None:
         type=int,
         default=1,
         help="Threads passed to RDKit FF optimizer via numThreads (default: 1)",
+    )
+    add_rdkit_max_seconds_arg(
+        parser,
+        extra_help="The RDKit FF optimizer loop stops at the next molecule boundary once the budget is hit.",
     )
 
     parser.add_argument("--batch_size", "-b", type=int, default=1024, help="nvmolkit batch size (default: 1024)")
@@ -398,7 +399,7 @@ def main() -> None:
     print(f"  {len(mols)} molecules ready")
 
     print(f"\nEmbedding {args.confs_per_mol} conformer(s) per molecule with RDKit ETKDGv3...")
-    mols = _embed_conformers(mols, args.confs_per_mol, args.seed)
+    mols = embed_and_jitter(mols, args.confs_per_mol, seed=args.seed, num_workers=args.rdkit_threads)
     if not mols:
         print("Error: No molecules retained after embedding")
         sys.exit(1)
@@ -482,12 +483,22 @@ def main() -> None:
         results["nvmolkit"] = (nv_avg, nv_std, nv_energies)
         torch.cuda.cudart().cudaProfilerStop()
 
+    rdkit_processed_count = len(mols)
     if not args.no_rdkit:
         print(f"\nRunning RDKit {args.ff.upper()} optimize benchmark...")
-        rd_avg, rd_std, rd_energies = bench_rdkit(
-            mols, args.ff, args.max_iters, args.runs, args.warmup, args.rdkit_threads
+        rd_avg, rd_std, rd_energies, rdkit_processed_count = bench_rdkit(
+            mols,
+            args.ff,
+            args.max_iters,
+            args.runs,
+            args.warmup,
+            args.rdkit_threads,
+            max_seconds=args.rdkit_max_seconds,
         )
-        print(f"  RDKit:           {rd_avg:10.2f} ms (+/- {rd_std:.2f} ms)")
+        print(
+            f"  RDKit:           {rd_avg:10.2f} ms (+/- {rd_std:.2f} ms)"
+            f"  [processed {rdkit_processed_count}/{len(mols)} mols]"
+        )
         results["rdkit"] = (rd_avg, rd_std, rd_energies)
 
     if not results:
@@ -496,11 +507,14 @@ def main() -> None:
 
     print("\n" + "=" * 70)
     print("Summary:")
-    baseline_ms = results.get("rdkit", (None, None, None))[0]
+    rdkit_throughput_per_s: float | None = None
+    if "rdkit" in results and results["rdkit"][0] > 0:
+        rdkit_throughput_per_s = throughput_per_s(rdkit_processed_count * args.confs_per_mol, results["rdkit"][0])
     for name, (avg_ms, std_ms, _) in results.items():
         speedup = ""
-        if baseline_ms is not None and name != "rdkit" and avg_ms > 0:
-            speedup = f", {baseline_ms / avg_ms:.1f}x vs RDKit"
+        if rdkit_throughput_per_s is not None and name != "rdkit" and avg_ms > 0:
+            method_throughput = throughput_per_s(len(mols) * args.confs_per_mol, avg_ms)
+            speedup = f", {method_throughput / rdkit_throughput_per_s:.1f}x vs RDKit (throughput)"
         print(f"  {name:20s}: {avg_ms:10.2f} ms (+/- {std_ms:.2f} ms){speedup}")
 
     energy_mean = float("nan")
@@ -531,19 +545,29 @@ def main() -> None:
     csv_rows: list[str] = []
     for name, (avg_ms, std_ms, energies) in results.items():
         is_nv = name == "nvmolkit"
+        is_rdkit = name == "rdkit"
         batch_size = applied_batch_size if is_nv else "N/A"
         batches_per_gpu = applied_batches_per_gpu if is_nv else "N/A"
         prep_threads = applied_prep_threads if is_nv else "N/A"
         num_gpus = applied_num_gpus if is_nv else "N/A"
         nvmolkit_config_source = config_source if is_nv else "N/A"
-        rdkit_threads = args.rdkit_threads if name == "rdkit" else "N/A"
+        rdkit_threads = args.rdkit_threads if is_rdkit else "N/A"
+        rdkit_max_seconds = args.rdkit_max_seconds if is_rdkit else "N/A"
+        mols_processed = rdkit_processed_count if is_rdkit else len(mols)
+        confs_per_second = throughput_per_s(mols_processed * args.confs_per_mol, avg_ms)
+        if rdkit_throughput_per_s is not None and not is_rdkit and avg_ms > 0:
+            vs_rdkit_throughput_ratio = f"{confs_per_second / rdkit_throughput_per_s:.4f}"
+        else:
+            vs_rdkit_throughput_ratio = "N/A"
         mean_diff = energy_mean if (args.validate and is_nv) else "N/A"
         max_diff = energy_max if (args.validate and is_nv) else "N/A"
         pairs = energy_pairs if (args.validate and is_nv) else "N/A"
         csv_rows.append(
-            f"{name},{args.ff},{input_file},{input_type},{len(mols)},{args.confs_per_mol},"
+            f"{name},{args.ff},{input_file},{input_type},{len(mols)},{mols_processed},{args.confs_per_mol},"
             f"{args.max_iters},{batch_size},{batches_per_gpu},{prep_threads},{num_gpus},"
-            f"{nvmolkit_config_source},{rdkit_threads},{avg_ms:.2f},{std_ms:.2f},"
+            f"{nvmolkit_config_source},{rdkit_threads},{rdkit_max_seconds},"
+            f"{avg_ms:.2f},{std_ms:.2f},"
+            f"{confs_per_second:.2f},{vs_rdkit_throughput_ratio},"
             f"{pairs},{mean_diff},{max_diff}"
         )
 

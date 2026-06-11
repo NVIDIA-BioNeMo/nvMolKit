@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-#include "host_vector.h"
+#include "src/utils/host_vector.h"
 
 namespace nvMolKit {
 

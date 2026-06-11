@@ -19,9 +19,9 @@
 #include <cstdint>
 #include <vector>
 
-#include "batched_forcefield.h"
-#include "device_vector.h"
-#include "dist_geom_kernels.h"
+#include "src/forcefields/batched_forcefield.h"
+#include "src/forcefields/dist_geom_kernels.h"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 namespace DistGeom {

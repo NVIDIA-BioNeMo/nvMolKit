@@ -19,9 +19,9 @@
 #include <boost/python.hpp>
 #include <cstdint>
 
-#include "array_helpers.h"
-#include "device_coord_result.h"
-#include "device_vector.h"
+#include "nvmolkit/array_helpers.h"
+#include "src/conformer/device_coord_result.h"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 

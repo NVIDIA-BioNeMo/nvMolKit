@@ -16,13 +16,12 @@
 #ifndef NVMOLKIT_BFGS_MINIMIZE_H
 #define NVMOLKIT_BFGS_MINIMIZE_H
 
-#include <device_vector.h>
-
 #include <functional>
 #include <vector>
 
-#include "bfgs_types.h"
-#include "host_vector.h"
+#include "src/minimizer/bfgs_types.h"
+#include "src/utils/device_vector.h"
+#include "src/utils/host_vector.h"
 
 namespace nvMolKit {
 

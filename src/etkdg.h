@@ -19,9 +19,9 @@
 #include <optional>
 #include <vector>
 
-#include "bfgs_minimize.h"
-#include "device_coord_result.h"
-#include "hardware_options.h"
+#include "src/conformer/device_coord_result.h"
+#include "src/hardware_options.h"
+#include "src/minimizer/bfgs_minimize.h"
 
 namespace RDKit {
 class ROMol;

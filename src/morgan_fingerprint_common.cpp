@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "morgan_fingerprint_common.h"
+#include "src/morgan_fingerprint_common.h"
 
 #include <GraphMol/PeriodicTable.h>
 

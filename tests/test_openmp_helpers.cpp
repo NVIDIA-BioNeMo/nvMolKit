@@ -21,7 +21,7 @@
 #include <stdexcept>
 #include <thread>
 
-#include "openmp_helpers.h"
+#include "src/utils/openmp_helpers.h"
 
 namespace {
 

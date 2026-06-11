@@ -19,7 +19,7 @@
  * 2. Initializing and configuring the ETKDG pipeline
  * 3. Managing force field parameters and variables for the embedding process
  */
-#include "embedder_utils.h"
+#include "src/embedder_utils.h"
 
 #include <DistGeom/BoundsMatrix.h>
 #include <DistGeom/ChiralSet.h>

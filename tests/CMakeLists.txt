@@ -78,7 +78,6 @@ target_link_libraries(
 
 add_executable(smarts_filter smarts_filter.cpp)
 target_link_libraries(smarts_filter PRIVATE molecules molData ${RDKit_LIBS})
-target_include_directories(smarts_filter PRIVATE ${PROJECT_SOURCE_DIR}/src)
 
 add_executable(test_flattened_builder test_flattened_builder.cu)
 target_link_libraries(
@@ -223,6 +222,7 @@ target_link_libraries(
   PRIVATE bfgs
           batched_forcefield
           mmff_batched_forcefield
+          rdkit_mmff_flattened
           device_vector
           ${RDKit_LIBS}
           test_utils

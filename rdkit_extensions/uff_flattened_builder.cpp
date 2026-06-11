@@ -1,4 +1,4 @@
-#include "uff_flattened_builder.h"
+#include "rdkit_extensions/uff_flattened_builder.h"
 
 #include <ForceField/UFF/AngleBend.h>
 #include <ForceField/UFF/BondStretch.h>

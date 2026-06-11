@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "ff_device_collect.h"
+#include "src/conformer/ff_device_collect.h"
 
 #include <cuda_runtime.h>
 #include <GraphMol/ROMol.h>
@@ -24,9 +24,9 @@
 #include <unordered_map>
 #include <vector>
 
-#include "cuda_error_check.h"
-#include "device.h"
-#include "p2p.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
+#include "src/utils/p2p.h"
 
 namespace nvMolKit {
 namespace detail {

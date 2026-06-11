@@ -15,9 +15,9 @@
 
 #include <cub/cub.cuh>
 
-#include "kernel_utils.cuh"
-#include "uff_kernels.h"
-#include "uff_kernels_device.cuh"
+#include "src/forcefields/kernel_utils.cuh"
+#include "src/forcefields/uff_kernels.h"
+#include "src/forcefields/uff_kernels_device.cuh"
 
 using namespace nvMolKit::FFKernelUtils;
 

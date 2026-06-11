@@ -22,10 +22,10 @@
 #include <set>
 #include <vector>
 
-#include "cuda_error_check.h"
-#include "device.h"
-#include "substruct_search.h"
-#include "testutils/substruct_validation.h"
+#include "src/substruct/substruct_search.h"
+#include "src/testutils/substruct_validation.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
 
 using nvMolKit::algorithmName;
 using nvMolKit::checkReturnCode;

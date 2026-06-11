@@ -32,21 +32,21 @@
 #include <unordered_map>
 #include <vector>
 
-#include "cuda_error_check.h"
-#include "host_vector.h"
-#include "nvtx.h"
-#include "pinned_host_allocator.h"
-#include "thread_safe_queue.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/host_vector.h"
+#include "src/utils/nvtx.h"
+#include "src/utils/pinned_host_allocator.h"
+#include "src/utils/thread_safe_queue.h"
 
 namespace RDKit {
 class ROMol;
 }  // namespace RDKit
-#include "device.h"
-#include "device_vector.h"
-#include "molecules.h"
-#include "recursive_preprocessor.h"
-#include "substruct_search.h"
-#include "thread_worker_context.h"
+#include "src/substruct/molecules.h"
+#include "src/substruct/recursive_preprocessor.h"
+#include "src/substruct/substruct_search.h"
+#include "src/substruct/thread_worker_context.h"
+#include "src/utils/device.h"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 

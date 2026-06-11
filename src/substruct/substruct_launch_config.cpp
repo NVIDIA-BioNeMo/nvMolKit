@@ -15,7 +15,7 @@
 
 #include <cuda/std/cstddef>
 
-#include "substruct_types.h"
+#include "src/substruct/substruct_types.h"
 
 namespace nvMolKit {
 TemplateConfigProperties getTemplateConfigProperties(SubstructTemplateConfig config) {

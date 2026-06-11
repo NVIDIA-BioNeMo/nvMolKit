@@ -55,6 +55,19 @@ jobs:
             config: linux_64_c_compiler_version14c_stdlib_version2.28cuda_compiler_version13.0cxx_compiler_version14libboost_devel1.88libboost_headers1.88libboost_python_devel1.88librdkit_dev2026.3.1_hf8c537c7
 
     steps:
+      - name: Free up runner disk space
+        shell: bash
+        run: |
+          set -xeuo pipefail
+          df -h /
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc /usr/local/.ghcup
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/share/powershell /usr/share/swift
+          sudo docker image prune --all --force || true
+          df -h /
+
       - name: Check out source tree
         uses: actions/checkout@v4
         with:

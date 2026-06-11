@@ -13,13 +13,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "minibatch_planner.h"
+#include "src/substruct/minibatch_planner.h"
 
 #include <algorithm>
 
-#include "nvtx.h"
-#include "recursive_preprocessor.h"
-#include "thread_worker_context.h"
+#include "src/substruct/recursive_preprocessor.h"
+#include "src/substruct/thread_worker_context.h"
+#include "src/utils/nvtx.h"
 
 namespace nvMolKit {
 

@@ -15,7 +15,7 @@
 
 #include <gtest/gtest.h>
 
-#include "cuda_error_check.h"
+#include "src/utils/cuda_error_check.h"
 
 using namespace nvMolKit;
 

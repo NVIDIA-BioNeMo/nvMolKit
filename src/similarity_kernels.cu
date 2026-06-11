@@ -16,10 +16,10 @@
 #include <cub/cub.cuh>
 #include <cuda/std/span>
 
-#include "device_vector.h"
-#include "load_store.cuh"
-#include "similarity_kernels.h"
-#include "similarity_op.cuh"
+#include "src/load_store.cuh"
+#include "src/similarity_kernels.h"
+#include "src/similarity_op.cuh"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 

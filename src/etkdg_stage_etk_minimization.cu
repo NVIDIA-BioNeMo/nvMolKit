@@ -16,10 +16,10 @@
 #include <optional>
 #include <unordered_map>
 
-#include "dist_geom_flattened_builder.h"
-#include "etk_batched_forcefield.h"
-#include "etkdg_stage_etk_minimization.h"
-#include "minimizer/bfgs_minimize.h"
+#include "rdkit_extensions/dist_geom_flattened_builder.h"
+#include "src/etkdg_stage_etk_minimization.h"
+#include "src/forcefields/etk_batched_forcefield.h"
+#include "src/minimizer/bfgs_minimize.h"
 
 namespace nvMolKit {
 namespace detail {

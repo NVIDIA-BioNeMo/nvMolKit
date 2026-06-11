@@ -14,8 +14,6 @@
 # the License.
 
 add_library(conformer_types INTERFACE)
-target_include_directories(conformer_types
-                           INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_library(device_coord_collector device_coord_collector.cpp)
 target_link_libraries(

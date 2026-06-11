@@ -1,4 +1,4 @@
-#include "dist_geom_flattened_builder.h"
+#include "rdkit_extensions/dist_geom_flattened_builder.h"
 
 #include <DistGeom/BoundsMatrix.h>
 #include <DistGeom/ChiralSet.h>

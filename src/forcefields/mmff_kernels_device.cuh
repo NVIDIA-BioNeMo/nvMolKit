@@ -16,7 +16,7 @@
 #ifndef NVMOLKIT_MMFF_KERNELS_DEVICE_CUH
 #define NVMOLKIT_MMFF_KERNELS_DEVICE_CUH
 
-#include "kernel_utils.cuh"
+#include "src/forcefields/kernel_utils.cuh"
 
 using namespace nvMolKit::FFKernelUtils;
 

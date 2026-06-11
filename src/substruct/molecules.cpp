@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "molecules.h"
+#include "src/substruct/molecules.h"
 
 #include <GraphMol/MolOps.h>
 #include <GraphMol/QueryAtom.h>
@@ -30,12 +30,12 @@
 #include <stdexcept>
 #include <string>
 
-#include "nvtx.h"
-#include "openmp_helpers.h"
-#include "packed_bonds.h"
-#include "rdkit_compat.h"
-#include "substruct_debug.h"
-#include "substruct_types.h"
+#include "src/substruct/packed_bonds.h"
+#include "src/substruct/substruct_debug.h"
+#include "src/substruct/substruct_types.h"
+#include "src/utils/nvtx.h"
+#include "src/utils/openmp_helpers.h"
+#include "src/utils/rdkit_compat.h"
 
 namespace nvMolKit {
 

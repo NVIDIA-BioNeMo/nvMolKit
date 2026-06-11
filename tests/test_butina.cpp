@@ -24,9 +24,9 @@
 #include <utility>
 #include <vector>
 
-#include "butina.h"
-#include "device.h"
-#include "host_vector.h"
+#include "src/butina.h"
+#include "src/utils/device.h"
+#include "src/utils/host_vector.h"
 
 using nvMolKit::AsyncDeviceVector;
 

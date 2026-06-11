@@ -23,7 +23,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include "mmff_properties.h"
+#include "src/forcefields/mmff_properties.h"
 
 namespace ForceFields {
 

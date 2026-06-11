@@ -18,8 +18,8 @@
 
 #include <mutex>
 
-#include "mmff.h"
-#include "mmff_properties.h"
+#include "src/forcefields/mmff.h"
+#include "src/forcefields/mmff_properties.h"
 
 namespace RDKit {
 class ROMol;

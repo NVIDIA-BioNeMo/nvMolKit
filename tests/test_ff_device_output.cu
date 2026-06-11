@@ -22,11 +22,11 @@
 #include <memory>
 #include <vector>
 
-#include "bfgs_mmff.h"
-#include "bfgs_uff.h"
-#include "cuda_error_check.h"
-#include "device.h"
-#include "device_coord_result.h"
+#include "src/conformer/device_coord_result.h"
+#include "src/minimizer/bfgs_mmff.h"
+#include "src/minimizer/bfgs_uff.h"
+#include "src/utils/cuda_error_check.h"
+#include "src/utils/device.h"
 
 using namespace nvMolKit;
 
