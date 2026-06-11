@@ -18,6 +18,7 @@ import pytest
 import torch
 
 from nvmolkit.clustering import butina, fused_butina
+from nvmolkit.types import AsyncGpuResult
 
 
 def check_butina_correctness(hit_mat, clusts):
@@ -112,6 +113,27 @@ def test_butina_returns_centroids():
         members = torch.nonzero(clusters_tensor == cluster_id, as_tuple=False).flatten()
         for member in members:
             assert adjacency[centroid, member].item()
+
+
+@pytest.mark.parametrize("input_kind", ["async", "cpu_tensor", "numpy"])
+def test_butina_accepts_array_input_types(input_kind):
+    n = 20
+    cutoff = 0.2
+    np.random.seed(456)
+    dists = np.random.rand(n, n)
+    dists = np.abs(dists - dists.T)
+    torch_dists = torch.tensor(dists, device="cuda", dtype=torch.float64)
+    expected = butina(torch_dists, cutoff).torch().cpu()
+
+    if input_kind == "async":
+        inp = AsyncGpuResult(torch_dists)
+    elif input_kind == "cpu_tensor":
+        inp = torch.tensor(dists, dtype=torch.float64)
+    else:
+        inp = dists
+
+    got = butina(inp, cutoff).torch().cpu()
+    torch.testing.assert_close(got, expected)
 
 
 def test_butina_on_explicit_stream():
@@ -272,6 +294,25 @@ def test_fused_butina_return_centroids(n, metric):
         for member in cluster:
             if member != centroid:
                 assert sim[centroid, member] >= threshold - 1e-6
+
+
+@pytest.mark.parametrize("input_kind", ["async", "cpu_tensor", "numpy"])
+def test_fused_butina_accepts_array_input_types(input_kind):
+    x = generate_clustered_fingerprints(50, num_words=32, num_clusters=10)
+    cutoff = 0.4
+    expected_clusters, expected_cluster_sizes = fused_butina(x, cutoff=cutoff)
+
+    if input_kind == "async":
+        inp = AsyncGpuResult(x)
+    elif input_kind == "cpu_tensor":
+        inp = x.cpu()
+    else:
+        inp = x.cpu().numpy()
+
+    clusters, cluster_sizes = fused_butina(inp, cutoff=cutoff)
+    assert [frozenset(cluster) for cluster in clusters] == [frozenset(cluster) for cluster in expected_clusters]
+    assert cluster_sizes == expected_cluster_sizes
+    check_fused_butina_basic(clusters, cluster_sizes, x.shape[0])
 
 
 def test_fused_butina_on_explicit_stream():
