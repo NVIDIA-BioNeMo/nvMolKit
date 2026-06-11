@@ -227,6 +227,36 @@ Inputs are `list[Mol]` with conformers already populated (typically by ETKDG, RD
 
 If any input molecule is `None` or lacks MMFF/UFF atom types, the call raises `ValueError`. The exception's `args[1]` is a dict with keys `"none"` and `"no_params"` listing the offending indices - useful for filtering a noisy input set.
 
+### Conformer RMSD and Butina clustering
+
+```python
+import torch
+from rdkit import Chem
+from rdkit.Chem.rdDistGeom import EmbedMultipleConfs
+from nvmolkit.clustering import butina
+from nvmolkit.conformerRmsd import GetConformerRMSMatrixBatch
+
+mols = [Chem.AddHs(Chem.MolFromSmiles(smi)) for smi in ["CCCCCC", "c1ccccc1"]]
+for mol in mols:
+    EmbedMultipleConfs(mol, numConfs=10)
+
+# Remove hydrogens after embedding for heavy-atom RMSD.
+heavy_mols = [Chem.RemoveHs(mol) for mol in mols]
+
+# Default RMSD output is RDKit-compatible condensed lower-triangle form.
+condensed = GetConformerRMSMatrixBatch(heavy_mols)
+
+# Butina expects a square distance matrix, so request square GPU tensors.
+square = GetConformerRMSMatrixBatch(heavy_mols, output_format="square")
+clusters = [butina(distance_matrix, cutoff=0.5).torch() for distance_matrix in square]
+
+torch.cuda.synchronize()
+for mol_clusters in clusters:
+    print(mol_clusters.cpu().tolist())
+```
+
+`GetConformerRMSMatrix(mol)` and `GetConformerRMSMatrixBatch(mols)` default to `output_format="condensed"`, returning `AsyncGpuResult` objects that wrap RDKit-style flat vectors of length `N * (N - 1) // 2`. Use `output_format="square"` when chaining into `butina()` or any other API that expects an `N x N` distance matrix. Both forms live on the GPU; call `.numpy()` on condensed results or synchronize before moving square tensors to the CPU.
+
 ### Custom forcefield options + constraints (`BatchedForcefield`)
 
 Reach for `MMFFBatchedForcefield` / `UFFBatchedForcefield` instead of the one-shot `MMFFOptimizeMoleculesConfs` / `UFFOptimizeMoleculesConfs` when you need any of:

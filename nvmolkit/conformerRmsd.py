@@ -19,8 +19,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
-from nvmolkit._arrayHelpers import *  # noqa: F403
 from nvmolkit import _conformerRmsd
+from nvmolkit._arrayHelpers import *  # noqa: F403
 from nvmolkit.types import AsyncGpuResult
 
 if TYPE_CHECKING:
@@ -29,11 +29,32 @@ if TYPE_CHECKING:
 __all__ = ["GetConformerRMSMatrix", "GetConformerRMSMatrixBatch"]
 
 
+_VALID_OUTPUT_FORMATS = frozenset({"condensed", "square"})
+
+
+def _check_output_format(output_format: str) -> None:
+    if output_format not in _VALID_OUTPUT_FORMATS:
+        raise ValueError(f"output_format must be one of {sorted(_VALID_OUTPUT_FORMATS)}, got {output_format!r}")
+
+
+def _condensed_to_square(rmsd: AsyncGpuResult, num_confs: int) -> torch.Tensor:
+    values = rmsd.torch()
+    square = torch.zeros((num_confs, num_confs), device=values.device, dtype=values.dtype)
+    if num_confs < 2:
+        return square
+
+    idx = torch.tril_indices(num_confs, num_confs, offset=-1, device=values.device)
+    square[idx[0], idx[1]] = values
+    return square + square.T
+
+
 def GetConformerRMSMatrix(
     mol: "Mol",
     prealigned: bool = False,
     stream: torch.cuda.Stream | None = None,
-) -> AsyncGpuResult:
+    *,
+    output_format: str = "condensed",
+) -> AsyncGpuResult | torch.Tensor:
     """Compute the pairwise RMSD matrix between all conformers of a molecule on GPU.
 
     GPU-accelerated equivalent of ``AllChem.GetConformerRMSMatrix(mol,
@@ -50,8 +71,9 @@ def GetConformerRMSMatrix(
     * Results are returned as an :class:`AsyncGpuResult` (device tensor) rather
       than a Python list, to keep the conformer-selection pipeline on the GPU.
 
-    The result can be passed directly to :func:`nvmolkit.clustering.butina` for
-    GPU-accelerated Butina clustering.
+    By default, the result matches RDKit's condensed lower-triangle shape.  Use
+    ``output_format="square"`` when a downstream API expects an ``N x N`` distance
+    matrix, such as :func:`nvmolkit.clustering.butina`.
 
     Args:
         mol: RDKit molecule with two or more conformers.  Strip hydrogens first
@@ -60,11 +82,19 @@ def GetConformerRMSMatrix(
         prealigned: If True, skip Kabsch alignment and compute RMSD on raw
                     coordinates.  If False (default), optimally align each pair.
         stream: CUDA stream to use.  If None, uses the current stream.
+        output_format: ``"condensed"`` returns an :class:`AsyncGpuResult` wrapping
+                       a 1-D RDKit-style lower-triangle vector.  ``"square"``
+                       returns a symmetric ``torch.Tensor`` of shape ``(N, N)``
+                       on the GPU with zeros on the diagonal.
 
     Returns:
-        AsyncGpuResult wrapping a 1-D tensor of shape ``(N*(N-1)/2,)`` containing
-        RMSD values in lower-triangle condensed order.  The RMSD for conformer
-        pair (i, j) with i > j is at index ``i*(i-1)//2 + j``.
+        With ``output_format="condensed"``, an :class:`AsyncGpuResult` wrapping a
+        1-D tensor of shape ``(N*(N-1)/2,)`` containing RMSD values in
+        lower-triangle condensed order.  The RMSD for conformer pair (i, j) with
+        i > j is at index ``i*(i-1)//2 + j``.
+
+        With ``output_format="square"``, a symmetric CUDA ``torch.Tensor`` of
+        shape ``(N, N)``.
 
     Raises:
         ValueError: If ``mol`` is None or has conformers but no atoms.
@@ -83,29 +113,32 @@ def GetConformerRMSMatrix(
         >>> # GPU equivalent of: AllChem.GetConformerRMSMatrix(no_h)
         >>> rmsd_matrix = GetConformerRMSMatrix(no_h)
         >>>
-        >>> # Reshape to square for GPU Butina clustering
-        >>> import torch
-        >>> n = no_h.GetNumConformers()
-        >>> square = torch.zeros(n, n, device='cuda', dtype=torch.float64)
-        >>> idx = torch.tril_indices(n, n, offset=-1)
-        >>> square[idx[0], idx[1]] = rmsd_matrix.torch()
-        >>> square = square + square.T
+        >>> # Request square output for GPU Butina clustering
+        >>> square = GetConformerRMSMatrix(no_h, output_format="square")
         >>> clusters = butina(square, cutoff=0.5)
     """
     if mol is None:
         raise ValueError("mol must not be None")
     if stream is not None and not isinstance(stream, torch.cuda.Stream):
         raise TypeError(f"stream must be a torch.cuda.Stream or None, got {type(stream).__name__}")
+    _check_output_format(output_format)
 
-    stream_ptr = (stream if stream is not None else torch.cuda.current_stream()).cuda_stream
-    return AsyncGpuResult(_conformerRmsd.GetConformerRMSMatrix(mol, prealigned, stream_ptr))
+    execution_stream = stream if stream is not None else torch.cuda.current_stream()
+    stream_ptr = execution_stream.cuda_stream
+    result = AsyncGpuResult(_conformerRmsd.GetConformerRMSMatrix(mol, prealigned, stream_ptr))
+    if output_format == "square":
+        with torch.cuda.stream(execution_stream):
+            return _condensed_to_square(result, mol.GetNumConformers())
+    return result
 
 
 def GetConformerRMSMatrixBatch(
     mols: list["Mol"],
     prealigned: bool = False,
     stream: torch.cuda.Stream | None = None,
-) -> list[AsyncGpuResult]:
+    *,
+    output_format: str = "condensed",
+) -> list[AsyncGpuResult] | list[torch.Tensor]:
     """Compute pairwise RMSD matrices for a batch of molecules on GPU.
 
     All molecules are processed in a single kernel launch, so their conformer
@@ -119,13 +152,21 @@ def GetConformerRMSMatrixBatch(
         prealigned: If True, skip Kabsch alignment and compute RMSD on raw
                     coordinates.  If False (default), optimally align each pair.
         stream: CUDA stream to use.  If None, uses the current stream.
+        output_format: ``"condensed"`` returns one :class:`AsyncGpuResult` per
+                       molecule, each wrapping a 1-D RDKit-style lower-triangle
+                       vector.  ``"square"`` returns one symmetric CUDA
+                       ``torch.Tensor`` of shape ``(N, N)`` per molecule.
 
     Returns:
-        List of :class:`AsyncGpuResult`, one per input molecule, in the same
-        order as ``mols``.  Each element wraps a 1-D tensor of shape
-        ``(N*(N-1)/2,)`` for a molecule with N conformers, or shape ``(0,)``
-        for molecules with fewer than 2 conformers.  The RMSD for conformer
-        pair (i, j) with i > j is at index ``i*(i-1)//2 + j``.
+        With ``output_format="condensed"``, a list of :class:`AsyncGpuResult`,
+        one per input molecule, in the same order as ``mols``.  Each element
+        wraps a 1-D tensor of shape ``(N*(N-1)/2,)`` for a molecule with N
+        conformers, or shape ``(0,)`` for molecules with fewer than 2
+        conformers.  The RMSD for conformer pair (i, j) with i > j is at index
+        ``i*(i-1)//2 + j``.
+
+        With ``output_format="square"``, a list of symmetric CUDA
+        ``torch.Tensor`` objects with shapes ``(N, N)``.
 
     Raises:
         ValueError: If any element of ``mols`` is None.
@@ -146,11 +187,17 @@ def GetConformerRMSMatrixBatch(
     """
     if stream is not None and not isinstance(stream, torch.cuda.Stream):
         raise TypeError(f"stream must be a torch.cuda.Stream or None, got {type(stream).__name__}")
+    _check_output_format(output_format)
 
     for i, mol in enumerate(mols):
         if mol is None:
             raise ValueError(f"mol at index {i} must not be None")
 
-    stream_ptr = (stream if stream is not None else torch.cuda.current_stream()).cuda_stream
+    execution_stream = stream if stream is not None else torch.cuda.current_stream()
+    stream_ptr = execution_stream.cuda_stream
     raw = _conformerRmsd.GetConformerRMSMatrixBatch(mols, prealigned, stream_ptr)
-    return [AsyncGpuResult(r) for r in raw]
+    results = [AsyncGpuResult(r) for r in raw]
+    if output_format == "square":
+        with torch.cuda.stream(execution_stream):
+            return [_condensed_to_square(result, mol.GetNumConformers()) for result, mol in zip(results, mols)]
+    return results

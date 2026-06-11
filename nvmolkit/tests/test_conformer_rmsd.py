@@ -13,15 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import copy
-
+import numpy as np
 import pytest
 import torch
-import numpy as np
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdDistGeom
 
 from nvmolkit.conformerRmsd import GetConformerRMSMatrix, GetConformerRMSMatrixBatch
+from nvmolkit.types import AsyncGpuResult
 
 
 def _numpy_kabsch_rmsd(p, q):
@@ -29,7 +28,7 @@ def _numpy_kabsch_rmsd(p, q):
     p_c = p - p.mean(axis=0)
     q_c = q - q.mean(axis=0)
     H = p_c.T @ q_c
-    U, S, Vt = np.linalg.svd(H)
+    _u, S, _vt = np.linalg.svd(H)
     d = np.sign(np.linalg.det(H))
     S[-1] *= d if d != 0.0 else 1.0
     Sp = np.sum(p_c**2)
@@ -132,6 +131,56 @@ def test_rmsd_two_conformers():
     assert abs(gpu_rms[0] - ref_rms[0]) < 0.01
 
 
+def test_rmsd_explicit_condensed_output_matches_default():
+    """Explicit condensed output preserves the default API behavior."""
+    mol = _embed_mol("CCCCCC", num_confs=10)
+    no_h = Chem.RemoveHs(mol)
+
+    default_result = GetConformerRMSMatrix(no_h)
+    condensed_result = GetConformerRMSMatrix(no_h, output_format="condensed")
+    torch.cuda.synchronize()
+
+    assert isinstance(condensed_result, AsyncGpuResult)
+    assert torch.allclose(condensed_result.torch(), default_result.torch(), atol=1e-10)
+
+
+def test_rmsd_square_output_matches_condensed():
+    """Square output expands the default RDKit-style condensed vector."""
+    mol = _embed_mol("CCCCCC", num_confs=10)
+    no_h = Chem.RemoveHs(mol)
+    n = no_h.GetNumConformers()
+
+    condensed = GetConformerRMSMatrix(no_h).torch()
+    square = GetConformerRMSMatrix(no_h, output_format="square")
+    torch.cuda.synchronize()
+
+    expected = torch.zeros((n, n), device=square.device, dtype=square.dtype)
+    idx = torch.tril_indices(n, n, offset=-1, device=square.device)
+    expected[idx[0], idx[1]] = condensed
+    expected = expected + expected.T
+
+    assert isinstance(square, torch.Tensor)
+    assert square.shape == (n, n)
+    assert torch.allclose(square, expected, atol=1e-10)
+    assert torch.allclose(torch.diag(square), torch.zeros(n, device=square.device, dtype=square.dtype))
+
+
+def test_rmsd_square_output_for_fewer_than_two_conformers():
+    """Square output handles the same <2 conformer inputs as condensed output."""
+    mol_zero = Chem.MolFromSmiles("CCO")
+    mol_one = Chem.RemoveHs(_embed_mol("CCO", num_confs=1))
+
+    square_zero = GetConformerRMSMatrix(mol_zero, output_format="square")
+    square_one = GetConformerRMSMatrix(mol_one, output_format="square")
+    torch.cuda.synchronize()
+
+    assert isinstance(square_zero, torch.Tensor)
+    assert square_zero.shape == (0, 0)
+    assert isinstance(square_one, torch.Tensor)
+    assert square_one.shape == (1, 1)
+    assert square_one.item() == 0.0
+
+
 def test_rmsd_rigid_molecule():
     """Rigid molecule (benzene) — all conformers should have near-zero RMSD."""
     mol = _embed_mol("c1ccccc1", num_confs=5)
@@ -160,6 +209,25 @@ def test_rmsd_explicit_stream():
         assert abs(g - r) < 0.01
 
 
+def test_rmsd_square_output_explicit_stream():
+    """Square conversion is enqueued on the caller-provided stream."""
+    mol = _embed_mol("CCCCCC", num_confs=10)
+    no_h = Chem.RemoveHs(mol)
+
+    s = torch.cuda.Stream()
+    square = GetConformerRMSMatrix(no_h, stream=s, output_format="square")
+    s.synchronize()
+
+    ref_rms = _numpy_rmsd_matrix(no_h)
+    n = no_h.GetNumConformers()
+    expected = torch.zeros((n, n), device=square.device, dtype=square.dtype)
+    idx = torch.tril_indices(n, n, offset=-1, device=square.device)
+    expected[idx[0], idx[1]] = torch.tensor(ref_rms, device=square.device, dtype=square.dtype)
+    expected = expected + expected.T
+
+    assert torch.allclose(square, expected, atol=0.01)
+
+
 def test_rmsd_invalid_input_none():
     """None molecule should raise ValueError."""
     with pytest.raises(ValueError, match="mol must not be None"):
@@ -179,6 +247,22 @@ def test_rmsd_invalid_stream_type():
     no_h = Chem.RemoveHs(mol)
     with pytest.raises(TypeError):
         GetConformerRMSMatrix(no_h, stream=42)
+
+
+def test_rmsd_invalid_output_format():
+    """Unknown output_format should fail before dispatch."""
+    mol = _embed_mol("CCCC", num_confs=2)
+    no_h = Chem.RemoveHs(mol)
+    with pytest.raises(ValueError, match="output_format must be one of"):
+        GetConformerRMSMatrix(no_h, output_format="matrix")
+
+
+def test_rmsd_output_format_is_keyword_only():
+    """output_format is keyword-only to avoid ambiguous positional calls."""
+    mol = _embed_mol("CCCC", num_confs=2)
+    no_h = Chem.RemoveHs(mol)
+    with pytest.raises(TypeError):
+        GetConformerRMSMatrix(no_h, False, None, "square")
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +304,45 @@ def test_batch_mixed_conformer_counts():
     assert results[2].numpy().shape[0] == 0
 
 
+def test_batch_explicit_condensed_output_matches_default():
+    """Explicit batch condensed output preserves the default API behavior."""
+    mols = [Chem.RemoveHs(_embed_mol(s, num_confs=5)) for s in ["CCCC", "CCCCC"]]
+
+    default_results = GetConformerRMSMatrixBatch(mols)
+    condensed_results = GetConformerRMSMatrixBatch(mols, output_format="condensed")
+    torch.cuda.synchronize()
+
+    for default_result, condensed_result in zip(default_results, condensed_results):
+        assert isinstance(condensed_result, AsyncGpuResult)
+        assert torch.allclose(condensed_result.torch(), default_result.torch(), atol=1e-10)
+
+
+def test_batch_square_output():
+    """Batch square output returns one NxN tensor per molecule."""
+    mols = [
+        Chem.RemoveHs(_embed_mol("CCCCCC", num_confs=8)),
+        Chem.RemoveHs(_embed_mol("CC", num_confs=3)),
+        Chem.MolFromSmiles("CCO"),
+        Chem.RemoveHs(_embed_mol("CCO", num_confs=1)),
+    ]
+
+    condensed_results = GetConformerRMSMatrixBatch(mols)
+    square_results = GetConformerRMSMatrixBatch(mols, output_format="square")
+    torch.cuda.synchronize()
+
+    for mol, condensed_result, square in zip(mols, condensed_results, square_results):
+        n = mol.GetNumConformers()
+        expected = torch.zeros((n, n), device=square.device, dtype=square.dtype)
+        if n >= 2:
+            idx = torch.tril_indices(n, n, offset=-1, device=square.device)
+            expected[idx[0], idx[1]] = condensed_result.torch()
+            expected = expected + expected.T
+
+        assert isinstance(square, torch.Tensor)
+        assert square.shape == (n, n)
+        assert torch.allclose(square, expected, atol=1e-10)
+
+
 def test_batch_empty_list():
     """Empty input returns an empty list."""
     results = GetConformerRMSMatrixBatch([])
@@ -251,6 +374,20 @@ def test_batch_invalid_none():
         GetConformerRMSMatrixBatch([mol, None])
 
 
+def test_batch_invalid_output_format():
+    """Unknown batch output_format should fail before dispatch."""
+    mol = Chem.RemoveHs(_embed_mol("CCCC", num_confs=2))
+    with pytest.raises(ValueError, match="output_format must be one of"):
+        GetConformerRMSMatrixBatch([mol], output_format="matrix")
+
+
+def test_batch_output_format_is_keyword_only():
+    """Batch output_format is keyword-only to avoid ambiguous positional calls."""
+    mol = Chem.RemoveHs(_embed_mol("CCCC", num_confs=2))
+    with pytest.raises(TypeError):
+        GetConformerRMSMatrixBatch([mol], False, None, "square")
+
+
 def test_batch_explicit_stream():
     """Batch results are correct on an explicit CUDA stream."""
     mols = [Chem.RemoveHs(_embed_mol(s, num_confs=5)) for s in ["CCCC", "CCCCC"]]
@@ -264,6 +401,25 @@ def test_batch_explicit_stream():
         rms = result.numpy().tolist()
         for g, r in zip(rms, ref):
             assert abs(g - r) < 0.01
+
+
+def test_batch_square_output_explicit_stream():
+    """Batch square conversion is enqueued on the caller-provided stream."""
+    mols = [Chem.RemoveHs(_embed_mol(s, num_confs=5)) for s in ["CCCC", "CCCCC"]]
+
+    s = torch.cuda.Stream()
+    squares = GetConformerRMSMatrixBatch(mols, stream=s, output_format="square")
+    s.synchronize()
+
+    for mol, square in zip(mols, squares):
+        ref_rms = _numpy_rmsd_matrix(mol)
+        n = mol.GetNumConformers()
+        expected = torch.zeros((n, n), device=square.device, dtype=square.dtype)
+        idx = torch.tril_indices(n, n, offset=-1, device=square.device)
+        expected[idx[0], idx[1]] = torch.tensor(ref_rms, device=square.device, dtype=square.dtype)
+        expected = expected + expected.T
+
+        assert torch.allclose(square, expected, atol=0.01)
 
 
 def test_rmsd_zero_atoms():
