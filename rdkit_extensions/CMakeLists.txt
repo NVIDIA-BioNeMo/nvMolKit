@@ -51,7 +51,7 @@ target_include_directories(mmff_optimize INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
 add_library(rdkit_dist_geom_flattened dist_geom_flattened_builder.cpp)
 target_link_libraries(
   rdkit_dist_geom_flattened
-  PRIVATE ${RDKit_LIBS} device_vector
+  PRIVATE ${RDKit_LIBS} device_vector nvmolkit_versions
   PUBLIC dist_geom)
 target_include_directories(rdkit_dist_geom_flattened
                            PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
