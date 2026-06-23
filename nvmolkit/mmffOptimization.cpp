@@ -35,10 +35,7 @@ BOOST_PYTHON_MODULE(_mmffOptimization) {
         nvMolKit::MMFF::MMFFOptimizeMoleculesConfsBfgs(molsVec, maxIters, properties, hardwareOptions);
       return nvMolKit::vectorOfVectorsToList(result);
     },
-    (bp::arg("molecules"),
-     bp::arg("maxIters")        = 200,
-     bp::arg("properties")      = bp::list(),
-     bp::arg("hardwareOptions") = nvMolKit::BatchHardwareOptions()),
+    (bp::arg("molecules"), bp::arg("maxIters"), bp::arg("properties"), bp::arg("hardwareOptions")),
     "Optimize conformers for multiple molecules using MMFF force field.\n"
     "\n"
     "Args:\n"
@@ -74,10 +71,10 @@ BOOST_PYTHON_MODULE(_mmffOptimization) {
       return nvMolKit::buildOwningDevice3DResult(*result.device);
     },
     (bp::arg("molecules"),
-     bp::arg("maxIters")        = 200,
-     bp::arg("properties")      = bp::list(),
-     bp::arg("hardwareOptions") = nvMolKit::BatchHardwareOptions(),
-     bp::arg("targetGpu")       = -1),
+     bp::arg("maxIters"),
+     bp::arg("properties"),
+     bp::arg("hardwareOptions"),
+     bp::arg("targetGpu")),
     "Optimize conformers for multiple molecules using MMFF force field, returning device-resident "
     "results.\n"
     "\n"

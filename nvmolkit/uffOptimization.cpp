@@ -39,10 +39,10 @@ BOOST_PYTHON_MODULE(_uffOptimization) {
       return nvMolKit::vectorOfVectorsToList(result);
     },
     (bp::arg("molecules"),
-     bp::arg("maxIters") = 1000,
+     bp::arg("maxIters"),
      bp::arg("vdwThresholds"),
      bp::arg("ignoreInterfragInteractions"),
-     bp::arg("hardwareOptions") = nvMolKit::BatchHardwareOptions()),
+     bp::arg("hardwareOptions")),
     "Optimize conformers for multiple molecules using UFF force field.\n"
     "\n"
     "Args:\n"
@@ -83,11 +83,11 @@ BOOST_PYTHON_MODULE(_uffOptimization) {
       return nvMolKit::buildOwningDevice3DResult(*result.device);
     },
     (bp::arg("molecules"),
-     bp::arg("maxIters") = 1000,
+     bp::arg("maxIters"),
      bp::arg("vdwThresholds"),
      bp::arg("ignoreInterfragInteractions"),
-     bp::arg("hardwareOptions") = nvMolKit::BatchHardwareOptions(),
-     bp::arg("targetGpu")       = -1),
+     bp::arg("hardwareOptions"),
+     bp::arg("targetGpu")),
     "Optimize conformers for multiple molecules using UFF force field, returning device-resident "
     "results.\n"
     "\n"
