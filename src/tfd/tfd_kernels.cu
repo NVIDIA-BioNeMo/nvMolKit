@@ -109,9 +109,10 @@ __global__ void tfdMatrixKernel(const int numMolecules,
     // Decode lower-triangular (i, j) from flat pairIdx
     // i*(i-1)/2 + j = pairIdx, i > j >= 0
     // i = floor((1 + sqrt(1 + 8*pairIdx)) / 2)
-    int i = static_cast<int>((1.0f + sqrtf(1.0f + 8.0f * pairIdx)) * 0.5f);
-    // Symmetric guards: float sqrtf can round either way when 8*pairIdx exceeds
-    // float32's 24-bit mantissa (pairIdx >~ 2M, i.e. >~2000 conformers).
+    // Use double precision: float32 loses bits when 8*pairIdx > 2^23 (~1M pairs,
+    // ~1415 conformers), the same threshold documented in conformer_rmsd.cu.
+    int i = static_cast<int>((1.0 + sqrt(1.0 + 8.0 * static_cast<double>(pairIdx))) * 0.5);
+    // Clamp guards for any residual rounding at boundary values.
     if (i * (i - 1) / 2 > pairIdx)
       i--;
     else if ((i + 1) * i / 2 <= pairIdx)
@@ -135,15 +136,19 @@ __global__ void tfdMatrixKernel(const int numMolecules,
         deviation = circularDifference(dihedralAngles[aI + qLocalStart], dihedralAngles[aJ + qLocalStart]) /
                     torsionMaxDevs[globalT];
       } else if (type == 1) {  // Ring
-        float avgI = 0.0f;
-        float avgJ = 0.0f;
-        for (int qq = 0; qq < numQ; ++qq) {
-          avgI += fabsf(dihedralAngles[aI + qLocalStart + qq] - 180.0f);
-          avgJ += fabsf(dihedralAngles[aJ + qLocalStart + qq] - 180.0f);
+        if (numQ == 0) {
+          deviation = 0.0f;
+        } else {
+          float avgI = 0.0f;
+          float avgJ = 0.0f;
+          for (int qq = 0; qq < numQ; ++qq) {
+            avgI += fabsf(dihedralAngles[aI + qLocalStart + qq] - 180.0f);
+            avgJ += fabsf(dihedralAngles[aJ + qLocalStart + qq] - 180.0f);
+          }
+          avgI /= numQ;
+          avgJ /= numQ;
+          deviation = fabsf(avgI - avgJ) / torsionMaxDevs[globalT];
         }
-        avgI /= numQ;
-        avgJ /= numQ;
-        deviation = fabsf(avgI - avgJ) / torsionMaxDevs[globalT];
       } else {  // Symmetric
         float minDiff = 180.0f;
         for (int qi = 0; qi < numQ; ++qi) {
