@@ -14,7 +14,7 @@ Conda is the recommended way to install nvMolKit, matching the recommended distr
 you have a variant of conda installed and activated, such as [Miniconda](https://docs.conda.io/en/latest/miniconda.html) 
 or [Miniforge](https://conda-forge.org/download/).
 
-nvMolKit v0.5.0 supports RDKit 2025.03.1 through 2026.03.1. To install:
+nvMolKit v0.5.1 supports RDKit 2025.03.1 through 2026.03.1. To install:
 
 ```bash
 conda install -c conda-forge nvmolkit
@@ -205,4 +205,3 @@ To narrow the matrix while iterating, set `CIBW_BUILD=cp312-manylinux_x86_64` (o
 The full CI pipeline is at [`.github/workflows/pip-build.yml`](.github/workflows/pip-build.yml). It runs on demand (`workflow_dispatch` only), expands the (rdkit, python) matrix from [`admin/distribute/rdkit_build_matrix.yaml`](admin/distribute/rdkit_build_matrix.yaml), and pulls the pre-built manylinux+CUDA image from the org's GHCR (`ghcr.io/nvidia-digital-bio/nvmolkit-manylinux-cuda12`). The image is rebuilt and pushed manually when the Dockerfile changes; the build script header documents the push command.
 
 Internally, cibuildwheel's `before-build` hook (see [`admin/distribute/cibuildwheel_before_build.sh`](admin/distribute/cibuildwheel_before_build.sh)) clones rdkit-pypi at the matching tag, runs [`admin/distribute/build_rdkit_recipe.sh`](admin/distribute/build_rdkit_recipe.sh) to reproduce its build (~30-60 min on first invocation; cached afterwards), pip-installs the matching rdkit wheel for runtime SONAME-matching libs, and stages everything at stable paths under `/tmp/nvmolkit_pip_inputs/`. setup.py picks those up via `NVMOLKIT_BUILD_AGAINST_PIP_*` env vars set in pyproject.toml's `[tool.cibuildwheel.linux].environment`.
-

@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.5.1 - 2026-06-24
+
+### Summary
+
+nvMolKit 0.5.1 is a patch release focused on release packaging, installation metadata, and targeted bug fixes for the v0.5 series. It keeps the v0.5.0 feature set and RDKit support range while improving pip wheel load behavior, GPU correctness edge cases, and Python wrapper compatibility.
+
+### Bug Fixes
+- Fix pip-built wheels failing to load in minimal manylinux containers by tightening bundled RDKit/Boost runtime linking.
+- Fix TFD lower-triangle pair decoding for large conformer counts and avoid division by zero for ring torsions with no quartet entries.
+- Match RDKit's fixed BFGS gradient-convergence denominator behavior when built against RDKit 2026.03 or newer, while preserving parity with older RDKit releases.
+- Fix Morgan fingerprint GPU correctness issues covered by GH issues 195 and 197.
+- Fix fused Butina neighbor-count launch overflow for very large clustering inputs.
+- Fix ETKDG chirality and bounds behavior by making the RDKit structure-flag API gate visible to the preprocessor and linked targets.
+- Fix disconnected SMARTS queries terminating the process during multithreaded substructure preprocessing; they now raise the expected Python exception.
+- Fix recursive SMARTS extraction for pip RDKit builds by including the RDKit layout flag required by recursive query structures.
+- Fix standalone import of `_mmffOptimization` and `_uffOptimization` before `nvmolkit.types`.
+- Accept `AsyncGpuResult`, CUDA tensors, CPU tensors, and NumPy arrays consistently in clustering and similarity wrappers.
+- Improve autotune search defaults by using stepped batch-size ranges and physical CPU core counts.
+
+### Packaging
+- Add PyPI-facing package metadata, project URLs, classifiers, and long description text to `pyproject.toml`.
+
 ## 0.5.0 - 2026-05-13
 
 ### Summary

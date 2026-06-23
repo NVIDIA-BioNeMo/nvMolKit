@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nvMolKit"
-version = "0.5.0"
+version = "0.5.1"
 description = "CUDA-backed python library for accelerating common RDKit molecular operations"
 readme = { text = """
 nvMolKit is a CUDA-backed Python library that accelerates common
