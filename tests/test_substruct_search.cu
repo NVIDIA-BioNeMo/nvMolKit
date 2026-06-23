@@ -1448,6 +1448,29 @@ TEST_P(RecursiveSubstructureSearchTest, NestedRecursiveBatchProcessing) {
   }
 }
 
+TEST_P(RecursiveSubstructureSearchTest, AmideRecursiveQueryMatchesSmallTargets) {
+  std::vector<std::unique_ptr<RDKit::ROMol>> targetMols;
+  std::vector<std::unique_ptr<RDKit::ROMol>> queryMols;
+
+  parseMolecules({"CC(=O)N", "NC=O", "CC(=O)O"}, {"[$(NC=O)]"}, targetMols, queryMols);
+
+  HasSubstructMatchResults boolResults;
+  hasSubstructMatch(getRawPtrs(targetMols), getRawPtrs(queryMols), boolResults, algorithm(), stream_.stream());
+
+  EXPECT_TRUE(boolResults.matches(0, 0));
+  EXPECT_TRUE(boolResults.matches(1, 0));
+  EXPECT_FALSE(boolResults.matches(2, 0));
+
+  std::vector<int> counts;
+  countSubstructMatches(getRawPtrs(targetMols), getRawPtrs(queryMols), counts, algorithm(), stream_.stream());
+
+  ASSERT_EQ(counts.size(), targetMols.size() * queryMols.size());
+  for (size_t t = 0; t < targetMols.size(); ++t) {
+    const auto rdkitMatches = getRDKitSubstructMatches(*targetMols[t], *queryMols[0], false);
+    EXPECT_EQ(counts[t], static_cast<int>(rdkitMatches.size())) << "target " << t;
+  }
+}
+
 TEST_P(SubstructureSearchTest, InvalidSlotsPerRunnerThrows) {
   std::vector<std::unique_ptr<RDKit::ROMol>> targetMols;
   std::vector<std::unique_ptr<RDKit::ROMol>> queryMols;

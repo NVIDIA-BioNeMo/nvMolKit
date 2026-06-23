@@ -15,6 +15,12 @@
 
 #include "src/substruct/molecules.h"
 
+// RDConfig defines RDK_BUILD_THREADSAFE_SSS, which changes RecursiveStructureQuery layout.
+// It must be visible before QueryOps is included through QueryAtom.h.
+// clang-format off
+#include <RDGeneral/RDConfig.h>
+// clang-format on
+
 #include <GraphMol/MolOps.h>
 #include <GraphMol/QueryAtom.h>
 #include <GraphMol/QueryOps.h>
