@@ -1,6 +1,14 @@
 ---
 name: nvmolkit-usage
-description: Write code that calls the installed nvMolKit Python API for GPU-accelerated, batched RDKit-style operations - Morgan fingerprints, Tanimoto/cosine similarity, ETKDG conformer embedding, MMFF/UFF optimization, TFD, conformer RMSD, Butina clustering, and substructure search. Use when the user is importing `nvmolkit.*`, debugging an `nvmolkit` call, choosing between nvMolKit and RDKit for a batched cheminformatics workflow, or wiring nvMolKit results into a torch/numpy pipeline. Out of scope: building nvMolKit from source.
+description: >-
+  Write code that calls the installed nvMolKit Python API for GPU-accelerated,
+  batched RDKit-style operations - Morgan fingerprints, Tanimoto/cosine
+  similarity, ETKDG conformer embedding, MMFF/UFF optimization, TFD, conformer
+  RMSD, Butina clustering, and substructure search. Use when the user is
+  importing `nvmolkit.*`, debugging an `nvmolkit` call, choosing between
+  nvMolKit and RDKit for a batched cheminformatics workflow, or wiring nvMolKit
+  results into a torch/numpy pipeline. Out of scope: building nvMolKit from
+  source.
 license: Apache-2.0
 metadata:
   owner: Kevin Boyd (@scal444)
@@ -30,6 +38,12 @@ Plain RDKit is usually the better choice for single-molecule one-offs or workflo
 - A working `torch` install with CUDA support (nvMolKit returns GPU tensors via `torch`'s CUDA array interface).
 
 If CUDA is unavailable, nvMolKit calls raise. There is no CPU fallback - if the user needs one, use RDKit directly for that path.
+
+When helping with installation, make the user choose a PyTorch CUDA backend that the host driver supports before installing nvMolKit. nvMolKit's PyPI wheels are built with CUDA Toolkit 12.9 and depend on CUDA 12 runtime packages, but pip/uv can still select a CUDA 13 PyTorch wheel unless the install command says otherwise.
+
+- Conda: prefer conda-forge `pytorch-gpu`; pin `cuda-version=12.6` or another CUDA version supported by the driver.
+- pip: send the user to the PyTorch install selector (`https://pytorch.org/get-started/locally/`) or previous-versions page (`https://pytorch.org/get-started/previous-versions/`) to install `torch` for a CUDA 12.x backend before installing nvMolKit.
+- uv: install nvMolKit with an explicit backend, e.g. `uv pip install --torch-backend=cu128 nvmolkit`.
 
 ## Verify the install before writing real code
 

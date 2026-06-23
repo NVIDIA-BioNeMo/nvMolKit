@@ -12,6 +12,12 @@ If you use [Cursor](https://cursor.com/) (or another agent that supports the `SK
 **IMPORTANT**: nvMolKit requires an NVIDIA GPU with compute capability 7.0 (V100) or higher to run. Check your GPU's compute capability [here](https://developer.nvidia.com/cuda-gpus).
 It also requires a CUDA Driver sufficient for CUDA 12.6 or later (driver version >=560.28), though some backwards compatibility may be supported, see the [CUDA compatibility guide](https://docs.nvidia.com/deploy/cuda-compatibility/index.html).
 
+nvMolKit uses PyTorch for CUDA tensors, so the installed PyTorch CUDA backend must also be compatible with your driver. Package managers may otherwise select a CUDA backend that is newer than your host driver supports.
+
+- **Conda**: install the conda-forge `pytorch-gpu` metapackage and pin `cuda-version` when needed.
+- **pip**: choose the CUDA backend from the [PyTorch local install selector](https://pytorch.org/get-started/locally/) or the [previous versions page](https://pytorch.org/get-started/previous-versions/), install that `torch` wheel first, then install nvMolKit.
+- **uv**: pass `--torch-backend` during install, for example `uv pip install --torch-backend=cu128 nvmolkit`.
+
 ### Conda-forge Installation (Recommended)
 
 Conda is the recommended way to install nvMolKit, matching the recommended distribution mechanism of the RDKit. First, ensure 
@@ -25,11 +31,11 @@ conda install -c conda-forge nvmolkit
 ```
 
 **Note**: If your system's CUDA driver does not support CUDA 13, the default install may
-resolve `cuda-version=13` and fall back to a CPU-only PyTorch. To ensure GPU-accelerated
-PyTorch is installed:
+resolve `cuda-version=13` and leave you with an unusable or CPU-only PyTorch. To ensure
+GPU-accelerated PyTorch is installed:
 
 ```bash
-conda install -c conda-forge nvmolkit cuda-version=12.6
+conda install -c conda-forge nvmolkit pytorch-gpu cuda-version=12.6
 ```
 Choose a `cuda-version` that is **≤** the CUDA version reported by `nvidia-smi` and that
 has a matching PyTorch build on conda-forge. See the
@@ -38,9 +44,19 @@ to find supported CUDA versions.
 
 ### Pip Installation
 
+Published binary wheels are available for CPython 3.11-3.14. The nvMolKit pip
+wheels are built with CUDA Toolkit 12.9 and depend on CUDA 12 runtime packages.
+For pip environments, install a PyTorch CUDA 12 wheel supported by your driver
+before installing nvMolKit. For example, with PyTorch's CUDA 12.8 backend:
+
 ```bash
-pip install nvmolkit
+python -m pip install torch --index-url https://download.pytorch.org/whl/cu128
+python -m pip install nvmolkit
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 ```
+
+Replace `cu128` with another CUDA 12 backend from the PyTorch install page if that is
+compatible with your driver.
 
 The wheel published to PyPI is built against a single RDKit release per
 nvMolKit version (RDKit 2026.03.1 for nvMolKit v0.5.0), due to versioning
@@ -237,4 +253,3 @@ To narrow the matrix while iterating, set `CIBW_BUILD=cp312-manylinux_x86_64` (o
 The full CI pipeline is at [`.github/workflows/pip-build.yml`](.github/workflows/pip-build.yml). It runs on demand (`workflow_dispatch` only), expands the (rdkit, python) matrix from [`admin/distribute/rdkit_build_matrix.yaml`](admin/distribute/rdkit_build_matrix.yaml), and pulls the pre-built manylinux+CUDA image from the org's GHCR (`ghcr.io/nvidia-bionemo/nvmolkit-manylinux-cuda12`). The image is rebuilt and pushed manually when the Dockerfile changes; the build script header documents the push command.
 
 Internally, cibuildwheel's `before-build` hook (see [`admin/distribute/cibuildwheel_before_build.sh`](admin/distribute/cibuildwheel_before_build.sh)) clones rdkit-pypi at the matching tag, runs [`admin/distribute/build_rdkit_recipe.sh`](admin/distribute/build_rdkit_recipe.sh) to reproduce its build (~30-60 min on first invocation; cached afterwards), pip-installs the matching rdkit wheel for runtime SONAME-matching libs, and stages everything at stable paths under `/tmp/nvmolkit_pip_inputs/`. setup.py picks those up via `NVMOLKIT_BUILD_AGAINST_PIP_*` env vars set in pyproject.toml's `[tool.cibuildwheel.linux].environment`.
-
