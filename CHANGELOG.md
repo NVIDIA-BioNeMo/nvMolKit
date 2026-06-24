@@ -12,20 +12,20 @@ nvMolKit 0.5.1 is a bug fix and quality-of-life release.
 - Clay Moore (@mooreneural)
 
 ### Bug Fixes
-- Fix pip-built wheels failing to load in minimal manylinux containers ([8ced6c8](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/8ced6c80e82b3ef486330cafe46692d208df7bef)).
-- Fix TFD lower-triangle pair decoding for large conformer counts and empty-ring torsion handling ([d265234](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/d265234ca47423a0635c3fe4949086738c10fb08)).
-- Match RDKit's fixed BFGS gradient-convergence denominator behavior with RDKit 2026.03+ ([ef5ad6b](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/ef5ad6b8bceadc94cbbf8536944ef9840e82833e)).
-- Fix Morgan fingerprints for batches containing only molecules larger than the GPU buckets ([#195](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/195)).
-- Fix Morgan fingerprint scratch reuse across GPU dispatch rounds ([#197](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/197)).
-- Fix fused Butina neighbor-count launch overflow for very large clustering inputs ([529dd26](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/529dd260ee507315780b5d3f8b6ea494471d48f7)).
-- Fix ETKDG chirality and bounds behavior under the RDKit structure-flag API ([#202](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/202)).
-- Fix disconnected SMARTS queries terminating during multithreaded substructure preprocessing ([#203](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/203)).
-- Fix recursive SMARTS extraction for pip RDKit builds ([eb4452c](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/eb4452c96c7a585e5f2c421a240b3f405f0e69a4)).
-- Fix standalone import of `_mmffOptimization` and `_uffOptimization` before `nvmolkit.types` ([f1f491d](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/f1f491dcdbdb2978cbaa0701a3764e72bc7a50a2)).
+- Fix pip wheels failing to import in minimal manylinux/CUDA containers ([8ced6c8](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/8ced6c80e82b3ef486330cafe46692d208df7bef)).
+- Fix incorrect TFD values for molecules with very large conformer sets and avoid invalid values for empty ring-torsion cases ([d265234](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/d265234ca47423a0635c3fe4949086738c10fb08)).
+- Fix MMFF/UFF convergence parity with RDKit 2026.03+ for force fields with negative intermediate energies ([ef5ad6b](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/ef5ad6b8bceadc94cbbf8536944ef9840e82833e)).
+- Fix empty Morgan fingerprints when every molecule in a batch exceeded the GPU size buckets ([#195](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/195)).
+- Fix rare one-bit Morgan fingerprint mismatches in multi-round GPU batches ([#197](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/197)).
+- Fix fused Butina clustering failures on very large inputs ([529dd26](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/529dd260ee507315780b5d3f8b6ea494471d48f7)).
+- Fix ETKDG cases that incorrectly produced zero conformers for affected molecules ([#202](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/202)).
+- Fix disconnected SMARTS queries raising the expected Python error instead of terminating the process with multithreaded preprocessing ([#203](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/203)).
+- Fix recursive SMARTS queries with pip-installed RDKit builds ([eb4452c](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/eb4452c96c7a585e5f2c421a240b3f405f0e69a4)).
+- Fix brittle Python import orders for MMFF and UFF optimization modules ([f1f491d](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/f1f491dcdbdb2978cbaa0701a3764e72bc7a50a2)).
 
-### Quality of Life
-- Accept `AsyncGpuResult`, CUDA tensors, CPU tensors, and NumPy arrays consistently in clustering and similarity wrappers ([ebc8fff](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/ebc8fff478bca6551b2f80b2deac59ff26f78b7a)).
-- Improve autotune search defaults with stepped batch-size ranges and physical CPU core counts ([3786668](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/3786668d211297cdb8aca8af5875934a108a8073)).
+### Miscellaneous
+- Clustering and similarity APIs now accept `AsyncGpuResult`, CUDA tensors, CPU tensors, and NumPy arrays consistently ([ebc8fff](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/ebc8fff478bca6551b2f80b2deac59ff26f78b7a)).
+- Autotune defaults now search fewer redundant batch sizes and avoid oversubscribing CPU threads ([3786668](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/3786668d211297cdb8aca8af5875934a108a8073)).
 
 ## 0.5.0 - 2026-05-13
 
