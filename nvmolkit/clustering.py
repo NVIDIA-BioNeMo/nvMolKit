@@ -32,14 +32,24 @@ import torch
 
 from nvmolkit import _clustering
 from nvmolkit._arrayHelpers import *  # noqa: F403
-from nvmolkit._fusedButina import extract_cluster_and_singletons, update_neighbor_counts, _check_fingerprint_matrix
-from nvmolkit.types import AsyncGpuResult
+from nvmolkit._fusedButina import _check_fingerprint_matrix, extract_cluster_and_singletons, update_neighbor_counts
+from nvmolkit.types import ArrayInput, AsyncGpuResult, _as_cuda_tensor, _resolve_cuda_stream, _validate_cuda_stream
 
 _VALID_NEIGHBORLIST_SIZES = frozenset({8, 16, 24, 32, 64, 128})
 
 
+def _check_distance_matrix(name: str, x: torch.Tensor) -> torch.Tensor:
+    if x.ndim != 2 or x.shape[0] != x.shape[1]:
+        raise ValueError(f"{name} must be a square 2D matrix, got shape={tuple(x.shape)}")
+    if x.dtype != torch.float64:
+        raise ValueError(f"{name} must have dtype float64")
+    if not x.is_contiguous():
+        x = x.contiguous()
+    return x
+
+
 def butina(
-    distance_matrix: AsyncGpuResult | torch.Tensor,
+    distance_matrix: ArrayInput,
     cutoff: float,
     neighborlist_max_size: int = 64,
     return_centroids: bool = False,
@@ -56,7 +66,9 @@ def butina(
 
     Args:
         distance_matrix: Square distance matrix of shape (N, N) where N is the number
-                        of items. Can be an AsyncGpuResult or torch.Tensor on GPU.
+                        of items. Can be an AsyncGpuResult, torch.Tensor, or numpy.ndarray.
+                        CPU tensors and NumPy arrays are copied to CUDA. Inputs
+                        must have dtype float64.
         cutoff: Distance threshold for clustering. Items are neighbors if their
                 distance is less than this cutoff.
         neighborlist_max_size: Maximum size of the neighborlist used for small cluster
@@ -80,16 +92,17 @@ def butina(
         raise ValueError(
             f"neighborlist_max_size must be one of {sorted(_VALID_NEIGHBORLIST_SIZES)}, got {neighborlist_max_size}"
         )
-    if stream is not None and not isinstance(stream, torch.cuda.Stream):
-        raise TypeError(f"stream must be a torch.cuda.Stream or None, got {type(stream).__name__}")
-    stream_ptr = (stream if stream is not None else torch.cuda.current_stream()).cuda_stream
-    result = _clustering.butina(
-        distance_matrix.__cuda_array_interface__,
-        cutoff,
-        neighborlist_max_size,
-        return_centroids,
-        stream_ptr,
-    )
+    active_stream = _resolve_cuda_stream(stream, distance_matrix)
+    with torch.cuda.stream(active_stream):
+        distance_matrix_tensor = _as_cuda_tensor("distance_matrix", distance_matrix, stream=active_stream)
+        distance_matrix_tensor = _check_distance_matrix("distance_matrix", distance_matrix_tensor)
+        result = _clustering.butina(
+            distance_matrix_tensor.__cuda_array_interface__,
+            cutoff,
+            neighborlist_max_size,
+            return_centroids,
+            active_stream.cuda_stream,
+        )
     if return_centroids:
         clusters, centroids = result
         return AsyncGpuResult(clusters), AsyncGpuResult(centroids)
@@ -97,7 +110,7 @@ def butina(
 
 
 def fused_butina(
-    x: torch.Tensor,
+    x: ArrayInput,
     cutoff: float,
     return_centroids: bool = False,
     stream: torch.cuda.Stream | None = None,
@@ -110,7 +123,9 @@ def fused_butina(
     the full distance matrix. This makes it suitable for large datasets.
 
     Args:
-        x: Tensor of shape (N, D) containing the fingerprints to cluster.
+        x: Tensor-like object of shape (N, D) containing packed int32 fingerprints
+           to cluster. Can be an AsyncGpuResult, torch.Tensor, or numpy.ndarray.
+           CPU tensors and NumPy arrays are copied to CUDA.
         cutoff: Distance threshold for clustering. Items are neighbors if their
                 distance is less than this cutoff (i.e. similarity > 1 - cutoff).
         return_centroids: Whether to return centroid indices for each cluster.
@@ -125,17 +140,18 @@ def fused_butina(
         If ``return_centroids`` is True, returns a tuple ``(clusters, cluster_sizes, centroids)``
         where *centroids* is a list of centroid indices.
     """
-    _check_fingerprint_matrix("x", x)
     if metric not in ["tanimoto", "cosine"]:
         raise ValueError(f"metric must be one of ['tanimoto', 'cosine'], got {metric}")
 
-    if stream is not None and not isinstance(stream, torch.cuda.Stream):
-        raise TypeError(f"stream must be a torch.cuda.Stream or None, got {type(stream).__name__}")
+    _validate_cuda_stream(stream)
 
     if cutoff < 0 or cutoff > 1:
         raise ValueError(f"cutoff must be in [0, 1], got {cutoff}")
 
-    with torch.cuda.stream(stream):
+    active_stream = _resolve_cuda_stream(stream, x)
+    with torch.cuda.stream(active_stream):
+        x = _as_cuda_tensor("x", x, stream=active_stream)
+        _check_fingerprint_matrix("x", x)
         n_start = x.shape[0]
         device = x.device
         indices = torch.arange(n_start, dtype=torch.int32, device=device)

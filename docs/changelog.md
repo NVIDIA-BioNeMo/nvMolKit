@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.5.1 - 2026-06-24
+
+### Summary
+
+nvMolKit 0.5.1 is a bug fix and quality-of-life release.
+
+### Contributors
+- Kevin Boyd (@scal444)
+- Eva Xue (@evasnow1992)
+- Clay Moore (@mooreneural)
+
+### Bug Fixes
+- Fix pip wheels failing to import in minimal manylinux/CUDA containers ([#174](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/174)).
+- Fix incorrect TFD values for molecules with very large conformer sets and avoid invalid values for empty ring-torsion cases ([d265234](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/d265234ca47423a0635c3fe4949086738c10fb08)).
+- Fix MMFF/UFF convergence parity with RDKit 2026.03+ for force fields with negative intermediate energies ([rdkit/rdkit#9298](https://github.com/rdkit/rdkit/issues/9298)).
+- Fix empty Morgan fingerprints when every molecule in a batch exceeded the GPU size buckets ([#195](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/195)).
+- Fix rare one-bit Morgan fingerprint mismatches in multi-round GPU batches ([#197](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/197)).
+- Fix fused Butina clustering failures on very large inputs ([#194](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/194)).
+- Fix ETKDG cases that incorrectly produced zero conformers for affected molecules ([#202](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/202)).
+- Fix disconnected SMARTS queries raising the expected Python error instead of terminating the process with multithreaded preprocessing ([#203](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/203)).
+- Fix recursive SMARTS queries with pip-installed RDKit builds ([#208](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/208)).
+- Fix brittle Python import orders for MMFF and UFF optimization modules ([#212](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/212)).
+
+### Miscellaneous
+- Clustering and similarity APIs now accept `AsyncGpuResult`, CUDA tensors, CPU tensors, and NumPy arrays consistently ([#207](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/207)).
+- Autotune defaults now search fewer redundant batch sizes and avoid oversubscribing CPU threads ([#179](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/179)).
+
 ## 0.5.0 - 2026-05-13
 
 ### Summary

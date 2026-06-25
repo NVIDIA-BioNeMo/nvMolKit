@@ -6,8 +6,8 @@ from nvmolkit._embedMolecules import BatchHardwareOptions
 
 def UFFOptimizeMoleculesConfs(
     molecules: List[Mol],
-    maxIters: int = 1000,
-    vdwThresholds: List[float] = ...,
-    ignoreInterfragInteractions: List[bool] = ...,
-    hardwareOptions: BatchHardwareOptions = ...,
+    maxIters: int,
+    vdwThresholds: List[float],
+    ignoreInterfragInteractions: List[bool],
+    hardwareOptions: BatchHardwareOptions,
 ) -> List[List[float]]: ...

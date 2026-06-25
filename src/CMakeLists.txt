@@ -108,6 +108,7 @@ target_link_libraries(
           ff_kernel_utils
           dist_geom
           rdkit_dist_geom_flattened
+          nvmolkit_versions
           etkdg)
 target_include_directories(etkdg_stages PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 

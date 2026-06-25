@@ -22,7 +22,7 @@ target_include_directories(molecules PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(
   molecules
   PUBLIC device_vector flatBitVect OpenMP::OpenMP_CXX packed_bonds device
-  PRIVATE ${RDKit_LIBS} nvtx)
+  PRIVATE ${RDKit_LIBS} nvtx openmp_helpers)
 
 add_library(substruct_kernels substruct_kernels.cu)
 target_include_directories(substruct_kernels PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

@@ -287,6 +287,9 @@ def suggest_from_space(trial, name: str, spec: Any) -> Any:
 
     - ``(low, high)`` tuple — uniform integer range.
     - ``(low, high, "log")`` tuple — log-uniform integer range.
+    - ``(low, high, step)`` tuple — uniform integer range restricted to
+      multiples of ``step`` (preserves ordering for TPE, unlike a categorical
+      list of the same values).
     - ``list`` of choices — categorical search.
 
     A literal scalar is returned unchanged (acts as a fixed value rather than
@@ -299,6 +302,11 @@ def suggest_from_space(trial, name: str, spec: Any) -> Any:
     if isinstance(spec, tuple) and len(spec) == 3 and spec[2] == "log":
         low, high, _ = spec
         return trial.suggest_int(name, int(low), int(high), log=True)
+    if isinstance(spec, tuple) and len(spec) == 3 and all(isinstance(v, int) for v in spec):
+        low, high, step = spec
+        if step <= 0:
+            raise ValueError(f"Search-space override for {name!r}: step must be a positive integer, got {step!r}.")
+        return trial.suggest_int(name, int(low), int(high), step=int(step))
     if isinstance(spec, list) and len(spec) == 2 and all(isinstance(v, int) for v in spec):
         raise TypeError(
             f"Search-space override for {name!r} is a 2-element int list {spec!r}; "
@@ -309,6 +317,12 @@ def suggest_from_space(trial, name: str, spec: Any) -> Any:
         raise TypeError(
             f"Search-space override for {name!r} is a 3-element list {spec!r} ending in 'log'; "
             "use a tuple (low, high, 'log') for a log-uniform integer range."
+        )
+    if isinstance(spec, list) and len(spec) == 3 and all(isinstance(v, int) for v in spec):
+        raise TypeError(
+            f"Search-space override for {name!r} is a 3-element int list {spec!r}; "
+            "use a tuple (low, high, step) for a stepped integer range, or wrap in "
+            "a list of more than three values to request a categorical search."
         )
     if isinstance(spec, (list, tuple)):
         choices = list(spec)
@@ -322,9 +336,11 @@ def collect_int_from_space(spec: Any) -> int:
     For a uniform integer range ``(low, high)`` the arithmetic midpoint is
     returned. For a log-uniform range ``(low, high, "log")`` the geometric
     midpoint is returned (rounded to the nearest int, clamped to ``[low,
-    high]``). For a categorical list the first listed choice is returned, on
-    the convention that callers list their preferred default first. A bare
-    scalar is returned unchanged.
+    high]``). For a stepped range ``(low, high, step)`` the arithmetic
+    midpoint snapped to the nearest multiple of ``step`` from ``low`` is
+    returned, clamped to ``[low, high]``. For a categorical list the first
+    listed choice is returned, on the convention that callers list their
+    preferred default first. A bare scalar is returned unchanged.
     """
     if isinstance(spec, tuple) and len(spec) == 3 and spec[2] == "log":
         low, high, _ = spec
@@ -334,6 +350,11 @@ def collect_int_from_space(spec: Any) -> int:
             raise ValueError(f"Log-uniform range {spec!r} requires strictly positive bounds.")
         midpoint = int(round(math.sqrt(low_int * high_int)))
         return max(low_int, min(high_int, midpoint))
+    if isinstance(spec, tuple) and len(spec) == 3 and all(isinstance(v, int) for v in spec):
+        low, high, step = (int(v) for v in spec)
+        midpoint = (low + high) // 2
+        snapped = low + round((midpoint - low) / step) * step
+        return max(low, min(high, snapped))
     if isinstance(spec, tuple) and len(spec) == 2:
         low, high = spec
         return (int(low) + int(high)) // 2

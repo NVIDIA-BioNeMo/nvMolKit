@@ -24,6 +24,7 @@ not consumed by the C++ batched-FF code path (threads come from
 from __future__ import annotations
 
 import os
+import re
 from typing import Iterable, Optional
 
 from rdkit.Chem import Mol
@@ -49,8 +50,28 @@ def coerce_gpu_ids(gpuIds: Optional[Iterable[int]]) -> list[int]:
 
 
 def cpu_count() -> int:
-    """Return the usable CPU core count, with a floor of 1."""
+    """Return the usable physical CPU core count, with a floor of 1.
+
+    Falls back to ``os.cpu_count()`` (logical) if ``/proc/cpuinfo`` is missing.
+    """
+    physical = _physical_cpu_count_from_proc()
+    if physical is not None:
+        return max(1, physical)
     return max(1, os.cpu_count() or 1)
+
+
+def _physical_cpu_count_from_proc() -> Optional[int]:
+    """Return the number of distinct physical cores from ``/proc/cpuinfo``."""
+    try:
+        with open("/proc/cpuinfo") as cpuinfo:
+            text = cpuinfo.read()
+    except OSError:
+        return None
+    physical_ids = re.findall(r"^physical id\s*:\s*(\S+)", text, re.MULTILINE)
+    core_ids = re.findall(r"^core id\s*:\s*(\S+)", text, re.MULTILINE)
+    if not physical_ids or len(physical_ids) != len(core_ids):
+        return None
+    return len(set(zip(physical_ids, core_ids)))
 
 
 def resolve_cpu_budget(cpu_budget: Optional[int]) -> int:
@@ -58,8 +79,8 @@ def resolve_cpu_budget(cpu_budget: Optional[int]) -> int:
 
     ``cpu_budget`` lets callers cap total CPU usage explicitly (useful for
     cross-machine normalization where the goal is to isolate GPU performance
-    from CPU-count differences). When ``None``, falls back to
-    :func:`cpu_count`. Values less than 1 are rejected.
+    from CPU-count differences). When ``None``, falls back to physical core
+    count via :func:`cpu_count`. Values less than 1 are rejected.
     """
     if cpu_budget is None:
         return cpu_count()
@@ -89,12 +110,16 @@ def resolve_num_gpus(fixed_gpu_ids: list[int]) -> int:
 def default_ff_search_space(num_gpus: int, cpus: int) -> dict:
     """Return the default FF search space scaled to the active hardware.
 
-    ``batchesPerGpu`` is per-GPU; its upper bound is capped at
-    ``cpus // num_gpus`` so the total worker thread count across all GPUs
-    (``num_gpus * batchesPerGpu``) does not exceed ``cpus``.
+    ``batchSize`` is a stepped integer range in multiples of 64 since the
+    underlying kernels are tile-tuned for those sizes; the stepped form
+    preserves numeric ordering for TPE (unlike a categorical list).
+    ``batchesPerGpu`` is per-GPU and capped at ``min(8, cpus // num_gpus)``:
+    8 is the empirical point of diminishing returns for the batched-FF
+    dispatch, and the physical-core floor prevents oversubscribing CPU
+    coordinator threads across all GPUs.
     """
-    per_gpu_max = max(1, cpus // max(1, num_gpus))
+    per_gpu_max = max(1, min(8, cpus // max(1, num_gpus)))
     return {
-        "batchSize": (32, 1500, "log"),
+        "batchSize": (64, 1024, 64),
         "batchesPerGpu": (1, per_gpu_max),
     }

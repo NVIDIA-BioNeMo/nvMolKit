@@ -15,6 +15,12 @@
 
 #include "molecules.h"
 
+// RDConfig defines RDK_BUILD_THREADSAFE_SSS, which changes RecursiveStructureQuery layout.
+// It must be visible before QueryOps is included through QueryAtom.h.
+// clang-format off
+#include <RDGeneral/RDConfig.h>
+// clang-format on
+
 #include <GraphMol/MolOps.h>
 #include <GraphMol/QueryAtom.h>
 #include <GraphMol/QueryOps.h>
@@ -25,11 +31,13 @@
 
 #include <algorithm>
 #include <cstring>
+#include <exception>
 #include <functional>
 #include <stdexcept>
 #include <string>
 
 #include "nvtx.h"
+#include "openmp_helpers.h"
 #include "packed_bonds.h"
 #include "rdkit_compat.h"
 #include "substruct_debug.h"
@@ -2128,6 +2136,12 @@ MoleculesHost buildQueryBatchParallel(const std::vector<const RDKit::ROMol*>& mo
     threadBatches[t].reserve(molsPerThread, atomsPerThread);
   }
 
+  // addQueryToBatch validates each query and throws on unsupported inputs (e.g.
+  // disconnected SMARTS). An exception escaping the OpenMP region would call
+  // std::terminate, so capture the first failure and rethrow after the region
+  // joins.
+  detail::OpenMPExceptionRegistry exceptionRegistry;
+
 #pragma omp parallel num_threads(numThreads)
   {
     const int       tid = omp_get_thread_num();
@@ -2136,10 +2150,15 @@ MoleculesHost buildQueryBatchParallel(const std::vector<const RDKit::ROMol*>& mo
 
 #pragma omp for schedule(static)
     for (int i = 0; i < numMols; ++i) {
-      const int molIdx = useSortOrder ? sortOrder[i] : i;
-      addQueryToBatch(molecules[molIdx], localBatch);
+      try {
+        const int molIdx = useSortOrder ? sortOrder[i] : i;
+        addQueryToBatch(molecules[molIdx], localBatch);
+      } catch (...) {
+        exceptionRegistry.store(std::current_exception());
+      }
     }
   }
+  exceptionRegistry.rethrow();
 
   MoleculesHost result;
   {

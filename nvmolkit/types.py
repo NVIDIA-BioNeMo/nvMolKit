@@ -18,6 +18,7 @@
 from enum import Enum
 from typing import Any, Iterable, List, NamedTuple, Optional
 
+import numpy as np
 import torch
 
 from nvmolkit import _embedMolecules  # type: ignore
@@ -43,6 +44,7 @@ class HardwareOptions:
         batchesPerGpu: int = -1,
         gpuIds: Iterable[int] | None = None,
     ) -> None:
+        """Create hardware options backed by the native BatchHardwareOptions type."""
         if _embedMolecules is None:  # propagate real import failure early
             raise ImportError("nvmolkit._embedMolecules is not available; build native extensions")
         native = _embedMolecules.BatchHardwareOptions()
@@ -162,6 +164,66 @@ class AsyncGpuResult:
         return self.arr.cpu().numpy()
 
 
+ArrayInput = AsyncGpuResult | torch.Tensor | np.ndarray
+
+
+def _validate_cuda_stream(stream: torch.cuda.Stream | None) -> torch.cuda.Stream | None:
+    if stream is not None and not isinstance(stream, torch.cuda.Stream):
+        raise TypeError(f"stream must be a torch.cuda.Stream or None, got {type(stream).__name__}")
+    return stream
+
+
+def _cuda_device(value: ArrayInput) -> torch.device | None:
+    if isinstance(value, AsyncGpuResult):
+        return value.device
+    if isinstance(value, torch.Tensor) and value.is_cuda:
+        return value.device
+    return None
+
+
+def _resolve_cuda_stream(stream: torch.cuda.Stream | None, *inputs: ArrayInput) -> torch.cuda.Stream:
+    _validate_cuda_stream(stream)
+    if stream is not None:
+        return stream
+
+    for value in inputs:
+        device = _cuda_device(value)
+        if device is not None:
+            return torch.cuda.current_stream(device)
+    return torch.cuda.current_stream()
+
+
+def _as_cuda_tensor(
+    name: str,
+    value: ArrayInput,
+    *,
+    stream: torch.cuda.Stream,
+) -> torch.Tensor:
+    """Return *value* as a CUDA tensor ordered on *stream*.
+
+    ``AsyncGpuResult`` and CUDA tensors are zero-copy. CPU tensors and NumPy
+    arrays are copied to the stream device. API-specific dtype, shape, and
+    layout checks live in the public wrappers that know their native contracts.
+    """
+    if isinstance(value, AsyncGpuResult):
+        tensor = value.torch()
+    elif isinstance(value, torch.Tensor):
+        tensor = value
+    elif isinstance(value, np.ndarray):
+        tensor = torch.as_tensor(value)
+    else:
+        raise TypeError(
+            f"{name} must be an AsyncGpuResult, torch.Tensor, or numpy.ndarray, got {type(value).__name__}"
+        )
+
+    target_device = stream.device
+    if not tensor.is_cuda:
+        return tensor.to(device=target_device, non_blocking=True)
+    if tensor.device != target_device:
+        raise ValueError(f"{name} is on {tensor.device}, but stream is on {target_device}")
+    return tensor
+
+
 class CoordinateOutput(Enum):
     """Selects how conformer-producing APIs return optimized coordinates.
 
@@ -227,6 +289,7 @@ class Device3DResult:
         energies: Optional[AsyncGpuResult] = None,
         converged: Optional[AsyncGpuResult] = None,
     ) -> None:
+        """Create a device result from GPU-resident CSR-style buffers."""
         self.values = values
         self.atom_starts = atom_starts
         self.mol_indices = mol_indices

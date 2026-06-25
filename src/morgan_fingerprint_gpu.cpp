@@ -122,15 +122,12 @@ void allocateGpuBatch(MorganGPUBuffersBatch& buffers,
   switch (maxAtoms) {
     case 32:
       buffers.allSeenNeighborhoods32 = AsyncDeviceVector<FlatBitVect<32>>(numMols * 32 * (radius + 1), stream);
-      buffers.allSeenNeighborhoods32.zero();
       break;
     case 64:
       buffers.allSeenNeighborhoods64 = AsyncDeviceVector<FlatBitVect<64>>(numMols * 64 * (radius + 1), stream);
-      buffers.allSeenNeighborhoods64.zero();
       break;
     case 128:
       buffers.allSeenNeighborhoods128 = AsyncDeviceVector<FlatBitVect<128>>(numMols * 128 * (radius + 1), stream);
-      buffers.allSeenNeighborhoods128.zero();
       break;
     default:
       throw std::runtime_error("Unsupported max atoms for Morgan fingerprint GPU: " + std::to_string(maxAtoms));
@@ -266,10 +263,18 @@ AsyncDeviceVector<FlatBitVect<fpSize>> computeFingerprintsCuImpl(const std::vect
       workLarge.push_back(i);
     }
   }
-  const size_t                    numThreads32    = (work32.size() + dispatchChunkSize - 1) / dispatchChunkSize;
-  const size_t                    numThreads64    = (work64.size() + dispatchChunkSize - 1) / dispatchChunkSize;
-  const size_t                    numThreads128   = (work128.size() + dispatchChunkSize - 1) / dispatchChunkSize;
-  const size_t                    numThreadsTotal = numThreads32 + numThreads64 + numThreads128;
+  const size_t numThreads32    = (work32.size() + dispatchChunkSize - 1) / dispatchChunkSize;
+  const size_t numThreads64    = (work64.size() + dispatchChunkSize - 1) / dispatchChunkSize;
+  const size_t numThreads128   = (work128.size() + dispatchChunkSize - 1) / dispatchChunkSize;
+  size_t       numThreadsTotal = numThreads32 + numThreads64 + numThreads128;
+  // Large molecules are drained from the shared workLarge queue inside the worker
+  // loop below, which only runs numThreadsTotal iterations. When every molecule is
+  // large there is no small/medium work, so without dedicated iterations the queue
+  // would never be drained and those molecules would get empty fingerprints. Spread
+  // the drain across the available threads in that case.
+  if (numThreadsTotal == 0) {
+    numThreadsTotal = std::min(workLarge.size(), static_cast<size_t>(nThreadsActual));
+  }
   detail::OpenMPExceptionRegistry exceptionRegistry;
 
 #pragma omp parallel for num_threads(nThreadsActual) default(none) shared(numThreadsTotal,     \
@@ -416,6 +421,15 @@ AsyncDeviceVector<FlatBitVect<fpSize>> computeFingerprintsCuImpl(const std::vect
         buffersToUse->outputIndices.copyFromHost(threadCpuBuffers.h_outputIndices.data(), scopedChunkSize);
         cudaCheckError(cudaEventRecord(threadCpuBuffers.prevMemcpyDoneEvent.event(), stream));
         rangeMemcpy.pop();
+        // The kernel uses allSeenNeighborhoods as scratch that must be zeroed on entry. The buffers are
+        // reused across dispatch rounds, so reset the scratch for this round before launching.
+        if (thisRoundNumAtoms == 32) {
+          buffersToUse->allSeenNeighborhoods32.zero();
+        } else if (thisRoundNumAtoms == 64) {
+          buffersToUse->allSeenNeighborhoods64.zero();
+        } else {
+          buffersToUse->allSeenNeighborhoods128.zero();
+        }
         solveOnGPUBatch<fpSize>(*buffersToUse,
                                 outputAccumulator,
                                 maxRadius,

@@ -6,13 +6,11 @@
 #define RDKIT_VERSION_PATCH @RDKit_VERSION_PATCH@
 
 
-namespace nvMolKit {
 // Account for API break adding d_structureFlags. Our GPU codepath always includes it, but
 // for an earlier version we pass in 1.0 to not change results. The CPU API must be adapted here and in
-// chiralty ETKDG code.
-constexpr bool RDKIT_NEW_FLAG_API  = (RDKIT_VERSION_MAJOR > 2024 || (RDKIT_VERSION_MAJOR == 2024 && RDKIT_VERSION_MINOR >= 9));
-
-
-} // namespace nvMolKit
+// chiralty ETKDG code. This must be a preprocessor macro: it gates calls to the ChiralSet structureFlags
+// constructor overload, which only exists on RDKit >= 2024.09, so the branch cannot be compiled on older
+// versions. Consumers select the codepath with `#if RDKIT_NEW_FLAG_API`.
+#define RDKIT_NEW_FLAG_API (RDKIT_VERSION_MAJOR > 2024 || (RDKIT_VERSION_MAJOR == 2024 && RDKIT_VERSION_MINOR >= 9))
 
 #endif  // NVMOLKIT_VERSIONS_H

@@ -13,25 +13,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import math
-import pytest
-import psutil
 
 import numpy as np
+import psutil
+import pytest
 import torch
-
 from rdkit.Chem import rdFingerprintGenerator
-from rdkit.DataStructs import BulkCosineSimilarity, BulkTanimotoSimilarity
-from rdkit.DataStructs import ExplicitBitVect
+from rdkit.DataStructs import BulkCosineSimilarity, BulkTanimotoSimilarity, ExplicitBitVect
 
+from nvmolkit.fingerprints import MorganFingerprintGenerator, pack_fingerprint
 from nvmolkit.similarity import (
     crossCosineSimilarity,
+    crossCosineSimilarityMemoryConstrained,
     crossTanimotoSimilarity,
     crossTanimotoSimilarityMemoryConstrained,
-    crossCosineSimilarityMemoryConstrained,
 )
-from nvmolkit.fingerprints import MorganFingerprintGenerator
-from nvmolkit.fingerprints import pack_fingerprint
-
+from nvmolkit.types import AsyncGpuResult
 
 # --------------------------------
 # Test helpers
@@ -72,10 +69,10 @@ def test_cross_similarity_fp_mismatch(simtype, size_limited_mols):
     nvmolkit_fps_cu2 = nvmolkit_fpgen2.GetFingerprints(size_limited_mols, num_threads=1)
     if simtype == "tanimoto":
         with pytest.raises(ValueError):
-            nvmolkit_sims = crossTanimotoSimilarity(nvmolkit_fps_cu, nvmolkit_fps_cu2)
+            crossTanimotoSimilarity(nvmolkit_fps_cu, nvmolkit_fps_cu2)
     else:
         with pytest.raises(ValueError):
-            nvmolkit_sims = crossCosineSimilarity(nvmolkit_fps_cu, nvmolkit_fps_cu2)
+            crossCosineSimilarity(nvmolkit_fps_cu, nvmolkit_fps_cu2)
 
 
 # --------------------------------
@@ -152,6 +149,37 @@ def test_nxm_cross_tanimoto_similarity_from_packing(nxmdims):
     torch.cuda.synchronize()
     nvmolkit_sims = crossTanimotoSimilarity(nvmolkit_fps_torch1, nvmolkit_fps_torch2).torch()
     torch.testing.assert_close(nvmolkit_sims, ref_sims)
+
+
+@pytest.mark.parametrize("metric", ("tanimoto", "cosine"))
+@pytest.mark.parametrize("input_kind", ("async", "cpu_tensor", "numpy"))
+def test_cross_similarity_accepts_array_input_types(metric, input_kind):
+    fps_1 = torch.randint(0, 2, (6, 256), dtype=torch.bool, device="cuda")
+    fps_2 = torch.randint(0, 2, (5, 256), dtype=torch.bool, device="cuda")
+    packed_1 = pack_fingerprint(fps_1)
+    packed_2 = pack_fingerprint(fps_2)
+
+    if metric == "tanimoto":
+        expected = crossTanimotoSimilarity(packed_1, packed_2).torch()
+    else:
+        expected = crossCosineSimilarity(packed_1, packed_2).torch()
+
+    if input_kind == "async":
+        inp_1 = AsyncGpuResult(packed_1)
+        inp_2 = AsyncGpuResult(packed_2)
+    elif input_kind == "cpu_tensor":
+        inp_1 = packed_1.cpu()
+        inp_2 = packed_2.cpu()
+    else:
+        inp_1 = packed_1.cpu().numpy()
+        inp_2 = packed_2.cpu().numpy()
+
+    if metric == "tanimoto":
+        got = crossTanimotoSimilarity(inp_1, inp_2).torch()
+    else:
+        got = crossCosineSimilarity(inp_1, inp_2).torch()
+
+    torch.testing.assert_close(got, expected)
 
 
 # --------------------------------
@@ -265,6 +293,37 @@ def test_memory_constrained_cosine_cross(size_limited_mols, nxmdims):
 
     got = crossCosineSimilarityMemoryConstrained(t1, t2)
     np.testing.assert_allclose(got, ref.cpu().numpy(), rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("metric", ("tanimoto", "cosine"))
+@pytest.mark.parametrize("input_kind", ("async", "cpu_tensor", "numpy"))
+def test_memory_constrained_similarity_accepts_array_input_types(metric, input_kind):
+    fps_1 = torch.randint(0, 2, (6, 256), dtype=torch.bool, device="cuda")
+    fps_2 = torch.randint(0, 2, (5, 256), dtype=torch.bool, device="cuda")
+    packed_1 = pack_fingerprint(fps_1)
+    packed_2 = pack_fingerprint(fps_2)
+
+    if metric == "tanimoto":
+        expected = crossTanimotoSimilarityMemoryConstrained(packed_1, packed_2)
+    else:
+        expected = crossCosineSimilarityMemoryConstrained(packed_1, packed_2)
+
+    if input_kind == "async":
+        inp_1 = AsyncGpuResult(packed_1)
+        inp_2 = AsyncGpuResult(packed_2)
+    elif input_kind == "cpu_tensor":
+        inp_1 = packed_1.cpu()
+        inp_2 = packed_2.cpu()
+    else:
+        inp_1 = packed_1.cpu().numpy()
+        inp_2 = packed_2.cpu().numpy()
+
+    if metric == "tanimoto":
+        got = crossTanimotoSimilarityMemoryConstrained(inp_1, inp_2)
+    else:
+        got = crossCosineSimilarityMemoryConstrained(inp_1, inp_2)
+
+    np.testing.assert_allclose(got, expected, rtol=1e-5, atol=1e-5)
 
 
 # Test large N x M where N != M to exercise segmented path without overwhelming CPU RAM
