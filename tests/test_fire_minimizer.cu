@@ -965,3 +965,31 @@ TEST(FireMinimizer, StaggeredConvergenceCount) {
   uniqueConvIters.erase(std::unique(uniqueConvIters.begin(), uniqueConvIters.end()), uniqueConvIters.end());
   EXPECT_GE(uniqueConvIters.size(), 2u) << "Test should produce at least two distinct convergence iterations";
 }
+
+TEST(FireMinimizer, HybridBackendSelectionAndPerMolInitialization) {
+  nvMolKit::FireOptions        options;
+  nvMolKit::FireBatchMinimizer minimizer(kDim,
+                                         options,
+                                         /*stream=*/nullptr,
+                                         /*debugMode=*/false,
+                                         nvMolKit::FireBackend::HYBRID);
+
+  EXPECT_EQ(minimizer.resolveBackend({0, 5, 10, 30}), nvMolKit::FireBackend::PER_MOLECULE);
+  EXPECT_EQ(minimizer.resolveBackend({0, 5, 10, 200}), nvMolKit::FireBackend::BATCHED);
+
+  const std::vector<int> atomStarts = {0, 4, 10, 18};
+  minimizer.initialize(atomStarts, nullptr, nullptr, nvMolKit::FireBackend::PER_MOLECULE);
+
+  EXPECT_EQ(minimizer.numActiveSystemsHost(), 3);
+  const auto state = minimizer.snapshotInternalState();
+  ASSERT_EQ(state.statuses.size(), 3u);
+  ASSERT_EQ(state.dt.size(), 3u);
+  ASSERT_EQ(state.alpha.size(), 3u);
+  ASSERT_EQ(state.nStepsPositive.size(), 3u);
+  for (size_t i = 0; i < state.statuses.size(); ++i) {
+    EXPECT_EQ(state.statuses[i], 1);
+    EXPECT_EQ(state.nStepsPositive[i], 0);
+    EXPECT_NEAR(state.dt[i], options.dtInit, 0.0);
+    EXPECT_NEAR(state.alpha[i], options.alphaInit, 0.0);
+  }
+}
