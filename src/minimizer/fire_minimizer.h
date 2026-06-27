@@ -18,6 +18,7 @@
 
 #include <vector>
 
+#include "src/minimizer/bfgs_types.h"
 #include "src/minimizer/fire_options.h"
 #include "src/minimizer/minimizer_api.h"
 #include "src/utils/device_vector.h"
@@ -58,16 +59,23 @@ class FireBatchMinimizer final : public BatchMinimizer {
   explicit FireBatchMinimizer(int                dataDim   = 3,
                               const FireOptions& options   = FireOptions(),
                               cudaStream_t       stream    = nullptr,
-                              bool               debugMode = false);
+                              bool               debugMode = false,
+                              FireBackend        backend   = FireBackend::BATCHED);
   ~FireBatchMinimizer() override = default;
+
+  //! \brief Resolve the effective backend for the provided batch under HYBRID selection.
+  FireBackend resolveBackend(const std::vector<int>& atomStartsHost) const;
 
   //! \brief Initialize internal buffers for a new batch.
   //! \param atomStartsHost Host offsets for the first atom of each system.
   //! \param masses Optional pointer to per-atom masses; nullptr means use any masses set via setMasses().
   //! \param activeThisStage Optional uint8_t mask (1 = active). When nullptr all systems start active.
+  //! \param effectiveBackend Selects which backend's auxiliary buffers to materialize.
+  //!        Pass the value returned by ::resolveBackend so HYBRID is collapsed first.
   void initialize(const std::vector<int>& atomStartsHost,
-                  const double*           masses          = nullptr,
-                  const uint8_t*          activeThisStage = nullptr);
+                  const double*           masses           = nullptr,
+                  const uint8_t*          activeThisStage  = nullptr,
+                  FireBackend             effectiveBackend = FireBackend::BATCHED);
 
   //! \brief Provide per-atom masses to be used on the next initialization
   //! when explicit masses are not supplied. Passing an empty vector clears
@@ -107,6 +115,8 @@ class FireBatchMinimizer final : public BatchMinimizer {
 
   //! \brief Cadence (in iterations) at which the minimize() loop reads the
   //! still-running system count back to the host. Default 8.
+  //! \note Only the BATCHED backend uses this; per-molecule kernels iterate
+  //! entirely device-side and ignore the poll interval.
   void setConvergencePollInterval(int interval);
 
   //! \brief Read back internal per-system state for testing.
@@ -144,6 +154,7 @@ class FireBatchMinimizer final : public BatchMinimizer {
   int          numSystems_              = 0;
   int          convergencePollInterval_ = 8;
   int          lastKnownNumUnfinished_  = 0;
+  FireBackend  backend_                 = FireBackend::BATCHED;
 
   AsyncDeviceVector<double> velocities_;
   AsyncDeviceVector<double> masses_;
@@ -184,6 +195,13 @@ class FireBatchMinimizer final : public BatchMinimizer {
 
   //! Per-system convergence reason for diagnostics: 0=active, 1=grad-tol, 2=stuck-plateau.
   AsyncDeviceVector<uint8_t> convergeReason_;
+
+  // Per-molecule kernel data (used when backend_ == PER_MOLECULE / HYBRID resolves to it).
+  int                       maxAtomsInBatch_ = 0;  //!< Largest molecule in batch (for kernel dispatch).
+  std::vector<int>          activeMolIds_;         //!< Active molecule IDs (host).
+  AsyncDeviceVector<int>    activeMolIdsDevice_;   //!< Device copy of @c activeMolIds_.
+  PinnedHostVector<uint8_t> activeHost_;           //!< Pinned scratch for caller-supplied active mask.
+  PinnedHostVector<uint8_t> convergenceHost_;      //!< Pinned scratch for status readback.
 };
 
 }  // namespace nvMolKit

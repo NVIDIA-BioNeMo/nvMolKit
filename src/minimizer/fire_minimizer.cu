@@ -385,11 +385,13 @@ __global__ void fireStuckCheckKernel(cuda::std::span<const int>    activeSystemI
 FireBatchMinimizer::FireBatchMinimizer(const int          dataDim,
                                        const FireOptions& options,
                                        cudaStream_t       stream,
-                                       const bool         debugMode)
+                                       const bool         debugMode,
+                                       const FireBackend  backend)
     : dataDim_(dataDim),
       fireOptions_(options),
       stream_(stream),
-      debugMode_(debugMode) {
+      debugMode_(debugMode),
+      backend_(backend) {
   velocities_.setStream(stream_);
   statuses_.setStream(stream_);
   dt_.setStream(stream_);
@@ -405,8 +407,21 @@ FireBatchMinimizer::FireBatchMinimizer(const int          dataDim,
   energyMaxStreak_.setStream(stream_);
   stuckStreak_.setStream(stream_);
   convergeReason_.setStream(stream_);
+  activeMolIdsDevice_.setStream(stream_);
   loopStatusHost_.resize(1);
   loopStatusHost_[0] = 0;
+}
+
+FireBackend FireBatchMinimizer::resolveBackend(const std::vector<int>& atomStartsHost) const {
+  if (backend_ != FireBackend::HYBRID) {
+    return backend_;
+  }
+  for (size_t i = 0; i + 1 < atomStartsHost.size(); ++i) {
+    if (atomStartsHost[i + 1] - atomStartsHost[i] > kHybridFireBackendAtomThreshold) {
+      return FireBackend::BATCHED;
+    }
+  }
+  return FireBackend::PER_MOLECULE;
 }
 
 void FireBatchMinimizer::setMasses(const std::vector<double>& masses) {
@@ -430,14 +445,17 @@ void FireBatchMinimizer::setConvergencePollInterval(const int interval) {
 
 void FireBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
                                     const double*           masses,
-                                    const uint8_t*          activeThisStage) {
+                                    const uint8_t*          activeThisStage,
+                                    const FireBackend       effectiveBackend) {
   step_                = 0;
   const int totalAtoms = atomStartsHost.back();
   const int numSystems = static_cast<int>(atomStartsHost.size()) - 1;
 
-  const bool isContinuation = hasInitializedBatch_ && cachedNumSystems_ == numSystems &&
-                              cachedTotalAtoms_ == totalAtoms && cachedActiveThisStage_ == activeThisStage &&
-                              cachedMasses_ == masses;
+  // Continuation cache only applies to the BATCHED backend; the per-mol path
+  // resets per-system state on every call.
+  const bool isContinuation = effectiveBackend == FireBackend::BATCHED && hasInitializedBatch_ &&
+                              cachedNumSystems_ == numSystems && cachedTotalAtoms_ == totalAtoms &&
+                              cachedActiveThisStage_ == activeThisStage && cachedMasses_ == masses;
 
   numSystems_ = numSystems;
 
@@ -472,6 +490,50 @@ void FireBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
   setAll(alpha_, fireOptions_.alphaInit);
   dt_.resize(numSystems);
   setAll(dt_, fireOptions_.dtInit);
+
+  if (effectiveBackend == FireBackend::PER_MOLECULE) {
+    energyMinStreak_.resize(0);
+    energyMaxStreak_.resize(0);
+    stuckStreak_.resize(0);
+    convergeReason_.resize(0);
+    debugPowers_.resize(0);
+    debugOutputs_.clear();
+    activeSystemIndices_.resize(0);
+    allSystemIndices_.resize(0);
+    pollsSinceLastEnergyEval_ = 0;
+
+    activeHost_.resize(numSystems);
+    convergenceHost_.resize(numSystems);
+    std::fill_n(activeHost_.begin(), numSystems, 1);
+    if (activeThisStage != nullptr) {
+      cudaCheckError(cudaMemcpyAsync(activeHost_.data(),
+                                     activeThisStage,
+                                     numSystems * sizeof(uint8_t),
+                                     cudaMemcpyDeviceToHost,
+                                     stream_));
+      cudaCheckError(cudaStreamSynchronize(stream_));
+    }
+    activeMolIds_.clear();
+    maxAtomsInBatch_ = 0;
+    for (int sysIdx = 0; sysIdx < numSystems; ++sysIdx) {
+      if (activeHost_[sysIdx] == 0) {
+        continue;
+      }
+      activeMolIds_.push_back(sysIdx);
+      const int numAtoms = atomStartsHost[sysIdx + 1] - atomStartsHost[sysIdx];
+      if (numAtoms > maxAtomsInBatch_) {
+        maxAtomsInBatch_ = numAtoms;
+      }
+    }
+    if (!activeMolIds_.empty()) {
+      activeMolIdsDevice_.resize(activeMolIds_.size());
+      activeMolIdsDevice_.setFromVector(activeMolIds_);
+    }
+
+    resetContinuationCache();
+    lastKnownNumUnfinished_ = static_cast<int>(activeMolIds_.size());
+    return;
+  }
 
   activeSystemIndices_.resize(numSystems);
   allSystemIndices_.resize(numSystems);
@@ -696,7 +758,7 @@ bool FireBatchMinimizer::minimize(const int                                   nu
                                   const GradFunctor                           gFunc,
                                   const uint8_t*                              activeThisStage) {
   const ScopedNvtxRange minimizeRange("FireBatchMinimizer::minimize (batched)");
-  initialize(atomStartsHost, nullptr, activeThisStage);
+  initialize(atomStartsHost, nullptr, activeThisStage, FireBackend::BATCHED);
 
   for (int iter = 0; iter < numIters; ++iter) {
     if (debugMode_) {
