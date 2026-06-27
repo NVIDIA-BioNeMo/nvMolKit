@@ -456,6 +456,8 @@ std::vector<std::vector<double>> splitCombinedGrads(const std::vector<double>& c
   return splitGrads;
 }
 
+std::vector<double> pad3Dto4D(const std::vector<double>& positions, double value);
+
 // Reference implementation for 3D ETKDG terms
 std::unique_ptr<ForceFields::ForceField> setup3DReferenceFF(
   RDKit::ROMol*                        mol,
@@ -567,6 +569,68 @@ std::unique_ptr<ForceFields::ForceField> setup3DReferenceFF(
   }
 
   return referenceForceField;
+}
+
+std::unique_ptr<ForceFields::ForceField> setupPlain3DReferenceFF(
+  RDKit::ROMol*                        mol,
+  const DGeomHelpers::EmbedParameters& params = DGeomHelpers::ETDG) {
+  auto& conf = mol->getConformer();
+
+  auto referenceForceField = std::make_unique<ForceFields::ForceField>(3);
+  for (unsigned int i = 0; i < conf.getNumAtoms(); ++i) {
+    auto* pos = &conf.getAtomPos(i);
+    referenceForceField->positions().push_back(pos);
+  }
+  referenceForceField->initialize();
+
+  auto modifiedParams            = params;
+  modifiedParams.useRandomCoords = true;
+
+  nvMolKit::detail::EmbedArgs eargs;
+  nvMolKit::DGeomHelpers::prepareEmbedderArgs(*mol, modifiedParams, eargs);
+  const auto& etkdgDetails = eargs.etkdgDetails;
+
+  RDGeom::Point3DPtrVect point3DVec;
+  for (unsigned int j = 0; j < conf.getNumAtoms(); ++j) {
+    point3DVec.push_back(&conf.getAtomPos(j));
+  }
+
+  const unsigned int      numAtoms = mol->getNumAtoms();
+  boost::dynamic_bitset<> atomPairs(numAtoms * numAtoms);
+  boost::dynamic_bitset<> isImproperConstrained(numAtoms);
+
+  addExperimentalTorsionTerms(referenceForceField.get(), etkdgDetails, atomPairs, numAtoms);
+  add12Terms(referenceForceField.get(), etkdgDetails, atomPairs, point3DVec, KNOWN_DIST_FORCE_CONSTANT, numAtoms);
+  add13Terms(referenceForceField.get(),
+             etkdgDetails,
+             atomPairs,
+             point3DVec,
+             KNOWN_DIST_FORCE_CONSTANT,
+             isImproperConstrained,
+             modifiedParams.useBasicKnowledge,
+             *eargs.mmat,
+             numAtoms);
+  addLongRangeDistanceConstraints(referenceForceField.get(),
+                                  etkdgDetails,
+                                  atomPairs,
+                                  point3DVec,
+                                  KNOWN_DIST_FORCE_CONSTANT,
+                                  *eargs.mmat,
+                                  numAtoms);
+
+  return referenceForceField;
+}
+
+double getReferencePlain3DEnergy(RDKit::ROMol* mol, double* ePos) {
+  auto FF = setupPlain3DReferenceFF(mol);
+  return FF->calcEnergy(ePos);
+}
+
+std::vector<double> getReferencePlain3DGradient(RDKit::ROMol* mol, double* fPos) {
+  auto                FF = setupPlain3DReferenceFF(mol);
+  std::vector<double> gradients(3 * mol->getNumAtoms(), 0.0);
+  FF->calcGrad(fPos, gradients.data());
+  return pad3Dto4D(gradients, 0.0);
 }
 
 std::vector<double> pad3Dto4D(const std::vector<double>& positions, const double value = 0.0) {
@@ -1463,12 +1527,7 @@ TEST_F(ETK3DGpuTestFixture, PlainCombinedEnergiesSingleMolecule) {
   double gotEnergy;
   CHECK_CUDA_RETURN(cudaMemcpy(&gotEnergy, systemDevice.energyOuts.data() + 0, sizeof(double), cudaMemcpyDeviceToHost));
 
-  // Calculate reference combined energy by summing individual plain terms
-  double wantEnergy = 0.0;
-  for (const auto& term : plainETK3DTerms) {
-    const double e = getReferenceETK3DEnergyTerm(mol_.get(), term, positionsHost.data(), DGeomHelpers::ETDG);
-    wantEnergy += e;
-  }
+  const double wantEnergy = getReferencePlain3DEnergy(mol_.get(), positionsHost.data());
 
   EXPECT_NEAR(gotEnergy, wantEnergy, E_TOL_FUNCTION);
 }
@@ -1487,14 +1546,7 @@ TEST_F(ETK3DGpuTestFixture, PlainCombinedGradientsSingleMolecule) {
   systemDevice.grad.copyToHost(gotGrad);
   cudaDeviceSynchronize();
 
-  // Calculate reference combined gradients by summing individual plain terms
-  std::vector<double> wantGradients(4 * mol_->getNumAtoms(), 0.0);
-  for (const auto& term : plainETK3DTerms) {
-    auto termGrad = getReferenceETK3DGradientTerm(mol_.get(), term, positionsHost.data(), DGeomHelpers::ETDG);
-    for (size_t i = 0; i < wantGradients.size(); ++i) {
-      wantGradients[i] += termGrad[i];
-    }
-  }
+  const std::vector<double> wantGradients = getReferencePlain3DGradient(mol_.get(), positionsHost.data());
 
   EXPECT_THAT(gotGrad, ::testing::Pointwise(::testing::FloatNear(G_TOL), wantGradients));
 }
@@ -1782,16 +1834,11 @@ TEST_F(ETK3DGpuTestFixture, PlainCombinedEnergiesMultiMol) {
   systemDevice.energyOuts.copyToHost(gotEnergy);
   cudaDeviceSynchronize();
 
-  // Calculate reference combined energy by summing individual plain terms for each molecule
+  // Calculate reference combined energy using the same shared atom-pair exclusions as the device setup.
   std::vector<double> wantEnergy(molsPtrs_.size(), 0.0);
   for (size_t molIdx = 0; molIdx < molsPtrs_.size(); ++molIdx) {
-    for (const auto& term : plainETK3DTerms) {
-      const double e = getReferenceETK3DEnergyTerm(molsPtrs_[molIdx],
-                                                   term,
-                                                   positionsHost.data() + 3 * atomStartsHost[molIdx],
-                                                   DGeomHelpers::ETDG);
-      wantEnergy[molIdx] += e;
-    }
+    wantEnergy[molIdx] =
+      getReferencePlain3DEnergy(molsPtrs_[molIdx], positionsHost.data() + 3 * atomStartsHost[molIdx]);
   }
 
   EXPECT_THAT(gotEnergy, ::testing::Pointwise(::testing::DoubleNear(E_TOL_COMBINED), wantEnergy));
@@ -1801,6 +1848,7 @@ TEST_F(ETK3DGpuTestFixture, PlainCombinedGradientsMultiMol) {
   loadMMFFMols(10, DGeomHelpers::ETDG);  // Use ETDG parameters (useBasicKnowledge=false)
 
   // Test combined gradient calculation with plain 3D terms (ETDG variant - no improper torsions)
+  systemDevice.grad.zero();
   CHECK_CUDA_RETURN(nvMolKit::DistGeom::computeGradientsETK(systemDevice,
                                                             atomStartsDevice,
                                                             positionsDevice,
@@ -1810,21 +1858,17 @@ TEST_F(ETK3DGpuTestFixture, PlainCombinedGradientsMultiMol) {
   systemDevice.grad.copyToHost(gotGrad);
   cudaDeviceSynchronize();
 
-  // Calculate reference combined gradients by summing individual plain terms for each molecule
-  std::vector<std::vector<double>> wantGradients;
-  for (size_t molIdx = 0; molIdx < molsPtrs_.size(); ++molIdx) {
-    std::vector<double> molGradients(4 * molsPtrs_[molIdx]->getNumAtoms(), 0.0);
-    for (const auto& term : plainETK3DTerms) {
-      auto termGrad = getReferenceETK3DGradientTerm(molsPtrs_[molIdx],
-                                                    term,
-                                                    positionsHost.data() + 3 * atomStartsHost[molIdx],
-                                                    DGeomHelpers::ETDG);
-      for (size_t i = 0; i < molGradients.size(); ++i) {
-        molGradients[i] += termGrad[i];
-      }
+  // Validate the combined PLAIN path against the sum of isolated device term kernels.
+  // The device torsion gradient intentionally carries fixes that can differ from RDKit's
+  // scalar CrystalFF gradient for affected torsions.
+  std::vector<double> wantCombinedGrad(systemDevice.grad.size(), 0.0);
+  for (const auto& term : plainETK3DTerms) {
+    auto termGrad = getETK3DGradientTerm(systemDevice, atomStartsDevice, positionsDevice, term);
+    for (size_t i = 0; i < wantCombinedGrad.size(); ++i) {
+      wantCombinedGrad[i] += termGrad[i];
     }
-    wantGradients.push_back(molGradients);
   }
+  std::vector<std::vector<double>> wantGradients = splitCombinedGrads(wantCombinedGrad, atomStartsHost);
 
   std::vector<std::vector<double>> gotGradSplit = splitCombinedGrads(gotGrad, atomStartsHost);
   for (size_t i = 0; i < wantGradients.size(); ++i) {

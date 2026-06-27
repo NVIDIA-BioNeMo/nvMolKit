@@ -16,6 +16,7 @@
 #include <DistGeom/DistGeomUtils.h>
 #include <GraphMol/FileParsers/FileParsers.h>
 
+#include <cmath>
 #include <filesystem>
 #include <random>
 
@@ -208,7 +209,9 @@ std::vector<double> getGPUEnergy(const std::vector<const RDKit::ROMol*>&    mols
   return getReferenceEnergy(mols, eargs, false, 0.001, hostPos3.data(), nullptr, useBasicKnowledge);
 }
 
-class ETKStageSingleMolTestFixture : public ::testing::TestWithParam<std::tuple<ETKDGOption, nvMolKit::BfgsBackend>> {
+using ETKStageTestParam = std::tuple<ETKDGOption, nvMolKit::BfgsBackend>;
+
+class ETKStageSingleMolTestFixture : public ::testing::TestWithParam<ETKStageTestParam> {
  public:
   ETKStageSingleMolTestFixture() { testDataFolderPath_ = getTestDataFolderPath(); }
 
@@ -249,19 +252,18 @@ TEST_P(ETKStageSingleMolTestFixture, MinimizeCompare) {
   const bool useBasicKnowledge = embedParam_.useBasicKnowledge;
 
   // Create minimizer for the test
-  nvMolKit::BfgsBatchMinimizer minimizer(4, nvMolKit::DebugLevel::NONE, true, nullptr, backend);
+  nvMolKit::BfgsBatchMinimizer bfgsMinimizer(4, nvMolKit::DebugLevel::NONE, true, nullptr, backend);
 
   // Create FirstMinimizeStage
   std::vector<std::unique_ptr<ETKDGStage>> stages;
   std::vector<const RDKit::ROMol*>         molsPtrs;
   molsPtrs.push_back(molPtr_.get());
-  auto        stage    = std::make_unique<nvMolKit::detail::ETKMinimizationStage>(molsPtrs,
+  auto stage = std::make_unique<nvMolKit::detail::ETKMinimizationStage>(molsPtrs,
                                                                         eargs_,
                                                                         embedParam_,
                                                                         context_,
-                                                                        minimizer,
+                                                                        bfgsMinimizer,
                                                                         nullptr);
-  const auto* stagePtr = stage.get();  // Store pointer before moving
   stages.push_back(std::move(stage));
 
   // Create and run driver
@@ -294,26 +296,37 @@ TEST_P(ETKStageSingleMolTestFixture, MinimizeCompare) {
   EXPECT_THAT(refEnergies, ::testing::Pointwise(testing::Ge(), gpuEnergies));
 }
 
-// Instantiate parameterized tests for different ETKDG variants and backends
+namespace {
+std::vector<ETKStageTestParam> makeETKStageParams(const std::vector<ETKDGOption>& options) {
+  std::vector<ETKStageTestParam> params;
+  for (const auto option : options) {
+    params.emplace_back(option, nvMolKit::BfgsBackend::BATCHED);
+    params.emplace_back(option, nvMolKit::BfgsBackend::PER_MOLECULE);
+  }
+  return params;
+}
+
+std::string makeETKStageName(const ETKStageTestParam& param) {
+  std::string name = getETKDGOptionName(std::get<0>(param));
+  name += std::get<1>(param) == nvMolKit::BfgsBackend::BATCHED ? "_Batched" : "_PerMolecule";
+  return name;
+}
+}  // namespace
+
 INSTANTIATE_TEST_SUITE_P(ETKDGVariants,
                          ETKStageSingleMolTestFixture,
-                         ::testing::Combine(::testing::Values(ETKDGOption::ETKDG,
-                                                              ETKDGOption::ETKDGv2,
-                                                              ETKDGOption::srETKDGv3,
-                                                              ETKDGOption::ETKDGv3,
-                                                              ETKDGOption::KDG,
-                                                              ETKDGOption::ETDG,
-                                                              ETKDGOption::DG),
-                                            ::testing::Values(nvMolKit::BfgsBackend::BATCHED,
-                                                              nvMolKit::BfgsBackend::PER_MOLECULE)),
-                         [](const ::testing::TestParamInfo<std::tuple<ETKDGOption, nvMolKit::BfgsBackend>>& info) {
-                           std::string name = getETKDGOptionName(std::get<0>(info.param));
-                           name +=
-                             std::get<1>(info.param) == nvMolKit::BfgsBackend::BATCHED ? "_Batched" : "_PerMolecule";
-                           return name;
+                         ::testing::ValuesIn(makeETKStageParams({ETKDGOption::ETKDG,
+                                                                 ETKDGOption::ETKDGv2,
+                                                                 ETKDGOption::srETKDGv3,
+                                                                 ETKDGOption::ETKDGv3,
+                                                                 ETKDGOption::KDG,
+                                                                 ETKDGOption::ETDG,
+                                                                 ETKDGOption::DG})),
+                         [](const ::testing::TestParamInfo<ETKStageTestParam>& info) {
+                           return makeETKStageName(info.param);
                          });
 
-class ETKStageMultiMolTestFixture : public ::testing::TestWithParam<std::tuple<ETKDGOption, nvMolKit::BfgsBackend>> {
+class ETKStageMultiMolTestFixture : public ::testing::TestWithParam<ETKStageTestParam> {
  public:
   ETKStageMultiMolTestFixture() { testDataFolderPath_ = getTestDataFolderPath(); }
 
@@ -354,7 +367,7 @@ TEST_P(ETKStageMultiMolTestFixture, MinimizeCompare) {
   const bool useBasicKnowledge = embedParam_.useBasicKnowledge;
 
   // Create minimizer for the test
-  nvMolKit::BfgsBatchMinimizer minimizer(4, nvMolKit::DebugLevel::NONE, true, nullptr, backend);
+  nvMolKit::BfgsBatchMinimizer bfgsMinimizer(4, nvMolKit::DebugLevel::NONE, true, nullptr, backend);
 
   // Create FirstMinimizeStage
   std::vector<std::unique_ptr<ETKDGStage>> stages;
@@ -364,13 +377,12 @@ TEST_P(ETKStageMultiMolTestFixture, MinimizeCompare) {
   }
   const int count = molsPtrs.size();
 
-  auto        stage    = std::make_unique<nvMolKit::detail::ETKMinimizationStage>(molsPtrs,
+  auto stage = std::make_unique<nvMolKit::detail::ETKMinimizationStage>(molsPtrs,
                                                                         eargs_,
                                                                         embedParam_,
                                                                         context_,
-                                                                        minimizer,
+                                                                        bfgsMinimizer,
                                                                         nullptr);
-  const auto* stagePtr = stage.get();  // Store pointer before moving
   stages.push_back(std::move(stage));
 
   // Create and run driver
@@ -435,18 +447,13 @@ TEST_P(ETKStageMultiMolTestFixture, MinimizeCompare) {
 // Instantiate parameterized tests for different ETKDG variants and backends
 INSTANTIATE_TEST_SUITE_P(ETKDGVariants,
                          ETKStageMultiMolTestFixture,
-                         ::testing::Combine(::testing::Values(ETKDGOption::ETDG,
-                                                              ETKDGOption::ETKDG,
-                                                              ETKDGOption::ETKDGv2,
-                                                              ETKDGOption::srETKDGv3,
-                                                              ETKDGOption::ETKDGv3,
-                                                              ETKDGOption::KDG,
-                                                              ETKDGOption::DG),
-                                            ::testing::Values(nvMolKit::BfgsBackend::BATCHED,
-                                                              nvMolKit::BfgsBackend::PER_MOLECULE)),
-                         [](const ::testing::TestParamInfo<std::tuple<ETKDGOption, nvMolKit::BfgsBackend>>& info) {
-                           std::string name = getETKDGOptionName(std::get<0>(info.param));
-                           name +=
-                             std::get<1>(info.param) == nvMolKit::BfgsBackend::BATCHED ? "_Batched" : "_PerMolecule";
-                           return name;
+                         ::testing::ValuesIn(makeETKStageParams({ETKDGOption::ETDG,
+                                                                 ETKDGOption::ETKDG,
+                                                                 ETKDGOption::ETKDGv2,
+                                                                 ETKDGOption::srETKDGv3,
+                                                                 ETKDGOption::ETKDGv3,
+                                                                 ETKDGOption::KDG,
+                                                                 ETKDGOption::DG})),
+                         [](const ::testing::TestParamInfo<ETKStageTestParam>& info) {
+                           return makeETKStageName(info.param);
                          });
