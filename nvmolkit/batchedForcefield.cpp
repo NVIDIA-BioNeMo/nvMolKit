@@ -32,8 +32,8 @@
 #include "src/forcefields/mmff_properties.h"
 #include "src/forcefields/uff_batched_forcefield.h"
 #include "src/hardware_options.h"
-#include "src/minimizer/bfgs_mmff.h"
 #include "src/minimizer/bfgs_uff.h"
+#include "src/minimizer/mmff_minimize.h"
 #include "src/utils/device_vector.h"
 
 namespace bp = boost::python;

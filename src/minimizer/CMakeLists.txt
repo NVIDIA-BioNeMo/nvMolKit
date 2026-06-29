@@ -39,13 +39,15 @@ target_link_libraries(
   PUBLIC device_vector batched_forcefield
   PRIVATE mmff cub_helpers cccl_interface)
 
-add_library(bfgs_mmff bfgs_mmff.cpp)
+add_library(mmff_minimize mmff_minimize.cpp)
 target_link_libraries(
-  bfgs_mmff
+  mmff_minimize
   PUBLIC bfgs conformer_types
   PRIVATE ${RDKit_LIBS}
           bfgs_common
           ff_device_collect
+          ff_utils
+          fire_minimizer
           mmff_batched_forcefield
           rdkit_mmff_flattened
           forcefield_constraints

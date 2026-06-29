@@ -13,8 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef NVMOLKIT_BFGS_MMFF_H
-#define NVMOLKIT_BFGS_MMFF_H
+#ifndef NVMOLKIT_MMFF_MINIMIZE_H
+#define NVMOLKIT_MMFF_MINIMIZE_H
 
 #include <optional>
 #include <vector>
@@ -24,6 +24,7 @@
 #include "src/forcefields/mmff_properties.h"
 #include "src/hardware_options.h"
 #include "src/minimizer/bfgs_minimize.h"
+#include "src/minimizer/fire_minimizer.h"
 
 namespace RDKit {
 class ROMol;
@@ -100,5 +101,41 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfs(
   int                                                          targetGpu   = -1,
   const DeviceCoordResult*                                     deviceInput = nullptr);
 
+//! \brief Optimize conformers using the FIRE 2.0 minimizer instead of BFGS.
+//!
+//! Mirrors the API shape of the BFGS overloads. Routes through either the
+//! batched-forcefield path or the per-molecule MMFF FIRE kernel based on
+//! @p backend.
+//! \param mols Molecules to optimize (positions written back in-place).
+//! \param maxIters Maximum FIRE iterations.
+//! \param fireOptions Algorithm parameters; @ref FireOptions::gradTol controls convergence.
+//! \param properties Per-molecule MMFF settings (one entry per molecule).
+//! \param constraints Per-molecule constraint specifications (empty = no constraints).
+//! \param perfOptions Hardware and batching configuration.
+//! \param backend FIRE backend to use (BATCHED, PER_MOLECULE, or HYBRID which auto-selects).
+//! \param output Whether to write coordinates back into RDKit conformers (default) or return them
+//!               on-device as a DeviceCoordResult.
+//! \param targetGpu In DEVICE mode, the GPU to consolidate the result onto. -1 selects the first
+//!                  configured execution GPU (or device 0).
+//! \return Energies/convergence flags in RDKIT mode, or a device result in DEVICE mode.
+MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
+  std::vector<RDKit::ROMol*>&                                  mols,
+  int                                                          maxIters    = 200,
+  const FireOptions&                                           fireOptions = {},
+  const std::vector<MMFFProperties>&                           properties  = {},
+  const std::vector<ForceFieldConstraints::PerMolConstraints>& constraints = {},
+  const BatchHardwareOptions&                                  perfOptions = {},
+  FireBackend                                                  backend     = FireBackend::HYBRID,
+  CoordinateOutput                                             output      = CoordinateOutput::RDKIT_CONFORMERS,
+  int                                                          targetGpu   = -1);
+
+//! \brief Convenience wrapper returning energies only.
+std::vector<std::vector<double>> MMFFOptimizeMoleculesConfsFire(std::vector<RDKit::ROMol*>&        mols,
+                                                                int                                maxIters    = 200,
+                                                                const FireOptions&                 fireOptions = {},
+                                                                const std::vector<MMFFProperties>& properties  = {},
+                                                                const BatchHardwareOptions&        perfOptions = {},
+                                                                FireBackend backend = FireBackend::HYBRID);
+
 }  // namespace nvMolKit::MMFF
-#endif  // NVMOLKIT_BFGS_MMFF_H
+#endif  // NVMOLKIT_MMFF_MINIMIZE_H

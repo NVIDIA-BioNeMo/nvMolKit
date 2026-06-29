@@ -28,6 +28,10 @@ namespace nvMolKit {
 
 class BatchedForcefield;
 
+namespace MMFF {
+struct BatchedMolecularDeviceBuffers;
+}  // namespace MMFF
+
 //! \brief Per-system per-iteration debug snapshot recorded when the minimizer is
 //! constructed in debug mode.
 struct FireDebugOutput {
@@ -111,6 +115,17 @@ class FireBatchMinimizer final : public BatchMinimizer {
                 AsyncDeviceVector<double>& energyOuts,
                 const uint8_t*             activeSystemMask = nullptr);
 
+  //! \brief Run MMFF FIRE minimization through the per-molecule kernel.
+  //! \pre Backend must be ::FireBackend::PER_MOLECULE or ::FireBackend::HYBRID resolving
+  //!      to PER_MOLECULE for this batch.
+  //! \pre ::FireOptions::stuckDetectionEnabled must be false; the per-molecule path does
+  //!      not support FIRE energy-plateau detection.
+  bool minimizeWithMMFF(int                                  numIters,
+                        double                               gradTol,
+                        const std::vector<int>&              atomStartsHost,
+                        MMFF::BatchedMolecularDeviceBuffers& systemDevice,
+                        const uint8_t*                       activeThisStage = nullptr);
+
   const std::vector<FireDebugOutput>& debugOutputs() const { return debugOutputs_; }
 
   //! \brief Cadence (in iterations) at which the minimize() loop reads the
@@ -145,6 +160,9 @@ class FireBatchMinimizer final : public BatchMinimizer {
                       int                           launchBlocks);
   void compactActiveAsync();
   int  readbackNumUnfinished();
+
+  //! \brief Copy per-molecule statuses to host and report whether all active systems converged.
+  bool checkPerMolConvergence();
 
   int          dataDim_;
   FireOptions  fireOptions_;

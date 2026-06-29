@@ -25,12 +25,15 @@
 #include <cmath>
 #include <numeric>
 #include <random>
+#include <stdexcept>
 #include <vector>
 
 #include "rdkit_extensions/mmff_flattened_builder.h"
 #include "src/forcefields/mmff.h"
 #include "src/forcefields/mmff_batched_forcefield.h"
 #include "src/minimizer/fire_minimize_permol_kernels.h"
+#include "src/minimizer/fire_minimizer.h"
+#include "src/minimizer/mmff_minimize.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
 #include "tests/test_utils.h"
@@ -209,4 +212,99 @@ TEST(FireMinimizerPerMolMMFF, DirectLauncherNoopsForEmptyBatch) {
                                                            /*energyOuts=*/nullptr,
                                                            /*statuses=*/nullptr);
   EXPECT_EQ(err, cudaSuccess);
+}
+
+TEST(FireMinimizerPerMolMMFF, MinimizerWrapperConvergesNearReference) {
+  PerMolFireFixture fixture;
+  fixture.setup(/*numMols=*/2);
+  const std::vector<double> refEnergies = computeReferenceEnergies(fixture.mols);
+
+  nvMolKit::FireOptions options{};
+  options.useMass               = false;
+  options.stuckDetectionEnabled = false;
+  options.gradTol               = 1e-3;
+  options.dtInit                = 0.05;
+  options.dMax                  = 0.2;
+
+  nvMolKit::FireBatchMinimizer minimizer(/*dataDim=*/3,
+                                         options,
+                                         /*stream=*/nullptr,
+                                         /*debugMode=*/false,
+                                         nvMolKit::FireBackend::PER_MOLECULE);
+
+  bool converged = false;
+  for (int extension = 0; extension < 5 && !converged; ++extension) {
+    converged = minimizer.minimizeWithMMFF(/*numIters=*/2000,
+                                           /*gradTol=*/options.gradTol,
+                                           fixture.systemHost.indices.atomStarts,
+                                           fixture.systemDevice);
+  }
+
+  std::vector<double> energiesHost(fixture.systemDevice.energyOuts.size());
+  fixture.systemDevice.energyOuts.copyToHost(energiesHost);
+  cudaCheckError(cudaDeviceSynchronize());
+
+  for (size_t i = 0; i < energiesHost.size(); ++i) {
+    const double tolerance = 1.0 + 0.05 * std::abs(refEnergies[i]);
+    EXPECT_NEAR(energiesHost[i], refEnergies[i], tolerance) << "system " << i;
+  }
+}
+
+TEST(FireMinimizerPerMolMMFF, MinimizerWrapperRejectsStuckDetection) {
+  PerMolFireFixture fixture;
+  fixture.setup(/*numMols=*/1);
+
+  nvMolKit::FireOptions options{};
+  options.stuckDetectionEnabled = true;
+  options.gradTol               = 1e-3;
+
+  nvMolKit::FireBatchMinimizer minimizer(/*dataDim=*/3,
+                                         options,
+                                         /*stream=*/nullptr,
+                                         /*debugMode=*/false,
+                                         nvMolKit::FireBackend::PER_MOLECULE);
+
+  EXPECT_THROW(minimizer.minimizeWithMMFF(/*numIters=*/10,
+                                          /*gradTol=*/options.gradTol,
+                                          fixture.systemHost.indices.atomStarts,
+                                          fixture.systemDevice),
+               std::runtime_error);
+}
+
+TEST(FireMinimizerPerMolMMFF, PublicMMFFWrapperConvergesNearReference) {
+  PerMolFireFixture fixture;
+  fixture.setup(/*numMols=*/2);
+  const std::vector<double> refEnergies = computeReferenceEnergies(fixture.mols);
+
+  std::vector<RDKit::ROMol*> molPtrs;
+  molPtrs.reserve(fixture.mols.size());
+  for (const auto& mol : fixture.mols) {
+    molPtrs.push_back(mol.get());
+  }
+
+  nvMolKit::FireOptions options{};
+  options.useMass               = false;
+  options.stuckDetectionEnabled = false;
+  options.gradTol               = 1e-3;
+  options.dtInit                = 0.05;
+  options.dMax                  = 0.2;
+
+  const auto result = nvMolKit::MMFF::MMFFMinimizeMoleculesConfsFire(molPtrs,
+                                                                     /*maxIters=*/10000,
+                                                                     options,
+                                                                     /*properties=*/{},
+                                                                     /*constraints=*/{},
+                                                                     /*perfOptions=*/{},
+                                                                     nvMolKit::FireBackend::PER_MOLECULE);
+
+  ASSERT_FALSE(result.device.has_value());
+  ASSERT_EQ(result.energies.size(), fixture.mols.size());
+  ASSERT_EQ(result.converged.size(), fixture.mols.size());
+  for (size_t i = 0; i < result.energies.size(); ++i) {
+    ASSERT_EQ(result.energies[i].size(), 1u);
+    ASSERT_EQ(result.converged[i].size(), 1u);
+    EXPECT_EQ(result.converged[i][0], 1);
+    const double tolerance = 1.0 + 0.05 * std::abs(refEnergies[i]);
+    EXPECT_NEAR(result.energies[i][0], refEnergies[i], tolerance) << "system " << i;
+  }
 }
