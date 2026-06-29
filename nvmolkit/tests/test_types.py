@@ -23,6 +23,7 @@ from nvmolkit.types import (
     CoordinateOutput,
     Dense3DResult,
     Device3DResult,
+    FireOptions,
     HardwareOptions,
 )
 
@@ -100,6 +101,17 @@ def _make_device_3d_result(
 def test_coordinate_output_enum_values():
     assert CoordinateOutput.RDKIT_CONFORMERS.value == "rdkit"
     assert CoordinateOutput.DEVICE.value == "device"
+
+
+def test_fire_options_exposes_native_defaults_and_mutators():
+    options = FireOptions()
+    assert math.isclose(options.gradTol, 1e-4)
+    assert options.stuckDetectionEnabled is False
+
+    options.gradTol = 1e-3
+    options.useMass = True
+    assert math.isclose(options.gradTol, 1e-3)
+    assert options.useMass is True
 
 
 def test_device_3d_result_num_conformers_matches_atom_starts():

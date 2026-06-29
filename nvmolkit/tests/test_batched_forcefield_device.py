@@ -26,7 +26,7 @@ from rdkit import Chem
 from rdkit.Chem import rdDistGeom
 
 from nvmolkit.batchedForcefield import MMFFBatchedForcefield, UFFBatchedForcefield
-from nvmolkit.types import CoordinateOutput, Device3DResult
+from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions
 
 
 def make_embedded_mol(smiles: str, num_confs: int = 1, seed: int = 0xC0FFEE):
@@ -90,6 +90,19 @@ def test_minimize_device_energies_match_host(ff_cls, two_mols):
     assert len(energies_device) == len(energies_host)
     for h, d in zip(energies_host, energies_device):
         assert abs(h - d) < 1e-3, f"host {h} vs device {d}"
+
+
+@pytest.mark.parametrize("ff_cls", [MMFFBatchedForcefield, UFFBatchedForcefield])
+def test_minimize_fire_host_returns_nested_energy_and_status(ff_cls, two_mols):
+    options = FireOptions()
+    options.gradTol = 1e-3
+
+    ff = ff_cls([Chem.Mol(m) for m in two_mols])
+    energies, converged = ff.minimize(maxIters=100, minimizerKind="FIRE", fireOptions=options)
+
+    assert [len(inner) for inner in energies] == [2, 3]
+    assert [len(inner) for inner in converged] == [2, 3]
+    assert all(isinstance(flag, bool) for inner in converged for flag in inner)
 
 
 @pytest.mark.parametrize("ff_cls", [MMFFBatchedForcefield, UFFBatchedForcefield])

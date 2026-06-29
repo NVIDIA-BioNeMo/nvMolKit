@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import os
+
 import pytest
 import torch
 from rdkit import Chem
@@ -24,7 +25,7 @@ from rdkit.Geometry import Point3D
 
 from nvmolkit.embedMolecules import EmbedMolecules
 import nvmolkit.mmffOptimization as nvmolkit_mmff
-from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions
+from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions, HardwareOptions
 
 
 @pytest.fixture
@@ -274,6 +275,56 @@ def test_mmff_optimization_empty_input():
     """Test nvMolKit MMFF optimization with empty input."""
     result = nvmolkit_mmff.MMFFOptimizeMoleculesConfs([])
     assert result == []
+
+
+@pytest.mark.parametrize("backend", ["BATCHED", "PER_MOL"])
+def test_mmff_optimization_fire_matches_rdkit(mmff_test_mols, backend):
+    starting_mols = create_hard_copy_mols(mmff_test_mols[:2])
+    rdkit_mols = create_hard_copy_mols(mmff_test_mols[:2])
+    nvmolkit_mols = create_hard_copy_mols(mmff_test_mols[:2])
+
+    starting_energies = calculate_rdkit_mmff_energies(starting_mols, maxIters=0)
+    rdkit_energies = calculate_rdkit_mmff_energies(rdkit_mols, maxIters=1000)
+
+    options = FireOptions()
+    options.useMass = False
+    options.stuckDetectionEnabled = False
+    options.gradTol = 1e-3
+    options.dtInit = 0.05
+    options.dMax = 0.2
+
+    nvmolkit_energies = nvmolkit_mmff.MMFFOptimizeMoleculesConfs(
+        nvmolkit_mols,
+        maxIters=10000,
+        minimizerKind="FIRE",
+        backend=backend,
+        fireOptions=options,
+    )
+
+    assert len(nvmolkit_energies) == len(rdkit_energies)
+    for molecule_index, (starting, reference, result) in enumerate(
+        zip(starting_energies, rdkit_energies, nvmolkit_energies)
+    ):
+        assert len(result) == len(reference)
+        for conformer_index, (starting_energy, reference_energy, result_energy) in enumerate(
+            zip(starting, reference, result)
+        ):
+            assert result_energy < starting_energy, (
+                f"Molecule {molecule_index}, conformer {conformer_index}: "
+                f"FIRE energy {result_energy:.6f} did not improve from {starting_energy:.6f}"
+            )
+            tolerance = 1.0 + 0.05 * abs(reference_energy)
+            assert abs(result_energy - reference_energy) <= tolerance, (
+                f"Molecule {molecule_index}, conformer {conformer_index}: "
+                f"RDKit={reference_energy:.6f}, nvMolKit FIRE={result_energy:.6f}, "
+                f"tolerance={tolerance:.6f}"
+            )
+
+
+def test_mmff_optimization_rejects_unknown_minimizer_kind():
+    mol = Chem.MolFromSmiles("CCO")
+    with pytest.raises(ValueError, match="minimizerKind"):
+        nvmolkit_mmff.MMFFOptimizeMoleculesConfs([mol], minimizerKind="NOT_A_MINIMIZER")
 
 
 def test_mmff_optimization_invalid_input():
