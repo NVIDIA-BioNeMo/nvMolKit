@@ -43,7 +43,7 @@
 #include "src/forcefields/mmff.h"
 #include "src/forcefields/mmff_batched_forcefield.h"
 #include "src/forcefields/mmff_kernels.h"
-#include "src/minimizer/bfgs_mmff.h"
+#include "src/minimizer/mmff_minimize.h"
 #include "src/utils/device.h"
 #include "tests/test_utils.h"
 using namespace nvMolKit::MMFF;

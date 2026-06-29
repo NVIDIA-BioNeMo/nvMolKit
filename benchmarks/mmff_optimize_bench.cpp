@@ -24,7 +24,7 @@
 #include <memory>
 #include <random>
 
-#include "src/minimizer/bfgs_mmff.h"
+#include "src/minimizer/mmff_minimize.h"
 #include "tests/test_utils.h"
 
 void perturbConformer(RDKit::Conformer& conf, const float delta = 0.1, const int seed = 0) {

@@ -89,7 +89,7 @@ add_executable(test_mmff test_mmff.cu)
 target_link_libraries(
   test_mmff
   PRIVATE ${RDKit_LIBS}
-          bfgs_mmff
+          mmff_minimize
           rdkit_mmff_flattened
           mmff
           mmff_batched_forcefield
@@ -188,7 +188,7 @@ target_link_libraries(
 add_executable(test_ff_device_output test_ff_device_output.cu)
 target_link_libraries(
   test_ff_device_output
-  PRIVATE bfgs_mmff
+  PRIVATE mmff_minimize
           bfgs_uff
           bfgs_common
           mmff
@@ -226,6 +226,11 @@ target_link_libraries(
           device_vector
           ${RDKit_LIBS}
           test_utils
+          mmff_minimize
+          bfgs_common
+          ff_device_collect
+          ff_utils
+          forcefield_constraints
           mmff
           device)
 
@@ -247,6 +252,7 @@ target_link_libraries(
           cuda_error_check
           ${RDKit_LIBS}
           test_utils
+          mmff_minimize
           mmff
           device)
 

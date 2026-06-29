@@ -28,7 +28,7 @@
 #include <vector>
 
 #include "benchmarks/benchmark_utils.h"
-#include "src/minimizer/bfgs_mmff.h"
+#include "src/minimizer/mmff_minimize.h"
 #include "tests/test_utils.h"
 
 namespace {

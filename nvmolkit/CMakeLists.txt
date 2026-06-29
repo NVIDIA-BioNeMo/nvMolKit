@@ -43,7 +43,7 @@ installpythontarget(_arrayHelpers ./)
 add_library(_mmffOptimization MODULE mmffOptimization.cpp)
 target_link_libraries(_mmffOptimization PUBLIC ${Boost_LIBRARIES}
                                                ${PYTHON_LIBRARIES})
-target_link_libraries(_mmffOptimization PRIVATE ${RDKit_LIBS} bfgs_mmff
+target_link_libraries(_mmffOptimization PRIVATE ${RDKit_LIBS} mmff_minimize
                                                 ff_utils)
 target_include_directories(_mmffOptimization PUBLIC ${Python_INCLUDE_DIRS})
 target_include_directories(_mmffOptimization SYSTEM
@@ -64,7 +64,7 @@ target_link_libraries(_batchedForcefield PUBLIC ${Boost_LIBRARIES}
 target_link_libraries(
   _batchedForcefield
   PRIVATE ${RDKit_LIBS}
-          bfgs_mmff
+          mmff_minimize
           bfgs_uff
           mmff_batched_forcefield
           uff_batched_forcefield

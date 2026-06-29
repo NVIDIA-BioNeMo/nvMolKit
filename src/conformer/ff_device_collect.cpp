@@ -31,11 +31,14 @@
 namespace nvMolKit {
 namespace detail {
 
-void appendBatch(const std::vector<ConformerInfo>& batchConformers,
-                 const AsyncDeviceVector<double>&  positionsDevice,
-                 const AsyncDeviceVector<double>&  energiesDevice,
-                 const AsyncDeviceVector<int16_t>& statusesDevice,
-                 DeviceCoordCollector&             collector) {
+namespace {
+
+template <typename Status>
+void appendBatchWithHostStatuses(const std::vector<ConformerInfo>& batchConformers,
+                                 const AsyncDeviceVector<double>&  positionsDevice,
+                                 const AsyncDeviceVector<double>&  energiesDevice,
+                                 const std::vector<Status>&        statusesHost,
+                                 DeviceCoordCollector&             collector) {
   const int numConformers = static_cast<int>(batchConformers.size());
   if (numConformers == 0) {
     return;
@@ -43,16 +46,14 @@ void appendBatch(const std::vector<ConformerInfo>& batchConformers,
   if (energiesDevice.size() != static_cast<size_t>(numConformers)) {
     throw std::invalid_argument("energiesDevice size does not match batch size");
   }
-  if (statusesDevice.size() != static_cast<size_t>(numConformers)) {
-    throw std::invalid_argument("statusesDevice size does not match batch size");
+  if (statusesHost.size() != static_cast<size_t>(numConformers)) {
+    throw std::invalid_argument("statusesHost size does not match batch size");
   }
 
   const WithDevice withDevice(collector.gpuId);
 
   // Make collector.stream wait on whatever stream produced positionsDevice / energiesDevice so the
-  // device-to-device copies below see the minimizer's writes. When the producer stream and
-  // collector.stream are the same the cross-stream sync is unnecessary; skip it. The `statusesDevice`
-  // stream is synced fully on the host immediately below because we read its bytes on host.
+  // device-to-device copies below see the minimizer's writes.
   const cudaStream_t collectorStream = collector.stream;
   const cudaStream_t positionsStream = positionsDevice.stream();
   const cudaStream_t energiesStream  = energiesDevice.stream();
@@ -68,10 +69,6 @@ void appendBatch(const std::vector<ConformerInfo>& batchConformers,
   if (energiesStream != positionsStream) {
     waitOnStream(energiesStream);
   }
-
-  std::vector<int16_t> statusesHost(numConformers);
-  statusesDevice.copyToHost(statusesHost.data(), static_cast<size_t>(numConformers));
-  cudaCheckError(cudaStreamSynchronize(statusesDevice.stream()));
 
   int totalNewAtoms = 0;
   for (const auto& confInfo : batchConformers) {
@@ -119,6 +116,39 @@ void appendBatch(const std::vector<ConformerInfo>& batchConformers,
   // Sync so the pageable host-side `convergedHost` we just used in cudaMemcpyAsync is no longer
   // needed once we return.
   cudaCheckError(cudaStreamSynchronize(collector.stream));
+}
+
+}  // namespace
+
+void appendBatch(const std::vector<ConformerInfo>& batchConformers,
+                 const AsyncDeviceVector<double>&  positionsDevice,
+                 const AsyncDeviceVector<double>&  energiesDevice,
+                 const AsyncDeviceVector<int16_t>& statusesDevice,
+                 DeviceCoordCollector&             collector) {
+  const int numConformers = static_cast<int>(batchConformers.size());
+  if (numConformers == 0) {
+    return;
+  }
+  if (energiesDevice.size() != static_cast<size_t>(numConformers)) {
+    throw std::invalid_argument("energiesDevice size does not match batch size");
+  }
+  if (statusesDevice.size() != static_cast<size_t>(numConformers)) {
+    throw std::invalid_argument("statusesDevice size does not match batch size");
+  }
+
+  std::vector<int16_t> statusesHost(numConformers);
+  statusesDevice.copyToHost(statusesHost.data(), static_cast<size_t>(numConformers));
+  cudaCheckError(cudaStreamSynchronize(statusesDevice.stream()));
+
+  appendBatchWithHostStatuses(batchConformers, positionsDevice, energiesDevice, statusesHost, collector);
+}
+
+void appendBatch(const std::vector<ConformerInfo>& batchConformers,
+                 const AsyncDeviceVector<double>&  positionsDevice,
+                 const AsyncDeviceVector<double>&  energiesDevice,
+                 const std::vector<uint8_t>&       statusesHost,
+                 DeviceCoordCollector&             collector) {
+  appendBatchWithHostStatuses(batchConformers, positionsDevice, energiesDevice, statusesHost, collector);
 }
 
 namespace {

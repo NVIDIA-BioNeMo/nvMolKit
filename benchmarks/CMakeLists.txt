@@ -49,7 +49,7 @@ target_link_libraries(
   mmff_multimol_bench
   PRIVATE nanobench
           ${RDKit_LIBS}
-          bfgs_mmff
+          mmff_minimize
           test_utils
           ff_utils
           cuda_error_check
