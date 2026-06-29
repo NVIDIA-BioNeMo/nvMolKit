@@ -24,14 +24,15 @@ from typing import TYPE_CHECKING, Literal, overload
 
 from rdkit.Chem import AllChem
 
+from nvmolkit._arrayHelpers import *  # noqa: F403  # registers PyArray for DEVICE-mode returns
+from nvmolkit._mmff_bridge import default_rdkit_mmff_properties, make_internal_mmff_properties
+from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions, HardwareOptions
+
 if TYPE_CHECKING:
     from rdkit.Chem import Mol
     from rdkit.ForceField.rdForceField import MMFFMolProperties
 
 from nvmolkit import _mmffOptimization
-from nvmolkit._arrayHelpers import *  # noqa: F403  # registers PyArray for DEVICE-mode returns
-from nvmolkit._mmff_bridge import default_rdkit_mmff_properties, make_internal_mmff_properties
-from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions
 
 
 @overload
@@ -44,6 +45,9 @@ def MMFFOptimizeMoleculesConfs(
     hardwareOptions: HardwareOptions | None = None,
     output: Literal[CoordinateOutput.RDKIT_CONFORMERS] = CoordinateOutput.RDKIT_CONFORMERS,
     targetGpu: int = -1,
+    backend: str = "HYBRID",
+    minimizerKind: str = "BFGS",
+    fireOptions: FireOptions | None = None,
 ) -> list[list[float]]: ...
 @overload
 def MMFFOptimizeMoleculesConfs(
@@ -56,6 +60,9 @@ def MMFFOptimizeMoleculesConfs(
     *,
     output: Literal[CoordinateOutput.DEVICE],
     targetGpu: int = -1,
+    backend: str = "HYBRID",
+    minimizerKind: str = "BFGS",
+    fireOptions: FireOptions | None = None,
 ) -> Device3DResult: ...
 def MMFFOptimizeMoleculesConfs(
     molecules: list["Mol"],
@@ -66,8 +73,11 @@ def MMFFOptimizeMoleculesConfs(
     hardwareOptions: HardwareOptions | None = None,
     output: CoordinateOutput = CoordinateOutput.RDKIT_CONFORMERS,
     targetGpu: int = -1,
+    backend: str = "HYBRID",
+    minimizerKind: str = "BFGS",
+    fireOptions: FireOptions | None = None,
 ):
-    """Optimize conformers for multiple molecules using MMFF force field with BFGS minimization.
+    """Optimize conformers for multiple molecules using MMFF force field.
 
     This function performs GPU-accelerated MMFF optimization on multiple molecules with
     multiple conformers each. It uses CUDA for GPU acceleration and OpenMP for CPU
@@ -89,6 +99,10 @@ def MMFFOptimizeMoleculesConfs(
             keeps optimized coordinates and energies on GPU and returns a :class:`Device3DResult`.
         targetGpu: In DEVICE mode, the GPU to consolidate the result onto. ``-1`` selects the
             first configured execution GPU.
+        backend: Kernel backend selector. One of ``"BATCHED"``, ``"PER_MOL"``,
+            or ``"HYBRID"``.
+        minimizerKind: ``"BFGS"`` (default) or ``"FIRE"``.
+        fireOptions: FIRE algorithm options used when ``minimizerKind="FIRE"``.
 
     Returns:
         For ``RDKIT_CONFORMERS``: list of lists of energies, where each inner list contains the
@@ -179,13 +193,17 @@ def MMFFOptimizeMoleculesConfs(
             ]
         return [value for _ in molecules]
 
-    # Call the C++ implementation
     if hardwareOptions is None:
         hardwareOptions = HardwareOptions()
     native_options = hardwareOptions._as_native()
     properties_list = _normalize_properties(properties)
     thresholds = _normalize_scalar_or_list(nonBondedThreshold, "nonBondedThreshold")
     interfrag_flags = _normalize_scalar_or_list(ignoreInterfragInteractions, "ignoreInterfragInteractions")
+    minimizer_kind = str(minimizerKind).upper()
+    if minimizer_kind not in {"BFGS", "FIRE"}:
+        raise ValueError("minimizerKind must be 'BFGS' or 'FIRE'")
+    if fireOptions is None:
+        fireOptions = FireOptions()
     native_properties = [
         make_internal_mmff_properties(
             props,
@@ -196,6 +214,21 @@ def MMFFOptimizeMoleculesConfs(
     ]
     if output == CoordinateOutput.DEVICE:
         return _mmffOptimization.MMFFOptimizeMoleculesConfsDevice(
-            molecules, maxIters, native_properties, native_options, targetGpu
+            molecules,
+            maxIters,
+            native_properties,
+            native_options,
+            targetGpu,
+            backend,
+            minimizer_kind,
+            fireOptions,
         )
-    return _mmffOptimization.MMFFOptimizeMoleculesConfs(molecules, maxIters, native_properties, native_options)
+    return _mmffOptimization.MMFFOptimizeMoleculesConfs(
+        molecules,
+        maxIters,
+        native_properties,
+        native_options,
+        backend,
+        minimizer_kind,
+        fireOptions,
+    )

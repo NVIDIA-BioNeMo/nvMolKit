@@ -23,7 +23,7 @@ from rdkit.ForceField import rdForceField as _rdForceField  # noqa: F401
 from rdkit.Geometry import Point3D
 
 import nvmolkit.uffOptimization as nvmolkit_uff
-from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions
+from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions, HardwareOptions
 
 
 @pytest.fixture
@@ -155,6 +155,54 @@ def test_uff_optimization_batch_vs_rdkit(uff_test_mols):
 
 def test_uff_optimization_empty_input():
     assert nvmolkit_uff.UFFOptimizeMoleculesConfs([]) == []
+
+
+def test_uff_optimization_fire_matches_rdkit(uff_test_mols):
+    starting_mols = create_hard_copy_mols(uff_test_mols[:2])
+    rdkit_mols = create_hard_copy_mols(uff_test_mols[:2])
+    nvmolkit_mols = create_hard_copy_mols(uff_test_mols[:2])
+
+    starting_energies = calculate_rdkit_uff_energies(starting_mols, maxIters=0)
+    rdkit_energies = calculate_rdkit_uff_energies(rdkit_mols, maxIters=1000)
+
+    options = FireOptions()
+    options.useMass = False
+    options.stuckDetectionEnabled = False
+    options.gradTol = 1e-3
+    options.dtInit = 0.05
+    options.dMax = 0.2
+
+    nvmolkit_energies = nvmolkit_uff.UFFOptimizeMoleculesConfs(
+        nvmolkit_mols,
+        maxIters=10000,
+        minimizerKind="FIRE",
+        fireOptions=options,
+    )
+
+    assert len(nvmolkit_energies) == len(rdkit_energies)
+    for molecule_index, (starting, reference, result) in enumerate(
+        zip(starting_energies, rdkit_energies, nvmolkit_energies)
+    ):
+        assert len(result) == len(reference)
+        for conformer_index, (starting_energy, reference_energy, result_energy) in enumerate(
+            zip(starting, reference, result)
+        ):
+            assert result_energy < starting_energy, (
+                f"Molecule {molecule_index}, conformer {conformer_index}: "
+                f"FIRE energy {result_energy:.6f} did not improve from {starting_energy:.6f}"
+            )
+            tolerance = 2.0 + 0.05 * abs(reference_energy)
+            assert abs(result_energy - reference_energy) <= tolerance, (
+                f"Molecule {molecule_index}, conformer {conformer_index}: "
+                f"RDKit={reference_energy:.6f}, nvMolKit FIRE={result_energy:.6f}, "
+                f"tolerance={tolerance:.6f}"
+            )
+
+
+def test_uff_optimization_rejects_unknown_minimizer_kind():
+    mol = Chem.MolFromSmiles("CCO")
+    with pytest.raises(ValueError, match="minimizerKind"):
+        nvmolkit_uff.UFFOptimizeMoleculesConfs([mol], minimizerKind="NOT_A_MINIMIZER")
 
 
 def test_uff_optimization_invalid_input():

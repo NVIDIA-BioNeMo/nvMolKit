@@ -14,12 +14,35 @@
 // limitations under the License.
 
 #include <boost/python.hpp>
+#include <stdexcept>
+#include <string>
 
 #include "nvmolkit/boost_python_utils.h"
 #include "nvmolkit/device_result_python.h"
+#include "src/minimizer/bfgs_types.h"
+#include "src/minimizer/fire_minimizer.h"
 #include "src/minimizer/uff_minimize.h"
 
 namespace bp = boost::python;
+
+namespace {
+
+enum class MinimizerKind {
+  BFGS,
+  FIRE
+};
+
+MinimizerKind parseMinimizerKind(const std::string& name) {
+  if (name == "BFGS" || name == "bfgs") {
+    return MinimizerKind::BFGS;
+  }
+  if (name == "FIRE" || name == "fire") {
+    return MinimizerKind::FIRE;
+  }
+  throw std::invalid_argument("Unknown minimizerKind '" + name + "'. Expected 'BFGS' or 'FIRE'.");
+}
+
+}  // namespace
 
 BOOST_PYTHON_MODULE(_uffOptimization) {
   bp::def(
@@ -28,21 +51,33 @@ BOOST_PYTHON_MODULE(_uffOptimization) {
         int                                   maxIters,
         const bp::list&                       vdwThresholds,
         const bp::list&                       ignoreInterfragInteractions,
-        const nvMolKit::BatchHardwareOptions& hardwareOptions) -> bp::list {
+        const nvMolKit::BatchHardwareOptions& hardwareOptions,
+        const std::string&                    minimizerKind,
+        const nvMolKit::FireOptions&          fireOptions) -> bp::list {
       auto       molsVec      = nvMolKit::extractMolecules(molecules);
       const int  numMols      = static_cast<int>(molsVec.size());
       const auto thresholdVec = nvMolKit::extractDoubleList(vdwThresholds, numMols, "vdwThreshold");
       const auto ignoreVec =
         nvMolKit::extractBoolList(ignoreInterfragInteractions, numMols, "ignoreInterfragInteractions");
+      const auto kind = parseMinimizerKind(minimizerKind);
       const auto result =
-        nvMolKit::UFF::UFFOptimizeMoleculesConfsBfgs(molsVec, maxIters, thresholdVec, ignoreVec, hardwareOptions);
+        kind == MinimizerKind::FIRE ?
+          nvMolKit::UFF::UFFOptimizeMoleculesConfsFire(molsVec,
+                                                       maxIters,
+                                                       fireOptions,
+                                                       thresholdVec,
+                                                       ignoreVec,
+                                                       hardwareOptions) :
+          nvMolKit::UFF::UFFOptimizeMoleculesConfsBfgs(molsVec, maxIters, thresholdVec, ignoreVec, hardwareOptions);
       return nvMolKit::vectorOfVectorsToList(result);
     },
     (bp::arg("molecules"),
-     bp::arg("maxIters"),
+     bp::arg("maxIters") = 1000,
      bp::arg("vdwThresholds"),
      bp::arg("ignoreInterfragInteractions"),
-     bp::arg("hardwareOptions")),
+     bp::arg("hardwareOptions") = nvMolKit::BatchHardwareOptions(),
+     bp::arg("minimizerKind")   = std::string("BFGS"),
+     bp::arg("fireOptions")     = nvMolKit::FireOptions()),
     "Optimize conformers for multiple molecules using UFF force field.\n"
     "\n"
     "Args:\n"
@@ -51,6 +86,8 @@ BOOST_PYTHON_MODULE(_uffOptimization) {
     "    vdwThresholds: Per-molecule van der Waals thresholds\n"
     "    ignoreInterfragInteractions: Per-molecule interfragment interaction flags\n"
     "    hardwareOptions: BatchHardwareOptions object with hardware settings\n"
+    "    minimizerKind: 'BFGS' or 'FIRE' (default: 'BFGS')\n"
+    "    fireOptions: FireOptions used when minimizerKind='FIRE'\n"
     "\n"
     "Returns:\n"
     "    List of lists of energies, where each inner list contains energies for conformers of one molecule");
@@ -62,21 +99,34 @@ BOOST_PYTHON_MODULE(_uffOptimization) {
         const bp::list&                       vdwThresholds,
         const bp::list&                       ignoreInterfragInteractions,
         const nvMolKit::BatchHardwareOptions& hardwareOptions,
-        int                                   targetGpu) -> bp::object {
+        int                                   targetGpu,
+        const std::string&                    minimizerKind,
+        const nvMolKit::FireOptions&          fireOptions) -> bp::object {
       auto       molsVec      = nvMolKit::extractMolecules(molecules);
       const int  numMols      = static_cast<int>(molsVec.size());
       const auto thresholdVec = nvMolKit::extractDoubleList(vdwThresholds, numMols, "vdwThreshold");
       const auto ignoreVec =
         nvMolKit::extractBoolList(ignoreInterfragInteractions, numMols, "ignoreInterfragInteractions");
-      auto result = nvMolKit::UFF::UFFMinimizeMoleculesConfs(molsVec,
-                                                             maxIters,
-                                                             /*gradTol=*/1e-4,
-                                                             thresholdVec,
-                                                             ignoreVec,
-                                                             /*constraints=*/{},
-                                                             hardwareOptions,
-                                                             nvMolKit::CoordinateOutput::DEVICE,
-                                                             targetGpu);
+      const auto kind   = parseMinimizerKind(minimizerKind);
+      auto       result = kind == MinimizerKind::FIRE ?
+                            nvMolKit::UFF::UFFMinimizeMoleculesConfsFire(molsVec,
+                                                                   maxIters,
+                                                                   fireOptions,
+                                                                   thresholdVec,
+                                                                   ignoreVec,
+                                                                   /*constraints=*/{},
+                                                                   hardwareOptions,
+                                                                   nvMolKit::CoordinateOutput::DEVICE,
+                                                                   targetGpu) :
+                            nvMolKit::UFF::UFFMinimizeMoleculesConfs(molsVec,
+                                                               maxIters,
+                                                               /*gradTol=*/1e-4,
+                                                               thresholdVec,
+                                                               ignoreVec,
+                                                               /*constraints=*/{},
+                                                               hardwareOptions,
+                                                               nvMolKit::CoordinateOutput::DEVICE,
+                                                               targetGpu);
       if (!result.device.has_value()) {
         throw std::runtime_error("UFFMinimizeMoleculesConfs(DEVICE) returned no device result");
       }
@@ -87,7 +137,9 @@ BOOST_PYTHON_MODULE(_uffOptimization) {
      bp::arg("vdwThresholds"),
      bp::arg("ignoreInterfragInteractions"),
      bp::arg("hardwareOptions"),
-     bp::arg("targetGpu")),
+     bp::arg("targetGpu"),
+     bp::arg("minimizerKind") = std::string("BFGS"),
+     bp::arg("fireOptions")   = nvMolKit::FireOptions()),
     "Optimize conformers for multiple molecules using UFF force field, returning device-resident "
     "results.\n"
     "\n"
