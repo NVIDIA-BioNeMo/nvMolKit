@@ -93,6 +93,7 @@ target_link_libraries(
           ${RDKit_LIBS}
           dg_batched_forcefield
           etk_batched_forcefield
+          fire_minimizer
           ff_kernel_utils
           dist_geom
           rdkit_dist_geom_flattened
@@ -111,6 +112,7 @@ target_link_libraries(
           dist_geom
           embedder_utils
           etkdg_device_collect
+          fire_minimizer
           rdkit_dist_geom_flattened
           etkdg_impl
           etkdg_stages

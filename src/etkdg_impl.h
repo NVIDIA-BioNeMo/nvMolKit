@@ -45,7 +45,27 @@ struct EmbedParameters;
 
 namespace nvMolKit {
 
+struct BfgsBatchMinimizer;
+class FireBatchMinimizer;
+
 namespace detail {
+
+//! \brief Minimizer implementation used by a distance-geometry minimization stage.
+enum class DistGeomMinimizerKind {
+  BFGS,
+  FIRE
+};
+
+//! \brief Non-owning, type-tagged reference to the minimizer driving an ETKDG
+//! distance-geometry minimization stage.
+struct MinimizerHandle {
+  DistGeomMinimizerKind kind = DistGeomMinimizerKind::BFGS;
+  BfgsBatchMinimizer*   bfgs = nullptr;
+  FireBatchMinimizer*   fire = nullptr;
+
+  explicit MinimizerHandle(BfgsBatchMinimizer& minimizer) : bfgs(&minimizer) {}
+  explicit MinimizerHandle(FireBatchMinimizer& minimizer) : kind(DistGeomMinimizerKind::FIRE), fire(&minimizer) {}
+};
 
 struct ETKDGSystemHost {
   //! Size n_molecules + 1, defines the start and end of each molecule in the batch

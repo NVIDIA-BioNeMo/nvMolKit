@@ -44,6 +44,9 @@ namespace nvMolKit {
  * @c hardwareOptions.gpuIds, or device 0 when no ids are specified). RDKit conformer lists
  * are left untouched in this mode. ETKDG conformer pruning (@c params.pruneRmsThresh) must be
  * disabled when using DEVICE mode; an exception is thrown otherwise.
+ *
+ * The distance-geometry minimization stages run with FIRE; the ETK 3D refinement stage
+ * remains BFGS. There is intentionally no public ETKDG minimizer selector.
  */
 std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>&           mols,
                                                 const RDKit::DGeomHelpers::EmbedParameters& params,

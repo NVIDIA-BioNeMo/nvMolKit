@@ -22,20 +22,26 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <optional>
 
 #include "src/embedder_utils.h"
 #include "src/etkdg_impl.h"
 #include "src/etkdg_stage_coordgen.h"
 #include "src/etkdg_stage_distgeom_minimize.h"
 #include "src/forcefields/dist_geom.h"
+#include "src/minimizer/fire_minimizer.h"
 #include "src/utils/host_vector.h"
 #include "tests/test_utils.h"
 
 using namespace ::nvMolKit::detail;
 
-using ETKDGStageTestParams = std::tuple<ETKDGOption, int>;
+using ETKDGMinimizeParam = std::tuple<ETKDGOption, nvMolKit::detail::DistGeomMinimizerKind>;
 
 namespace {
+
+std::string minimizerKindName(nvMolKit::detail::DistGeomMinimizerKind kind) {
+  return kind == nvMolKit::detail::DistGeomMinimizerKind::BFGS ? "BFGS" : "FIRE";
+}
 
 // Helper function for common initialization logic
 void initTestComponentsCommon(const std::vector<const RDKit::ROMol*>&           mols,
@@ -133,7 +139,7 @@ void checkFinalEnergies(const std::vector<double>&                        finalE
 }  // anonymous namespace
 
 // Test fixture for single molecule tests
-class ETKDGMinimizeSingleMolTestFixture : public ::testing::TestWithParam<ETKDGOption> {
+class ETKDGMinimizeSingleMolTestFixture : public ::testing::TestWithParam<ETKDGMinimizeParam> {
  public:
   ETKDGMinimizeSingleMolTestFixture() { testDataFolderPath_ = getTestDataFolderPath(); }
 
@@ -153,12 +159,23 @@ class ETKDGMinimizeSingleMolTestFixture : public ::testing::TestWithParam<ETKDGO
     molsPtrs_.push_back(std::move(molPtr_));
 
     // Initialize common test components
-    embedParam_                 = getETKDGOption(GetParam());
+    embedParam_                 = getETKDGOption(std::get<0>(GetParam()));
     embedParam_.useRandomCoords = true;
     initTestComponents();
 
-    // Create minimizer after context is initialized
     minimizer_ = std::make_unique<nvMolKit::BfgsBatchMinimizer>(4, nvMolKit::DebugLevel::NONE, true, nullptr);
+    nvMolKit::FireOptions fireOptions{};
+    fireOptions.useMass = false;
+    fireMinimizer_      = std::make_unique<nvMolKit::FireBatchMinimizer>(4,
+                                                                    fireOptions,
+                                                                    nullptr,
+                                                                    /*debugMode=*/false,
+                                                                    nvMolKit::FireBackend::BATCHED);
+    if (std::get<1>(GetParam()) == nvMolKit::detail::DistGeomMinimizerKind::FIRE) {
+      handle_.emplace(*fireMinimizer_);
+    } else {
+      handle_.emplace(*minimizer_);
+    }
 
     // Pre-allocate scratch buffers for stages
     const size_t totalAtoms = context_.systemHost.atomStarts.back();
@@ -169,20 +186,22 @@ class ETKDGMinimizeSingleMolTestFixture : public ::testing::TestWithParam<ETKDGO
   void initTestComponents() { initTestComponentsCommon(mols_, molsPtrs_, context_, eargs_, embedParam_); }
 
  protected:
-  std::string                                   testDataFolderPath_;
-  std::unique_ptr<RDKit::RWMol>                 molPtr_;
-  std::vector<std::unique_ptr<RDKit::RWMol>>    molsPtrs_;
-  std::vector<const RDKit::ROMol*>              mols_;
-  ETKDGContext                                  context_;
-  std::vector<nvMolKit::detail::EmbedArgs>      eargs_;
-  RDKit::DGeomHelpers::EmbedParameters          embedParam_;
-  std::unique_ptr<nvMolKit::BfgsBatchMinimizer> minimizer_;
-  nvMolKit::PinnedHostVector<double>            positionsScratch_;
-  nvMolKit::PinnedHostVector<uint8_t>           activeScratch_;
+  std::string                                      testDataFolderPath_;
+  std::unique_ptr<RDKit::RWMol>                    molPtr_;
+  std::vector<std::unique_ptr<RDKit::RWMol>>       molsPtrs_;
+  std::vector<const RDKit::ROMol*>                 mols_;
+  ETKDGContext                                     context_;
+  std::vector<nvMolKit::detail::EmbedArgs>         eargs_;
+  RDKit::DGeomHelpers::EmbedParameters             embedParam_;
+  std::unique_ptr<nvMolKit::BfgsBatchMinimizer>    minimizer_;
+  std::unique_ptr<nvMolKit::FireBatchMinimizer>    fireMinimizer_;
+  std::optional<nvMolKit::detail::MinimizerHandle> handle_;
+  nvMolKit::PinnedHostVector<double>               positionsScratch_;
+  nvMolKit::PinnedHostVector<uint8_t>              activeScratch_;
 };
 
-// BFGS Stage Tests
-TEST_P(ETKDGMinimizeSingleMolTestFixture, FirstMinimizeStageBFGSTest) {
+// Distance-geometry minimization stage tests
+TEST_P(ETKDGMinimizeSingleMolTestFixture, FirstMinimizeStageTest) {
   // Calculate initial energy
   const std::vector<double> initialEnergies = calculateInitialEnergies(molsPtrs_);
 
@@ -192,7 +211,7 @@ TEST_P(ETKDGMinimizeSingleMolTestFixture, FirstMinimizeStageBFGSTest) {
                                                                          eargs_,
                                                                          embedParam_,
                                                                          context_,
-                                                                         *minimizer_,
+                                                                         *handle_,
                                                                          1.0,
                                                                          0.1,
                                                                          400,
@@ -225,14 +244,14 @@ TEST_P(ETKDGMinimizeSingleMolTestFixture, FirstMinimizeStageBFGSTest) {
   checkFinalEnergies(finalEnergies, initialEnergies, molsPtrs_, failureCounts);
 }
 
-TEST_P(ETKDGMinimizeSingleMolTestFixture, FourthDimMinimizeStageBFGSTest) {
+TEST_P(ETKDGMinimizeSingleMolTestFixture, FourthDimMinimizeStageTest) {
   // Create FourthDimMinimizeStage
   std::vector<std::unique_ptr<ETKDGStage>> stages;
   stages.push_back(std::make_unique<nvMolKit::detail::DistGeomMinimizeStage>(mols_,
                                                                              eargs_,
                                                                              embedParam_,
                                                                              context_,
-                                                                             *minimizer_,
+                                                                             *handle_,
                                                                              0.2,
                                                                              1.0,
                                                                              200,
@@ -256,7 +275,7 @@ TEST_P(ETKDGMinimizeSingleMolTestFixture, FourthDimMinimizeStageBFGSTest) {
   EXPECT_THAT(completed, testing::ElementsAre(1));
 }
 
-TEST_P(ETKDGMinimizeSingleMolTestFixture, FullMinimizationPipelineBFGSTest) {
+TEST_P(ETKDGMinimizeSingleMolTestFixture, FullMinimizationPipelineTest) {
   // Calculate initial energy
   const std::vector<double> initialEnergies = calculateInitialEnergies(molsPtrs_);
 
@@ -266,7 +285,7 @@ TEST_P(ETKDGMinimizeSingleMolTestFixture, FullMinimizationPipelineBFGSTest) {
                                                                               eargs_,
                                                                               embedParam_,
                                                                               context_,
-                                                                              *minimizer_,
+                                                                              *handle_,
                                                                               1.0,
                                                                               0.1,
                                                                               400,
@@ -306,7 +325,7 @@ TEST_P(ETKDGMinimizeSingleMolTestFixture, FullMinimizationPipelineBFGSTest) {
   checkFinalEnergies(finalEnergies, initialEnergies, molsPtrs_, failureCounts);
 }
 
-TEST_P(ETKDGMinimizeSingleMolTestFixture, FirstPartETKDGPipelineBFGSTest) {
+TEST_P(ETKDGMinimizeSingleMolTestFixture, FirstPartETKDGPipelineTest) {
   constexpr int16_t         maxFailedIterations = 2;
   // Calculate initial energy
   const std::vector<double> initialEnergies     = calculateInitialEnergies(molsPtrs_);
@@ -314,7 +333,6 @@ TEST_P(ETKDGMinimizeSingleMolTestFixture, FirstPartETKDGPipelineBFGSTest) {
   // Zero out positions on device since we are using coordgen stage for generating initial coordinates
   context_.systemDevice.positions.zero();
 
-  // Create stages in order: coordgen -> first minimize BFGS -> fourthdim BFGS
   std::vector<std::unique_ptr<ETKDGStage>> stages;
   stages.push_back(std::make_unique<nvMolKit::detail::ETKDGCoordGenRDKitStage>(embedParam_,
                                                                                mols_,
@@ -325,7 +343,7 @@ TEST_P(ETKDGMinimizeSingleMolTestFixture, FirstPartETKDGPipelineBFGSTest) {
                                                                               eargs_,
                                                                               embedParam_,
                                                                               context_,
-                                                                              *minimizer_,
+                                                                              *handle_,
                                                                               1.0,
                                                                               0.1,
                                                                               400,
@@ -367,7 +385,7 @@ TEST_P(ETKDGMinimizeSingleMolTestFixture, FirstPartETKDGPipelineBFGSTest) {
 }
 
 // Test fixture for multiple diverse molecules tests
-class ETKDGMinimizeMultiMolDiverseTestFixture : public ::testing::TestWithParam<ETKDGOption> {
+class ETKDGMinimizeMultiMolDiverseTestFixture : public ::testing::TestWithParam<ETKDGMinimizeParam> {
  public:
   ETKDGMinimizeMultiMolDiverseTestFixture() { testDataFolderPath_ = getTestDataFolderPath(); }
 
@@ -391,12 +409,23 @@ class ETKDGMinimizeMultiMolDiverseTestFixture : public ::testing::TestWithParam<
     ASSERT_EQ(mols_.size(), 5) << "Expected 5 molecules";
 
     // Initialize common test components
-    embedParam_                 = getETKDGOption(GetParam());
+    embedParam_                 = getETKDGOption(std::get<0>(GetParam()));
     embedParam_.useRandomCoords = true;
     initTestComponents();
 
-    // Create minimizer after context is initialized
     minimizer_ = std::make_unique<nvMolKit::BfgsBatchMinimizer>(4, nvMolKit::DebugLevel::NONE, true, nullptr);
+    nvMolKit::FireOptions fireOptions{};
+    fireOptions.useMass = false;
+    fireMinimizer_      = std::make_unique<nvMolKit::FireBatchMinimizer>(4,
+                                                                    fireOptions,
+                                                                    nullptr,
+                                                                    /*debugMode=*/false,
+                                                                    nvMolKit::FireBackend::BATCHED);
+    if (std::get<1>(GetParam()) == nvMolKit::detail::DistGeomMinimizerKind::FIRE) {
+      handle_.emplace(*fireMinimizer_);
+    } else {
+      handle_.emplace(*minimizer_);
+    }
 
     // Pre-allocate scratch buffers for stages
     const size_t totalAtoms = context_.systemHost.atomStarts.back();
@@ -407,19 +436,21 @@ class ETKDGMinimizeMultiMolDiverseTestFixture : public ::testing::TestWithParam<
   void initTestComponents() { initTestComponentsCommon(mols_, molsPtrs_, context_, eargs_, embedParam_); }
 
  protected:
-  std::string                                   testDataFolderPath_;
-  std::vector<std::unique_ptr<RDKit::RWMol>>    molsPtrs_;
-  std::vector<const RDKit::ROMol*>              mols_;
-  ETKDGContext                                  context_;
-  std::vector<nvMolKit::detail::EmbedArgs>      eargs_;
-  RDKit::DGeomHelpers::EmbedParameters          embedParam_;
-  std::unique_ptr<nvMolKit::BfgsBatchMinimizer> minimizer_;
-  nvMolKit::PinnedHostVector<double>            positionsScratch_;
-  nvMolKit::PinnedHostVector<uint8_t>           activeScratch_;
+  std::string                                      testDataFolderPath_;
+  std::vector<std::unique_ptr<RDKit::RWMol>>       molsPtrs_;
+  std::vector<const RDKit::ROMol*>                 mols_;
+  ETKDGContext                                     context_;
+  std::vector<nvMolKit::detail::EmbedArgs>         eargs_;
+  RDKit::DGeomHelpers::EmbedParameters             embedParam_;
+  std::unique_ptr<nvMolKit::BfgsBatchMinimizer>    minimizer_;
+  std::unique_ptr<nvMolKit::FireBatchMinimizer>    fireMinimizer_;
+  std::optional<nvMolKit::detail::MinimizerHandle> handle_;
+  nvMolKit::PinnedHostVector<double>               positionsScratch_;
+  nvMolKit::PinnedHostVector<uint8_t>              activeScratch_;
 };
 
-// BFGS Stage Tests for diverse molecules
-TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FirstMinimizeStageBFGSTest) {
+// Distance-geometry minimization stage tests for diverse molecules
+TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FirstMinimizeStageTest) {
   constexpr int16_t maxFailedIterations = 2;
 
   // Calculate initial energies for all molecules
@@ -431,7 +462,7 @@ TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FirstMinimizeStageBFGSTest) {
                                                                          eargs_,
                                                                          embedParam_,
                                                                          context_,
-                                                                         *minimizer_,
+                                                                         *handle_,
                                                                          1.0,
                                                                          0.1,
                                                                          400,
@@ -465,14 +496,14 @@ TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FirstMinimizeStageBFGSTest) {
   checkFinalEnergies(finalEnergies, initialEnergies, molsPtrs_, failureCounts);
 }
 
-TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FourthDimMinimizeStageBFGSTest) {
+TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FourthDimMinimizeStageTest) {
   // Create FourthDimMinimizeStage
   std::vector<std::unique_ptr<ETKDGStage>> stages;
   stages.push_back(std::make_unique<nvMolKit::detail::DistGeomMinimizeStage>(mols_,
                                                                              eargs_,
                                                                              embedParam_,
                                                                              context_,
-                                                                             *minimizer_,
+                                                                             *handle_,
                                                                              0.2,
                                                                              1.0,
                                                                              200,
@@ -496,7 +527,7 @@ TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FourthDimMinimizeStageBFGSTest) 
   EXPECT_THAT(completed, testing::Each(1));
 }
 
-TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FullMinimizationPipelineBFGSTest) {
+TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FullMinimizationPipelineTest) {
   constexpr int16_t maxFailedIterations = 2;
 
   // Calculate initial energies for all molecules
@@ -508,7 +539,7 @@ TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FullMinimizationPipelineBFGSTest
                                                                               eargs_,
                                                                               embedParam_,
                                                                               context_,
-                                                                              *minimizer_,
+                                                                              *handle_,
                                                                               1.0,
                                                                               0.1,
                                                                               400,
@@ -549,7 +580,7 @@ TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FullMinimizationPipelineBFGSTest
   checkFinalEnergies(finalEnergies, initialEnergies, molsPtrs_, failureCounts);
 }
 
-TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FirstPartETKDGPipelineBFGSTest) {
+TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FirstPartETKDGPipelineTest) {
   constexpr int16_t         maxFailedIterations = 2;
   // Calculate initial energies for all molecules
   const std::vector<double> initialEnergies     = calculateInitialEnergies(molsPtrs_);
@@ -557,7 +588,6 @@ TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FirstPartETKDGPipelineBFGSTest) 
   // Zero out positions on device since we are using coordgen stage for generating initial coordinates
   context_.systemDevice.positions.zero();
 
-  // Create stages in order: coordgen -> first minimize BFGS -> fourthdim BFGS
   std::vector<std::unique_ptr<ETKDGStage>> stages;
 
   stages.push_back(std::make_unique<nvMolKit::detail::ETKDGCoordGenRDKitStage>(embedParam_,
@@ -569,7 +599,7 @@ TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FirstPartETKDGPipelineBFGSTest) 
                                                                               eargs_,
                                                                               embedParam_,
                                                                               context_,
-                                                                              *minimizer_,
+                                                                              *handle_,
                                                                               1.0,
                                                                               0.1,
                                                                               400,
@@ -608,13 +638,13 @@ TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FirstPartETKDGPipelineBFGSTest) 
   checkFinalEnergies(finalEnergies, initialEnergies, molsPtrs_, failureCounts);
 }
 
-TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FirstMinimizeStageBFGSWithInactiveMolecules) {
+TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FirstMinimizeStageWithInactiveMolecules) {
   // Create FirstMinimizeStage
   auto stage = std::make_unique<nvMolKit::detail::DistGeomMinimizeStage>(mols_,
                                                                          eargs_,
                                                                          embedParam_,
                                                                          context_,
-                                                                         *minimizer_,
+                                                                         *handle_,
                                                                          1.0,
                                                                          0.1,
                                                                          400,
@@ -640,24 +670,37 @@ TEST_P(ETKDGMinimizeMultiMolDiverseTestFixture, FirstMinimizeStageBFGSWithInacti
   for (int i = 0; i < context_.nTotalSystems; ++i) {
     if (activeRef[i] == 0) {
       // Empirical observation: inactive molecules typically have energy > 50
-      // since they haven't been minimized by BFGS
+      // since they haven't been minimized
       EXPECT_GT(energyOuts[i], 50.0) << "Inactive molecule " << i
                                      << " should have high energy (>50) since it wasn't minimized";
     } else {
       // Empirical observation: active molecules typically have energy < 0.1
-      // after successful BFGS minimization
+      // after successful minimization
       EXPECT_LT(energyOuts[i], 0.1) << "Active molecule " << i
                                     << " should have low energy (<0.1) after successful minimization";
     }
   }
 }
 
-// Instantiate test suites for both fixtures
-INSTANTIATE_TEST_SUITE_P(
-  ETKDGOptions,
-  ETKDGMinimizeSingleMolTestFixture,
-  ::testing::Values(ETKDGOption::ETKDGv3, ETKDGOption::ETKDGv2, ETKDGOption::ETKDG, ETKDGOption::KDG),
-  [](const ::testing::TestParamInfo<ETKDGOption>& info) { return getETKDGOptionName(info.param); });
+namespace {
+std::vector<ETKDGMinimizeParam> makeMinimizeParams(const std::vector<ETKDGOption>& etkdgOptions) {
+  std::vector<ETKDGMinimizeParam> params;
+  for (const ETKDGOption opt : etkdgOptions) {
+    params.emplace_back(opt, nvMolKit::detail::DistGeomMinimizerKind::BFGS);
+    params.emplace_back(opt, nvMolKit::detail::DistGeomMinimizerKind::FIRE);
+  }
+  return params;
+}
+}  // namespace
+
+INSTANTIATE_TEST_SUITE_P(ETKDGOptions,
+                         ETKDGMinimizeSingleMolTestFixture,
+                         ::testing::ValuesIn(makeMinimizeParams(
+                           {ETKDGOption::ETKDGv3, ETKDGOption::ETKDGv2, ETKDGOption::ETKDG, ETKDGOption::KDG})),
+                         [](const ::testing::TestParamInfo<ETKDGMinimizeParam>& info) {
+                           return getETKDGOptionName(std::get<0>(info.param)) + "_" +
+                                  minimizerKindName(std::get<1>(info.param));
+                         });
 
 // TODO: Currently only testing ETKDGv3 due to non-deterministic failures when testing multiple options.
 // When multiple ETKDGOptions are tested together (even though each may pass individually),
@@ -667,7 +710,8 @@ INSTANTIATE_TEST_SUITE_P(
 // successful but not definitive. Further investigation is needed
 INSTANTIATE_TEST_SUITE_P(ETKDGOptions,
                          ETKDGMinimizeMultiMolDiverseTestFixture,
-                         ::testing::Values(ETKDGOption::ETKDGv3),
-                         [](const ::testing::TestParamInfo<ETKDGOption>& info) {
-                           return getETKDGOptionName(info.param);
+                         ::testing::ValuesIn(makeMinimizeParams({ETKDGOption::ETKDGv3})),
+                         [](const ::testing::TestParamInfo<ETKDGMinimizeParam>& info) {
+                           return getETKDGOptionName(std::get<0>(info.param)) + "_" +
+                                  minimizerKindName(std::get<1>(info.param));
                          });

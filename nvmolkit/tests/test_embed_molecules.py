@@ -257,8 +257,9 @@ def test_embed_molecules_serial_vs_rdkit(embed_test_mols, etkdg_variant):
             f"Molecule {mol_idx}: expected {confs_per_mol} conformers, got {nvmolkit_count}"
         )
 
-    # Compare conformer similarity using RMSD
-    compare_conformers_rmsd(rdkit_mols, nvmolkit_mols, rmsd_threshold=0.2, min_match_fraction=0.5)
+    # nvMolKit uses FIRE for the two distance-geometry minimization stages and
+    # BFGS for ETK refinement, so it can deviate more than a pure BFGS path.
+    compare_conformers_rmsd(rdkit_mols, nvmolkit_mols, rmsd_threshold=0.5, min_match_fraction=0.3)
 
 
 @pytest.mark.parametrize("etkdg_variant", ["ETKDG", "ETKDGv2", "ETKDGv3", "srETKDGv3", "KDG", "ETDG", "DG"])
@@ -335,8 +336,7 @@ def test_embed_molecules_batch_vs_rdkit(embed_test_mols, etkdg_variant, gpu_ids)
             f"Molecule {mol_idx}: expected {confs_per_mol} conformers, got {nvmolkit_count}"
         )
 
-    # Compare conformer similarity using RMSD
-    compare_conformers_rmsd(rdkit_mols, nvmolkit_mols, rmsd_threshold=0.2, min_match_fraction=0.5)
+    compare_conformers_rmsd(rdkit_mols, nvmolkit_mols, rmsd_threshold=0.5, min_match_fraction=0.3)
 
 
 def test_embed_molecules_empty_input():

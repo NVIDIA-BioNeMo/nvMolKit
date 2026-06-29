@@ -30,6 +30,7 @@
 #include "src/etkdg_stage_etk_minimization.h"
 #include "src/etkdg_stage_stereochem_checks.h"
 #include "src/etkdg_stage_update_conformers.h"
+#include "src/minimizer/fire_minimizer.h"
 #include "src/utils/device.h"
 #include "src/utils/host_vector.h"
 #include "src/utils/nvtx.h"
@@ -274,11 +275,19 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
       cudaStream_t     streamPtr = streamsPerThread[omp_get_thread_num()].stream();
       const int        deviceId  = devicesPerThread[omp_get_thread_num()];
       const WithDevice dev(deviceId);
-      auto             minimizer = std::make_unique<BfgsBatchMinimizer>(4,  // dataDim for ETKDG (4D distance geometry)
-                                                            DebugLevel::NONE,
-                                                            true,  // scaleGrads
-                                                            streamPtr,
-                                                            backend);
+      auto             bfgsMinimizer = std::make_unique<BfgsBatchMinimizer>(4,  // 4D distance geometry
+                                                                DebugLevel::NONE,
+                                                                true,  // scaleGrads
+                                                                streamPtr,
+                                                                backend);
+      FireOptions      fireOptions{};
+      fireOptions.useMass               = false;
+      fireOptions.stuckDetectionEnabled = true;
+      fireOptions.stuckEnergyRelTol     = 3e-4;
+      fireOptions.stuckStreakLength     = 5;
+      auto fireMinimizer =
+        std::make_unique<FireBatchMinimizer>(4, fireOptions, streamPtr, /*debugMode=*/false, FireBackend::BATCHED);
+      const detail::MinimizerHandle distGeomMinimizerHandle(*fireMinimizer);
       std::unordered_map<const RDKit::ROMol*, nvMolKit::DistGeom::EnergyForceContribsHost>   dgCache;
       std::unordered_map<const RDKit::ROMol*, nvMolKit::DistGeom::Energy3DForceContribsHost> etkCache;
       // Pinned reusable buffers for common copies.
@@ -340,7 +349,7 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
                                                                              batchEargs,
                                                                              paramsCopy,
                                                                              *context,
-                                                                             *minimizer,
+                                                                             distGeomMinimizerHandle,
                                                                              1.0,
                                                                              0.1,
                                                                              400,
@@ -374,7 +383,7 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
                                                                           batchEargs,
                                                                           paramsCopy,
                                                                           *context,
-                                                                          *minimizer,
+                                                                          *bfgsMinimizer,
                                                                           streamPtr,
                                                                           &etkCache));
         }
