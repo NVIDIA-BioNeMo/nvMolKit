@@ -31,11 +31,13 @@ target_link_libraries(
   PUBLIC host_vector device conformer_types
   PRIVATE ${RDKit_LIBS} OpenMP::OpenMP_CXX)
 
-add_library(fire_minimizer fire_minimizer.cu fire_minimizer.h)
+add_library(
+  fire_minimizer fire_minimizer.cu fire_minimizer.h
+                 fire_minimize_permol_kernels.cu fire_minimize_permol_kernels.h)
 target_link_libraries(
   fire_minimizer
   PUBLIC device_vector batched_forcefield
-  PRIVATE cub_helpers cccl_interface)
+  PRIVATE mmff cub_helpers cccl_interface)
 
 add_library(bfgs_mmff bfgs_mmff.cpp)
 target_link_libraries(
