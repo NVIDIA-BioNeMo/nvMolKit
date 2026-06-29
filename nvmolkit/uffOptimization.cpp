@@ -17,7 +17,7 @@
 
 #include "nvmolkit/boost_python_utils.h"
 #include "nvmolkit/device_result_python.h"
-#include "src/minimizer/bfgs_uff.h"
+#include "src/minimizer/uff_minimize.h"
 
 namespace bp = boost::python;
 

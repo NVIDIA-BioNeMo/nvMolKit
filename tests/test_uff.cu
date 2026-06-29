@@ -28,6 +28,7 @@
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -39,6 +40,7 @@
 #include "src/forcefields/uff.h"
 #include "src/forcefields/uff_batched_forcefield.h"
 #include "src/minimizer/bfgs_minimize.h"
+#include "src/minimizer/uff_minimize.h"
 #include "src/utils/device_vector.h"
 #include "tests/test_utils.h"
 
@@ -288,6 +290,53 @@ TEST(UFFMinimizer, BatchMinimizerMatchesRDKitFinalEnergies) {
   cudaDeviceSynchronize();
   for (size_t i = 0; i < gotFinalEnergies.size(); ++i) {
     EXPECT_NEAR(gotFinalEnergies[i], referenceFinalEnergies[i], kMinimizeEnergyTol) << "molecule " << i;
+  }
+}
+
+TEST(UFFMinimizer, FireWrapperImprovesAndApproachesRDKitFinalEnergies) {
+  const std::string                          sdfPath = getTestDataFolderPath() + "/MMFF94_dative.sdf";
+  std::vector<std::unique_ptr<RDKit::ROMol>> mols;
+  getMols(sdfPath, mols, 2);
+  ASSERT_FALSE(mols.empty());
+
+  std::vector<RDKit::ROMol*> molPtrs;
+  std::vector<double>        initialEnergies;
+  std::vector<double>        referenceFinalEnergies;
+  molPtrs.reserve(mols.size());
+  initialEnergies.reserve(mols.size());
+  referenceFinalEnergies.reserve(mols.size());
+  for (auto& molPtr : mols) {
+    auto referenceMol = std::make_unique<RDKit::ROMol>(*molPtr);
+    auto initialFF    = buildReferenceForceField(*referenceMol);
+    initialEnergies.push_back(initialFF->calcEnergy());
+
+    const auto optimizeResult = RDKit::UFF::UFFOptimizeMolecule(*referenceMol, 1000, 100.0, -1, true);
+    referenceFinalEnergies.push_back(optimizeResult.second);
+    molPtrs.push_back(molPtr.get());
+  }
+
+  nvMolKit::FireOptions options{};
+  options.useMass               = false;
+  options.stuckDetectionEnabled = false;
+  options.gradTol               = 1e-3;
+  options.dtInit                = 0.05;
+  options.dMax                  = 0.2;
+
+  const std::vector<double> vdwThresholds(molPtrs.size(), 100.0);
+  const std::vector<bool>   ignoreInterfragInteractions(molPtrs.size(), true);
+  const auto                result = UFFMinimizeMoleculesConfsFire(molPtrs,
+                                                    /*maxIters=*/10000,
+                                                    options,
+                                                    vdwThresholds,
+                                                    ignoreInterfragInteractions);
+
+  ASSERT_FALSE(result.device.has_value());
+  ASSERT_EQ(result.energies.size(), referenceFinalEnergies.size());
+  for (size_t i = 0; i < result.energies.size(); ++i) {
+    ASSERT_EQ(result.energies[i].size(), 1u);
+    EXPECT_LT(result.energies[i][0], initialEnergies[i]) << "molecule " << i;
+    const double tolerance = 2.0 + 0.05 * std::abs(referenceFinalEnergies[i]);
+    EXPECT_NEAR(result.energies[i][0], referenceFinalEnergies[i], tolerance) << "molecule " << i;
   }
 }
 

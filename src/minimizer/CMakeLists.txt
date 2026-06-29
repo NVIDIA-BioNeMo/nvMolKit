@@ -55,13 +55,14 @@ target_link_libraries(
           OpenMP::OpenMP_CXX
           openmp_helpers
           cccl_interface)
-add_library(bfgs_uff bfgs_uff.cpp)
+add_library(uff_minimize uff_minimize.cpp)
 target_link_libraries(
-  bfgs_uff
-  PUBLIC bfgs conformer_types
+  uff_minimize
+  PUBLIC bfgs fire_minimizer conformer_types
   PRIVATE ${RDKit_LIBS}
           bfgs_common
           ff_device_collect
+          ff_utils
           uff_batched_forcefield
           rdkit_uff_flattened
           forcefield_constraints

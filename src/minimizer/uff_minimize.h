@@ -13,8 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef NVMOLKIT_BFGS_UFF_H
-#define NVMOLKIT_BFGS_UFF_H
+#ifndef NVMOLKIT_UFF_MINIMIZE_H
+#define NVMOLKIT_UFF_MINIMIZE_H
 
 #include <cstdint>
 #include <optional>
@@ -24,6 +24,7 @@
 #include "src/forcefields/forcefield_constraints.h"
 #include "src/hardware_options.h"
 #include "src/minimizer/bfgs_minimize.h"
+#include "src/minimizer/fire_minimizer.h"
 
 namespace RDKit {
 class ROMol;
@@ -33,6 +34,13 @@ namespace nvMolKit::UFF {
 
 std::vector<std::vector<double>> UFFOptimizeMoleculesConfsBfgs(std::vector<RDKit::ROMol*>& mols,
                                                                int                         maxIters,
+                                                               const std::vector<double>&  vdwThresholds,
+                                                               const std::vector<bool>&    ignoreInterfragInteractions,
+                                                               const BatchHardwareOptions& perfOptions = {});
+
+std::vector<std::vector<double>> UFFOptimizeMoleculesConfsFire(std::vector<RDKit::ROMol*>& mols,
+                                                               int                         maxIters,
+                                                               const FireOptions&          fireOptions,
                                                                const std::vector<double>&  vdwThresholds,
                                                                const std::vector<bool>&    ignoreInterfragInteractions,
                                                                const BatchHardwareOptions& perfOptions = {});
@@ -87,6 +95,34 @@ UFFMinimizeResult UFFMinimizeMoleculesConfs(
   int                                                          targetGpu   = -1,
   const DeviceCoordResult*                                     deviceInput = nullptr);
 
+//! \brief Minimize UFF energies with FIRE 2.0 and report per-conformer convergence.
+//! \param mols Molecules whose conformers provide the initial coordinates. In
+//!             RDKIT_CONFORMERS mode, optimized coordinates are written back in place.
+//! \param maxIters Maximum FIRE iterations.
+//! \param fireOptions FIRE integration and convergence settings. A conformer converges when
+//!                    its gradient norm satisfies @ref FireOptions::gradTol. The UFF wrapper
+//!                    uses the batched backend and can additionally use energy-plateau detection.
+//! \param vdwThresholds Per-molecule VDW cutoff distances.
+//! \param ignoreInterfragInteractions Per-molecule interfragment interaction flags.
+//! \param constraints Per-molecule constraint specifications (empty = no constraints).
+//! \param perfOptions Hardware and batching configuration.
+//! \param output Whether to write coordinates back into RDKit conformers (default) or return
+//!               them on-device as a DeviceCoordResult.
+//! \param targetGpu In DEVICE mode, the GPU to consolidate the result onto. -1 selects the first
+//!                  configured execution GPU (or device 0).
+//! \return Final energies and convergence flags in RDKIT_CONFORMERS mode, or a device-resident
+//!         result in DEVICE mode. A convergence flag is false when @p maxIters is reached first.
+UFFMinimizeResult UFFMinimizeMoleculesConfsFire(
+  std::vector<RDKit::ROMol*>&                                  mols,
+  int                                                          maxIters,
+  const FireOptions&                                           fireOptions,
+  const std::vector<double>&                                   vdwThresholds,
+  const std::vector<bool>&                                     ignoreInterfragInteractions,
+  const std::vector<ForceFieldConstraints::PerMolConstraints>& constraints = {},
+  const BatchHardwareOptions&                                  perfOptions = {},
+  CoordinateOutput                                             output      = CoordinateOutput::RDKIT_CONFORMERS,
+  int                                                          targetGpu   = -1);
+
 }  // namespace nvMolKit::UFF
 
-#endif  // NVMOLKIT_BFGS_UFF_H
+#endif  // NVMOLKIT_UFF_MINIMIZE_H
