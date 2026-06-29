@@ -23,8 +23,8 @@
 #include <vector>
 
 #include "src/conformer/device_coord_result.h"
-#include "src/minimizer/bfgs_uff.h"
 #include "src/minimizer/mmff_minimize.h"
+#include "src/minimizer/uff_minimize.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device.h"
 

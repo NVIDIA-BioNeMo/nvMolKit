@@ -53,7 +53,8 @@ installpythontarget(_mmffOptimization ./)
 add_library(_uffOptimization MODULE uffOptimization.cpp)
 target_link_libraries(_uffOptimization PUBLIC ${Boost_LIBRARIES}
                                               ${PYTHON_LIBRARIES})
-target_link_libraries(_uffOptimization PRIVATE ${RDKit_LIBS} bfgs_uff ff_utils)
+target_link_libraries(_uffOptimization PRIVATE ${RDKit_LIBS} uff_minimize
+                                               ff_utils)
 target_include_directories(_uffOptimization PUBLIC ${Python_INCLUDE_DIRS})
 target_include_directories(_uffOptimization SYSTEM PUBLIC ${Boost_INCLUDE_DIRS})
 installpythontarget(_uffOptimization ./)
@@ -65,7 +66,7 @@ target_link_libraries(
   _batchedForcefield
   PRIVATE ${RDKit_LIBS}
           mmff_minimize
-          bfgs_uff
+          uff_minimize
           mmff_batched_forcefield
           uff_batched_forcefield
           batched_forcefield

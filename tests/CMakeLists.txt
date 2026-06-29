@@ -105,7 +105,12 @@ target_link_libraries(
   test_uff
   PRIVATE ${RDKit_LIBS}
           uff_batched_forcefield
+          uff_minimize
+          bfgs_common
           bfgs
+          ff_device_collect
+          fire_minimizer
+          forcefield_constraints
           uff
           rdkit_uff_flattened
           device_vector
@@ -189,7 +194,7 @@ add_executable(test_ff_device_output test_ff_device_output.cu)
 target_link_libraries(
   test_ff_device_output
   PRIVATE mmff_minimize
-          bfgs_uff
+          uff_minimize
           bfgs_common
           mmff
           uff

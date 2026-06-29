@@ -13,8 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef NVMOLKIT_BFGS_UFF_H
-#define NVMOLKIT_BFGS_UFF_H
+#ifndef NVMOLKIT_UFF_MINIMIZE_H
+#define NVMOLKIT_UFF_MINIMIZE_H
 
 #include <cstdint>
 #include <optional>
@@ -24,6 +24,7 @@
 #include "src/forcefields/forcefield_constraints.h"
 #include "src/hardware_options.h"
 #include "src/minimizer/bfgs_minimize.h"
+#include "src/minimizer/fire_minimizer.h"
 
 namespace RDKit {
 class ROMol;
@@ -33,6 +34,13 @@ namespace nvMolKit::UFF {
 
 std::vector<std::vector<double>> UFFOptimizeMoleculesConfsBfgs(std::vector<RDKit::ROMol*>& mols,
                                                                int                         maxIters,
+                                                               const std::vector<double>&  vdwThresholds,
+                                                               const std::vector<bool>&    ignoreInterfragInteractions,
+                                                               const BatchHardwareOptions& perfOptions = {});
+
+std::vector<std::vector<double>> UFFOptimizeMoleculesConfsFire(std::vector<RDKit::ROMol*>& mols,
+                                                               int                         maxIters,
+                                                               const FireOptions&          fireOptions,
                                                                const std::vector<double>&  vdwThresholds,
                                                                const std::vector<bool>&    ignoreInterfragInteractions,
                                                                const BatchHardwareOptions& perfOptions = {});
@@ -87,6 +95,21 @@ UFFMinimizeResult UFFMinimizeMoleculesConfs(
   int                                                          targetGpu   = -1,
   const DeviceCoordResult*                                     deviceInput = nullptr);
 
+//! \brief Optimize conformers using the FIRE 2.0 minimizer instead of BFGS.
+//! \param constraints Per-molecule constraint specifications (empty = no constraints).
+//! \param output Whether to write coordinates back into RDKit conformers (default) or return
+//!               them on-device as a DeviceCoordResult.
+UFFMinimizeResult UFFMinimizeMoleculesConfsFire(
+  std::vector<RDKit::ROMol*>&                                  mols,
+  int                                                          maxIters,
+  const FireOptions&                                           fireOptions,
+  const std::vector<double>&                                   vdwThresholds,
+  const std::vector<bool>&                                     ignoreInterfragInteractions,
+  const std::vector<ForceFieldConstraints::PerMolConstraints>& constraints = {},
+  const BatchHardwareOptions&                                  perfOptions = {},
+  CoordinateOutput                                             output      = CoordinateOutput::RDKIT_CONFORMERS,
+  int                                                          targetGpu   = -1);
+
 }  // namespace nvMolKit::UFF
 
-#endif  // NVMOLKIT_BFGS_UFF_H
+#endif  // NVMOLKIT_UFF_MINIMIZE_H
