@@ -236,6 +236,20 @@ add_executable(test_fire_minimizer test_fire_minimizer.cu)
 target_link_libraries(test_fire_minimizer PRIVATE fire_minimizer device_vector
                                                   cuda_error_check)
 
+add_executable(test_fire_minimizer_permol test_fire_minimizer_permol.cu)
+target_link_libraries(
+  test_fire_minimizer_permol
+  PRIVATE fire_minimizer
+          batched_forcefield
+          mmff_batched_forcefield
+          rdkit_mmff_flattened
+          device_vector
+          cuda_error_check
+          ${RDKit_LIBS}
+          test_utils
+          mmff
+          device)
+
 add_executable(test_etkdg_etk_minimize test_etkdg_etk_minimize.cu)
 target_link_libraries(
   test_etkdg_etk_minimize
@@ -387,7 +401,8 @@ set(TEST_LIST
     test_similarity
     test_thread_safe_queue
     test_work_splitting
-    test_fire_minimizer)
+    test_fire_minimizer
+    test_fire_minimizer_permol)
 
 # Auto populate the NVMOLKIT_TESTDATA environment variable for ctest.
 foreach(arg ${TEST_LIST})
