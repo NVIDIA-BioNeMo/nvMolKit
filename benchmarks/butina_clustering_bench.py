@@ -95,8 +95,11 @@ def resize_and_fill_fingerprints(fps: torch.Tensor, want_size: int) -> torch.Ten
     return full_fps
 
 
-def bench_rdkit(data, threshold, runs=3):
-    result = time_it(lambda: ClusterData(data, len(data), threshold, isDistData=True, reordering=True), runs=runs)
+def bench_rdkit(data, threshold, runs=3, reordering=True):
+    result = time_it(
+        lambda: ClusterData(data, len(data), threshold, isDistData=True, reordering=reordering),
+        runs=runs,
+    )
     return result.mean_ms, result.std_ms
 
 
@@ -132,8 +135,13 @@ def bench_rdkit_lowmem(rdkit_fps, threshold, runs=3):
     return result.mean_ms, result.std_ms
 
 
-def bench_nvmol_inner(data, threshold, neighborlist_max_size):
-    butina_nvmol(data, threshold, neighborlist_max_size=neighborlist_max_size)
+def bench_nvmol_inner(data, threshold, neighborlist_max_size, reordering=True):
+    butina_nvmol(
+        data,
+        threshold,
+        neighborlist_max_size=neighborlist_max_size,
+        reordering=reordering,
+    )
 
 
 def bench_nvmol_with_tanimoto(fps, threshold, neighborlist_max_size):
@@ -166,6 +174,12 @@ if __name__ == "__main__":
         help="Path to JSON config file specifying per-size benchmark selection",
     )
     parser.add_argument("--cutoff", type=float, default=None, help="Run only this cutoff value")
+    parser.add_argument(
+        "--nvmolkit-reordering",
+        choices=["true", "false", "both"],
+        default="true",
+        help="nvMolKit Butina reordering mode(s) to benchmark (default: true)",
+    )
     parser.add_argument("--runs", type=int, default=3, help="Number of timed repetitions (default: 3)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for sampling SMILES (default: 42)")
     parser.add_argument(
@@ -308,54 +322,71 @@ if __name__ == "__main__":
                     fused_time, fused_std = fused_result.mean_ms, fused_result.std_ms
 
                 if "nvmolkit" in runs:
+                    reordering_modes = []
+                    if args.nvmolkit_reordering in ("true", "both"):
+                        reordering_modes.append(True)
+                    if args.nvmolkit_reordering in ("false", "both"):
+                        reordering_modes.append(False)
                     for max_nl in max_nl_sizes:
-                        print(f"Running nvmolkit_cluster_only size {size} cutoff {cutoff} max_nl {max_nl}")
-                        nvmolkit_cluster_only_result = time_it(
-                            lambda: bench_nvmol_inner(dist_mat, cutoff, max_nl),
-                            gpu_sync=True,
-                            runs=n_runs,
-                        )
-                        nvmolkit_cluster_only_time = nvmolkit_cluster_only_result.mean_ms
-                        nvmolkit_cluster_only_std = nvmolkit_cluster_only_result.std_ms
-
-                        nvmolkit_with_tanimoto_time, nvmolkit_with_tanimoto_std = float("nan"), float("nan")
-                        if fps_mat_real is not None:
-                            print(f"Running nvmolkit_with_tanimoto size {size} cutoff {cutoff} max_nl {max_nl}")
-                            nvmolkit_with_tanimoto_result = time_it(
-                                lambda: bench_nvmol_with_tanimoto(fps_mat_real, cutoff, max_nl),
+                        for nvmol_reordering in reordering_modes:
+                            print(
+                                "Running nvmolkit_cluster_only "
+                                f"size {size} cutoff {cutoff} max_nl {max_nl} "
+                                f"reordering {nvmol_reordering}"
+                            )
+                            nvmolkit_cluster_only_result = time_it(
+                                lambda: bench_nvmol_inner(dist_mat, cutoff, max_nl, nvmol_reordering),
                                 gpu_sync=True,
                                 runs=n_runs,
                             )
-                            nvmolkit_with_tanimoto_time = nvmolkit_with_tanimoto_result.mean_ms
-                            nvmolkit_with_tanimoto_std = nvmolkit_with_tanimoto_result.std_ms
+                            nvmolkit_cluster_only_time = nvmolkit_cluster_only_result.mean_ms
+                            nvmolkit_cluster_only_std = nvmolkit_cluster_only_result.std_ms
 
-                        nvmol_res = butina_nvmol(dist_mat, cutoff, neighborlist_max_size=max_nl).torch()
-                        torch.cuda.synchronize()
-                        nvmol_clusts = [
-                            tuple(torch.argwhere(nvmol_res == i).flatten().tolist())
-                            for i in range(nvmol_res.max() + 1)
-                        ]
-                        check_butina_correctness(dist_mat <= cutoff, nvmol_clusts)
+                            nvmolkit_with_tanimoto_time, nvmolkit_with_tanimoto_std = float("nan"), float("nan")
+                            if fps_mat_real is not None and nvmol_reordering:
+                                print(f"Running nvmolkit_with_tanimoto size {size} cutoff {cutoff} max_nl {max_nl}")
+                                nvmolkit_with_tanimoto_result = time_it(
+                                    lambda: bench_nvmol_with_tanimoto(fps_mat_real, cutoff, max_nl),
+                                    gpu_sync=True,
+                                    runs=n_runs,
+                                )
+                                nvmolkit_with_tanimoto_time = nvmolkit_with_tanimoto_result.mean_ms
+                                nvmolkit_with_tanimoto_std = nvmolkit_with_tanimoto_result.std_ms
 
-                        results.append(
-                            {
-                                "size": size,
-                                "cutoff": cutoff,
-                                "max_neighborlist_size": max_nl,
-                                "rdkit_cluster_only_time_ms": rdkit_cluster_only_time,
-                                "rdkit_cluster_only_std_ms": rdkit_cluster_only_std,
-                                "rdkit_with_tanimoto_time_ms": rdkit_with_tanimoto_time,
-                                "rdkit_with_tanimoto_std_ms": rdkit_with_tanimoto_std,
-                                "rdkit_lowmem_time_ms": rdkit_lm_time,
-                                "rdkit_lowmem_std_ms": rdkit_lm_std,
-                                "nvmolkit_cluster_only_time_ms": nvmolkit_cluster_only_time,
-                                "nvmolkit_cluster_only_std_ms": nvmolkit_cluster_only_std,
-                                "nvmolkit_with_tanimoto_time_ms": nvmolkit_with_tanimoto_time,
-                                "nvmolkit_with_tanimoto_std_ms": nvmolkit_with_tanimoto_std,
-                                "fused_butina_time_ms": fused_time,
-                                "fused_butina_std_ms": fused_std,
-                            }
-                        )
+                            nvmol_res = butina_nvmol(
+                                dist_mat,
+                                cutoff,
+                                neighborlist_max_size=max_nl,
+                                reordering=nvmol_reordering,
+                            ).torch()
+                            torch.cuda.synchronize()
+                            nvmol_clusts = [
+                                tuple(torch.argwhere(nvmol_res == i).flatten().tolist())
+                                for i in range(nvmol_res.max() + 1)
+                            ]
+                            if nvmol_reordering:
+                                check_butina_correctness(dist_mat <= cutoff, nvmol_clusts)
+
+                            results.append(
+                                {
+                                    "size": size,
+                                    "cutoff": cutoff,
+                                    "max_neighborlist_size": max_nl,
+                                    "nvmolkit_reordering": nvmol_reordering,
+                                    "rdkit_cluster_only_time_ms": rdkit_cluster_only_time,
+                                    "rdkit_cluster_only_std_ms": rdkit_cluster_only_std,
+                                    "rdkit_with_tanimoto_time_ms": rdkit_with_tanimoto_time,
+                                    "rdkit_with_tanimoto_std_ms": rdkit_with_tanimoto_std,
+                                    "rdkit_lowmem_time_ms": rdkit_lm_time,
+                                    "rdkit_lowmem_std_ms": rdkit_lm_std,
+                                    "nvmolkit_cluster_only_time_ms": nvmolkit_cluster_only_time,
+                                    "nvmolkit_cluster_only_std_ms": nvmolkit_cluster_only_std,
+                                    "nvmolkit_with_tanimoto_time_ms": nvmolkit_with_tanimoto_time,
+                                    "nvmolkit_with_tanimoto_std_ms": nvmolkit_with_tanimoto_std,
+                                    "fused_butina_time_ms": fused_time,
+                                    "fused_butina_std_ms": fused_std,
+                                }
+                            )
                 else:
                     results.append(
                         {

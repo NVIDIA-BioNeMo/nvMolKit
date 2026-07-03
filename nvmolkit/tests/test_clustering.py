@@ -16,10 +16,10 @@
 import numpy as np
 import pytest
 import torch
+from rdkit.ML.Cluster.Butina import ClusterData
 
 from nvmolkit.clustering import butina, fused_butina
 from nvmolkit.types import AsyncGpuResult
-
 
 def check_butina_correctness(hit_mat, clusts):
     hit_mat = hit_mat.clone()
@@ -50,6 +50,52 @@ def check_butina_correctness(hit_mat, clusts):
             hit_mat[item, :] = False
             hit_mat[:, item] = False
     assert len(seen) == hit_mat.shape[0]
+
+
+def _nvmolkit_butina_clusters(distance_matrix, cutoff, *, reordering):
+    labels, centroids = butina(
+        torch.tensor(distance_matrix, device="cuda"),
+        cutoff,
+        reordering=reordering,
+        return_centroids=True,
+    )
+    labels = labels.torch().cpu().numpy()
+    centroids = centroids.torch().cpu().numpy()
+
+    clusters = []
+    for cluster_id, centroid in enumerate(centroids):
+        members = np.flatnonzero(labels == cluster_id)
+        clusters.append(tuple([int(centroid)] + [int(member) for member in members if member != centroid]))
+    return tuple(clusters)
+
+
+def _rdkit_butina_clusters(distance_matrix, cutoff, *, reordering):
+    return ClusterData(
+        np.asarray(distance_matrix, dtype=np.float64),
+        int(distance_matrix.shape[0]),
+        cutoff,
+        isDistData=True,
+        reordering=reordering,
+    )
+
+
+@pytest.mark.parametrize("reordering", [False, True])
+def test_butina_reordering_matches_rdkit(reordering):
+    distance_matrix = np.array(
+        [
+            [0.0, 0.2, 1.0, 1.0],
+            [0.2, 0.0, 0.2, 1.0],
+            [1.0, 0.2, 0.0, 0.2],
+            [1.0, 1.0, 0.2, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    cutoff = 0.2
+
+    expected = _rdkit_butina_clusters(distance_matrix, cutoff, reordering=reordering)
+    got = _nvmolkit_butina_clusters(distance_matrix, cutoff, reordering=reordering)
+
+    assert got == expected
 
 
 @pytest.mark.parametrize(

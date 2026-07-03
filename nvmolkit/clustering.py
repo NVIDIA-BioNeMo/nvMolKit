@@ -54,6 +54,7 @@ def butina(
     neighborlist_max_size: int = 64,
     return_centroids: bool = False,
     stream: torch.cuda.Stream | None = None,
+    reordering: bool = True,
 ) -> AsyncGpuResult | tuple[AsyncGpuResult, AsyncGpuResult]:
     """Perform Butina clustering on a distance matrix.
 
@@ -70,13 +71,16 @@ def butina(
                         CPU tensors and NumPy arrays are copied to CUDA. Inputs
                         must have dtype float64.
         cutoff: Distance threshold for clustering. Items are neighbors if their
-                distance is less than this cutoff.
+                distance is less than or equal to this cutoff.
         neighborlist_max_size: Maximum size of the neighborlist used for small cluster
                               optimization. Must be 8, 16, 24, 32, 64, or 128. Larger values
                               allow parallel processing of larger clusters but use more
                               shared memory.
         return_centroids: Whether to return centroid indices for each cluster.
         stream: CUDA stream to use. If None, uses the current stream.
+        reordering: Whether to update neighbor counts among unassigned items
+                    after each cluster is formed. The default matches the
+                    existing nvMolKit behavior and RDKit's ``reordering=True``.
 
     Returns:
         AsyncGpuResult of shape ``(N,)`` with cluster IDs (cluster 0 is the
@@ -102,6 +106,7 @@ def butina(
             neighborlist_max_size,
             return_centroids,
             active_stream.cuda_stream,
+            reordering,
         )
     if return_centroids:
         clusters, centroids = result
