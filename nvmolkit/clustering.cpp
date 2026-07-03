@@ -43,7 +43,7 @@ BOOST_PYTHON_MODULE(_clustering) {
       if (!streamOpt) {
         throw std::invalid_argument("Invalid CUDA stream");
       }
-      auto                             stream                = *streamOpt;
+      auto                             stream  = *streamOpt;
       // Extract boost::python::tuple from dict['shape']
       boost::python::tuple             shape   = boost::python::extract<boost::python::tuple>(distanceMatrix["shape"]);
       const size_t                     matDim1 = boost::python::extract<size_t>(shape[0]);
@@ -58,13 +58,8 @@ BOOST_PYTHON_MODULE(_clustering) {
         centroids.setStream(stream);
       }
       const auto centroidSpan = returnCentroids ? toSpan(centroids) : cuda::std::span<int>{};
-      const int numClusters = nvMolKit::butinaGpu(matSpan,
-                                                  toSpan(clusterIds),
-                                                  cutoff,
-                                                  neighborlistMaxSize,
-                                                  centroidSpan,
-                                                  stream,
-                                                  reordering);
+      const int numClusters =
+        nvMolKit::butinaGpu(matSpan, toSpan(clusterIds), cutoff, neighborlistMaxSize, centroidSpan, stream, reordering);
       if (returnCentroids) {
         auto clusterArray  = nvMolKit::makePyArray(clusterIds, boost::python::make_tuple(matDim1));
         auto centroidArray = nvMolKit::makePyArray(centroids, boost::python::make_tuple(numClusters));

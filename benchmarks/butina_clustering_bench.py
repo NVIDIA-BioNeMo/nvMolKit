@@ -96,10 +96,7 @@ def resize_and_fill_fingerprints(fps: torch.Tensor, want_size: int) -> torch.Ten
 
 
 def bench_rdkit(data, threshold, runs=3, reordering=True):
-    result = time_it(
-        lambda: ClusterData(data, len(data), threshold, isDistData=True, reordering=reordering),
-        runs=runs,
-    )
+    result = time_it(lambda: ClusterData(data, len(data), threshold, isDistData=True, reordering=reordering), runs=runs)
     return result.mean_ms, result.std_ms
 
 
@@ -136,12 +133,7 @@ def bench_rdkit_lowmem(rdkit_fps, threshold, runs=3):
 
 
 def bench_nvmol_inner(data, threshold, neighborlist_max_size, reordering=True):
-    butina_nvmol(
-        data,
-        threshold,
-        neighborlist_max_size=neighborlist_max_size,
-        reordering=reordering,
-    )
+    butina_nvmol(data, threshold, neighborlist_max_size=neighborlist_max_size, reordering=reordering)
 
 
 def bench_nvmol_with_tanimoto(fps, threshold, neighborlist_max_size):
@@ -330,8 +322,7 @@ if __name__ == "__main__":
                     for max_nl in max_nl_sizes:
                         for nvmol_reordering in reordering_modes:
                             print(
-                                "Running nvmolkit_cluster_only "
-                                f"size {size} cutoff {cutoff} max_nl {max_nl} "
+                                f"Running nvmolkit_cluster_only size {size} cutoff {cutoff} max_nl {max_nl} "
                                 f"reordering {nvmol_reordering}"
                             )
                             nvmolkit_cluster_only_result = time_it(
@@ -354,10 +345,7 @@ if __name__ == "__main__":
                                 nvmolkit_with_tanimoto_std = nvmolkit_with_tanimoto_result.std_ms
 
                             nvmol_res = butina_nvmol(
-                                dist_mat,
-                                cutoff,
-                                neighborlist_max_size=max_nl,
-                                reordering=nvmol_reordering,
+                                dist_mat, cutoff, neighborlist_max_size=max_nl, reordering=nvmol_reordering
                             ).torch()
                             torch.cuda.synchronize()
                             nvmol_clusts = [

@@ -58,7 +58,7 @@ namespace nvMolKit {
  * a binary hit matrix where element (i,j) indicates whether items i and j are neighbors.
  *
  * @param hitMatrix Binary matrix of size NxN where hitMatrix[i*N+j] = 1 if items i and j
- *                  are neighbors, 0 otherwise.
+ *                  are neighbors (distance <= cutoff), 0 otherwise.
  * @param clusters Output array of size N. Each element will contain the cluster ID for
  *                 that item. Modified in-place.
  * @param neighborlistMaxSize Maximum size of the neighborlist used for small cluster optimization.
