@@ -12,6 +12,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+#include <climits>
 
 #include <cooperative_groups.h>
 
@@ -30,6 +31,7 @@ namespace nvMolKit {
 
 namespace {
 constexpr int blockSizeCount            = 256;
+constexpr int fixedOrderPrepareBlockSize = 1024;
 constexpr int kSubTileSize              = 8;
 constexpr int kMinLoopSizeForAssignment = 2;
 
@@ -492,58 +494,85 @@ void sortFixedOrderCandidates(const cuda::std::span<const int> hitCounts,
   cudaCheckError(cudaGetLastError());
 }
 
-// Select the next unassigned candidate for parallel row assignment. Note that this task is not inherently parallelizable. We walk the vector element by element until we find a valid centroid. If done in parallel, we could accidentallly select the wrong elements as centroids.
+// ! Add custom kernel support if some users cant use CUB like was previously done earlier
+// Select the next fixed-order centroid. The order is sequential, but each block pass can search a chunk in parallel.
 __global__ void prepareFixedOrderCandidateKernel(const cuda::std::span<const uint64_t> sortedKeys,
-                                                 const cuda::std::span<const int> hitCounts,
                                                  const cuda::std::span<int>       clusters,
-                                                 const cuda::std::span<int>       centroids,
                                                  int*                             cursor,
                                                  int*                             activePoint,
                                                  int*                             activeCluster,
                                                  int*                             nextClusterIdx,
                                                  int*                             keepGoing) {
   const int numPoints = clusters.size();
-  if (threadIdx.x != 0 || blockIdx.x != 0) {
+  const int tid       = threadIdx.x;
+
+  // we should only be launching this kernel with only one block regardless
+  if (blockIdx.x != 0) {
     return;
   }
 
-  *activePoint   = -1;
-  *activeCluster = -1;
+  __shared__ cub::BlockReduce<int, fixedOrderPrepareBlockSize>::TempStorage tempStorage;
 
-  while (*cursor < numPoints) {
-    // use the bit mask to get the point index
-    const int pointIdx = sortedKeys[*cursor] & 0xffffffffULL;
-    *cursor += 1;
+  if (tid == 0) {
+    *activePoint   = -1;
+    *activeCluster = -1;
+  }
 
-    // this point has already been assigned to a cluster, cannot be a centroid
-    if (clusters[pointIdx] > -1) {
+  int base = *cursor;
+  while (base < numPoints) {
+    const int sortedPos = base + tid;
+
+    // INT_MAX will be used as identity later when we do the block reduce with min()
+    int candidate = INT_MAX;
+
+    if (sortedPos < numPoints) {
+      // Use the bit mask to get the point index from the packed sort key.
+      const int pointIdx = sortedKeys[sortedPos] & 0xffffffffULL;
+      // Points already assigned to a cluster cannot become centroids.
+      if (clusters[pointIdx] < 0) {
+        candidate = sortedPos;
+      }
+    }
+
+    // now we reduce all those indexes and get the smallest one (corresponds to first valid element in the sorted hit count vector)
+    const int firstPos = cub::BlockReduce<int, fixedOrderPrepareBlockSize>(tempStorage).Reduce(candidate, cub::Min());
+    if (firstPos == INT_MAX) {
+      // we have not yet found a valid candidate
+      base += fixedOrderPrepareBlockSize;
+
+      // this sync is necessary, (need to ensure all threads extracted the reduced value from shared memory, before
+      // calling blockReduce again and potentially overwriting shared memory)
+      __syncthreads();
       continue;
     }
 
-    const int clusterVal = *nextClusterIdx;
-    *nextClusterIdx += 1;
-    clusters[pointIdx] = clusterVal;
+    const int pointIdx = sortedKeys[firstPos] & 0xffffffffULL;
+    if (tid == 0) {
+      // update the cursor all the way to the next possible valid idx
+      *cursor = firstPos + 1;
 
-    // this is here if the caller decides to request the centroids list
-    if (!centroids.empty()) {
-      centroids[clusterVal] = pointIdx;
-    }
+      const int clusterVal = *nextClusterIdx;
+      *nextClusterIdx += 1;
 
-    // we prepare the parameters for the parallel scan.
-    if (hitCounts[pointIdx] > 1) {
+      // Prepare the parameters for the parallel row scan.
       *activePoint   = pointIdx;
       *activeCluster = clusterVal;
       *keepGoing     = 1;
-      return;
     }
+    return;
   }
 
-  *keepGoing = 0;
+  if (tid == 0) {
+    *cursor    = numPoints;
+    *keepGoing = 0;
+  }
 }
 
 // Parallel Scan. Assign still-unassigned neighbors to the cluster belonging to the centroid we just selected
 __global__ void assignFixedOrderActiveRowKernel(const cuda::std::span<const uint8_t> hitMatrix,
+                                                const cuda::std::span<const int>     hitCounts,
                                                 const cuda::std::span<int>           clusters,
+                                                const cuda::std::span<int>           centroids,
                                                 const int*                           activePoint,
                                                 const int*                           activeCluster) {
   const int pointIdx   = *activePoint;
@@ -554,6 +583,20 @@ __global__ void assignFixedOrderActiveRowKernel(const cuda::std::span<const uint
 
   const int    numPoints = clusters.size();
   const int    tid       = blockIdx.x * blockDim.x + threadIdx.x;
+  if (tid == 0) {
+    // We make the selected point the centroid and assing it to a cluster
+    clusters[pointIdx] = clusterVal;
+    if (!centroids.empty()) {
+      // This is only filled when the caller requests centroids.
+      centroids[clusterVal] = pointIdx;
+    }
+  }
+
+  // If hit_count == 1, no neighbors to scan this point only hit itself
+  if (hitCounts[pointIdx] <= 1) {
+    return;
+  }
+
   const cuda::std::span<const uint8_t> hits = hitMatrix.subspan(static_cast<size_t>(pointIdx) * numPoints, numPoints);
 
   // if this point is a neighbor of the selected centroid and we have not yet selected a cluster for this point, assign this point to the same cluster as the centroid we just selected
@@ -1081,19 +1124,19 @@ class FixedOrderButinaGraph {
     cudaCheckError(
       cudaStreamBeginCaptureToGraph(captureStream, bodyGraph, nullptr, nullptr, 0, cudaStreamCaptureModeRelaxed));
 
-    prepareFixedOrderCandidateKernel<<<1, 1, 0, captureStream>>>(sortedKeys,
-                                                                  hitCounts,
-                                                                  clusters,
-                                                                  centroids,
-                                                                  cursorPtr,
-                                                                  activePointPtr,
-                                                                  activeClusterPtr,
-                                                                  clusterIdxPtr,
-                                                                  keepGoingPtr);
+    prepareFixedOrderCandidateKernel<<<1, fixedOrderPrepareBlockSize, 0, captureStream>>>(sortedKeys,
+                                                                                          clusters,
+                                                                                          cursorPtr,
+                                                                                          activePointPtr,
+                                                                                          activeClusterPtr,
+                                                                                          clusterIdxPtr,
+                                                                                          keepGoingPtr);
     cudaCheckError(cudaGetLastError());
 
     assignFixedOrderActiveRowKernel<<<rowScanBlocks, blockSizeCount, 0, captureStream>>>(hitMatrix,
+                                                                                         hitCounts,
                                                                                          clusters,
+                                                                                         centroids,
                                                                                          activePointPtr,
                                                                                          activeClusterPtr);
     cudaCheckError(cudaGetLastError());
