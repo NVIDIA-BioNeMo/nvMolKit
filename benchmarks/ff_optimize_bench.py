@@ -24,6 +24,7 @@ enabled) absolute energy deltas between the two implementations.
 
 Usage:
     python ff_optimize_bench.py --smiles data/chembl_10k.smi --ff mmff --num_mols 200 --confs_per_mol 5
+    python ff_optimize_bench.py --smiles data/chembl_10k.smi --ff mmff --minimizer_kind FIRE --autotune
     python ff_optimize_bench.py --sdf data/MPCONF196.sdf --ff uff --confs_per_mol 1 --no_rdkit
     python ff_optimize_bench.py --pickle prepared.pkl --ff mmff --batch_size 512 --batches_per_gpu 4
 """
@@ -106,6 +107,7 @@ def _energy_diff_summary(
 def bench_nvmolkit(
     mols: list[Chem.Mol],
     ff: str,
+    minimizer_kind: str,
     max_iters: int,
     hardware_options,
     runs: int,
@@ -124,12 +126,22 @@ def bench_nvmolkit(
     @nvtx.annotate("ff_nvmolkit_run", color="orange")
     def run() -> None:
         cloned = clone_mols_with_conformers(mols)
-        last_energies[0] = _OptimizeConfs(cloned, maxIters=max_iters, hardwareOptions=hardware_options)
+        last_energies[0] = _OptimizeConfs(
+            cloned,
+            maxIters=max_iters,
+            hardwareOptions=hardware_options,
+            minimizerKind=minimizer_kind,
+        )
 
     if warmup:
         warmup_mols = clone_mols_with_conformers(mols[: min(4, len(mols))])
         with nvtx.annotate("ff_nvmolkit_warmup", color="purple"):
-            _OptimizeConfs(warmup_mols, maxIters=max_iters, hardwareOptions=hardware_options)
+            _OptimizeConfs(
+                warmup_mols,
+                maxIters=max_iters,
+                hardwareOptions=hardware_options,
+                minimizerKind=minimizer_kind,
+            )
         torch.cuda.synchronize()
 
     result = time_it(run, runs=runs, warmups=0, gpu_sync=True)
@@ -208,7 +220,7 @@ def _build_hardware_options(
 
 
 CSV_HEADER = (
-    "method,ff,input_file,input_type,num_mols,mols_processed,confs_per_mol,max_iters,"
+    "method,ff,minimizer_kind,input_file,input_type,num_mols,mols_processed,confs_per_mol,max_iters,"
     "batch_size,batches_per_gpu,prep_threads,num_gpus,nvmolkit_config_source,"
     "rdkit_threads,rdkit_max_seconds,time_ms,std_ms,"
     "confs_per_second,vs_rdkit_throughput_ratio,"
@@ -232,6 +244,13 @@ def main() -> None:
     parser.set_defaults(sanitize=True)
 
     parser.add_argument("--ff", choices=["mmff", "uff"], required=True, help="Force field to optimize: mmff or uff")
+    parser.add_argument(
+        "--minimizer_kind",
+        choices=["BFGS", "FIRE"],
+        type=str.upper,
+        default="BFGS",
+        help="nvmolkit minimizer to benchmark: BFGS or FIRE (default: BFGS)",
+    )
     parser.add_argument(
         "--confs_per_mol",
         "-c",
@@ -363,6 +382,7 @@ def main() -> None:
     print("\nConfiguration:")
     print(f"  Input: {input_file} ({input_type})")
     print(f"  Force field: {args.ff.upper()}")
+    print(f"  nvmolkit minimizer: {args.minimizer_kind}")
     print(f"  Max molecules: {args.num_mols if args.num_mols > 0 else 'all'}")
     print(f"  Conformers per mol: {args.confs_per_mol}")
     print(f"  Max FF iterations: {args.max_iters}")
@@ -446,6 +466,7 @@ def main() -> None:
                 explicit_calibration = rng.sample(range(len(mols)), size)
             tune_kwargs = dict(
                 maxIters=args.max_iters,
+                minimizerKind=args.minimizer_kind,
                 gpuIds=gpu_ids,
                 n_trials=args.autotune_trials,
                 target_seconds_per_trial=args.autotune_time_budget,
@@ -475,9 +496,9 @@ def main() -> None:
             )
 
         torch.cuda.cudart().cudaProfilerStart()
-        print(f"\nRunning nvmolkit {args.ff.upper()} optimize benchmark...")
+        print(f"\nRunning nvmolkit {args.ff.upper()} {args.minimizer_kind} optimize benchmark...")
         nv_avg, nv_std, nv_energies = bench_nvmolkit(
-            mols, args.ff, args.max_iters, hardware_options, args.runs, args.warmup
+            mols, args.ff, args.minimizer_kind, args.max_iters, hardware_options, args.runs, args.warmup
         )
         print(f"  nvmolkit:        {nv_avg:10.2f} ms (+/- {nv_std:.2f} ms)")
         results["nvmolkit"] = (nv_avg, nv_std, nv_energies)
@@ -563,7 +584,8 @@ def main() -> None:
         max_diff = energy_max if (args.validate and is_nv) else "N/A"
         pairs = energy_pairs if (args.validate and is_nv) else "N/A"
         csv_rows.append(
-            f"{name},{args.ff},{input_file},{input_type},{len(mols)},{mols_processed},{args.confs_per_mol},"
+            f"{name},{args.ff},{args.minimizer_kind if is_nv else 'N/A'},{input_file},{input_type},"
+            f"{len(mols)},{mols_processed},{args.confs_per_mol},"
             f"{args.max_iters},{batch_size},{batches_per_gpu},{prep_threads},{num_gpus},"
             f"{nvmolkit_config_source},{rdkit_threads},{rdkit_max_seconds},"
             f"{avg_ms:.2f},{std_ms:.2f},"

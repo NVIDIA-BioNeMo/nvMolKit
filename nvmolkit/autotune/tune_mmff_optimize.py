@@ -41,7 +41,7 @@ from nvmolkit.autotune._ff_common import (
     total_conformers,
 )
 from nvmolkit.mmffOptimization import MMFFOptimizeMoleculesConfs
-from nvmolkit.types import HardwareOptions
+from nvmolkit.types import FireOptions, HardwareOptions
 
 if TYPE_CHECKING:
     from rdkit.ForceField.rdForceField import MMFFMolProperties
@@ -54,6 +54,9 @@ def tune_mmff_optimize(
     properties: "MMFFMolProperties | Sequence[MMFFMolProperties | None] | None" = None,
     nonBondedThreshold: float | Sequence[float] = 100.0,
     ignoreInterfragInteractions: bool | Sequence[bool] = True,
+    backend: str = "HYBRID",
+    minimizerKind: str = "BFGS",
+    fireOptions: FireOptions | None = None,
     gpuIds: Optional[Iterable[int]] = None,
     calibration_set: Optional[Iterable[int]] = None,
     calibration_fraction: float = 0.1,
@@ -82,6 +85,10 @@ def tune_mmff_optimize(
             Accepts a scalar or per-molecule sequence.
         ignoreInterfragInteractions: ``ignoreInterfragInteractions``
             forwarded to each trial.
+        backend: MMFF kernel backend forwarded to each trial.
+        minimizerKind: ``"BFGS"`` or ``"FIRE"``, forwarded to each trial.
+        fireOptions: FIRE algorithm options forwarded to each trial when
+            ``minimizerKind="FIRE"``.
         gpuIds: GPU device IDs to use. Fixed across the study.
         calibration_set: Optional explicit indices into ``molecules``.
         calibration_fraction: Fraction of the workload to auto-sample.
@@ -146,6 +153,9 @@ def tune_mmff_optimize(
             nonBondedThreshold=_slice_param(nonBondedThreshold, is_seq_nbt, state.indices),
             ignoreInterfragInteractions=_slice_param(ignoreInterfragInteractions, is_seq_ifg, state.indices),
             hardwareOptions=options,
+            backend=backend,
+            minimizerKind=minimizerKind,
+            fireOptions=fireOptions,
         )
         return total_conformers(cloned)
 

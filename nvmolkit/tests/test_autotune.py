@@ -592,7 +592,8 @@ def test_tune_embed_molecules_smoke(small_mols):
     assert all(mol.GetNumConformers() == 1 for mol in fresh)
 
 
-def test_tune_mmff_optimize_smoke(small_optimized_mols):
+@pytest.mark.parametrize("minimizer_kind", ["BFGS", "FIRE"])
+def test_tune_mmff_optimize_smoke(small_optimized_mols, minimizer_kind):
     pytest.importorskip("optuna")
     from rdkit.Chem import AllChem
 
@@ -602,6 +603,7 @@ def test_tune_mmff_optimize_smoke(small_optimized_mols):
     result = autotune.tune_mmff_optimize(
         small_optimized_mols,
         maxIters=20,
+        minimizerKind=minimizer_kind,
         n_trials=2,
         target_seconds_per_trial=30.0,
         calibration_fraction=1.0,
@@ -619,7 +621,8 @@ def test_tune_mmff_optimize_smoke(small_optimized_mols):
     assert len(energies) == len(fresh)
 
 
-def test_tune_uff_optimize_smoke(small_optimized_mols):
+@pytest.mark.parametrize("minimizer_kind", ["BFGS", "FIRE"])
+def test_tune_uff_optimize_smoke(small_optimized_mols, minimizer_kind):
     pytest.importorskip("optuna")
     from rdkit.Chem import rdForceFieldHelpers
 
@@ -629,6 +632,7 @@ def test_tune_uff_optimize_smoke(small_optimized_mols):
     result = autotune.tune_uff_optimize(
         small_optimized_mols,
         maxIters=20,
+        minimizerKind=minimizer_kind,
         n_trials=2,
         target_seconds_per_trial=30.0,
         calibration_fraction=1.0,

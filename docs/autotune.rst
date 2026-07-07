@@ -147,6 +147,12 @@ type:
 * :func:`nvmolkit.autotune.tune_batched_forcefield`
 * :func:`nvmolkit.autotune.tune_substructure`
 
+The MMFF and UFF wrappers accept ``minimizerKind="BFGS"`` (the default) or
+``minimizerKind="FIRE"``. Tune each minimizer independently when comparing
+their throughput because their optimal hardware batching can differ. Custom
+FIRE settings can be supplied through ``fireOptions``; MMFF also forwards its
+``backend`` selector.
+
 Tuning a batched forcefield
 ---------------------------
 

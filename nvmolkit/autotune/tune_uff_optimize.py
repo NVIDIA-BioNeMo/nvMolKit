@@ -40,7 +40,7 @@ from nvmolkit.autotune._ff_common import (
     resolve_num_gpus,
     total_conformers,
 )
-from nvmolkit.types import HardwareOptions
+from nvmolkit.types import FireOptions, HardwareOptions
 from nvmolkit.uffOptimization import UFFOptimizeMoleculesConfs
 
 
@@ -50,6 +50,8 @@ def tune_uff_optimize(
     maxIters: int = 1000,
     vdwThreshold: float | Sequence[float] = 10.0,
     ignoreInterfragInteractions: bool | Sequence[bool] = True,
+    minimizerKind: str = "BFGS",
+    fireOptions: FireOptions | None = None,
     gpuIds: Optional[Iterable[int]] = None,
     calibration_set: Optional[Iterable[int]] = None,
     calibration_fraction: float = 0.1,
@@ -72,6 +74,9 @@ def tune_uff_optimize(
         maxIters: ``maxIters`` argument forwarded to each trial.
         vdwThreshold: ``vdwThreshold`` forwarded to each trial.
         ignoreInterfragInteractions: ``ignoreInterfragInteractions`` flag.
+        minimizerKind: ``"BFGS"`` or ``"FIRE"``, forwarded to each trial.
+        fireOptions: FIRE algorithm options forwarded to each trial when
+            ``minimizerKind="FIRE"``.
         gpuIds: GPU device IDs to use. Fixed across the study.
         calibration_set: Optional explicit indices into ``molecules``.
         calibration_fraction: Fraction of the workload to auto-sample.
@@ -134,6 +139,8 @@ def tune_uff_optimize(
             vdwThreshold=_slice_param(vdwThreshold, is_seq_vdw, state.indices),
             ignoreInterfragInteractions=_slice_param(ignoreInterfragInteractions, is_seq_ifg, state.indices),
             hardwareOptions=options,
+            minimizerKind=minimizerKind,
+            fireOptions=fireOptions,
         )
         return total_conformers(cloned)
 
