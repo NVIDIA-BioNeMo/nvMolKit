@@ -78,8 +78,8 @@ def butina(
                               shared memory.
         return_centroids: Whether to return centroid indices for each cluster.
         reordering: Whether to update neighbor counts among unassigned items
-                    after each cluster is formed. The default matches the
-                    existing nvMolKit behavior and RDKit's ``reordering=True``.
+                    after each cluster is formed. Defaults to True, while
+                    RDKit's ``Butina.ClusterData`` defaults to False.
         stream: CUDA stream to use. If None, uses the current stream.
 
     Returns:
