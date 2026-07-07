@@ -12,10 +12,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-#include <climits>
-
 #include <cooperative_groups.h>
 
+#include <climits>
 #include <cub/cub.cuh>
 
 #include "src/butina.h"
@@ -30,10 +29,10 @@
 namespace nvMolKit {
 
 namespace {
-constexpr int blockSizeCount            = 256;
+constexpr int blockSizeCount             = 256;
 constexpr int fixedOrderPrepareBlockSize = 1024;
-constexpr int kSubTileSize              = 8;
-constexpr int kMinLoopSizeForAssignment = 2;
+constexpr int kSubTileSize               = 8;
+constexpr int kMinLoopSizeForAssignment  = 2;
 
 __device__ __forceinline__ void sumCountsAndStoreClusterSize(const int                  tid,
                                                              const int                  pointIdx,
@@ -449,7 +448,8 @@ void renumberClustersBySize(const cuda::std::span<int> clusters,
   }
 }
 
-// Build packed sort keys: higher hit count (primary key), then higher point index (secondary key). Note that we can easily use a bit mask after radix sort to retrieve the point idxs. Bits 0-31 will be for hit count, Bits 32-63 will be for point idxs.
+// Build packed sort keys: higher hit count (primary key), then higher point index (secondary key).
+// Bits 32-63 hold the hit count; bits 0-31 hold the point index and can be recovered with a bit mask.
 __global__ void setupFixedOrderSortKeysKernel(const cuda::std::span<const int> hitCounts,
                                               const cuda::std::span<uint64_t>  sortKeys) {
   const int numPoints = hitCounts.size();
@@ -474,35 +474,47 @@ void sortFixedOrderCandidates(const cuda::std::span<const int> hitCounts,
   constexpr int blockSize = 256;
 
   // make enough blocks so that we have enough threads for radix sort
-  const int     numBlocks = (numPoints + blockSize - 1) / blockSize;
+  const int numBlocks = (numPoints + blockSize - 1) / blockSize;
   setupFixedOrderSortKeysKernel<<<numBlocks, blockSize, 0, stream>>>(hitCounts, sortKeys);
   cudaCheckError(cudaGetLastError());
 
   std::size_t sortTempBytes = 0;
 
   // 1) find how much temp memory is needed for the radix sort (nullptr passed in as parameter)
-  cub::DeviceRadixSort::SortKeysDescending(
-    nullptr, sortTempBytes, sortKeys.data(), sortedKeys.data(), numPoints, 0, sizeof(uint64_t) * 8, stream);
+  cub::DeviceRadixSort::SortKeysDescending(nullptr,
+                                           sortTempBytes,
+                                           sortKeys.data(),
+                                           sortedKeys.data(),
+                                           numPoints,
+                                           0,
+                                           sizeof(uint64_t) * 8,
+                                           stream);
 
   // 2) allocate the temp memory (note that even though the allocatoin is async, we are using the same stream
   // so FIFO order is maintained and mem will be allocated before the next sorting step)
   const AsyncDeviceVector<uint8_t> sortTemp(sortTempBytes, stream);
 
   // 3) run the radix sort
-  cub::DeviceRadixSort::SortKeysDescending(
-    sortTemp.data(), sortTempBytes, sortKeys.data(), sortedKeys.data(), numPoints, 0, sizeof(uint64_t) * 8, stream);
+  cub::DeviceRadixSort::SortKeysDescending(sortTemp.data(),
+                                           sortTempBytes,
+                                           sortKeys.data(),
+                                           sortedKeys.data(),
+                                           numPoints,
+                                           0,
+                                           sizeof(uint64_t) * 8,
+                                           stream);
   cudaCheckError(cudaGetLastError());
 }
 
-// ! Add custom kernel support if some users cant use CUB like was previously done earlier
-// Select the next fixed-order centroid. The order is sequential, but each block pass can search a chunk in parallel.
+// Select the next fixed-order centroid. We can actually parallelize this kernel. We use block sizes of 1024 and process
+// the vector chunk by chunk (processing of each chunk is parallelized).
 __global__ void prepareFixedOrderCandidateKernel(const cuda::std::span<const uint64_t> sortedKeys,
-                                                 const cuda::std::span<int>       clusters,
-                                                 int*                             cursor,
-                                                 int*                             activePoint,
-                                                 int*                             activeCluster,
-                                                 int*                             nextClusterIdx,
-                                                 int*                             keepGoing) {
+                                                 const cuda::std::span<int>            clusters,
+                                                 int*                                  cursor,
+                                                 int*                                  activePoint,
+                                                 int*                                  activeCluster,
+                                                 int*                                  nextClusterIdx,
+                                                 int*                                  keepGoing) {
   const int numPoints = clusters.size();
   const int tid       = threadIdx.x;
 
@@ -512,6 +524,7 @@ __global__ void prepareFixedOrderCandidateKernel(const cuda::std::span<const uin
   }
 
   __shared__ cub::BlockReduce<int, fixedOrderPrepareBlockSize>::TempStorage tempStorage;
+  __shared__ int                                                            firstPos;
 
   if (tid == 0) {
     *activePoint   = -1;
@@ -534,15 +547,20 @@ __global__ void prepareFixedOrderCandidateKernel(const cuda::std::span<const uin
       }
     }
 
-    // now we reduce all those indexes and get the smallest one (corresponds to first valid element in the sorted hit count vector)
-    const int firstPos = cub::BlockReduce<int, fixedOrderPrepareBlockSize>(tempStorage).Reduce(candidate, cub::Min());
+    // now we reduce all those indexes and get the smallest one (corresponds to first valid element in the sorted hit
+    // count vector)
+    const int reducedFirstPos =
+      cub::BlockReduce<int, fixedOrderPrepareBlockSize>(tempStorage).Reduce(candidate, cub::Min());
+    if (tid == 0) {
+      firstPos = reducedFirstPos;
+    }
+    // sync is necessary for 1) allows us to reuse temp storage the next while loop iteration with no issues, 2) tid==0
+    // shares the reduced value with the other threads
+    __syncthreads();
+
     if (firstPos == INT_MAX) {
       // we have not yet found a valid candidate
       base += fixedOrderPrepareBlockSize;
-
-      // this sync is necessary, (need to ensure all threads extracted the reduced value from shared memory, before
-      // calling blockReduce again and potentially overwriting shared memory)
-      __syncthreads();
       continue;
     }
 
@@ -562,6 +580,7 @@ __global__ void prepareFixedOrderCandidateKernel(const cuda::std::span<const uin
     return;
   }
 
+  // we have processed the whole arr
   if (tid == 0) {
     *cursor    = numPoints;
     *keepGoing = 0;
@@ -581,8 +600,8 @@ __global__ void assignFixedOrderActiveRowKernel(const cuda::std::span<const uint
     return;
   }
 
-  const int    numPoints = clusters.size();
-  const int    tid       = blockIdx.x * blockDim.x + threadIdx.x;
+  const int numPoints = clusters.size();
+  const int tid       = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid == 0) {
     // We make the selected point the centroid and assing it to a cluster
     clusters[pointIdx] = clusterVal;
@@ -599,7 +618,8 @@ __global__ void assignFixedOrderActiveRowKernel(const cuda::std::span<const uint
 
   const cuda::std::span<const uint8_t> hits = hitMatrix.subspan(static_cast<size_t>(pointIdx) * numPoints, numPoints);
 
-  // if this point is a neighbor of the selected centroid and we have not yet selected a cluster for this point, assign this point to the same cluster as the centroid we just selected
+  // if this point is a neighbor of the selected centroid and we have not yet selected a cluster for this point, assign
+  // this point to the same cluster as the centroid we just selected
   if (tid < numPoints && hits[tid] && clusters[tid] < 0) {
     clusters[tid] = clusterVal;
   }
@@ -1090,16 +1110,16 @@ void buildInitialNeighborlist(const int                            numPoints,
 //! CUDA Graph wrapper for the reordering=false loop.
 class FixedOrderButinaGraph {
  public:
-  FixedOrderButinaGraph(const cuda::std::span<const uint8_t> hitMatrix,
+  FixedOrderButinaGraph(const cuda::std::span<const uint8_t>  hitMatrix,
                         const cuda::std::span<const uint64_t> sortedKeys,
-                        const cuda::std::span<const int>     hitCounts,
-                        const cuda::std::span<int>           clusters,
-                        const cuda::std::span<int>           centroids,
-                        int*                                 cursorPtr,
-                        int*                                 activePointPtr,
-                        int*                                 activeClusterPtr,
-                        int*                                 clusterIdxPtr,
-                        int*                                 keepGoingPtr) {
+                        const cuda::std::span<const int>      hitCounts,
+                        const cuda::std::span<int>            clusters,
+                        const cuda::std::span<int>            centroids,
+                        int*                                  cursorPtr,
+                        int*                                  activePointPtr,
+                        int*                                  activeClusterPtr,
+                        int*                                  clusterIdxPtr,
+                        int*                                  keepGoingPtr) {
     const int numPoints     = clusters.size();
     const int rowScanBlocks = (numPoints + blockSizeCount - 1) / blockSizeCount;
 
@@ -1118,7 +1138,7 @@ class FixedOrderButinaGraph {
     cudaCheckError(cudaGraphAddNode(&conditionalNode, graph_, nullptr, 0, &cParams));
 #endif
 
-    cudaGraph_t bodyGraph = cParams.conditional.phGraph_out[0];
+    cudaGraph_t  bodyGraph = cParams.conditional.phGraph_out[0];
     cudaStream_t captureStream;
     cudaCheckError(cudaStreamCreate(&captureStream));
     cudaCheckError(
@@ -1175,7 +1195,7 @@ int butinaGpuNoReorderingImpl(const cuda::std::span<const uint8_t> hitMatrix,
   ScopedNvtxRange setupRange("Butina No-Reordering Setup");
 
   // validate input
-  const int       numPoints = clusters.size();
+  const int numPoints = clusters.size();
   validateButinaInputs(hitMatrix, clusters, centroids);
   if (numPoints == 0) {
     return 0;
@@ -1321,8 +1341,8 @@ template <int NeighborlistMaxSize>
                                const cuda::std::span<int>           clusters,
                                const int                            neighborlistMaxSize,
                                const cuda::std::span<int>           centroids,
-                               cudaStream_t                         stream,
-                               const bool                           reordering) {
+                               const bool                           reordering,
+                               cudaStream_t                         stream) {
   if (!reordering) {
     AsyncDeviceVector<int> initialHitCounts(clusters.size(), stream);
     if (!clusters.empty()) {
@@ -1371,9 +1391,9 @@ __global__ void thresholdDistanceMatrixAndCountKernel(const cuda::std::span<cons
                                                       const cuda::std::span<uint8_t>      hits,
                                                       const cuda::std::span<int>          hitCounts,
                                                       const double                        cutoff) {
-  const int tid       = threadIdx.x;
-  const int pointIdx  = blockIdx.x;
-  const int numPoints = hitCounts.size();
+  const int tid        = threadIdx.x;
+  const int pointIdx   = blockIdx.x;
+  const int numPoints  = hitCounts.size();
   int       localCount = 0;
   for (int i = tid; i < numPoints; i += blockSizeCount) {
     const size_t idx = static_cast<size_t>(pointIdx) * numPoints + i;
@@ -1393,8 +1413,8 @@ __global__ void thresholdDistanceMatrixAndCountKernel(const cuda::std::span<cons
                                const double                        cutoff,
                                const int                           neighborlistMaxSize,
                                const cuda::std::span<int>          centroids,
-                               cudaStream_t                        stream,
-                               const bool                          reordering) {
+                               const bool                          reordering,
+                               cudaStream_t                        stream) {
   AsyncDeviceVector<uint8_t> hitMatrix(distanceMatrix.size(), stream);
 
   if (reordering) {
@@ -1405,14 +1425,16 @@ __global__ void thresholdDistanceMatrixAndCountKernel(const cuda::std::span<cons
                                                                        cutoff,
                                                                        distanceMatrix.size());
     cudaCheckError(cudaGetLastError());
-    return butinaGpu(toSpan(hitMatrix), clusters, neighborlistMaxSize, centroids, stream, reordering);
+    return butinaGpu(toSpan(hitMatrix), clusters, neighborlistMaxSize, centroids, reordering, stream);
   }
 
   AsyncDeviceVector<int> initialHitCounts(clusters.size(), stream);
   if (!clusters.empty()) {
     setAll(clusters, -1, stream);
-    thresholdDistanceMatrixAndCountKernel<<<clusters.size(), blockSizeCount, 0, stream>>>(
-      distanceMatrix, toSpan(hitMatrix), toSpan(initialHitCounts), cutoff);
+    thresholdDistanceMatrixAndCountKernel<<<clusters.size(), blockSizeCount, 0, stream>>>(distanceMatrix,
+                                                                                          toSpan(hitMatrix),
+                                                                                          toSpan(initialHitCounts),
+                                                                                          cutoff);
     cudaCheckError(cudaGetLastError());
   }
   return butinaGpuNoReorderingImpl(toSpan(hitMatrix), clusters, centroids, toSpan(initialHitCounts), stream);

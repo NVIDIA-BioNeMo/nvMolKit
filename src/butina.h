@@ -39,8 +39,8 @@ namespace nvMolKit {
  *                            processing of larger clusters but use more memory.
  * @param centroids Optional output array of size N. If provided, centroids[i] stores the
  *                  centroid index for cluster i. Must be empty or size N.
- * @param stream CUDA stream to execute operations on. Defaults to stream 0.
  * @param reordering Whether to dynamically reorder candidates after each cluster assignment.
+ * @param stream CUDA stream to execute operations on. Defaults to stream 0.
  * @return Number of clusters assigned.
  */
 [[maybe_unused]] int butinaGpu(cuda::std::span<const double> distanceMatrix,
@@ -48,8 +48,8 @@ namespace nvMolKit {
                                double                        cutoff,
                                int                           neighborlistMaxSize = 64,
                                cuda::std::span<int>          centroids           = {},
-                               cudaStream_t                  stream              = nullptr,
-                               bool                          reordering          = true);
+                               bool                          reordering          = true,
+                               cudaStream_t                  stream              = nullptr);
 
 /**
  * @brief Perform Butina clustering on a precomputed hit matrix.
@@ -66,16 +66,16 @@ namespace nvMolKit {
  *                            processing of larger clusters but use more memory.
  * @param centroids Optional output array of size N. If provided, centroids[i] stores the
  *                  centroid index for cluster i. Must be empty or size N.
- * @param stream CUDA stream to execute operations on. Defaults to stream 0.
  * @param reordering Whether to dynamically reorder candidates after each cluster assignment.
+ * @param stream CUDA stream to execute operations on. Defaults to stream 0.
  * @return Number of clusters assigned.
  */
 [[maybe_unused]] int butinaGpu(cuda::std::span<const uint8_t> hitMatrix,
                                cuda::std::span<int>           clusters,
                                int                            neighborlistMaxSize = 64,
                                cuda::std::span<int>           centroids           = {},
-                               cudaStream_t                   stream              = nullptr,
-                               bool                           reordering          = true);
+                               bool                           reordering          = true,
+                               cudaStream_t                   stream              = nullptr);
 }  // namespace nvMolKit
 
 #endif  // NVMOLKIT_BUTINA_H

@@ -37,8 +37,8 @@ BOOST_PYTHON_MODULE(_clustering) {
         const double               cutoff,
         const int                  neighborlistMaxSize,
         const bool                 returnCentroids,
-        std::uintptr_t             streamPtr,
-        const bool                 reordering) -> boost::python::object {
+        const bool                 reordering,
+        std::uintptr_t             streamPtr) -> boost::python::object {
       auto streamOpt = nvMolKit::acquireExternalStream(streamPtr);
       if (!streamOpt) {
         throw std::invalid_argument("Invalid CUDA stream");
@@ -58,8 +58,8 @@ BOOST_PYTHON_MODULE(_clustering) {
         centroids.setStream(stream);
       }
       const auto centroidSpan = returnCentroids ? toSpan(centroids) : cuda::std::span<int>{};
-      const int numClusters =
-        nvMolKit::butinaGpu(matSpan, toSpan(clusterIds), cutoff, neighborlistMaxSize, centroidSpan, stream, reordering);
+      const int  numClusters =
+        nvMolKit::butinaGpu(matSpan, toSpan(clusterIds), cutoff, neighborlistMaxSize, centroidSpan, reordering, stream);
       if (returnCentroids) {
         auto clusterArray  = nvMolKit::makePyArray(clusterIds, boost::python::make_tuple(matDim1));
         auto centroidArray = nvMolKit::makePyArray(centroids, boost::python::make_tuple(numClusters));
@@ -72,6 +72,6 @@ BOOST_PYTHON_MODULE(_clustering) {
      boost::python::arg("cutoff"),
      boost::python::arg("neighborlist_max_size") = 64,
      boost::python::arg("return_centroids")      = false,
-     boost::python::arg("stream")                = 0,
-     boost::python::arg("reordering")            = true));
+     boost::python::arg("reordering")            = true,
+     boost::python::arg("stream")                = 0));
 };

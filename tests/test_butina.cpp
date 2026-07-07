@@ -63,7 +63,7 @@ std::pair<std::vector<int>, int> runButina(const std::vector<double>& distances,
   AsyncDeviceVector<int>    resultDev(nPts, stream);
   distancesDev.copyFromHost(distances);
   const int numClusters =
-    nvMolKit::butinaGpu(toSpan(distancesDev), toSpan(resultDev), cutoff, neighborlistMaxSize, {}, stream);
+    nvMolKit::butinaGpu(toSpan(distancesDev), toSpan(resultDev), cutoff, neighborlistMaxSize, {}, true, stream);
   std::vector<int> got(nPts);
   resultDev.copyToHost(got);
   cudaStreamSynchronize(stream);
@@ -84,6 +84,7 @@ std::tuple<std::vector<int>, std::vector<int>, int> runButinaWithCentroids(const
                                               cutoff,
                                               neighborlistMaxSize,
                                               toSpan(centroidsDev),
+                                              true,
                                               stream);
   std::vector<int> got(nPts);
   std::vector<int> centroids(nPts);
@@ -167,7 +168,7 @@ TEST_P(ButinaSinglePointFixture, HandlesSinglePoint) {
   distancesDev.copyFromHost(std::vector<double>{0.0});
 
   const int numClusters =
-    nvMolKit::butinaGpu(toSpan(distancesDev), toSpan(resultDev), cutoff, neighborlistMaxSize, {}, stream);
+    nvMolKit::butinaGpu(toSpan(distancesDev), toSpan(resultDev), cutoff, neighborlistMaxSize, {}, true, stream);
   std::vector<int> got(nPts);
   resultDev.copyToHost(got);
   cudaStreamSynchronize(stream);
