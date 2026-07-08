@@ -490,7 +490,7 @@ void sortFixedOrderCandidates(const cuda::std::span<const int> hitCounts,
                                            sizeof(uint64_t) * 8,
                                            stream);
 
-  // 2) allocate the temp memory (note that even though the allocatoin is async, we are using the same stream
+  // 2) allocate the temp memory (note that even though the allocation is async, we are using the same stream
   // so FIFO order is maintained and mem will be allocated before the next sorting step)
   const AsyncDeviceVector<uint8_t> sortTemp(sortTempBytes, stream);
 
@@ -506,7 +506,7 @@ void sortFixedOrderCandidates(const cuda::std::span<const int> hitCounts,
   cudaCheckError(cudaGetLastError());
 }
 
-// Select the next fixed-order centroid. We can actually parallelize this kernel. We use block sizes of 1024 and process
+// Select the next fixed-order centroid. We use fixedOrderPrepareBlockSize threads and process
 // the vector chunk by chunk (processing of each chunk is parallelized).
 __global__ void prepareFixedOrderCandidateKernel(const cuda::std::span<const uint64_t> sortedKeys,
                                                  const cuda::std::span<const int>      hitCounts,
@@ -620,7 +620,7 @@ __global__ void assignFixedOrderActiveRowKernel(const cuda::std::span<const uint
   const int numPoints = clusters.size();
   const int tid       = blockIdx.x * blockDim.x + threadIdx.x;
   if (tid == 0) {
-    // We make the selected point the centroid and assing it to a cluster
+    // We make the selected point the centroid and assign it to a cluster.
     clusters[pointIdx] = clusterVal;
     if (!centroids.empty()) {
       // This is only filled when the caller requests centroids.
