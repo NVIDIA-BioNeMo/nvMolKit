@@ -487,13 +487,8 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
         energyOutsDevice.resize(batchConformers.size());
         energyOutsDevice.zero();
 
-        const bool converged = fireMinimizer.minimize(maxIters,
-                                                      fireOptions.gradTol,
-                                                      forcefield,
-                                                      positionsDevice,
-                                                      gradDevice,
-                                                      energyOutsDevice);
-        (void)converged;
+        fireMinimizer
+          .minimize(maxIters, fireOptions.gradTol, forcefield, positionsDevice, gradDevice, energyOutsDevice);
 
         forcefield.computeEnergy(energyOutsDevice.data(), positionsDevice.data(), nullptr, streamPtr);
 
@@ -515,9 +510,7 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
         systemDevice.grad.resize(systemHost.positions.size());
         systemDevice.grad.zero();
 
-        const bool converged =
-          fireMinimizer.minimizeWithMMFF(maxIters, fireOptions.gradTol, systemHost.indices.atomStarts, systemDevice);
-        (void)converged;
+        fireMinimizer.minimizeWithMMFF(maxIters, fireOptions.gradTol, systemHost.indices.atomStarts, systemDevice);
 
         finalPositions = &systemDevice.positions;
         finalEnergies  = &systemDevice.energyOuts;
@@ -530,20 +523,22 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
         }
       }
 
-      const auto state = fireMinimizer.snapshotInternalState();
-
       if (deviceOutput) {
         detail::appendBatch(batchConformers,
                             *finalPositions,
                             *finalEnergies,
-                            state.statuses,
+                            fireMinimizer.statuses(),
                             deviceCollectors[threadId]);
       } else {
+        std::vector<uint8_t> statusesHost(batchConformers.size());
+        fireMinimizer.statuses().copyToHost(statusesHost.data(), batchConformers.size());
+        cudaStreamSynchronize(streamPtr);
+
         writeBackResults(batchConformers, conformerAtomStarts, buffers, moleculeEnergies);
 
         for (size_t i = 0; i < batchConformers.size(); ++i) {
           const auto& confInfo                                 = batchConformers[i];
-          moleculeConverged[confInfo.molIdx][confInfo.confIdx] = static_cast<int8_t>(state.statuses[i] == 0);
+          moleculeConverged[confInfo.molIdx][confInfo.confIdx] = static_cast<int8_t>(statusesHost[i] == 0);
         }
       }
 

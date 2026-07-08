@@ -140,6 +140,9 @@ class FireBatchMinimizer final : public BatchMinimizer {
   //! \brief Number of currently-active systems (host-side cached).
   int numActiveSystemsHost() const { return lastKnownNumUnfinished_; }
 
+  //! \brief Per-system convergence status (0 = converged, 1 = not converged).
+  const AsyncDeviceVector<uint8_t>& statuses() const { return statuses_; }
+
   //! \brief Forget any cached batch state so the next @c initialize() call resets all
   //! per-system convergence state (statuses, streak counters, etc.). Use before starting
   //! a new minimization session on the same minimizer instance when the active-mask

@@ -55,11 +55,11 @@ void appendBatch(const std::vector<ConformerInfo>& batchConformers,
                  const AsyncDeviceVector<int16_t>& statusesDevice,
                  DeviceCoordCollector&             collector);
 
-//! \brief Append a batch using host-side FIRE statuses (0 = converged).
+//! \brief Append a batch using FIRE statuses (0 = converged).
 void appendBatch(const std::vector<ConformerInfo>& batchConformers,
                  const AsyncDeviceVector<double>&  positionsDevice,
                  const AsyncDeviceVector<double>&  energiesDevice,
-                 const std::vector<uint8_t>&       statusesHost,
+                 const AsyncDeviceVector<uint8_t>& statusesDevice,
                  DeviceCoordCollector&             collector);
 
 /**

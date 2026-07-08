@@ -101,23 +101,23 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfs(
   int                                                          targetGpu   = -1,
   const DeviceCoordResult*                                     deviceInput = nullptr);
 
-//! \brief Optimize conformers using the FIRE 2.0 minimizer instead of BFGS.
-//!
-//! Mirrors the API shape of the BFGS overloads. Routes through either the
-//! batched-forcefield path or the per-molecule MMFF FIRE kernel based on
-//! @p backend.
-//! \param mols Molecules to optimize (positions written back in-place).
+//! \brief Minimize MMFF energies with FIRE 2.0 and report per-conformer convergence.
+//! \param mols Molecules whose conformers provide the initial coordinates. In
+//!             RDKIT_CONFORMERS mode, optimized coordinates are written back in place.
 //! \param maxIters Maximum FIRE iterations.
-//! \param fireOptions Algorithm parameters; @ref FireOptions::gradTol controls convergence.
+//! \param fireOptions FIRE integration and convergence settings. A conformer converges when
+//!                    its gradient norm satisfies @ref FireOptions::gradTol. The batched backend
+//!                    can additionally use energy-plateau detection when enabled.
 //! \param properties Per-molecule MMFF settings (one entry per molecule).
 //! \param constraints Per-molecule constraint specifications (empty = no constraints).
 //! \param perfOptions Hardware and batching configuration.
-//! \param backend FIRE backend to use (BATCHED, PER_MOLECULE, or HYBRID which auto-selects).
+//! \param backend Execution backend. HYBRID selects a backend from the molecule sizes.
 //! \param output Whether to write coordinates back into RDKit conformers (default) or return them
 //!               on-device as a DeviceCoordResult.
 //! \param targetGpu In DEVICE mode, the GPU to consolidate the result onto. -1 selects the first
 //!                  configured execution GPU (or device 0).
-//! \return Energies/convergence flags in RDKIT mode, or a device result in DEVICE mode.
+//! \return Final energies and convergence flags in RDKIT_CONFORMERS mode, or a device-resident
+//!         result in DEVICE mode. A convergence flag is false when @p maxIters is reached first.
 MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
   std::vector<RDKit::ROMol*>&                                  mols,
   int                                                          maxIters    = 200,
@@ -129,7 +129,8 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
   CoordinateOutput                                             output      = CoordinateOutput::RDKIT_CONFORMERS,
   int                                                          targetGpu   = -1);
 
-//! \brief Convenience wrapper returning energies only.
+//! \brief Minimize MMFF energies with FIRE 2.0 and return the final energy of each conformer.
+//! \note Use @ref MMFFMinimizeMoleculesConfsFire when convergence status is required.
 std::vector<std::vector<double>> MMFFOptimizeMoleculesConfsFire(std::vector<RDKit::ROMol*>&        mols,
                                                                 int                                maxIters    = 200,
                                                                 const FireOptions&                 fireOptions = {},

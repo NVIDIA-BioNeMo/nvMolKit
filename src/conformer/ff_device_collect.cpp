@@ -146,8 +146,23 @@ void appendBatch(const std::vector<ConformerInfo>& batchConformers,
 void appendBatch(const std::vector<ConformerInfo>& batchConformers,
                  const AsyncDeviceVector<double>&  positionsDevice,
                  const AsyncDeviceVector<double>&  energiesDevice,
-                 const std::vector<uint8_t>&       statusesHost,
+                 const AsyncDeviceVector<uint8_t>& statusesDevice,
                  DeviceCoordCollector&             collector) {
+  const int numConformers = static_cast<int>(batchConformers.size());
+  if (numConformers == 0) {
+    return;
+  }
+  if (energiesDevice.size() != static_cast<size_t>(numConformers)) {
+    throw std::invalid_argument("energiesDevice size does not match batch size");
+  }
+  if (statusesDevice.size() != static_cast<size_t>(numConformers)) {
+    throw std::invalid_argument("statusesDevice size does not match batch size");
+  }
+
+  std::vector<uint8_t> statusesHost(numConformers);
+  statusesDevice.copyToHost(statusesHost.data(), static_cast<size_t>(numConformers));
+  cudaCheckError(cudaStreamSynchronize(statusesDevice.stream()));
+
   appendBatchWithHostStatuses(batchConformers, positionsDevice, energiesDevice, statusesHost, collector);
 }
 
