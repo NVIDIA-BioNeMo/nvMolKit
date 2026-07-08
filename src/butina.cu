@@ -30,7 +30,7 @@ namespace nvMolKit {
 
 namespace {
 constexpr int blockSizeCount             = 256;
-constexpr int fixedOrderPrepareBlockSize = 1024;
+constexpr int fixedOrderPrepareBlockSize = 512;
 constexpr int kSubTileSize               = 8;
 constexpr int kMinLoopSizeForAssignment  = 2;
 
@@ -461,7 +461,7 @@ __global__ void setupFixedOrderSortKeysKernel(const cuda::std::span<const int> h
   }
 }
 
-// Sort candidates once
+// Sort candidates once. Only one sort needed since this kernel will be used for the reordering = False version of clustering
 void sortFixedOrderCandidates(const cuda::std::span<const int> hitCounts,
                               const cuda::std::span<uint64_t>  sortKeys,
                               const cuda::std::span<uint64_t>  sortedKeys,
@@ -509,7 +509,9 @@ void sortFixedOrderCandidates(const cuda::std::span<const int> hitCounts,
 // Select the next fixed-order centroid. We can actually parallelize this kernel. We use block sizes of 1024 and process
 // the vector chunk by chunk (processing of each chunk is parallelized).
 __global__ void prepareFixedOrderCandidateKernel(const cuda::std::span<const uint64_t> sortedKeys,
+                                                 const cuda::std::span<const int>      hitCounts,
                                                  const cuda::std::span<int>            clusters,
+                                                 const cuda::std::span<int>            centroids,
                                                  int*                                  cursor,
                                                  int*                                  activePoint,
                                                  int*                                  activeCluster,
@@ -518,7 +520,7 @@ __global__ void prepareFixedOrderCandidateKernel(const cuda::std::span<const uin
   const int numPoints = clusters.size();
   const int tid       = threadIdx.x;
 
-  // we should only be launching this kernel with only one block regardless
+  // we should be launching this kernel with only one block regardless
   if (blockIdx.x != 0) {
     return;
   }
@@ -535,7 +537,7 @@ __global__ void prepareFixedOrderCandidateKernel(const cuda::std::span<const uin
   while (base < numPoints) {
     const int sortedPos = base + tid;
 
-    // INT_MAX will be used as identity later when we do the block reduce with min()
+    // INT_MAX will be used as identity later when we do the block reduce with cub::Min()
     int candidate = INT_MAX;
 
     if (sortedPos < numPoints) {
@@ -564,7 +566,9 @@ __global__ void prepareFixedOrderCandidateKernel(const cuda::std::span<const uin
       continue;
     }
 
-    const int pointIdx = sortedKeys[firstPos] & 0xffffffffULL;
+    const int pointIdx     = sortedKeys[firstPos] & 0xffffffffULL;
+    bool      hasNeighbors = hitCounts[pointIdx] > 1;
+
     if (tid == 0) {
       // update the cursor all the way to the next possible valid idx
       *cursor = firstPos + 1;
@@ -572,15 +576,28 @@ __global__ void prepareFixedOrderCandidateKernel(const cuda::std::span<const uin
       const int clusterVal = *nextClusterIdx;
       *nextClusterIdx += 1;
 
-      // Prepare the parameters for the parallel row scan.
-      *activePoint   = pointIdx;
-      *activeCluster = clusterVal;
-      *keepGoing     = 1;
+      if (hasNeighbors) {
+        // Prepare the parameters for the parallel row scan.
+        *activePoint   = pointIdx;
+        *activeCluster = clusterVal;
+        *keepGoing     = 1;
+      } else {
+        // this is a singleton, no need for the parallel row scan, we can instantly assign the cluster
+        clusters[pointIdx] = clusterVal;
+        if (!centroids.empty()) {
+          centroids[clusterVal] = pointIdx;
+        }
+      }
     }
-    return;
+
+    // threads should exit to run the parallel row scan
+    if (hasNeighbors) {
+      return;
+    }
+
+    base = firstPos + 1;
   }
 
-  // we have processed the whole arr
   if (tid == 0) {
     *cursor    = numPoints;
     *keepGoing = 0;
@@ -1145,7 +1162,9 @@ class FixedOrderButinaGraph {
       cudaStreamBeginCaptureToGraph(captureStream, bodyGraph, nullptr, nullptr, 0, cudaStreamCaptureModeRelaxed));
 
     prepareFixedOrderCandidateKernel<<<1, fixedOrderPrepareBlockSize, 0, captureStream>>>(sortedKeys,
+                                                                                          hitCounts,
                                                                                           clusters,
+                                                                                          centroids,
                                                                                           cursorPtr,
                                                                                           activePointPtr,
                                                                                           activeClusterPtr,
