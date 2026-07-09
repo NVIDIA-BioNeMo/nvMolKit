@@ -537,7 +537,7 @@ __global__ void prepareFixedOrderCandidateKernel(const cuda::std::span<const uin
   while (base < numPoints) {
     const int sortedPos = base + tid;
 
-    // INT_MAX will be used as identity later when we do the block reduce with cub::Min()
+    // INT_MAX will be used as identity later when we do the block reduce with cubMin()
     int candidate = INT_MAX;
 
     if (sortedPos < numPoints) {
@@ -552,7 +552,7 @@ __global__ void prepareFixedOrderCandidateKernel(const cuda::std::span<const uin
     // now we reduce all those indexes and get the smallest one (corresponds to first valid element in the sorted hit
     // count vector)
     const int reducedFirstPos =
-      cub::BlockReduce<int, fixedOrderPrepareBlockSize>(tempStorage).Reduce(candidate, cub::Min());
+      cub::BlockReduce<int, fixedOrderPrepareBlockSize>(tempStorage).Reduce(candidate, cubMin());
     if (tid == 0) {
       firstPos = reducedFirstPos;
     }
