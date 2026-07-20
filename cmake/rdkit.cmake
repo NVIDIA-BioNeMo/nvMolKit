@@ -23,6 +23,7 @@ set(NVMOLKIT_RDKIT_COMPONENTS
     DistGeomHelpers
     FileParsers
     Fingerprints
+    FMCS
     ForceField
     ForceFieldHelpers
     GraphMol

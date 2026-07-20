@@ -110,6 +110,10 @@ target_link_libraries(test_fmcs_engine_validation PRIVATE mcs_fmcs_core)
 add_executable(test_fmcs_labeled test_fmcs_labeled.cpp)
 target_link_libraries(test_fmcs_labeled PRIVATE mcs_fmcs_core)
 
+add_executable(test_fmcs_integration test_fmcs_integration.cu)
+target_link_libraries(test_fmcs_integration PRIVATE mcs_search molData
+                                                    test_utils ${RDKit_LIBS})
+
 add_executable(test_openmp_helpers test_openmp_helpers.cpp)
 target_link_libraries(test_openmp_helpers PRIVATE openmp_helpers
                                                   OpenMP::OpenMP_CXX)
@@ -468,6 +472,7 @@ set(TEST_LIST
     test_fmcs_core
     test_fmcs_engine_validation
     test_fmcs_labeled
+    test_fmcs_integration
     test_work_splitting
     test_fire_minimizer
     test_fire_minimizer_permol)
