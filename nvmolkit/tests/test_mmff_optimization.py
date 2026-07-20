@@ -327,6 +327,12 @@ def test_mmff_optimization_rejects_unknown_minimizer_kind():
         nvmolkit_mmff.MMFFOptimizeMoleculesConfs([mol], minimizerKind="NOT_A_MINIMIZER")
 
 
+def test_mmff_optimization_rejects_unknown_backend():
+    mol = Chem.MolFromSmiles("CCO")
+    with pytest.raises(ValueError, match="backend"):
+        nvmolkit_mmff.MMFFOptimizeMoleculesConfs([mol], backend="NOT_A_BACKEND")
+
+
 def test_mmff_optimization_invalid_input():
     """Test nvMolKit MMFF optimization with invalid input."""
     with pytest.raises(ValueError, match="None at indices") as exc_info:

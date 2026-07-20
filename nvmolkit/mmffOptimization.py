@@ -195,6 +195,11 @@ def MMFFOptimizeMoleculesConfs(
 
     if hardwareOptions is None:
         hardwareOptions = HardwareOptions()
+    backend_name = str(backend).upper()
+    if backend_name == "PER_MOLECULE":
+        backend_name = "PER_MOL"
+    if backend_name not in {"BATCHED", "PER_MOL", "HYBRID"}:
+        raise ValueError("backend must be 'BATCHED', 'PER_MOL', or 'HYBRID'")
     native_options = hardwareOptions._as_native()
     properties_list = _normalize_properties(properties)
     thresholds = _normalize_scalar_or_list(nonBondedThreshold, "nonBondedThreshold")
@@ -219,7 +224,7 @@ def MMFFOptimizeMoleculesConfs(
             native_properties,
             native_options,
             targetGpu,
-            backend,
+            backend_name,
             minimizer_kind,
             fireOptions,
         )
@@ -228,7 +233,7 @@ def MMFFOptimizeMoleculesConfs(
         maxIters,
         native_properties,
         native_options,
-        backend,
+        backend_name,
         minimizer_kind,
         fireOptions,
     )

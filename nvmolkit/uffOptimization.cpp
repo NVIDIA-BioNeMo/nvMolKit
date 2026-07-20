@@ -72,7 +72,7 @@ BOOST_PYTHON_MODULE(_uffOptimization) {
       return nvMolKit::vectorOfVectorsToList(result);
     },
     (bp::arg("molecules"),
-     bp::arg("maxIters") = 1000,
+     bp::arg("maxIters"),
      bp::arg("vdwThresholds"),
      bp::arg("ignoreInterfragInteractions"),
      bp::arg("hardwareOptions") = nvMolKit::BatchHardwareOptions(),
