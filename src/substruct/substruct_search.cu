@@ -20,12 +20,10 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <condition_variable>
 #include <exception>
 #include <memory>
 #include <mutex>
 #include <numeric>
-#include <queue>
 #include <set>
 #include <stdexcept>
 #include <thread>
@@ -46,6 +44,7 @@
 #include "src/substruct/substruct_search.h"
 #include "src/substruct/substruct_search_internal.h"
 #include "src/utils/cuda_error_check.h"
+#include "src/utils/gpu_executor_ring.h"
 #include "src/utils/host_vector.h"
 #include "src/utils/nvtx.h"
 #include "src/utils/thread_safe_queue.h"
@@ -272,11 +271,6 @@ void uploadAndLaunchMiniBatch(GpuExecutor&                        executor,
 
 constexpr int kMaxExecutorsPerRunner = 8;
 
-struct InFlightBatch {
-  GpuExecutor*                       executor = nullptr;
-  std::unique_ptr<PreparedMiniBatch> batch;
-};
-
 void applyPreparedMiniBatch(GpuExecutor& executor, PreparedMiniBatch& batch) {
   executor.applyMiniBatchPlan(std::move(batch.plan));
 }
@@ -301,89 +295,43 @@ void runnerWorkerPipeline(int                                 workerIdx,
                                 std::to_string(deviceId));
     const WithDevice           setDevice(deviceId);
 
-    const int                                         executorsPerRunner = static_cast<int>(executors.size());
-    std::array<InFlightBatch, kMaxExecutorsPerRunner> pending{};
-    int                                               pendingHead  = 0;
-    int                                               pendingTail  = 0;
-    int                                               pendingCount = 0;
-
-    auto drainOne = [&]() {
-      InFlightBatch&  slot   = pending[pendingHead];
-      GpuExecutor*    oldest = slot.executor;
+    auto drainBatch = [&](GpuExecutor& oldest, std::unique_ptr<PreparedMiniBatch>& batch) {
       ScopedNvtxRange waitRange("Wait for D2H copy", NvtxColor::kRed);
-      cudaCheckError(cudaEventSynchronize(oldest->copyDoneEvent.event()));
+      cudaCheckError(cudaEventSynchronize(oldest.copyDoneEvent.event()));
       waitRange.pop();
 
       ScopedNvtxRange accumRange("Accumulate mini-batch");
-      accumulate(*oldest, slot.batch->ctx, *slot.batch->pinnedBuffer);
+      accumulate(oldest, batch->ctx, *batch->pinnedBuffer);
       accumRange.pop();
 
-      bufferPool.release(slot.batch->pinnedBuffer);
-      slot.batch.reset();
-
-      pendingHead = (pendingHead + 1) % executorsPerRunner;
-      --pendingCount;
+      bufferPool.release(batch->pinnedBuffer);
     };
 
-    while (true) {
-      if (pendingCount == executorsPerRunner) {
-        drainOne();
-        continue;
-      }
+    auto launchBatch = [&](GpuExecutor& executor, std::unique_ptr<PreparedMiniBatch>& batch) {
+      applyPreparedMiniBatch(executor, *batch);
+      executor.recursiveScratch.setPinnedBuffer(batch->pinnedBuffer->patternsAtDepthHost,
+                                                static_cast<int>(batch->pinnedBuffer->patternsAtDepthHost[0].size()));
 
-      std::unique_ptr<PreparedMiniBatch> batch;
-      if (pendingCount > 0) {
-        auto optBatch = batchQueue.tryPop();
-        if (!optBatch) {
-          drainOne();
-          continue;
-        }
-        batch = std::move(*optBatch);
-      } else {
-        std::optional<std::unique_ptr<PreparedMiniBatch>> optBatch;
-        {
-          ScopedNvtxRange waitRange("Wait for prepared batch", NvtxColor::kRed);
-          optBatch = batchQueue.pop();
-        }
-        if (!optBatch) {
-          break;
-        }
-        batch = std::move(*optBatch);
-      }
+      executor.consolidatedBuffer.allocate(batch->pinnedBuffer->consolidated.maxBatchSize, executor.stream());
+      executor.consolidatedBuffer.copyFromHost(*batch->pinnedBuffer, executor.stream());
 
-      GpuExecutor* executor = executors[pendingTail];
-      applyPreparedMiniBatch(*executor, *batch);
-      executor->recursiveScratch.setPinnedBuffer(batch->pinnedBuffer->patternsAtDepthHost,
-                                                 static_cast<int>(batch->pinnedBuffer->patternsAtDepthHost[0].size()));
-
-      executor->consolidatedBuffer.allocate(batch->pinnedBuffer->consolidated.maxBatchSize, executor->stream());
-      executor->consolidatedBuffer.copyFromHost(*batch->pinnedBuffer, executor->stream());
-
-      executor->targetsDevice.copyFromHost(*batch->targetsHost, executor->stream());
-      cudaCheckError(cudaEventRecord(executor->targetsReadyEvent.event(), executor->stream()));
-      cudaCheckError(cudaStreamWaitEvent(executor->recursiveStream.stream(), executor->targetsReadyEvent.event(), 0));
-      cudaCheckError(
-        cudaStreamWaitEvent(executor->postRecursionStream.stream(), executor->targetsReadyEvent.event(), 0));
+      executor.targetsDevice.copyFromHost(*batch->targetsHost, executor.stream());
+      cudaCheckError(cudaEventRecord(executor.targetsReadyEvent.event(), executor.stream()));
+      cudaCheckError(cudaStreamWaitEvent(executor.recursiveStream.stream(), executor.targetsReadyEvent.event(), 0));
+      cudaCheckError(cudaStreamWaitEvent(executor.postRecursionStream.stream(), executor.targetsReadyEvent.event(), 0));
 
       ScopedNvtxRange launchRange("GPU launch prepared batch");
-      uploadAndLaunchMiniBatch(*executor,
+      uploadAndLaunchMiniBatch(executor,
                                batch->ctx,
-                               executor->targetsDevice,
+                               executor.targetsDevice,
                                queriesDevice,
                                recursivePreprocessor,
                                algorithm);
-      initiateCopy(*executor, *batch->pinnedBuffer);
+      initiateCopy(executor, *batch->pinnedBuffer);
       launchRange.pop();
+    };
 
-      pending[pendingTail].executor = executor;
-      pending[pendingTail].batch    = std::move(batch);
-      pendingTail                   = (pendingTail + 1) % executorsPerRunner;
-      ++pendingCount;
-    }
-
-    while (pendingCount > 0) {
-      drainOne();
-    }
+    runQueuedExecutorRing(executors, batchQueue, launchBatch, drainBatch);
   } catch (...) {
     exceptionPtr = std::current_exception();
     pipelineAbort.store(true, std::memory_order_release);

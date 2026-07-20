@@ -21,9 +21,18 @@
 #include <thread>
 #include <vector>
 
+#include "src/utils/gpu_executor_ring.h"
 #include "src/utils/thread_safe_queue.h"
 
 using nvMolKit::ThreadSafeQueue;
+
+namespace {
+
+struct FakeExecutor {
+  int id;
+};
+
+}  // namespace
 
 // =============================================================================
 // Basic Operations
@@ -90,6 +99,79 @@ TEST(ThreadSafeQueueTest, MoveOnlyType) {
   ASSERT_TRUE(result.has_value());
   ASSERT_NE(*result, nullptr);
   EXPECT_EQ(**result, 42);
+}
+
+// =============================================================================
+// Queued Executor Ring
+// =============================================================================
+
+TEST(GpuExecutorRingTest, RejectsEmptyExecutorList) {
+  ThreadSafeQueue<int>       queue;
+  std::vector<FakeExecutor*> executors;
+  queue.close();
+
+  EXPECT_THROW(nvMolKit::runQueuedExecutorRing(
+                 executors,
+                 queue,
+                 [](FakeExecutor&, int&) {},
+                 [](FakeExecutor&, int&) {}),
+               std::invalid_argument);
+}
+
+TEST(GpuExecutorRingTest, ReusesExecutorsAndDrainsInLaunchOrder) {
+  ThreadSafeQueue<int> queue;
+  for (int batch = 1; batch <= 5; ++batch) {
+    queue.push(batch);
+  }
+  queue.close();
+
+  FakeExecutor                     executor0{0};
+  FakeExecutor                     executor1{1};
+  std::vector<FakeExecutor*>       executors{&executor0, &executor1};
+  std::vector<std::pair<int, int>> launches;
+  std::vector<std::pair<int, int>> drains;
+
+  nvMolKit::runQueuedExecutorRing(
+    executors,
+    queue,
+    [&](FakeExecutor& executor, int& batch) { launches.emplace_back(executor.id, batch); },
+    [&](FakeExecutor& executor, int& batch) { drains.emplace_back(executor.id, batch); });
+
+  EXPECT_EQ(launches,
+            (std::vector<std::pair<int, int>>{
+              {0, 1},
+              {1, 2},
+              {0, 3},
+              {1, 4},
+              {0, 5}
+  }));
+  EXPECT_EQ(drains,
+            (std::vector<std::pair<int, int>>{
+              {0, 1},
+              {1, 2},
+              {0, 3},
+              {1, 4},
+              {0, 5}
+  }));
+}
+
+TEST(GpuExecutorRingTest, ClosedEmptyQueueDoesNotInvokeCallbacks) {
+  ThreadSafeQueue<int> queue;
+  queue.close();
+
+  FakeExecutor               executor{0};
+  std::vector<FakeExecutor*> executors{&executor};
+  int                        launches = 0;
+  int                        drains   = 0;
+
+  nvMolKit::runQueuedExecutorRing(
+    executors,
+    queue,
+    [&](FakeExecutor&, int&) { ++launches; },
+    [&](FakeExecutor&, int&) { ++drains; });
+
+  EXPECT_EQ(launches, 0);
+  EXPECT_EQ(drains, 0);
 }
 
 // =============================================================================
