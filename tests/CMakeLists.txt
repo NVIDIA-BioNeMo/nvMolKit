@@ -67,6 +67,11 @@ target_link_libraries(test_work_splitting PRIVATE work_splitting)
 add_executable(test_thread_safe_queue test_thread_safe_queue.cpp)
 target_link_libraries(test_thread_safe_queue PRIVATE thread_safe_queue)
 
+add_executable(test_fmcs_primitives test_fmcs_primitives.cu)
+target_include_directories(test_fmcs_primitives
+                           PRIVATE ${CMAKE_SOURCE_DIR}/src/mcs)
+target_link_libraries(test_fmcs_primitives PRIVATE CUDA::cudart device_vector)
+
 add_executable(test_openmp_helpers test_openmp_helpers.cpp)
 target_link_libraries(test_openmp_helpers PRIVATE openmp_helpers
                                                   OpenMP::OpenMP_CXX)
@@ -411,6 +416,7 @@ set(TEST_LIST
     test_substruct_label_integration
     test_similarity
     test_thread_safe_queue
+    test_fmcs_primitives
     test_work_splitting
     test_fire_minimizer
     test_fire_minimizer_permol)
