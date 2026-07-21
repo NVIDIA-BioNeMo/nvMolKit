@@ -461,7 +461,8 @@ __global__ void setupFixedOrderSortKeysKernel(const cuda::std::span<const int> h
   }
 }
 
-// Sort candidates once. Only one sort needed since this kernel will be used for the reordering = False version of clustering
+// Sort candidates once. Only one sort needed since this kernel will be used for the reordering = False version of
+// clustering
 void sortFixedOrderCandidates(const cuda::std::span<const int> hitCounts,
                               const cuda::std::span<uint64_t>  sortKeys,
                               const cuda::std::span<uint64_t>  sortedKeys,

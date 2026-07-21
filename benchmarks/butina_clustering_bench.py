@@ -96,7 +96,9 @@ def resize_and_fill_fingerprints(fps: torch.Tensor, want_size: int) -> torch.Ten
 
 
 def bench_rdkit(data, threshold, runs=3, reordering=True):
-    result = time_it(lambda: ClusterData(data, len(data), threshold, isDistData=True, reordering=reordering), runs=runs)
+    result = time_it(
+        lambda: ClusterData(data, len(data), threshold, isDistData=True, reordering=reordering), runs=runs
+    )
     return result.mean_ms, result.std_ms
 
 
