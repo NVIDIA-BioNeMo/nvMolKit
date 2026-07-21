@@ -442,6 +442,7 @@ class _BatchedForcefieldBase:
             raise ValueError("minimizerKind must be 'BFGS' or 'FIRE'")
         if fireOptions is None:
             fireOptions = FireOptions()
+            fireOptions.gradTol = forceTol
         if output == CoordinateOutput.DEVICE:
             return self._native_ff.minimizeDevice(
                 maxIters,
@@ -599,7 +600,8 @@ class MMFFBatchedForcefield(_BatchedForcefieldBase):
 
         Args:
             maxIters: Maximum number of minimizer iterations.
-            forceTol: Gradient convergence tolerance.
+            forceTol: Gradient convergence tolerance. For FIRE, this value is
+                used only when ``fireOptions`` is ``None``.
             output: ``RDKIT_CONFORMERS`` (default) or ``DEVICE``.
             target_gpu: In DEVICE mode, the GPU to consolidate the result on.
                 ``None`` (the default) selects the wrapper's own GPU. The
@@ -610,7 +612,8 @@ class MMFFBatchedForcefield(_BatchedForcefieldBase):
                 targetGpu=...)`` API.
             minimizerKind: ``"BFGS"`` (default) or ``"FIRE"``.
             fireOptions: FIRE algorithm options used when
-                ``minimizerKind="FIRE"``.
+                ``minimizerKind="FIRE"``. When provided, its ``gradTol``
+                takes precedence over ``forceTol``.
 
         Returns:
             For RDKit mode: ``(energies, converged)`` nested host lists.
@@ -731,7 +734,8 @@ class UFFBatchedForcefield(_BatchedForcefieldBase):
 
         Args:
             maxIters: Maximum number of minimizer iterations.
-            forceTol: Gradient convergence tolerance.
+            forceTol: Gradient convergence tolerance. For FIRE, this value is
+                used only when ``fireOptions`` is ``None``.
             output: ``RDKIT_CONFORMERS`` (default) or ``DEVICE``.
             target_gpu: In DEVICE mode, the GPU to consolidate the result on.
                 ``None`` (the default) selects the wrapper's own GPU. The
@@ -742,7 +746,8 @@ class UFFBatchedForcefield(_BatchedForcefieldBase):
                 targetGpu=...)`` API.
             minimizerKind: ``"BFGS"`` (default) or ``"FIRE"``.
             fireOptions: FIRE algorithm options used when
-                ``minimizerKind="FIRE"``.
+                ``minimizerKind="FIRE"``. When provided, its ``gradTol``
+                takes precedence over ``forceTol``.
 
         Returns:
             For RDKit mode: ``(energies, converged)`` nested host lists.

@@ -157,12 +157,6 @@ MinimizerKind parseMinimizerKind(const std::string& name) {
   throw std::invalid_argument("Unknown minimizerKind '" + name + "'. Expected 'BFGS' or 'FIRE'.");
 }
 
-nvMolKit::FireOptions fireOptionsWithGradTol(const nvMolKit::FireOptions& fireOptions, double gradTol) {
-  auto options    = fireOptions;
-  options.gradTol = gradTol;
-  return options;
-}
-
 }  // namespace
 
 template <typename Spec, typename Parser>
@@ -300,7 +294,7 @@ class NativeMMFFBatchedForcefield {
       kind == MinimizerKind::FIRE ?
               nvMolKit::MMFF::MMFFMinimizeMoleculesConfsFire(mols_,
                                                        maxIters,
-                                                       fireOptionsWithGradTol(fireOptions, gradTol),
+                                                       fireOptions,
                                                        properties_,
                                                        constraints_,
                                                        hwOpts_,
@@ -332,7 +326,7 @@ class NativeMMFFBatchedForcefield {
     auto       result = kind == MinimizerKind::FIRE ?
                           nvMolKit::MMFF::MMFFMinimizeMoleculesConfsFire(mols_,
                                                                    maxIters,
-                                                                   fireOptionsWithGradTol(fireOptions, gradTol),
+                                                                   fireOptions,
                                                                    properties_,
                                                                    constraints_,
                                                                    hwOpts_,
@@ -452,7 +446,7 @@ class NativeUFFBatchedForcefield {
     auto       result = kind == MinimizerKind::FIRE ?
                           nvMolKit::UFF::UFFMinimizeMoleculesConfsFire(mols_,
                                                                  maxIters,
-                                                                 fireOptionsWithGradTol(fireOptions, gradTol),
+                                                                 fireOptions,
                                                                  vdwThresholds_,
                                                                  ignoreInterfragInteractions_,
                                                                  constraints_,
@@ -490,7 +484,7 @@ class NativeUFFBatchedForcefield {
     auto       result = kind == MinimizerKind::FIRE ?
                           nvMolKit::UFF::UFFMinimizeMoleculesConfsFire(mols_,
                                                                  maxIters,
-                                                                 fireOptionsWithGradTol(fireOptions, gradTol),
+                                                                 fireOptions,
                                                                  vdwThresholds_,
                                                                  ignoreInterfragInteractions_,
                                                                  constraints_,

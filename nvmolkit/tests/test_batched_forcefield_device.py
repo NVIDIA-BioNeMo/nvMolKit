@@ -93,16 +93,22 @@ def test_minimize_device_energies_match_host(ff_cls, two_mols):
 
 
 @pytest.mark.parametrize("ff_cls", [MMFFBatchedForcefield, UFFBatchedForcefield])
-def test_minimize_fire_host_returns_nested_energy_and_status(ff_cls, two_mols):
+def test_minimize_fire_options_grad_tol_takes_precedence(ff_cls, two_mols):
     options = FireOptions()
-    options.gradTol = 1e-3
+    options.gradTol = 1e10
 
     ff = ff_cls([Chem.Mol(m) for m in two_mols])
-    energies, converged = ff.minimize(maxIters=100, minimizerKind="FIRE", fireOptions=options)
+    energies, converged = ff.minimize(
+        maxIters=1,
+        forceTol=0.0,
+        minimizerKind="FIRE",
+        fireOptions=options,
+    )
 
     assert [len(inner) for inner in energies] == [2, 3]
     assert [len(inner) for inner in converged] == [2, 3]
     assert all(isinstance(flag, bool) for inner in converged for flag in inner)
+    assert all(flag for inner in converged for flag in inner)
 
 
 @pytest.mark.parametrize("ff_cls", [MMFFBatchedForcefield, UFFBatchedForcefield])
