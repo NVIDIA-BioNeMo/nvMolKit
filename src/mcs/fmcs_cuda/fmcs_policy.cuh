@@ -21,9 +21,9 @@
 #include <utility>
 #include <vector>
 
-#include "fmcs_cuda/fmcs_match_tables.cuh"
-#include "labeled_graph.h"
-#include "mcs_common/mcs_types.cuh"
+#include "src/mcs/fmcs_cuda/fmcs_match_tables.cuh"
+#include "src/mcs/labeled_graph.h"
+#include "src/mcs/mcs_common/mcs_types.cuh"
 
 namespace mcs {
 namespace fmcs {

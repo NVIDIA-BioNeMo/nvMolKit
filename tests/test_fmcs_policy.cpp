@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "fmcs_cuda/fmcs_policy.cuh"
+#include "src/mcs/fmcs_cuda/fmcs_policy.cuh"
 
 namespace {
 

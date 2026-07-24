@@ -19,7 +19,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "mcs_common/mcs_types.cuh"
+#include "src/mcs/mcs_common/mcs_types.cuh"
 
 namespace mcs {
 
