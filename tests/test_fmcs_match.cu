@@ -26,9 +26,9 @@
 #include <set>
 #include <vector>
 
-#include "fmcs_cuda/fmcs_match.cuh"
-#include "fmcs_cuda/fmcs_match_tables.cuh"
-#include "fmcs_cuda/fmcs_seed.cuh"
+#include "src/mcs/fmcs_cuda/fmcs_match.cuh"
+#include "src/mcs/fmcs_cuda/fmcs_match_tables.cuh"
+#include "src/mcs/fmcs_cuda/fmcs_seed.cuh"
 #include "src/utils/device_vector.h"
 
 namespace {
