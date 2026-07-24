@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include "fmcs_cuda/fmcs_grow.cuh"
+#include "src/mcs/fmcs_cuda/fmcs_grow.cuh"
 #include "src/utils/device_vector.h"
 
 namespace {

@@ -18,8 +18,8 @@
 
 #include <cstdint>
 
-#include "fmcs_cuda/fmcs_seed.cuh"
-#include "mcs_common/mcs_cooperative_copy.cuh"
+#include "src/mcs/fmcs_cuda/fmcs_seed.cuh"
+#include "src/mcs/mcs_common/mcs_cooperative_copy.cuh"
 
 namespace mcs {
 namespace fmcs {
