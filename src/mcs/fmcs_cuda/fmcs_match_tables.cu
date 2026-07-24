@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "fmcs_cuda/fmcs_match_tables.cuh"
+#include "src/mcs/fmcs_cuda/fmcs_match_tables.cuh"
 
 namespace mcs {
 namespace fmcs {

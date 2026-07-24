@@ -8,8 +8,8 @@
 #include <utility>
 #include <vector>
 
-#include "fmcs_cuda/fmcs_match_tables.cuh"
-#include "mcs_common/mcs_types.cuh"
+#include "src/mcs/fmcs_cuda/fmcs_match_tables.cuh"
+#include "src/mcs/mcs_common/mcs_types.cuh"
 #include "src/utils/cuda_error_check.h"
 
 namespace {
