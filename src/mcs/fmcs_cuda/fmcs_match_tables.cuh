@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "mcs_common/mcs_types.cuh"
+#include "src/utils/device_vector.h"
 
 namespace mcs {
 namespace fmcs {
@@ -74,15 +75,15 @@ struct PairMatchTablesDevice {
   MatchTableDevice bonds;
 };
 
-/// Upload a batch of per-pair host match tables into one contiguous device
-/// buffer.  The returned buffer is owned by the caller and must be released
-/// with @ref freePairMatchTablesBuffer on the same stream.
-std::vector<PairMatchTablesDevice> uploadPairMatchTables(const std::vector<PairMatchTablesHost>& host,
-                                                         cudaStream_t                            stream,
-                                                         void**                                  outDeviceBuffer,
-                                                         std::size_t*                            outDeviceBufferBytes);
+struct UploadedPairMatchTables {
+  nvMolKit::AsyncDeviceVector<uint32_t> storage;
+  std::vector<PairMatchTablesDevice>    tables;
+};
 
-void freePairMatchTablesBuffer(void* deviceBuffer, cudaStream_t stream);
+/// Upload a batch of per-pair host match tables into one contiguous device
+/// allocation.  The returned object owns that allocation and keeps the
+/// per-pair device views valid for its lifetime.
+UploadedPairMatchTables uploadPairMatchTables(const std::vector<PairMatchTablesHost>& host, cudaStream_t stream);
 
 }  // namespace fmcs
 }  // namespace mcs

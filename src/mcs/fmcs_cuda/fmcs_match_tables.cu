@@ -13,87 +13,46 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <cuda_runtime.h>
-
-#include <cstring>
-#include <stdexcept>
-#include <string>
-
 #include "fmcs_cuda/fmcs_match_tables.cuh"
 
 namespace mcs {
 namespace fmcs {
 
-namespace {
-
-void checkCuda(cudaError_t err, const char* context) {
-  if (err != cudaSuccess) {
-    throw std::runtime_error(std::string("fMCS match-tables CUDA error at ") + context + ": " +
-                             cudaGetErrorString(err));
-  }
-}
-
-}  // namespace
-
-std::vector<PairMatchTablesDevice> uploadPairMatchTables(const std::vector<PairMatchTablesHost>& host,
-                                                         cudaStream_t                            stream,
-                                                         void**                                  outDeviceBuffer,
-                                                         size_t*                                 outDeviceBufferBytes) {
-  std::vector<PairMatchTablesDevice> out(host.size());
-
+UploadedPairMatchTables uploadPairMatchTables(const std::vector<PairMatchTablesHost>& host, cudaStream_t stream) {
   size_t totalWords = 0;
   for (const auto& p : host) {
     totalWords += p.atoms.data.size();
     totalWords += p.bonds.data.size();
   }
 
-  void* buf = nullptr;
-  if (totalWords > 0) {
-    checkCuda(cudaMallocAsync(&buf, totalWords * sizeof(uint32_t), stream), "cudaMallocAsync (match tables)");
-  }
+  UploadedPairMatchTables out;
+  out.storage = nvMolKit::AsyncDeviceVector<uint32_t>(totalWords, stream);
+  out.tables.resize(host.size());
 
-  size_t    cursor = 0;
-  uint32_t* base   = reinterpret_cast<uint32_t*>(buf);
+  std::vector<uint32_t> packed;
+  packed.reserve(totalWords);
+  uint32_t* base = out.storage.data();
   for (size_t i = 0; i < host.size(); ++i) {
     const auto& ph = host[i];
-    auto&       pd = out[i];
+    auto&       pd = out.tables[i];
 
     if (!ph.atoms.data.empty()) {
-      uint32_t* dst = base + cursor;
-      checkCuda(cudaMemcpyAsync(dst,
-                                ph.atoms.data.data(),
-                                ph.atoms.data.size() * sizeof(uint32_t),
-                                cudaMemcpyHostToDevice,
-                                stream),
-                "cudaMemcpyAsync (atoms)");
-      pd.atoms = {dst, ph.atoms.nRows, ph.atoms.nCols, ph.atoms.wordsPerRow};
-      cursor += ph.atoms.data.size();
+      const size_t offset = packed.size();
+      packed.insert(packed.end(), ph.atoms.data.begin(), ph.atoms.data.end());
+      pd.atoms = {base + offset, ph.atoms.nRows, ph.atoms.nCols, ph.atoms.wordsPerRow};
     }
 
     if (!ph.bonds.data.empty()) {
-      uint32_t* dst = base + cursor;
-      checkCuda(cudaMemcpyAsync(dst,
-                                ph.bonds.data.data(),
-                                ph.bonds.data.size() * sizeof(uint32_t),
-                                cudaMemcpyHostToDevice,
-                                stream),
-                "cudaMemcpyAsync (bonds)");
-      pd.bonds = {dst, ph.bonds.nRows, ph.bonds.nCols, ph.bonds.wordsPerRow};
-      cursor += ph.bonds.data.size();
+      const size_t offset = packed.size();
+      packed.insert(packed.end(), ph.bonds.data.begin(), ph.bonds.data.end());
+      pd.bonds = {base + offset, ph.bonds.nRows, ph.bonds.nCols, ph.bonds.wordsPerRow};
     }
   }
 
-  if (outDeviceBuffer)
-    *outDeviceBuffer = buf;
-  if (outDeviceBufferBytes)
-    *outDeviceBufferBytes = totalWords * sizeof(uint32_t);
-  return out;
-}
-
-void freePairMatchTablesBuffer(void* deviceBuffer, cudaStream_t stream) {
-  if (deviceBuffer) {
-    cudaFreeAsync(deviceBuffer, stream);
+  if (!packed.empty()) {
+    out.storage.copyFromHost(packed);
   }
+  return out;
 }
 
 }  // namespace fmcs

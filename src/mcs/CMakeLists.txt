@@ -16,4 +16,4 @@
 add_library(mcs_fmcs_foundations fmcs_cuda/fmcs_match_tables.cu mcs_graph.cpp)
 target_include_directories(mcs_fmcs_foundations
                            PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(mcs_fmcs_foundations PUBLIC CUDA::cudart)
+target_link_libraries(mcs_fmcs_foundations PUBLIC device_vector)

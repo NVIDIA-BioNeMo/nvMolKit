@@ -10,11 +10,13 @@
 
 #include "fmcs_cuda/fmcs_match_tables.cuh"
 #include "mcs_common/mcs_types.cuh"
+#include "src/utils/cuda_error_check.h"
 
 namespace {
 
 using mcs::fmcs::MatchTableHost;
 using mcs::fmcs::PairMatchTablesHost;
+using nvMolKit::checkReturnCode;
 
 TEST(FMCSGraph, BuildsSortedSymmetricCsr) {
   const auto graph = mcs::buildGraphFromEdges(4,
@@ -78,35 +80,29 @@ TEST(FMCSMatchTable, UploadsPairsIntoOneContiguousBuffer) {
   host[1].atoms.resize(1, 33);
   host[1].atoms.setBit(0, 32);
 
-  void*       buffer = nullptr;
-  std::size_t bytes  = 0;
-  const auto  device = mcs::fmcs::uploadPairMatchTables(host, nullptr, &buffer, &bytes);
+  const auto  upload = mcs::fmcs::uploadPairMatchTables(host, nullptr);
+  const auto& device = upload.tables;
 
-  ASSERT_NE(buffer, nullptr);
+  ASSERT_NE(upload.storage.data(), nullptr);
   ASSERT_EQ(device.size(), 2);
-  EXPECT_EQ(bytes, 4 * sizeof(std::uint32_t));
-  EXPECT_EQ(device[0].atoms.data, static_cast<std::uint32_t*>(buffer));
-  EXPECT_EQ(device[0].bonds.data, static_cast<std::uint32_t*>(buffer) + 1);
-  EXPECT_EQ(device[1].atoms.data, static_cast<std::uint32_t*>(buffer) + 2);
+  EXPECT_EQ(upload.storage.size(), 4);
+  EXPECT_EQ(device[0].atoms.data, upload.storage.data());
+  EXPECT_EQ(device[0].bonds.data, upload.storage.data() + 1);
+  EXPECT_EQ(device[1].atoms.data, upload.storage.data() + 2);
   EXPECT_EQ(device[1].atoms.wordsPerRow, 2);
 
   std::vector<std::uint32_t> copied(4);
-  ASSERT_EQ(cudaMemcpy(copied.data(), buffer, bytes, cudaMemcpyDeviceToHost), cudaSuccess);
+  upload.storage.copyToHost(copied);
+  cudaCheckError(cudaStreamSynchronize(upload.storage.stream()));
   EXPECT_EQ(copied, (std::vector<std::uint32_t>{2u, 1u, 0u, 1u}));
-
-  mcs::fmcs::freePairMatchTablesBuffer(buffer, nullptr);
-  ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
 }
 
 TEST(FMCSMatchTable, EmptyUploadReturnsNoAllocation) {
-  void*       buffer = reinterpret_cast<void*>(1);
-  std::size_t bytes  = 1;
-  const auto  device = mcs::fmcs::uploadPairMatchTables({}, nullptr, &buffer, &bytes);
+  const auto upload = mcs::fmcs::uploadPairMatchTables({}, nullptr);
 
-  EXPECT_TRUE(device.empty());
-  EXPECT_EQ(buffer, nullptr);
-  EXPECT_EQ(bytes, 0);
-  mcs::fmcs::freePairMatchTablesBuffer(buffer, nullptr);
+  EXPECT_TRUE(upload.tables.empty());
+  EXPECT_EQ(upload.storage.data(), nullptr);
+  EXPECT_EQ(upload.storage.size(), 0);
 }
 
 }  // namespace
