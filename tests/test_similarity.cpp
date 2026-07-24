@@ -25,6 +25,7 @@
 #include <tuple>
 
 #include "src/similarity.h"
+#include "src/utils/device.h"
 
 using namespace RDKit;
 using namespace nvMolKit;
@@ -493,14 +494,15 @@ TEST_P(CrossCpuCosineSimilarityParamTestFixture, DefaultMemoryAgrees) {
     boost::to_block_range(*bitVec->dp_bits, std::back_inserter(bitsB));
   }
 
-  AsyncDeviceVector<std::uint64_t> bitsGpuA(bitsA.size());
-  AsyncDeviceVector<std::uint64_t> bitsGpuB(bitsB.size());
+  ScopedStream                     inputStream;
+  AsyncDeviceVector<std::uint64_t> bitsGpuA(bitsA.size(), inputStream.stream());
+  AsyncDeviceVector<std::uint64_t> bitsGpuB(bitsB.size(), inputStream.stream());
   bitsGpuA.copyFromHost(bitsA);
   bitsGpuB.copyFromHost(bitsB);
   auto bitsGpuSpanA = castAsSpanOfSmallerType<std::uint64_t, std::uint32_t>(bitsGpuA);
   auto bitsGpuSpanB = castAsSpanOfSmallerType<std::uint64_t, std::uint32_t>(bitsGpuB);
 
-  const auto got = crossCosineSimilarityCPUResult(bitsGpuSpanA, bitsGpuSpanB, kNumBits);
+  const auto got = crossCosineSimilarityCPUResult(bitsGpuSpanA, bitsGpuSpanB, kNumBits, {}, inputStream.stream());
   cudaDeviceSynchronize();
   EXPECT_THAT(got, testing::Pointwise(testing::DoubleNear(1e-5), wantSimilarities));
 }
@@ -538,8 +540,9 @@ TEST_P(CrossCpuCosineSimilarityParamTestFixture, ConstrainedMemoryAgrees) {
     boost::to_block_range(*bitVec->dp_bits, std::back_inserter(bitsB));
   }
 
-  AsyncDeviceVector<std::uint64_t> bitsGpuA(bitsA.size());
-  AsyncDeviceVector<std::uint64_t> bitsGpuB(bitsB.size());
+  ScopedStream                     inputStream;
+  AsyncDeviceVector<std::uint64_t> bitsGpuA(bitsA.size(), inputStream.stream());
+  AsyncDeviceVector<std::uint64_t> bitsGpuB(bitsB.size(), inputStream.stream());
   bitsGpuA.copyFromHost(bitsA);
   bitsGpuB.copyFromHost(bitsB);
   auto bitsGpuSpanA = castAsSpanOfSmallerType<std::uint64_t, std::uint32_t>(bitsGpuA);
@@ -555,7 +558,7 @@ TEST_P(CrossCpuCosineSimilarityParamTestFixture, ConstrainedMemoryAgrees) {
     opts.maxDeviceMemoryBytes = totalBytes + margin;
   }
 
-  const auto got = crossCosineSimilarityCPUResult(bitsGpuSpanA, bitsGpuSpanB, kNumBits, opts);
+  const auto got = crossCosineSimilarityCPUResult(bitsGpuSpanA, bitsGpuSpanB, kNumBits, opts, inputStream.stream());
   cudaDeviceSynchronize();
   EXPECT_THAT(got, testing::Pointwise(testing::DoubleNear(1e-5), wantSimilarities));
 }

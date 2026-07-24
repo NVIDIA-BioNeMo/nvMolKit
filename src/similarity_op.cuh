@@ -20,15 +20,16 @@
 #include <cstdint>
 #include <vector>
 
+#include "src/fingerprint_similarity_device.cuh"
 #include "src/utils/macros_ptx.cuh"
 
 namespace nvMolKit {
 
-template <bool _IsTensorOp, bool _IsTanimoto> struct SimilarityOp {
+template <bool _IsTensorOp, FingerprintSimilarityMetric Metric> struct SimilarityOp {
   __device__ void operator()(uint32_t d_and[4], uint32_t d_xor[4], uint32_t d_and_not[4]) {}
 };
 
-template <> struct SimilarityOp<true, true> {
+template <> struct SimilarityOp<true, FingerprintSimilarityMetric::Tanimoto> {
   __forceinline__ __device__ void operator()(uint32_t d_and[4],
                                              uint32_t d_xor[4],
                                              uint32_t d_and_not[4],
@@ -66,7 +67,7 @@ template <> struct SimilarityOp<true, true> {
   }
 };
 
-template <> struct SimilarityOp<true, false> {
+template <> struct SimilarityOp<true, FingerprintSimilarityMetric::Cosine> {
   __device__ void operator()(uint32_t d_and[4],
                              uint32_t d_xor[4],
                              uint32_t d_and_not[4],

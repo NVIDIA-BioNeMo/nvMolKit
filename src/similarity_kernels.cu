@@ -16,6 +16,7 @@
 #include <cub/cub.cuh>
 #include <cuda/std/span>
 
+#include "src/fingerprint_similarity_device.cuh"
 #include "src/load_store.cuh"
 #include "src/similarity_kernels.h"
 #include "src/similarity_op.cuh"
@@ -108,16 +109,11 @@ cuda::std::span<const OtherT> castAsSpanOfSmallerType(const AsyncDeviceVector<T>
   return cuda::std::span<OtherT>(reinterpret_cast<OtherT*>(vec.data()), vec.size() * sizeMultiplier);
 }
 
-enum class SimilarityType {
-  Tanimoto = 0,
-  Cosine
-};
-
 // --------------------------------
 // SIMT & TensorOp Kernel Template
 // --------------------------------
 
-template <SimilarityType similarityType,
+template <FingerprintSimilarityMetric similarityType,
           typename kThreadReductionType,
           typename T_out,
           size_t BLOCK_TILE_SIZE_X,
@@ -140,8 +136,6 @@ __device__ void crossSimilarityKernelTensorOp(const cuda::std::span<const kThrea
 
   constexpr int NUM_THREADS = NUM_WARP_X * 32 * NUM_WARP_Y;
 
-  constexpr bool IS_TANIMOTO = (similarityType == SimilarityType::Tanimoto);
-
   constexpr int WARP_TILE_X = BLOCK_TILE_SIZE_X / NUM_WARP_X;  // BLOCK_TILE_SIZE_X % NUM_WARP_X == 0
   constexpr int WARP_TILE_Y = BLOCK_TILE_SIZE_Y / NUM_WARP_Y;  // BLOCK_TILE_SIZE_Y % NUM_WARP_Y == 0
 
@@ -159,7 +153,7 @@ __device__ void crossSimilarityKernelTensorOp(const cuda::std::span<const kThrea
   unsigned a_regs[4];
   unsigned b_regs[2];
 
-  SimilarityOp<true, IS_TANIMOTO> similarityOp;
+  SimilarityOp<true, similarityType> similarityOp;
 
   int lane_id;
   get_lane(lane_id);
@@ -233,16 +227,16 @@ __device__ void crossSimilarityKernelTensorOp(const cuda::std::span<const kThrea
   for (int m_idx = 0; m_idx < NUM_M_PER_WARP; m_idx++) {
     NVMOLKIT_UNROLL
     for (int n_idx = 0; n_idx < NUM_N_PER_WARP; n_idx++) {
-      st_m16n8k256_x4<BLOCK_TILE_SIZE_X, BLOCK_TILE_SIZE_Y, IS_TANIMOTO>(d_and[m_idx * NUM_N_PER_WARP + n_idx],
-                                                                         d_xor[m_idx * NUM_N_PER_WARP + n_idx],
-                                                                         d_and_not[m_idx * NUM_N_PER_WARP + n_idx],
-                                                                         groupID,
-                                                                         threadID_in_group,
-                                                                         m_idx + warp_id_y * (WARP_TILE_Y / WMMA_M),
-                                                                         n_idx + warp_id_x * (WARP_TILE_X / WMMA_N),
-                                                                         m,
-                                                                         n,
-                                                                         C_smem);
+      st_m16n8k256_x4<BLOCK_TILE_SIZE_X, BLOCK_TILE_SIZE_Y, similarityType>(d_and[m_idx * NUM_N_PER_WARP + n_idx],
+                                                                            d_xor[m_idx * NUM_N_PER_WARP + n_idx],
+                                                                            d_and_not[m_idx * NUM_N_PER_WARP + n_idx],
+                                                                            groupID,
+                                                                            threadID_in_group,
+                                                                            m_idx + warp_id_y * (WARP_TILE_Y / WMMA_M),
+                                                                            n_idx + warp_id_x * (WARP_TILE_X / WMMA_N),
+                                                                            m,
+                                                                            n,
+                                                                            C_smem);
     }
   }
   __syncthreads();
@@ -263,7 +257,7 @@ __device__ void crossSimilarityKernelTensorOp(const cuda::std::span<const kThrea
   }
 }
 
-template <SimilarityType similarityType,
+template <FingerprintSimilarityMetric similarityType,
           typename kThreadReductionType,
           typename T_out,
           size_t BLOCK_TILE_SIZE_X,
@@ -371,19 +365,10 @@ __device__ void crossSimilarityKernelSIMT(const cuda::std::span<const kThreadRed
       const int B_row_oneBits =
         B_k_reduced[threadIdx.x % (BLOCK_TILE_SIZE_X / THREAD_TILE_X) * THREAD_TILE_X + thread_tile_col_idx];
 
-      T_out tmp;
-      if constexpr (similarityType == SimilarityType::Tanimoto) {
-        tmp = static_cast<T_out>(C_thread_results[thread_tile_col_idx][thread_tile_row_idx]) /
-              static_cast<T_out>(max(1,
-                                     A_row_oneBits + B_row_oneBits -
-                                       static_cast<int>(C_thread_results[thread_tile_col_idx][thread_tile_row_idx])));
-      } else {
-        T_out denom = sqrt(static_cast<T_out>(A_row_oneBits) * static_cast<T_out>(B_row_oneBits));
-
-        tmp = (C_thread_results[thread_tile_col_idx][thread_tile_row_idx] == 0 || denom == 0.0f) ?
-                0.0f :
-                static_cast<T_out>(C_thread_results[thread_tile_col_idx][thread_tile_row_idx]) / denom;
-      }
+      const T_out tmp =
+        detail::fingerprintSimilarity<similarityType, T_out>(C_thread_results[thread_tile_col_idx][thread_tile_row_idx],
+                                                             A_row_oneBits,
+                                                             B_row_oneBits);
       if (C_row_idx < numMoleculesTotalOne && C_col_idx < numMoleculesTotalTwo) {
         similarities[C_row_idx * numMoleculesTotalTwo + C_col_idx] = tmp;
       }
@@ -407,7 +392,7 @@ __global__ void tanimotoCrossSimilarityKernel(const cuda::std::span<const kThrea
                                               cuda::std::span<double>                           similarities,
                                               const size_t                                      offset) {
 #if __CUDA_ARCH__ >= 800
-  crossSimilarityKernelTensorOp<SimilarityType::Tanimoto,
+  crossSimilarityKernelTensorOp<FingerprintSimilarityMetric::Tanimoto,
                                 kThreadReductionType,
                                 double,
                                 BLOCK_TILE_SIZE_X,
@@ -420,7 +405,7 @@ __global__ void tanimotoCrossSimilarityKernel(const cuda::std::span<const kThrea
                                                              similarities,
                                                              offset);
 #else
-  crossSimilarityKernelSIMT<SimilarityType::Tanimoto,
+  crossSimilarityKernelSIMT<FingerprintSimilarityMetric::Tanimoto,
                             kThreadReductionType,
                             double,
                             BLOCK_TILE_SIZE_X,
@@ -615,7 +600,7 @@ __global__ void cosineCrossSimilarityKernel(const cuda::std::span<const kThreadR
                                             cuda::std::span<double>                           similarities,
                                             const size_t                                      offset) {
 #if __CUDA_ARCH__ >= 800
-  crossSimilarityKernelTensorOp<SimilarityType::Cosine,
+  crossSimilarityKernelTensorOp<FingerprintSimilarityMetric::Cosine,
                                 kThreadReductionType,
                                 double,
                                 BLOCK_TILE_SIZE_X,
@@ -628,7 +613,7 @@ __global__ void cosineCrossSimilarityKernel(const cuda::std::span<const kThreadR
                                                              similarities,
                                                              offset);
 #else
-  crossSimilarityKernelSIMT<SimilarityType::Cosine,
+  crossSimilarityKernelSIMT<FingerprintSimilarityMetric::Cosine,
                             kThreadReductionType,
                             double,
                             BLOCK_TILE_SIZE_X,

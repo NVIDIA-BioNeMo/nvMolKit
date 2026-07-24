@@ -19,6 +19,7 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 
+#include "src/fingerprint_similarity_device.cuh"
 #include "src/utils/macros_ptx.cuh"
 
 namespace nvMolKit {
@@ -210,11 +211,11 @@ __forceinline__ __device__ void ld_m16n8k256_x2(const uint32_t* smem_ptr,
  * @brief Template function for storing computed values in shared memory.
  *
  * This function is designed to handle the storage of computed values into shared memory
- * for both Tanimoto and Cosine calculations based on the template parameter TANIMOTO.
+ * for both Tanimoto and Cosine calculations based on the template parameter Metric.
  *
  * @tparam TILE_X The tile width in shared memory.
  * @tparam TILE_Y The tile height in shared memory.
- * @tparam TANIMOTO Boolean template parameter to switch between Tanimoto and Cosine calculations.
+ * @tparam Metric Fingerprint similarity metric.
  *
  * @param regs_and Array of unsigned integers containing AND results.
  * @param regs_xor Array of unsigned integers containing XOR results.
@@ -238,7 +239,7 @@ __forceinline__ __device__ void ld_m16n8k256_x2(const uint32_t* smem_ptr,
  * - This function is expected to be called within a CUDA kernel, hence it interfaces directly with GPU hardware.
  * - Assumes the presence of CUDA-capable hardware and appropriate CUDA drivers.
  **/
-template <size_t TILE_X, size_t TILE_Y, bool TANIMOTO>
+template <size_t TILE_X, size_t TILE_Y, FingerprintSimilarityMetric Metric>
 __forceinline__ __device__ void st_m16n8k256_x4(unsigned regs_and[4],
                                                 unsigned regs_xor[4],
                                                 unsigned regs_and_not[4],
@@ -261,18 +262,15 @@ __forceinline__ __device__ void st_m16n8k256_x4(unsigned regs_and[4],
       row = groupID + r * 8 + load_y * 16;
       col = threadID_in_group * 2 + c + 8 * load_x;
 
-      if constexpr (TANIMOTO) {
-        smem_ptr[row * (TILE_Y + 1) + col] =
-          (regs_and[2 * r + c] == 0) ?
-            0.0f :
-            static_cast<float>(regs_and[2 * r + c]) / static_cast<float>(regs_and[2 * r + c] + regs_xor[2 * r + c]);
+      if constexpr (Metric == FingerprintSimilarityMetric::Tanimoto) {
+        smem_ptr[row * (TILE_Y + 1) + col] = detail::fingerprintSimilarityFromDenominator<Metric>(
+          static_cast<int>(regs_and[2 * r + c]),
+          static_cast<float>(regs_and[2 * r + c] + regs_xor[2 * r + c]));
       } else {
-        // cosine similarity
-        int   popc_b = regs_and[2 * r + c] + regs_and_not[2 * r + c];
-        int   popc_a = regs_and[2 * r + c] + regs_xor[2 * r + c] - regs_and_not[2 * r + c];
-        float denom  = sqrtf(static_cast<float>(popc_a * popc_b));
+        const int popcB = regs_and[2 * r + c] + regs_and_not[2 * r + c];
+        const int popcA = regs_and[2 * r + c] + regs_xor[2 * r + c] - regs_and_not[2 * r + c];
         smem_ptr[row * (TILE_Y + 1) + col] =
-          (regs_and[2 * r + c] == 0) ? 0.0f : static_cast<float>(regs_and[2 * r + c]) / denom;
+          detail::fingerprintSimilarity<Metric, float>(static_cast<int>(regs_and[2 * r + c]), popcA, popcB);
       }
     }
   }

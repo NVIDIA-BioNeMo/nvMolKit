@@ -57,7 +57,6 @@ except ImportError:
 
 
 from nvmolkit import _TFD
-from nvmolkit._arrayHelpers import *  # noqa: F403
 from nvmolkit.types import AsyncGpuResult
 
 

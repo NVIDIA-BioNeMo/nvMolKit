@@ -21,6 +21,7 @@ from typing import Any, Iterable, List, NamedTuple, Optional
 import numpy as np
 import torch
 
+from nvmolkit import _arrayHelpers  # noqa: F401
 from nvmolkit import _embedMolecules  # type: ignore
 from nvmolkit._types import FireOptions  # noqa: F401
 
@@ -211,6 +212,8 @@ def _as_cuda_tensor(
     elif isinstance(value, torch.Tensor):
         tensor = value
     elif isinstance(value, np.ndarray):
+        if not value.flags.c_contiguous:
+            value = np.ascontiguousarray(value)
         tensor = torch.as_tensor(value)
     else:
         raise TypeError(

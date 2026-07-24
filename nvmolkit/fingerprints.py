@@ -17,29 +17,31 @@
 
 import torch
 
-from nvmolkit._arrayHelpers import *  # noqa: F403
 from nvmolkit._Fingerprints import MorganFingerprintGenerator as InternalFPGen
-from nvmolkit.types import AsyncGpuResult
+from nvmolkit.types import AsyncGpuResult, _resolve_cuda_stream
 
 
 def unpack_fingerprint(fp: torch.Tensor) -> torch.Tensor:
     """Unpack a 32-bit integer-encoded fingerprint into a 2D boolean tensor of shape (len(fp), fingerprint_size).
 
     Args:
-        fp: A tensor of shape `(n_fps, fp_size / 32)`, containing packed fingerprints with dtype int32
+        fp: A tensor of shape `(n_fps, fp_size / 32)`, containing packed fingerprints with dtype uint32 or int32.
 
     Returns:
         A boolean tensor of shape `(n_fps, fp_size)`
     """
+    if fp.ndim != 2:
+        raise ValueError(f"Input tensor must be 2D, got shape={tuple(fp.shape)}")
     if fp.dtype not in (torch.int32, torch.uint32):
         raise ValueError("Input tensor must have dtype int32 or uint32")
-    n_fps = fp.shape[0]
-    n_ints = fp.shape[1]
-    fp_size = n_ints * 32
+    fp = fp.contiguous()
+    if fp.dtype == torch.int32:
+        fp = fp.view(torch.uint32)
+
     return (
-        ((fp.unsqueeze(2) >> torch.arange(0, 32, device=fp.device, dtype=torch.int32)) & 1)
+        ((fp.to(torch.int64).unsqueeze(2) >> torch.arange(32, device=fp.device, dtype=torch.int64)) & 1)
         .bool()
-        .reshape(n_fps, fp_size)
+        .flatten(1)
     )
 
 
@@ -52,13 +54,18 @@ def pack_fingerprint(fp: torch.Tensor) -> torch.Tensor:
     Returns:
         A tensor of shape `(n_fps, fp_size / 32)` containing packed fingerprints (rounded up to the nearest multiple of 32)
     """
+    if fp.ndim != 2:
+        raise ValueError(f"Input tensor must be 2D, got shape={tuple(fp.shape)}")
+    if fp.dtype != torch.bool:
+        raise ValueError("Input tensor must have dtype bool")
+
     n_fps, fp_size = fp.shape
-    n_ints = (fp_size + 31) // 32  # Number of int32s needed per fingerprint
+    padding = -fp_size % 32
+    n_ints = (fp_size + padding) // 32
 
     # Pad to next multiple of 32 if needed
-    if fp_size % 32 != 0:
-        padded_size = n_ints * 32
-        padded = torch.zeros((n_fps, padded_size), dtype=torch.bool, device=fp.device)
+    if padding:
+        padded = torch.zeros((n_fps, fp_size + padding), dtype=torch.bool, device=fp.device)
         padded[:, :fp_size] = fp
         fp = padded
 
@@ -66,10 +73,10 @@ def pack_fingerprint(fp: torch.Tensor) -> torch.Tensor:
     fp_reshaped = fp.reshape(n_fps, n_ints, 32)
 
     # Create powers of 2 for each bit position, using 0 to 31 instead of 31 to 0 to fix endianness
-    powers = 1 << torch.arange(0, 32, device=fp.device, dtype=torch.int32)
+    powers = 1 << torch.arange(32, device=fp.device, dtype=torch.int64)
 
     # Multiply and sum to create packed integers
-    return (fp_reshaped * powers.unsqueeze(0)).sum(dim=2, dtype=torch.int32)
+    return (fp_reshaped * powers.unsqueeze(0)).sum(dim=2).to(torch.uint32)
 
 
 class MorganFingerprintGenerator:
@@ -84,11 +91,14 @@ class MorganFingerprintGenerator:
         """
         self._internal = InternalFPGen(radius, fpSize)
 
-    def GetFingerprints(self, mols: list, num_threads: int = 0, stream: torch.cuda.Stream | None = None):
+    def GetFingerprints(
+        self, mols: list, num_threads: int = 0, stream: torch.cuda.Stream | None = None
+    ) -> AsyncGpuResult:
         """Compute Morgan fingerprints for a list of molecules.
 
         Preprocessing of fingerprinting features is done on the CPU, and is parallelized with the `num_threads` argument.
-        The resulting tensor has dtype torch.int32 and contains a packed fingerprint for each molecule, one row per molecule.
+        The resulting tensor has dtype torch.uint32 and contains a packed fingerprint for each molecule, one row per
+        molecule.
 
         Packed fingerprints can be passed directly to nvMolKit similarity calculations, or unpacked
         via `unpack_fingerprint`.
@@ -102,7 +112,5 @@ class MorganFingerprintGenerator:
             AsyncGpuResult wrapping a torch.Tensor of shape (len(mols), fpSize / 32) containing the fingerprints.
             Each row is a fingerprint for the corresponding molecule.
         """
-        if stream is not None and not isinstance(stream, torch.cuda.Stream):
-            raise TypeError(f"stream must be a torch.cuda.Stream or None, got {type(stream).__name__}")
-        stream_ptr = (stream if stream is not None else torch.cuda.current_stream()).cuda_stream
-        return AsyncGpuResult(self._internal.GetFingerprintsDevice(mols, num_threads, stream_ptr))
+        active_stream = _resolve_cuda_stream(stream)
+        return AsyncGpuResult(self._internal.GetFingerprintsDevice(mols, num_threads, active_stream.cuda_stream))

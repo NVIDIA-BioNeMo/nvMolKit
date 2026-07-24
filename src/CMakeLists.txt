@@ -117,11 +117,11 @@ target_link_libraries(
           openmp_helpers
           OpenMP::OpenMP_CXX)
 
-add_library(butina butina.cu)
+add_library(butina butina.cu fused_butina.cu)
 target_link_libraries(
   butina
   PUBLIC device_vector
-  PRIVATE cub_helpers nvtx)
+  PRIVATE cuda_error_check cub_helpers nvtx)
 
 add_library(conformer_rmsd conformer_rmsd.cu)
 target_link_libraries(

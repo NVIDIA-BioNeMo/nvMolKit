@@ -43,7 +43,6 @@ requires-python = ">=3.10,<3.15"
 dependencies = [
     "numpy>=1.23",
     "torch>=2.1",
-    "triton",
     "rdkit",  # nvmolkit-rdkit-pin: pinned to RDKIT_VERSION by admin/deploy/build_pip_wheels.sh during cibuildwheel
     "nvidia-cuda-runtime-cu12>=12.0",
 ]

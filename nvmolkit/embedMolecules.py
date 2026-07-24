@@ -27,7 +27,6 @@ if TYPE_CHECKING:
 __all__ = ["EmbedMolecules"]
 
 from nvmolkit import _embedMolecules  # type: ignore
-from nvmolkit._arrayHelpers import *  # noqa: F403  # registers PyArray for DEVICE-mode returns
 from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions
 
 

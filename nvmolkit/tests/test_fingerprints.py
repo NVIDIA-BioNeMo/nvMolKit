@@ -22,19 +22,16 @@ from nvmolkit.fingerprints import MorganFingerprintGenerator, pack_fingerprint, 
 
 
 def test_roundtrip_pack_unpack():
-    # Create a test boolean tensor
     n_fps = 10
     fp_size = 128
     test_fp = torch.randint(0, 2, (n_fps, fp_size), dtype=torch.bool, device="cuda")
 
-    # Pack it
     packed = pack_fingerprint(test_fp)
     assert packed.shape == (n_fps, fp_size // 32)
     assert packed.device.type == "cuda"
+    assert packed.dtype == torch.uint32
 
-    # Unpack it
     unpacked = unpack_fingerprint(packed)
-    # Verify roundtrip
     torch.testing.assert_close(test_fp, unpacked)
 
 
@@ -50,27 +47,41 @@ def test_pack_unpack_uneven_size():
 
 
 def test_unpack_invalid_dtype():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="dtype int32 or uint32"):
         unpack_fingerprint(torch.randint(0, 2, (10, 32), device="cuda", dtype=torch.int64))
+
+
+def test_unpack_invalid_shape():
+    with pytest.raises(ValueError, match="must be 2D"):
+        unpack_fingerprint(torch.zeros(32, dtype=torch.int32, device="cuda"))
+
+
+def test_pack_invalid_dtype():
+    with pytest.raises(ValueError, match="dtype bool"):
+        pack_fingerprint(torch.zeros((10, 32), dtype=torch.int32, device="cuda"))
+
+
+def test_pack_invalid_shape():
+    with pytest.raises(ValueError, match="must be 2D"):
+        pack_fingerprint(torch.zeros(32, dtype=torch.bool, device="cuda"))
 
 
 @pytest.mark.parametrize("fpSize", (17, 8192))
 def test_nvmolkit_fingerprint_throws_on_invalid_fpsize(fpSize, size_limited_mols):
     fpgen = MorganFingerprintGenerator(radius=3, fpSize=fpSize)
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError, match="Invalid fpSize"):
         fpgen.GetFingerprints(size_limited_mols)
 
 
 def test_empty_input():
     fpgen = MorganFingerprintGenerator(radius=3, fpSize=2048)
     fps = fpgen.GetFingerprints([]).torch()
-    torch.cuda.synchronize()
     assert fps.shape == (0, 2048 // 32)
 
 
 def test_invalid_input():
     fpgen = MorganFingerprintGenerator(radius=3, fpSize=2048)
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError, match="Invalid molecule at index 0"):
         fpgen.GetFingerprints([None])
 
 
@@ -82,31 +93,18 @@ def test_nvmolkit_morgan_fingerprint(size_limited_mols, fpSize, radius):
 
     nvmolkit_fpgen = MorganFingerprintGenerator(radius=radius, fpSize=fpSize)
     nvmolkit_fps_torch = nvmolkit_fpgen.GetFingerprints(size_limited_mols).torch()
-    torch.cuda.synchronize()
     assert nvmolkit_fps_torch.device.type == "cuda"
+    assert nvmolkit_fps_torch.dtype == torch.uint32
     want_n_rows = len(size_limited_mols)
-    want_n_cols = fpSize / 32
+    want_n_cols = fpSize // 32
     assert nvmolkit_fps_torch.shape == (want_n_rows, want_n_cols)
-    for i in range(want_n_rows):
-        ref_fp = fps[i]
-        got_fp_row = nvmolkit_fps_torch[i, :]
-        for j in range(fpSize):
-            want_bit = ref_fp.GetBit(j)
 
-            column = j // 32
-            mask = 1 << (j % 32)
-
-            got_bit = got_fp_row[column].item() & mask != 0
-            assert got_bit == want_bit
-        # Now test that the unpacked fingerprint matches the original
-        unpacked = unpack_fingerprint(got_fp_row.unsqueeze(0))
-        assert unpacked.shape == (
-            1,
-            fpSize,
-        )
-        assert unpacked.device.type == "cuda"
-        assert unpacked.dtype == torch.bool
-        torch.testing.assert_close(ref_fp.ToList(), unpacked.to(int).tolist()[0])
+    unpacked = unpack_fingerprint(nvmolkit_fps_torch)
+    expected = torch.tensor([fp.ToList() for fp in fps], dtype=torch.bool, device="cuda")
+    assert unpacked.shape == (want_n_rows, fpSize)
+    assert unpacked.device.type == "cuda"
+    assert unpacked.dtype == torch.bool
+    torch.testing.assert_close(unpacked, expected)
 
 
 def test_fingerprints_on_explicit_stream(size_limited_mols):
@@ -119,13 +117,9 @@ def test_fingerprints_on_explicit_stream(size_limited_mols):
     result = gen.GetFingerprints(size_limited_mols, stream=s).torch()
     s.synchronize()
 
-    assert result.shape == (len(size_limited_mols), 2048 // 32)
-    for i in range(len(size_limited_mols)):
-        for j in range(2048):
-            column = j // 32
-            mask = 1 << (j % 32)
-            got_bit = result[i, column].item() & mask != 0
-            assert got_bit == ref_fps[i].GetBit(j)
+    unpacked = unpack_fingerprint(result)
+    expected = torch.tensor([fp.ToList() for fp in ref_fps], dtype=torch.bool, device="cuda")
+    torch.testing.assert_close(unpacked, expected)
 
 
 def test_fingerprints_invalid_stream_type(size_limited_mols):
@@ -168,7 +162,6 @@ def test_gh_issue_195():
 
     for batch in ([large_mol], [large_mol, large_mol]):
         unpacked = unpack_fingerprint(nvmolkit_gen.GetFingerprints(batch).torch())
-        torch.cuda.synchronize()
         assert unpacked.shape == (len(batch), fp_size)
         for row in range(len(batch)):
             assert unpacked[row].sum().item() > 0, "Large-only batch produced an empty fingerprint"

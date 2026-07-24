@@ -47,7 +47,8 @@ AsyncDeviceVector<double> crossTanimotoSimilarityGpuResult(cuda::std::span<const
 std::vector<double> crossTanimotoSimilarityCPUResult(cuda::std::span<const std::uint32_t> bitsOneBuffer,
                                                      cuda::std::span<const std::uint32_t> bitsTwoBuffer,
                                                      int                                  fpSize,
-                                                     const CrossSimilarityOptions& options = CrossSimilarityOptions());
+                                                     const CrossSimilarityOptions& options = CrossSimilarityOptions(),
+                                                     cudaStream_t                  stream  = nullptr);
 // --------------------------------
 // Cosine similarity wrapper functions
 // --------------------------------
@@ -64,7 +65,8 @@ AsyncDeviceVector<double> crossCosineSimilarityGpuResult(cuda::std::span<const s
 std::vector<double> crossCosineSimilarityCPUResult(cuda::std::span<const std::uint32_t> bitsOneBuffer,
                                                    cuda::std::span<const std::uint32_t> bitsTwoBuffer,
                                                    int                                  fpSize,
-                                                   const CrossSimilarityOptions& options = CrossSimilarityOptions());
+                                                   const CrossSimilarityOptions& options = CrossSimilarityOptions(),
+                                                   cudaStream_t                  stream  = nullptr);
 
 }  // namespace nvMolKit
 

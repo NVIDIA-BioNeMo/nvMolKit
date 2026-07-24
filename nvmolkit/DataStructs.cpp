@@ -13,12 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <DataStructs/ExplicitBitVect.h>
-
 #include <boost/python.hpp>
 #include <boost/python/numpy.hpp>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 #include "nvmolkit/array_helpers.h"
 #include "src/similarity.h"
@@ -28,12 +30,13 @@ namespace {
 
 using ::nvMolKit::getSpanFromDictElems;
 
-// Shared CPU-result wrapper for cosine and tanimoto similarity
+// Build a CPU similarity result.
 template <typename ComputeFn>
 boost::python::numpy::ndarray crossSimilarityCPUFromRawBuffers(const boost::python::dict& bitsOne,
                                                                const boost::python::dict& bitsTwo,
-                                                               ComputeFn                  compute) {
-  // Extract boost::python::tuple from dict['shape']
+                                                               ComputeFn                  compute,
+                                                               cudaStream_t               stream) {
+  // Read the array shapes.
   boost::python::tuple shapeOne = boost::python::extract<boost::python::tuple>(bitsOne["shape"]);
   boost::python::tuple shapeTwo = boost::python::extract<boost::python::tuple>(bitsTwo["shape"]);
 
@@ -46,8 +49,7 @@ boost::python::numpy::ndarray crossSimilarityCPUFromRawBuffers(const boost::pyth
     throw std::invalid_argument("Shape of bitsOne and bitsTwo dim 1 must be the same");
   }
 
-  const size_t         nBytes       = sizeof(std::uint32_t);
-  const size_t         fpSize       = nInts * 8 * nBytes;
+  const int            fpSize       = static_cast<int>(nInts * 32);
   boost::python::tuple data1        = boost::python::extract<boost::python::tuple>(bitsOne["data"]);
   size_t               data1Pointer = boost::python::extract<std::size_t>(data1[0]);
   boost::python::tuple data2        = boost::python::extract<boost::python::tuple>(bitsTwo["data"]);
@@ -56,13 +58,12 @@ boost::python::numpy::ndarray crossSimilarityCPUFromRawBuffers(const boost::pyth
   auto span1 = getSpanFromDictElems<std::uint32_t>(reinterpret_cast<void*>(data1Pointer), shapeOne);
   auto span2 = getSpanFromDictElems<std::uint32_t>(reinterpret_cast<void*>(data2Pointer), shapeTwo);
 
-  auto vec = compute(span1, span2, fpSize);
+  auto vec = compute(span1, span2, fpSize, stream);
 
-  // Move vector to heap and tie lifetime to a capsule owner
+  // Let the NumPy array own the result.
   auto  heapVec = std::make_unique<std::vector<double>>(std::move(vec));
   void* dataPtr = static_cast<void*>(heapVec->data());
 
-  // Capsule destructor to free heapVec
   auto deleter = [](PyObject* capsule) {
     void* ptr = PyCapsule_GetPointer(capsule, "nvmolkit.double_vector");
     auto* v   = reinterpret_cast<std::vector<double>*>(ptr);
@@ -87,6 +88,36 @@ boost::python::numpy::ndarray crossSimilarityCPUFromRawBuffers(const boost::pyth
   return arr;
 }
 
+// Build a GPU similarity result.
+template <typename ComputeFn>
+nvMolKit::PyArray* crossSimilarityGPUFromRawBuffers(const boost::python::dict& bitsOne,
+                                                    const boost::python::dict& bitsTwo,
+                                                    ComputeFn                  compute,
+                                                    cudaStream_t               stream) {
+  boost::python::tuple shapeOne = boost::python::extract<boost::python::tuple>(bitsOne["shape"]);
+  boost::python::tuple shapeTwo = boost::python::extract<boost::python::tuple>(bitsTwo["shape"]);
+
+  const size_t nInts    = boost::python::extract<size_t>(shapeOne[1]);
+  const size_t nIntsTwo = boost::python::extract<size_t>(shapeTwo[1]);
+  if (nInts != nIntsTwo) {
+    throw std::invalid_argument("Shape of bitsOne and bitsTwo dim 1 must be the same");
+  }
+
+  const size_t numMolsOne = boost::python::extract<size_t>(shapeOne[0]);
+  const size_t numMolsTwo = boost::python::extract<size_t>(shapeTwo[0]);
+  const int    fpSize     = static_cast<int>(nInts * 32);
+
+  boost::python::tuple dataOne        = boost::python::extract<boost::python::tuple>(bitsOne["data"]);
+  boost::python::tuple dataTwo        = boost::python::extract<boost::python::tuple>(bitsTwo["data"]);
+  const size_t         dataOnePointer = boost::python::extract<std::size_t>(dataOne[0]);
+  const size_t         dataTwoPointer = boost::python::extract<std::size_t>(dataTwo[0]);
+
+  auto spanOne = getSpanFromDictElems<std::uint32_t>(reinterpret_cast<void*>(dataOnePointer), shapeOne);
+  auto spanTwo = getSpanFromDictElems<std::uint32_t>(reinterpret_cast<void*>(dataTwoPointer), shapeTwo);
+  auto result  = compute(spanOne, spanTwo, fpSize, stream);
+  return nvMolKit::makePyArray(result, boost::python::make_tuple(numMolsOne, numMolsTwo));
+}
+
 }  // namespace
 
 BOOST_PYTHON_MODULE(_DataStructs) {
@@ -94,98 +125,70 @@ BOOST_PYTHON_MODULE(_DataStructs) {
   boost::python::def(
     "CrossTanimotoSimilarityRawBuffers",
     +[](const boost::python::dict& bitsOne, const boost::python::dict& bitsTwo, std::uintptr_t streamPtr) {
-      // Extract boost::python::tuple from dict['shape']
-      boost::python::tuple shapeOne = boost::python::extract<boost::python::tuple>(bitsOne["shape"]);
-      boost::python::tuple shapeTwo = boost::python::extract<boost::python::tuple>(bitsTwo["shape"]);
-
-      const size_t nInts    = boost::python::extract<size_t>(shapeOne[1]);
-      const size_t nIntsTwo = boost::python::extract<size_t>(shapeTwo[1]);
-      if (nInts != nIntsTwo) {
-        throw std::invalid_argument("Shape of bitsOne and bitsTwo dim 1 must be the same");
-      }
-      const size_t numMolsOne = boost::python::extract<size_t>(shapeOne[0]);
-      const size_t numMolsTwo = boost::python::extract<size_t>(shapeTwo[0]);
-
-      // Extract the datatype string, and check the number of bytes
-      const size_t nBytes = sizeof(std::uint32_t);
-
-      const size_t         fpSize       = nInts * 8 * nBytes;
-      boost::python::tuple data1        = boost::python::extract<boost::python::tuple>(bitsOne["data"]);
-      size_t               data1Pointer = boost::python::extract<std::size_t>(data1[0]);
-      boost::python::tuple data2        = boost::python::extract<boost::python::tuple>(bitsTwo["data"]);
-      size_t               data2Pointer = boost::python::extract<std::size_t>(data2[0]);
-
       auto streamOpt = nvMolKit::acquireExternalStream(streamPtr);
       if (!streamOpt) {
         throw std::invalid_argument("Invalid CUDA stream");
       }
-      auto span1 = getSpanFromDictElems<std::uint32_t>(reinterpret_cast<void*>(data1Pointer), shapeOne);
-      auto span2 = getSpanFromDictElems<std::uint32_t>(reinterpret_cast<void*>(data2Pointer), shapeTwo);
-      auto array = nvMolKit::crossTanimotoSimilarityGpuResult(span1, span2, fpSize, *streamOpt);
-      assert(array.size() == numMolsOne * numMolsTwo);
-      return makePyArray(array, boost::python::make_tuple(numMolsOne, numMolsTwo));
+      return crossSimilarityGPUFromRawBuffers(
+        bitsOne,
+        bitsTwo,
+        [](const auto& a, const auto& b, int fpSize, cudaStream_t stream) {
+          return nvMolKit::crossTanimotoSimilarityGpuResult(a, b, fpSize, stream);
+        },
+        *streamOpt);
     },
     boost::python::return_value_policy<boost::python::manage_new_object>(),
     (boost::python::arg("bitsOne"), boost::python::arg("bitsTwo"), boost::python::arg("stream") = 0));
-
-  // --------------------------------
-  // Cosine similarity binding functions
-  // --------------------------------
 
   boost::python::def(
     "CrossCosineSimilarityRawBuffers",
     +[](const boost::python::dict& bitsOne, const boost::python::dict& bitsTwo, std::uintptr_t streamPtr) {
-      // Extract boost::python::tuple from dict['shape']
-      boost::python::tuple shapeOne = boost::python::extract<boost::python::tuple>(bitsOne["shape"]);
-      boost::python::tuple shapeTwo = boost::python::extract<boost::python::tuple>(bitsTwo["shape"]);
-
-      const size_t nInts    = boost::python::extract<size_t>(shapeOne[1]);
-      const size_t nIntsTwo = boost::python::extract<size_t>(shapeTwo[1]);
-      if (nInts != nIntsTwo) {
-        throw std::invalid_argument("Shape of bitsOne and bitsTwo dim 1 must be the same");
-      }
-      const size_t numMolsOne = boost::python::extract<size_t>(shapeOne[0]);
-      const size_t numMolsTwo = boost::python::extract<size_t>(shapeTwo[0]);
-
-      // Extract the datatype string, and check the number of bytes
-      const size_t nBytes = sizeof(std::uint32_t);
-
-      const size_t         fpSize       = nInts * 8 * nBytes;
-      boost::python::tuple data1        = boost::python::extract<boost::python::tuple>(bitsOne["data"]);
-      const size_t         data1Pointer = boost::python::extract<std::size_t>(data1[0]);
-      boost::python::tuple data2        = boost::python::extract<boost::python::tuple>(bitsTwo["data"]);
-      const size_t         data2Pointer = boost::python::extract<std::size_t>(data2[0]);
-
       auto streamOpt = nvMolKit::acquireExternalStream(streamPtr);
       if (!streamOpt) {
         throw std::invalid_argument("Invalid CUDA stream");
       }
-      auto span1 = getSpanFromDictElems<std::uint32_t>(reinterpret_cast<void*>(data1Pointer), shapeOne);
-      auto span2 = getSpanFromDictElems<std::uint32_t>(reinterpret_cast<void*>(data2Pointer), shapeTwo);
-      auto array = nvMolKit::crossCosineSimilarityGpuResult(span1, span2, fpSize, *streamOpt);
-      assert(array.size() == numMolsOne * numMolsTwo);
-      return makePyArray(array, boost::python::make_tuple(numMolsOne, numMolsTwo));
+      return crossSimilarityGPUFromRawBuffers(
+        bitsOne,
+        bitsTwo,
+        [](const auto& a, const auto& b, int fpSize, cudaStream_t stream) {
+          return nvMolKit::crossCosineSimilarityGpuResult(a, b, fpSize, stream);
+        },
+        *streamOpt);
     },
     boost::python::return_value_policy<boost::python::manage_new_object>(),
     (boost::python::arg("bitsOne"), boost::python::arg("bitsTwo"), boost::python::arg("stream") = 0));
 
-  // --------------------------------
-  // CPU-result similarity binding functions (no options exposed; nullopt by default)
-  // --------------------------------
-
   boost::python::def(
     "CrossTanimotoSimilarityCPURawBuffers",
-    +[](const boost::python::dict& bitsOne, const boost::python::dict& bitsTwo) {
-      return crossSimilarityCPUFromRawBuffers(bitsOne, bitsTwo, [](const auto& a, const auto& b, int fpSize) {
-        return nvMolKit::crossTanimotoSimilarityCPUResult(a, b, fpSize);
-      });
-    });
+    +[](const boost::python::dict& bitsOne, const boost::python::dict& bitsTwo, std::uintptr_t streamPtr) {
+      auto streamOpt = nvMolKit::acquireExternalStream(streamPtr);
+      if (!streamOpt) {
+        throw std::invalid_argument("Invalid CUDA stream");
+      }
+      return crossSimilarityCPUFromRawBuffers(
+        bitsOne,
+        bitsTwo,
+        [](const auto& a, const auto& b, int fpSize, cudaStream_t stream) {
+          return nvMolKit::crossTanimotoSimilarityCPUResult(a, b, fpSize, {}, stream);
+        },
+        *streamOpt);
+    },
+    (boost::python::arg("bitsOne"), boost::python::arg("bitsTwo"), boost::python::arg("stream") = 0));
 
   boost::python::def(
     "CrossCosineSimilarityCPURawBuffers",
-    +[](const boost::python::dict& bitsOne, const boost::python::dict& bitsTwo) {
-      return crossSimilarityCPUFromRawBuffers(bitsOne, bitsTwo, [](const auto& a, const auto& b, int fpSize) {
-        return nvMolKit::crossCosineSimilarityCPUResult(a, b, fpSize);
-      });
-    });
+    +[](const boost::python::dict& bitsOne, const boost::python::dict& bitsTwo, std::uintptr_t streamPtr) {
+      auto streamOpt = nvMolKit::acquireExternalStream(streamPtr);
+      if (!streamOpt) {
+        throw std::invalid_argument("Invalid CUDA stream");
+      }
+      return crossSimilarityCPUFromRawBuffers(
+        bitsOne,
+        bitsTwo,
+        [](const auto& a, const auto& b, int fpSize, cudaStream_t stream) {
+          return nvMolKit::crossCosineSimilarityCPUResult(a, b, fpSize, {}, stream);
+        },
+        *streamOpt);
+    },
+    (boost::python::arg("bitsOne"), boost::python::arg("bitsTwo"), boost::python::arg("stream") = 0));
 }

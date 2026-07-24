@@ -60,14 +60,13 @@ std::pair<std::vector<int>, int> runButina(const std::vector<double>& distances,
                                            const int                  neighborlistMaxSize,
                                            cudaStream_t               stream) {
   AsyncDeviceVector<double> distancesDev(distances.size(), stream);
-  AsyncDeviceVector<int>    resultDev(nPts, stream);
   distancesDev.copyFromHost(distances);
-  const int numClusters =
-    nvMolKit::butinaGpu(toSpan(distancesDev), toSpan(resultDev), cutoff, neighborlistMaxSize, {}, true, stream);
+  auto result =
+    nvMolKit::butinaFromDistanceMatrix(toSpan(distancesDev), nPts, cutoff, neighborlistMaxSize, false, true, stream);
   std::vector<int> got(nPts);
-  resultDev.copyToHost(got);
+  result.clusterIds.copyToHost(got);
   cudaStreamSynchronize(stream);
-  return {got, numClusters};
+  return {got, result.numClusters};
 }
 
 std::tuple<std::vector<int>, std::vector<int>, int> runButinaWithCentroids(const std::vector<double>& distances,
@@ -76,22 +75,15 @@ std::tuple<std::vector<int>, std::vector<int>, int> runButinaWithCentroids(const
                                                                            const int    neighborlistMaxSize,
                                                                            cudaStream_t stream) {
   AsyncDeviceVector<double> distancesDev(distances.size(), stream);
-  AsyncDeviceVector<int>    resultDev(nPts, stream);
-  AsyncDeviceVector<int>    centroidsDev(nPts, stream);
   distancesDev.copyFromHost(distances);
-  const int        numClusters = nvMolKit::butinaGpu(toSpan(distancesDev),
-                                              toSpan(resultDev),
-                                              cutoff,
-                                              neighborlistMaxSize,
-                                              toSpan(centroidsDev),
-                                              true,
-                                              stream);
+  auto result =
+    nvMolKit::butinaFromDistanceMatrix(toSpan(distancesDev), nPts, cutoff, neighborlistMaxSize, true, true, stream);
   std::vector<int> got(nPts);
   std::vector<int> centroids(nPts);
-  resultDev.copyToHost(got);
-  centroidsDev.copyToHost(centroids);
+  result.clusterIds.copyToHost(got);
+  result.centroids.copyToHost(centroids);
   cudaStreamSynchronize(stream);
-  return {got, centroids, numClusters};
+  return {got, centroids, result.numClusters};
 }
 
 void checkButinaCorrectness(const std::vector<uint8_t>& adjacency, const std::vector<int>& labels) {
@@ -164,18 +156,33 @@ TEST_P(ButinaSinglePointFixture, HandlesSinglePoint) {
   cudaStream_t                 stream = scopedStream.stream();
 
   AsyncDeviceVector<double> distancesDev(nPts * nPts, stream);
-  AsyncDeviceVector<int>    resultDev(nPts, stream);
   distancesDev.copyFromHost(std::vector<double>{0.0});
 
-  const int numClusters =
-    nvMolKit::butinaGpu(toSpan(distancesDev), toSpan(resultDev), cutoff, neighborlistMaxSize, {}, true, stream);
+  auto result =
+    nvMolKit::butinaFromDistanceMatrix(toSpan(distancesDev), nPts, cutoff, neighborlistMaxSize, false, true, stream);
   std::vector<int> got(nPts);
-  resultDev.copyToHost(got);
+  result.clusterIds.copyToHost(got);
   cudaStreamSynchronize(stream);
   EXPECT_THAT(got, ::testing::ElementsAre(0));
-  EXPECT_EQ(numClusters, 1);
+  EXPECT_EQ(result.numClusters, 1);
 }
 INSTANTIATE_TEST_SUITE_P(ButinaClusterTest, ButinaSinglePointFixture, ::testing::Values(8, 16, 24, 32, 64, 128));
+
+TEST(ButinaHitMatrixTest, ClustersInput) {
+  constexpr int                nPts = 3;
+  nvMolKit::ScopedStream const scopedStream;
+  cudaStream_t                 stream = scopedStream.stream();
+  AsyncDeviceVector<uint8_t>   hitMatrix(nPts * nPts, stream);
+  hitMatrix.copyFromHost(std::vector<uint8_t>{1, 1, 0, 1, 1, 0, 0, 0, 1});
+
+  auto             result = nvMolKit::butinaFromHitMatrix(toSpan(hitMatrix), nPts, 64, false, false, stream);
+  std::vector<int> clusterIds(nPts);
+  result.clusterIds.copyToHost(clusterIds);
+  cudaStreamSynchronize(stream);
+
+  EXPECT_THAT(clusterIds, ::testing::ElementsAre(0, 0, 1));
+  EXPECT_EQ(result.numClusters, 2);
+}
 
 class ButinaClusterTestFixture : public ::testing::TestWithParam<std::tuple<int, int>> {};
 TEST_P(ButinaClusterTestFixture, ClusteringMatchesReference) {

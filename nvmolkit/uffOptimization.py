@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from rdkit.Chem import Mol
 
 from nvmolkit import _uffOptimization
+from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions
 
 
 @overload

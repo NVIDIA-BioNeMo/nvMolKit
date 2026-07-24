@@ -38,12 +38,12 @@ namespace detail {
 
 // TODO explore std::memcmp for comparison and std::memcpy for cp/move.
 template <std::size_t NBits> struct FlatBitVectStorage {
-  using StorageType                          = std::int32_t;
+  using StorageType                          = std::uint32_t;
   constexpr static std::size_t kNBits        = NBits;
   constexpr static std::size_t kStorageBytes = sizeof(StorageType);
   constexpr static std::size_t kStorageBits  = kStorageBytes * 8;
   constexpr static std::size_t kStorageCount = (NBits + kStorageBits - 1) / kStorageBits;
-  std::uint32_t                bits[kStorageCount];
+  StorageType                  bits[kStorageCount];
 
   static_assert(kNBits > 0, "kNBits must be greater than 0");
   static_assert(kStorageCount > 0, "kStorageCount must be greater than 0");

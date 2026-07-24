@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING
 import torch
 
 from nvmolkit import _conformerRmsd
-from nvmolkit._arrayHelpers import *  # noqa: F403
 from nvmolkit.types import AsyncGpuResult
 
 if TYPE_CHECKING:

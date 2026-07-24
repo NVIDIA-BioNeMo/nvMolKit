@@ -106,15 +106,20 @@ std::vector<double> crossSimilarityImpl(const cuda::std::span<const std::uint32_
                                         const cuda::std::span<const std::uint32_t> bitsTwoBuffer,
                                         const int                                  fpSize,
                                         const CrossSimilarityOptions&              options,
-                                        LaunchKernelFn                             launchKernel) {
+                                        LaunchKernelFn                             launchKernel,
+                                        cudaStream_t                               inputStream) {
   const size_t nElementsPerFp = fpSize / (kBitsPerByte * sizeof(std::uint32_t));
   const size_t nFps1          = bitsOneBuffer.size() / nElementsPerFp;
   const size_t nFps2          = bitsTwoBuffer.size() / nElementsPerFp;
   const size_t freeBytes      = options.maxDeviceMemoryBytes.value_or(getDeviceFreeMemory());
 
+  ScopedCudaEvent inputsReady;
+  cudaCheckError(cudaEventRecord(inputsReady.event(), inputStream));
+
   // If there is enough memory, compute in one shot on the device then copy to host
   if (freeBytes >= nFps1 * nFps2 * sizeof(double)) {
-    ScopedStream              stream;
+    ScopedStream stream;
+    cudaCheckError(cudaStreamWaitEvent(stream.stream(), inputsReady.event()));
     AsyncDeviceVector<double> similarities_d(nFps1 * nFps2, stream.stream());
     launchKernel(bitsOneBuffer, bitsTwoBuffer, nElementsPerFp, toSpan(similarities_d), 0, stream.stream());
     std::vector<double> res(similarities_d.size());
@@ -135,6 +140,8 @@ std::vector<double> crossSimilarityImpl(const cuda::std::span<const std::uint32_
 
   // Prepare per-thread resources
   SimilaritiesRotBuffers rotBuffers;
+  cudaCheckError(cudaStreamWaitEvent(rotBuffers.streamA.stream(), inputsReady.event()));
+  cudaCheckError(cudaStreamWaitEvent(rotBuffers.streamB.stream(), inputsReady.event()));
   rotBuffers.bufferA = AsyncDeviceVector<double>(batchSizeA * nFps2, rotBuffers.streamA.stream());
   rotBuffers.bufferB = AsyncDeviceVector<double>(batchSizeA * nFps2, rotBuffers.streamB.stream());
 
@@ -239,7 +246,8 @@ std::vector<double> crossSimilarityImpl(const cuda::std::span<const std::uint32_
 std::vector<double> crossTanimotoSimilarityCPUResult(const cuda::std::span<const std::uint32_t> bitsOneBuffer,
                                                      const cuda::std::span<const std::uint32_t> bitsTwoBuffer,
                                                      const int                                  fpSize,
-                                                     const CrossSimilarityOptions&              options) {
+                                                     const CrossSimilarityOptions&              options,
+                                                     cudaStream_t                               stream) {
   return crossSimilarityImpl(
     bitsOneBuffer,
     bitsTwoBuffer,
@@ -250,7 +258,8 @@ std::vector<double> crossTanimotoSimilarityCPUResult(const cuda::std::span<const
        size_t                                     nElementsPerFp,
        const cuda::std::span<double>              out,
        int /*tile*/,
-       cudaStream_t stream) { launchCrossTanimotoSimilarity(bufA, bufB, nElementsPerFp, out, 0, stream); });
+       cudaStream_t stream) { launchCrossTanimotoSimilarity(bufA, bufB, nElementsPerFp, out, 0, stream); },
+    stream);
 }
 
 // --------------------------------
@@ -282,7 +291,8 @@ AsyncDeviceVector<double> crossCosineSimilarityGpuResult(const cuda::std::span<c
 std::vector<double> crossCosineSimilarityCPUResult(const cuda::std::span<const std::uint32_t> bitsOneBuffer,
                                                    const cuda::std::span<const std::uint32_t> bitsTwoBuffer,
                                                    const int                                  fpSize,
-                                                   const CrossSimilarityOptions&              options) {
+                                                   const CrossSimilarityOptions&              options,
+                                                   cudaStream_t                               stream) {
   return crossSimilarityImpl(
     bitsOneBuffer,
     bitsTwoBuffer,
@@ -293,7 +303,8 @@ std::vector<double> crossCosineSimilarityCPUResult(const cuda::std::span<const s
        size_t                                     nElementsPerFp,
        const cuda::std::span<double>              out,
        int /*tile*/,
-       cudaStream_t stream) { launchCrossCosineSimilarity(bufA, bufB, nElementsPerFp, out, 0, stream); });
+       cudaStream_t stream) { launchCrossCosineSimilarity(bufA, bufB, nElementsPerFp, out, 0, stream); },
+    stream);
 }
 
 }  // namespace nvMolKit
