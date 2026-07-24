@@ -581,5 +581,12 @@ std::vector<MCSResult> findMCESfMCSBatch(const std::vector<Graph>& graphsA,
   return runBatch<NullFMCSPolicy, Graph>(graphsA, graphsB, params, stream);
 }
 
+std::vector<MCSResult> findMCESfMCSBatchLabeled(const std::vector<LabeledGraph>& graphsA,
+                                                const std::vector<LabeledGraph>& graphsB,
+                                                Parameters                       params,
+                                                cudaStream_t                     stream) {
+  return runBatch<LabeledFMCSPolicy, LabeledGraph>(graphsA, graphsB, params, stream);
+}
+
 }  // namespace fmcs
 }  // namespace mcs
