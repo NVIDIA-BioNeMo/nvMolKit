@@ -81,6 +81,9 @@ target_compile_options(test_fmcs_grow
 add_executable(test_fmcs_foundations test_fmcs_foundations.cu)
 target_link_libraries(test_fmcs_foundations PRIVATE mcs_fmcs_foundations)
 
+add_executable(test_fmcs_policy test_fmcs_policy.cpp)
+target_link_libraries(test_fmcs_policy PRIVATE mcs_fmcs_foundations)
+
 add_executable(test_openmp_helpers test_openmp_helpers.cpp)
 target_link_libraries(test_openmp_helpers PRIVATE openmp_helpers
                                                   OpenMP::OpenMP_CXX)
@@ -428,6 +431,7 @@ set(TEST_LIST
     test_fmcs_primitives
     test_fmcs_foundations
     test_fmcs_grow
+    test_fmcs_policy
     test_work_splitting
     test_fire_minimizer
     test_fire_minimizer_permol)
