@@ -16,6 +16,7 @@
 #ifndef NVMOLKIT_MMFF_FLATTENED_BUILDER_H
 #define NVMOLKIT_MMFF_FLATTENED_BUILDER_H
 
+#include <memory>
 #include <mutex>
 
 #include "src/forcefields/mmff.h"
@@ -60,6 +61,15 @@ EnergyForceContribsHost constructForcefieldContribs(const RDKit::ROMol&         
 EnergyForceContribsHost constructForcefieldContribs(RDKit::ROMol&               mol,
                                                     const nvMolKit::MMFFProperties& props,
                                                     int                             confId = -1);
+
+//! Builds the RDKit MMFF atom typing/charges for \c mol.
+//! NOTE: RDKit's MMFFMolProperties constructor MUTATES the molecule (Kekulize, setMMFFAromaticity,
+//! and a _MMFFSanitized property write). Callers that share a molecule across threads must ensure
+//! this runs exactly once per molecule -- see the std::call_once use in the batch minimizers.
+//! Returns a shared_ptr so callers need only the forward declaration above: the deleter is bound
+//! here, where MMFFMolProperties is complete (its RDKit header is not self-contained).
+std::shared_ptr<RDKit::MMFF::MMFFMolProperties> makeMMFFMolProperties(RDKit::ROMol&                   mol,
+                                                                      const nvMolKit::MMFFProperties& props);
 
 }  // namespace nvMolKit::MMFF
 

@@ -1959,6 +1959,64 @@ TEST(MMFFMultiGPU, NonZeroGPUID) {
   }
 }
 
+// Regression test: several batch threads minimizing conformers of the same molecule used to build
+// that molecule's MMFF properties concurrently, and RDKit's MMFFMolProperties constructor mutates
+// the molecule it types. That produced wrong atom types (energies far from the RDKit reference) or
+// a corrupted property dict (heap corruption). Only one GPU is needed -- the trigger is the thread
+// count, not the device count, so batchesPerGpu is what matters here.
+TEST(MMFFThreadSafety, SharedMoleculeAcrossBatchThreads) {
+  nvMolKit::BatchHardwareOptions options;
+  options.batchSize     = 2;
+  options.batchesPerGpu = 4;  // 4 threads on one GPU
+  options.gpuIds.push_back(0);
+
+  constexpr int numMols        = 3;
+  constexpr int numConfsPerMol = 6;
+
+  std::vector<std::unique_ptr<RDKit::ROMol>> mols;
+  getMols(getTestDataFolderPath() + "/MMFF94_dative.sdf", mols, numMols);
+
+  std::vector<RDKit::ROMol*> molPtrs;
+  for (auto& mol : mols) {
+    for (int i = 1; i < numConfsPerMol; i++) {
+      auto conf = new RDKit::Conformer(mol->getConformer());
+      perturbConformer(*conf, 0.5f, i + 101);
+      mol->addConformer(conf, true);
+    }
+    molPtrs.push_back(mol.get());
+  }
+
+  std::vector<std::unique_ptr<RDKit::RWMol>> molCopies;
+  for (const auto& mol : mols) {
+    molCopies.push_back(std::make_unique<RDKit::RWMol>(*mol));
+    std::vector<std::pair<int, double>> res(molCopies.back()->getNumConformers(), {-1, -1});
+    RDKit::MMFF::MMFFOptimizeMoleculeConfs(*molCopies.back(), res);
+  }
+
+  std::vector<std::vector<double>> gotEnergies =
+    nvMolKit::MMFF::MMFFOptimizeMoleculesConfsBfgs(molPtrs, 200, nvMolKit::MMFFProperties{}, options);
+
+  ASSERT_EQ(gotEnergies.size(), mols.size());
+  for (size_t molIdx = 0; molIdx < mols.size(); ++molIdx) {
+    auto&                                    molRef   = *molCopies[molIdx];
+    auto                                     molProps = std::make_unique<RDKit::MMFF::MMFFMolProperties>(molRef);
+    std::unique_ptr<ForceFields::ForceField> refFF(RDKit::MMFF::constructForceField(molRef, molProps.get()));
+
+    const auto& energiesForMol = gotEnergies[molIdx];
+    ASSERT_EQ(energiesForMol.size(), molRef.getNumConformers());
+
+    int confIdx = 0;
+    for (auto confIter = molRef.beginConformers(); confIter != molRef.endConformers(); ++confIter) {
+      std::vector<double> posRef;
+      nvMolKit::confPosToVect(**confIter, posRef);
+      const double refEnergy = refFF->calcEnergy(posRef.data());
+      ASSERT_NEAR(energiesForMol[confIdx], refEnergy, 1e-4)
+        << "Energy mismatch vs RDKit reference for molecule " << molIdx << ", conformer " << confIdx;
+      confIdx++;
+    }
+  }
+}
+
 TEST(MMFFMultiGPU, MultiGPUSpecificIds) {
   // Requires multiple GPUs
   const int numDevices = nvMolKit::countCudaDevices();
