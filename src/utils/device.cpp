@@ -37,18 +37,60 @@ WithDevice::~WithDevice() {
   cudaCheckErrorNoThrow(cudaSetDevice(original_device_id_));
 }
 
+namespace {
+
+//! Returns true if `stream` belongs to the current device.
+//! cudaStreamQuery accepts streams from any device in the process, so it cannot answer this on its
+//! own.
+bool streamIsOnCurrentDevice(cudaStream_t stream) {
+#if CUDART_VERSION >= 12080
+  int currentDevice = -1;
+  if (cudaGetDevice(&currentDevice) != cudaSuccess) {
+    cudaGetLastError();
+    return false;
+  }
+  int streamDevice = -1;
+  if (cudaStreamGetDevice(stream, &streamDevice) != cudaSuccess) {
+    cudaGetLastError();
+    return false;
+  }
+  return streamDevice == currentDevice;
+#else
+  // cudaStreamGetDevice needs CUDA 12.8. Below that, probe with an event instead: an event and the
+  // stream it is recorded into must share a CUDA context, so recording an event created on the
+  // current device fails with cudaErrorInvalidResourceHandle if the stream belongs to another one.
+  cudaEvent_t probe = nullptr;
+  if (cudaEventCreateWithFlags(&probe, cudaEventDisableTiming) != cudaSuccess) {
+    cudaGetLastError();
+    return false;
+  }
+  const cudaError_t recordErr = cudaEventRecord(probe, stream);
+  cudaCheckErrorNoThrow(cudaEventDestroy(probe));
+  if (recordErr != cudaSuccess) {
+    cudaGetLastError();
+    return false;
+  }
+  return true;
+#endif
+}
+
+}  // namespace
+
 std::optional<cudaStream_t> acquireExternalStream(std::uintptr_t streamPtr) {
   auto stream = reinterpret_cast<cudaStream_t>(streamPtr);
   if (streamPtr == 0) {
     return stream;
   }
   cudaError_t err = cudaStreamQuery(stream);
-  if (err == cudaSuccess || err == cudaErrorNotReady) {
-    return stream;
+  if (err != cudaSuccess && err != cudaErrorNotReady) {
+    // Clear the sticky error state
+    cudaGetLastError();
+    return std::nullopt;
   }
-  // Clear the sticky error state
-  cudaGetLastError();
-  return std::nullopt;
+  if (!streamIsOnCurrentDevice(stream)) {
+    return std::nullopt;
+  }
+  return stream;
 }
 
 size_t getDeviceFreeMemory() {
