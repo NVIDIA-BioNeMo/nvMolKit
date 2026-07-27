@@ -196,7 +196,7 @@ class SubstructureSearchTest : public ::testing::TestWithParam<SubstructAlgorith
 // Instantiate parameterized tests for all algorithms
 INSTANTIATE_TEST_SUITE_P(AllAlgorithms,
                          SubstructureSearchTest,
-                         ::testing::Values(SubstructAlgorithm::GSI, SubstructAlgorithm::VF2),
+                         ::testing::Values(SubstructAlgorithm::GSI, SubstructAlgorithm::VF2, SubstructAlgorithm::DFS),
                          [](const ::testing::TestParamInfo<SubstructAlgorithm>& info) {
                            return algorithmName(info.param);
                          });
@@ -204,9 +204,9 @@ INSTANTIATE_TEST_SUITE_P(AllAlgorithms,
 // Fixture for recursive SMARTS tests - VF2 doesn't support recursion
 class RecursiveSubstructureSearchTest : public SubstructureSearchTest {};
 
-INSTANTIATE_TEST_SUITE_P(GSIOnly,
+INSTANTIATE_TEST_SUITE_P(RecursiveAlgorithms,
                          RecursiveSubstructureSearchTest,
-                         ::testing::Values(SubstructAlgorithm::GSI),
+                         ::testing::Values(SubstructAlgorithm::GSI, SubstructAlgorithm::DFS),
                          [](const ::testing::TestParamInfo<SubstructAlgorithm>& info) {
                            return algorithmName(info.param);
                          });

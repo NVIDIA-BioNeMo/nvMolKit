@@ -248,6 +248,177 @@ __device__ void vf2SearchGPU(const TargetMoleculeView&                          
 }
 
 // =============================================================================
+// Adjacency-Anchored DFS Algorithm Implementation
+// =============================================================================
+
+/**
+ * @brief Per-warp state for the adjacency-anchored DFS backend.
+ *
+ * State lives explicitly in shared memory so the compiler does not create
+ * lane-private local-memory stacks for the maximum query configurations.
+ */
+template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms> struct alignas(8) DFSStateT {
+  static constexpr int kUsedWords = (MaxTargetAtoms + 63) / 64;
+
+  int8_t   mapping[MaxQueryAtoms];
+  uint16_t candidateIdx[MaxQueryAtoms];
+  uint64_t usedTargets[kUsedWords];
+  int      depth;
+
+  __device__ __forceinline__ void init() {
+#pragma unroll
+    for (std::size_t i = 0; i < MaxQueryAtoms; ++i) {
+      candidateIdx[i] = 0;
+    }
+#pragma unroll
+    for (int i = 0; i < kUsedWords; ++i) {
+      usedTargets[i] = 0;
+    }
+    depth = 0;
+  }
+
+  __device__ __forceinline__ bool isTargetUsed(int targetAtom) const {
+    return (usedTargets[targetAtom >> 6] >> (targetAtom & 63)) & 1ULL;
+  }
+
+  __device__ __forceinline__ void setTargetUsed(int targetAtom) {
+    usedTargets[targetAtom >> 6] |= 1ULL << (targetAtom & 63);
+  }
+
+  __device__ __forceinline__ void clearTargetUsed(int targetAtom) {
+    usedTargets[targetAtom >> 6] &= ~(1ULL << (targetAtom & 63));
+  }
+};
+
+/**
+ * @brief Iterative DFS using mapped-neighbor candidate enumeration.
+ *
+ * Each warp owns one shared DFS state and explores a stripe of root atoms.
+ * At connected depths, candidates come only from the adjacency list of an
+ * already-mapped query neighbor. Disconnected components fall back to scanning
+ * target atoms. A target-used bitset makes injectivity checks constant-time.
+ *
+ * @tparam OutputMode Store complete mappings or paint recursive-match bits
+ */
+template <std::size_t         MaxTargetAtoms,
+          std::size_t         MaxQueryAtoms,
+          int                 MaxBondsPerAtom = kMaxBondsPerAtom,
+          SubstructOutputMode OutputMode      = SubstructOutputMode::StoreMatches>
+__device__ __forceinline__ void dfsSearchGPU(const TargetMoleculeView&                             target,
+                                             const QueryMoleculeView&                              query,
+                                             const BitMatrix2DView<MaxTargetAtoms, MaxQueryAtoms>& labelMatrix,
+                                             DFSStateT<MaxTargetAtoms, MaxQueryAtoms>&             state,
+                                             int                                                   startingTargetAtom,
+                                             int*                                                  matchCount,
+                                             int*                                                  reportedCount,
+                                             int16_t*                                              matchIndices,
+                                             int             totalMatchStorageCapacity,
+                                             int             matchOffset,
+                                             PaintModeParams paintParams      = {},
+                                             int             maxMatchesToFind = -1,
+                                             bool            countOnly        = false) {
+  const int laneId = threadIdx.x & (kWarpSize - 1);
+  if (laneId != 0) {
+    return;
+  }
+
+  const int numQueryAtoms = query.numAtoms;
+  if (startingTargetAtom >= target.numAtoms || !labelMatrix.get(startingTargetAtom, 0) ||
+      target.targetAtomBonds[startingTargetAtom].degree < query.getQueryBonds(0).degree) {
+    return;
+  }
+
+  state.init();
+  state.mapping[0] = static_cast<int8_t>(startingTargetAtom);
+  state.setTargetUsed(startingTargetAtom);
+  state.depth = 1;
+
+  const bool hasEarlyExitLimit = maxMatchesToFind >= 0;
+
+  while (state.depth > 0) {
+    if (hasEarlyExitLimit && *matchCount >= maxMatchesToFind) {
+      break;
+    }
+
+    if (state.depth == numQueryAtoms) {
+      const int matchIdx = atomicAdd(matchCount, 1);
+
+      if constexpr (OutputMode == SubstructOutputMode::StoreMatches) {
+        if (!countOnly && matchIdx < totalMatchStorageCapacity) {
+          const int writeOffset = matchOffset + matchIdx * numQueryAtoms;
+          for (int q = 0; q < numQueryAtoms; ++q) {
+            matchIndices[writeOffset + q] = state.mapping[q];
+          }
+          atomicAdd(reportedCount, 1);
+        }
+      } else {
+        const int rootTarget = state.mapping[0];
+        atomicOr(&paintParams.recursiveBits[paintParams.outputPairIdx * paintParams.maxTargetAtoms + rootTarget],
+                 1u << paintParams.patternId);
+        atomicAdd(reportedCount, 1);
+      }
+
+      --state.depth;
+      if (state.depth > 0) {
+        state.clearTargetUsed(state.mapping[state.depth]);
+        ++state.candidateIdx[state.depth];
+      }
+      continue;
+    }
+
+    const int             queryAtom       = state.depth;
+    const QueryAtomBonds& queryBonds      = query.getQueryBonds(queryAtom);
+    int                   anchorQueryAtom = -1;
+    for (int bondIdx = 0; bondIdx < queryBonds.degree; ++bondIdx) {
+      const int neighborQueryAtom = queryBonds.neighborIdx[bondIdx];
+      if (neighborQueryAtom < queryAtom) {
+        anchorQueryAtom = neighborQueryAtom;
+        break;
+      }
+    }
+
+    const TargetAtomBonds* anchorBonds =
+      anchorQueryAtom >= 0 ? &target.targetAtomBonds[state.mapping[anchorQueryAtom]] : nullptr;
+    const int candidateCount = anchorBonds != nullptr ? anchorBonds->degree : target.numAtoms;
+
+    bool foundCandidate = false;
+    while (state.candidateIdx[queryAtom] < candidateCount) {
+      const int candidateTarget = anchorBonds != nullptr ? anchorBonds->neighborIdx[state.candidateIdx[queryAtom]] :
+                                                           state.candidateIdx[queryAtom];
+
+      const bool feasible = !state.isTargetUsed(candidateTarget) && labelMatrix.get(candidateTarget, queryAtom) &&
+                            target.targetAtomBonds[candidateTarget].degree >= queryBonds.degree &&
+                            checkEdgeConsistencyPacked<MaxBondsPerAtom>(target.targetAtomBonds,
+                                                                        queryBonds,
+                                                                        state.mapping,
+                                                                        queryAtom,
+                                                                        candidateTarget);
+
+      if (feasible) {
+        state.mapping[queryAtom] = static_cast<int8_t>(candidateTarget);
+        state.setTargetUsed(candidateTarget);
+        if (queryAtom + 1 < numQueryAtoms) {
+          state.candidateIdx[queryAtom + 1] = 0;
+        }
+        ++state.depth;
+        foundCandidate = true;
+        break;
+      }
+      ++state.candidateIdx[queryAtom];
+    }
+
+    if (!foundCandidate) {
+      state.candidateIdx[queryAtom] = 0;
+      --state.depth;
+      state.clearTargetUsed(state.mapping[state.depth]);
+      if (state.depth > 0) {
+        ++state.candidateIdx[state.depth];
+      }
+    }
+  }
+}
+
+// =============================================================================
 // GSI BFS Algorithm Implementation
 // =============================================================================
 

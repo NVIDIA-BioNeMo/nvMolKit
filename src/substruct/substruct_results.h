@@ -27,7 +27,8 @@ namespace nvMolKit {
  */
 enum class SubstructAlgorithm {
   VF2,  ///< VF2 iterative stack-based DFS
-  GSI   ///< GSI-inspired BFS level-by-level join
+  GSI,  ///< GSI-inspired BFS level-by-level join
+  DFS   ///< Adjacency-anchored DFS with injectivity bitsets
 };
 
 /**

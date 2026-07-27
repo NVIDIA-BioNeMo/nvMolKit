@@ -285,7 +285,7 @@ const ThreadingConfig kMainTestThreadingConfigs[] = {
 
 INSTANTIATE_TEST_SUITE_P(AllCombinations,
                          SubstructureIntegrationTest,
-                         ::testing::Combine(::testing::Values(SubstructAlgorithm::GSI),
+                         ::testing::Combine(::testing::Values(SubstructAlgorithm::GSI, SubstructAlgorithm::DFS),
                                             ::testing::ValuesIn(kDatasets),
                                             ::testing::ValuesIn(kMainTestThreadingConfigs),
                                             ::testing::Values(SubstructMode::Matches)),
@@ -294,29 +294,32 @@ INSTANTIATE_TEST_SUITE_P(AllCombinations,
                                   std::get<1>(info.param).name + "_" + std::get<2>(info.param).name;
                          });
 
-INSTANTIATE_TEST_SUITE_P(ConfigOptionTests,
-                         SubstructureIntegrationTest,
-                         ::testing::Values(SubstructParams{SubstructAlgorithm::GSI,
-                                                           kDatasets[0],
-                                                           kThreadingConfigs[2],
-                                                           SubstructMode::Matches},  // Autoselect
-                                           SubstructParams{SubstructAlgorithm::GSI,
-                                                           kDatasets[0],
-                                                           kThreadingConfigs[0],
-                                                           SubstructMode::HasMatch},  // SingleThreaded, bool
-                                           SubstructParams{SubstructAlgorithm::GSI,
-                                                           kDatasets[3],
-                                                           kThreadingConfigs[2],
-                                                           SubstructMode::CountMatches}),  // Autoselect, counts
-                         [](const ::testing::TestParamInfo<SubstructParams>& info) {
-                           const SubstructMode mode = std::get<3>(info.param);
-                           const char*         modeSuffix =
-                             (mode == SubstructMode::HasMatch) ?
+INSTANTIATE_TEST_SUITE_P(
+  ConfigOptionTests,
+  SubstructureIntegrationTest,
+  ::testing::Values(
+    SubstructParams{SubstructAlgorithm::GSI, kDatasets[0], kThreadingConfigs[2], SubstructMode::Matches},  // Autoselect
+    SubstructParams{SubstructAlgorithm::GSI,
+                    kDatasets[0],
+                    kThreadingConfigs[0],
+                    SubstructMode::HasMatch},  // SingleThreaded, bool
+    SubstructParams{SubstructAlgorithm::GSI,
+                    kDatasets[3],
+                    kThreadingConfigs[2],
+                    SubstructMode::CountMatches},  // Autoselect, counts
+    SubstructParams{SubstructAlgorithm::DFS, kDatasets[0], kThreadingConfigs[0], SubstructMode::HasMatch},  // DFS bool
+    SubstructParams{SubstructAlgorithm::DFS,
+                    kDatasets[3],
+                    kThreadingConfigs[2],
+                    SubstructMode::CountMatches}),  // DFS counts
+  [](const ::testing::TestParamInfo<SubstructParams>& info) {
+    const SubstructMode mode       = std::get<3>(info.param);
+    const char*         modeSuffix = (mode == SubstructMode::HasMatch) ?
                                        "HasSubstructMatch" :
                                        (mode == SubstructMode::CountMatches ? "CountSubstructMatches" : "Autoselect");
-                           return std::string(algorithmName(std::get<0>(info.param))) + "_" +
-                                  std::get<1>(info.param).name + "_" + std::get<2>(info.param).name + "_" + modeSuffix;
-                         });
+    return std::string(algorithmName(std::get<0>(info.param))) + "_" + std::get<1>(info.param).name + "_" +
+           std::get<2>(info.param).name + "_" + modeSuffix;
+  });
 
 TEST_P(SubstructureIntegrationTest, ChemblVsSmarts) {
   const std::string smilesPath = testDataPath_ + "/chembl_1k.smi";

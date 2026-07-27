@@ -313,7 +313,7 @@ __global__ void labelMatrixPaintKernelT(TargetMoleculesDeviceView  targets,
  * @tparam MaxTargetAtoms Maximum target atoms for label matrix sizing
  * @tparam MaxQueryAtoms Maximum query atoms for label matrix and partial match sizing
  * @tparam MaxBondsPerAtom Maximum bonds per atom for edge consistency loop unrolling
- * @tparam Algo Algorithm to use (VF2 or GSI)
+ * @tparam Algo Algorithm to use (VF2, GSI, or DFS)
  */
 template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms, int MaxBondsPerAtom, SubstructAlgorithm Algo>
 __global__ void substructMatchKernelT(TargetMoleculesDeviceView                       targets,
@@ -444,6 +444,29 @@ __global__ void substructMatchKernelT(TargetMoleculesDeviceView                 
                                                                    countOnly);
     }
 
+  } else if constexpr (Algo == SubstructAlgorithm::DFS) {
+    namespace cg       = cooperative_groups;
+    auto      tile32   = cg::tiled_partition<32>(cg::this_thread_block());
+    const int warpId   = tile32.meta_group_rank();
+    const int numWarps = tile32.meta_group_size();
+
+    __shared__ DFSStateT<MaxTargetAtoms, MaxQueryAtoms> dfsStates[kWarpsPerBlock];
+
+    for (int startT = warpId; startT < target.numAtoms; startT += numWarps) {
+      dfsSearchGPU<MaxTargetAtoms, MaxQueryAtoms, MaxBondsPerAtom>(target,
+                                                                   query,
+                                                                   labelMatrix,
+                                                                   dfsStates[warpId],
+                                                                   startT,
+                                                                   &sharedMatchCount,
+                                                                   &sharedReportedCount,
+                                                                   results.matchIndices,
+                                                                   maxMatches,
+                                                                   matchOffset,
+                                                                   {},
+                                                                   maxMatchesToFind,
+                                                                   countOnly);
+    }
   } else if constexpr (Algo == SubstructAlgorithm::GSI) {
     constexpr int kBlockSizeT = getBlockSizeForConfig<MaxTargetAtoms>();
     constexpr int kMaxPartialsT =
@@ -495,7 +518,7 @@ __global__ void substructMatchKernelT(TargetMoleculesDeviceView                 
  * @tparam MaxTargetAtoms Maximum target atoms for label matrix sizing
  * @tparam MaxQueryAtoms Maximum query atoms for label matrix and partial match sizing
  * @tparam MaxBondsPerAtom Maximum bonds per atom for edge consistency loop unrolling
- * @tparam Algo Algorithm to use (VF2 or GSI)
+ * @tparam Algo Algorithm to use (GSI or DFS)
  */
 template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms, int MaxBondsPerAtom, SubstructAlgorithm Algo>
 __global__ void substructPaintKernelT(TargetMoleculesDeviceView     targets,
@@ -595,7 +618,28 @@ __global__ void substructPaintKernelT(TargetMoleculesDeviceView     targets,
 
   constexpr int gsiBuffersPerBlock = 2;
 
-  if constexpr (Algo == SubstructAlgorithm::GSI) {
+  if constexpr (Algo == SubstructAlgorithm::DFS) {
+    namespace cg       = cooperative_groups;
+    auto      tile32   = cg::tiled_partition<32>(cg::this_thread_block());
+    const int warpId   = tile32.meta_group_rank();
+    const int numWarps = tile32.meta_group_size();
+
+    __shared__ DFSStateT<MaxTargetAtoms, MaxQueryAtoms> dfsStates[kWarpsPerBlock];
+
+    for (int startT = warpId; startT < target.numAtoms; startT += numWarps) {
+      dfsSearchGPU<MaxTargetAtoms, MaxQueryAtoms, MaxBondsPerAtom, SubstructOutputMode::PaintBits>(target,
+                                                                                                   pattern,
+                                                                                                   labelMatrix,
+                                                                                                   dfsStates[warpId],
+                                                                                                   startT,
+                                                                                                   &sharedMatchCount,
+                                                                                                   &sharedReportedCount,
+                                                                                                   nullptr,
+                                                                                                   0,
+                                                                                                   0,
+                                                                                                   paintParams);
+    }
+  } else if constexpr (Algo == SubstructAlgorithm::GSI) {
     constexpr int kBlockSizeT = getBlockSizeForConfig<MaxTargetAtoms>();
     constexpr int kMaxPartialsT =
       getMaxPartialsForSM<MaxTargetAtoms, MaxQueryAtoms>(getComputeCapability(), kBlockSizeT);
@@ -628,7 +672,7 @@ __global__ void substructPaintKernelT(TargetMoleculesDeviceView     targets,
 // Explicit Template Instantiations for All 24 Valid Configurations
 // =============================================================================
 
-// Helper macro to instantiate both VF2 and GSI for a given configuration
+// Helper macro to instantiate all supported algorithms for a given configuration
 #define INSTANTIATE_SUBSTRUCT_KERNELS(MaxT, MaxQ, MaxB)                                      \
   template __global__ void substructMatchKernelT<MaxT, MaxQ, MaxB, SubstructAlgorithm::VF2>( \
     TargetMoleculesDeviceView,                                                               \
@@ -646,7 +690,32 @@ __global__ void substructPaintKernelT(TargetMoleculesDeviceView     targets,
     int,                                                                                     \
     const int*,                                                                              \
     DeviceTimingsData*);                                                                     \
+  template __global__ void substructMatchKernelT<MaxT, MaxQ, MaxB, SubstructAlgorithm::DFS>( \
+    TargetMoleculesDeviceView,                                                               \
+    QueryMoleculesDeviceView,                                                                \
+    SubstructMatchResultsDeviceViewT<MaxQ>,                                                  \
+    const int*,                                                                              \
+    int,                                                                                     \
+    const int*,                                                                              \
+    DeviceTimingsData*);                                                                     \
   template __global__ void substructPaintKernelT<MaxT, MaxQ, MaxB, SubstructAlgorithm::GSI>( \
+    TargetMoleculesDeviceView,                                                               \
+    QueryMoleculesDeviceView,                                                                \
+    const BatchedPatternEntry*,                                                              \
+    int,                                                                                     \
+    uint32_t*,                                                                               \
+    int,                                                                                     \
+    int,                                                                                     \
+    int,                                                                                     \
+    int,                                                                                     \
+    int,                                                                                     \
+    int,                                                                                     \
+    PartialMatchT<MaxQ>*,                                                                    \
+    PartialMatchT<MaxQ>*,                                                                    \
+    int,                                                                                     \
+    const uint32_t*,                                                                         \
+    int);                                                                                    \
+  template __global__ void substructPaintKernelT<MaxT, MaxQ, MaxB, SubstructAlgorithm::DFS>( \
     TargetMoleculesDeviceView,                                                               \
     QueryMoleculesDeviceView,                                                                \
     const BatchedPatternEntry*,                                                              \
@@ -971,6 +1040,25 @@ void launchSubstructPaintKernelForConfig(SubstructAlgorithm         algorithm,
   switch (algorithm) {
     case SubstructAlgorithm::VF2:
       break;
+    case SubstructAlgorithm::DFS:
+      substructPaintKernelT<MaxTargetAtoms, MaxQueryAtoms, MaxBondsPerAtom, SubstructAlgorithm::DFS>
+        <<<numBlocks, kBlockSize, 0, stream>>>(targets,
+                                               patterns,
+                                               patternEntries,
+                                               numPatterns,
+                                               outputRecursiveBits,
+                                               maxTargetAtoms,
+                                               outputNumQueries,
+                                               defaultPatternId,
+                                               defaultMainQueryIdx,
+                                               miniBatchPairOffset,
+                                               miniBatchSize,
+                                               reinterpret_cast<PartialMatchT<MaxQueryAtoms>*>(overflowA),
+                                               reinterpret_cast<PartialMatchT<MaxQueryAtoms>*>(overflowB),
+                                               overflowCapacity,
+                                               labelMatrixBuffer,
+                                               firstTargetIdx);
+      break;
     case SubstructAlgorithm::GSI:
       substructPaintKernelT<MaxTargetAtoms, MaxQueryAtoms, MaxBondsPerAtom, SubstructAlgorithm::GSI>
         <<<numBlocks, kBlockSize, 0, stream>>>(targets,
@@ -1046,6 +1134,10 @@ void configureSubstructKernelsSharedMem() {
     substructMatchKernelT<kMaxTargetAtoms, kMaxQueryAtoms, kMaxBondsPerAtom, SubstructAlgorithm::GSI>);
   configureSharedMemCarveout(
     substructPaintKernelT<kMaxTargetAtoms, kMaxQueryAtoms, kMaxBondsPerAtom, SubstructAlgorithm::GSI>);
+  configureSharedMemCarveout(
+    substructMatchKernelT<kMaxTargetAtoms, kMaxQueryAtoms, kMaxBondsPerAtom, SubstructAlgorithm::DFS>);
+  configureSharedMemCarveout(
+    substructPaintKernelT<kMaxTargetAtoms, kMaxQueryAtoms, kMaxBondsPerAtom, SubstructAlgorithm::DFS>);
 
   sharedMemCarveoutConfigured() = true;
 }
@@ -1087,6 +1179,16 @@ void launchMatchKernelForConfig(SubstructAlgorithm            algorithm,
   switch (algorithm) {
     case SubstructAlgorithm::VF2:
       substructMatchKernelT<MaxTargetAtoms, MaxQueryAtoms, MaxBondsPerAtom, SubstructAlgorithm::VF2>
+        <<<numPairs, kBlockSize, 0, stream>>>(targets,
+                                              queries,
+                                              results,
+                                              pairIndices,
+                                              numQueries,
+                                              batchLocalIndices,
+                                              timings);
+      break;
+    case SubstructAlgorithm::DFS:
+      substructMatchKernelT<MaxTargetAtoms, MaxQueryAtoms, MaxBondsPerAtom, SubstructAlgorithm::DFS>
         <<<numPairs, kBlockSize, 0, stream>>>(targets,
                                               queries,
                                               results,

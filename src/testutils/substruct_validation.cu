@@ -69,6 +69,8 @@ std::string algorithmName(SubstructAlgorithm algo) {
       return "VF2";
     case SubstructAlgorithm::GSI:
       return "GSI";
+    case SubstructAlgorithm::DFS:
+      return "DFS";
   }
   return "Unknown";
 }
