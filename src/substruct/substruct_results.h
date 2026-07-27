@@ -53,9 +53,10 @@ struct SubstructSearchConfig {
   int workerThreads        = -1;    ///< GPU runner threads per GPU (-1 = autoselect)
   int preprocessingThreads = -1;  ///< CPU threads for preprocessing and opportunistic RDKit fallback (-1 = autoselect)
   int executorsPerRunner   = -1;  ///< GPU executors per runner thread (-1 = auto: 3 for single runner, 2 otherwise)
-  std::vector<int> gpuIds;        ///< GPU device IDs to use (empty = current device only)
-  int              maxMatches = 0;      ///< Max matches per pair (0 = unlimited, like RDKit)
-  bool             uniquify   = false;  ///< Remove duplicate matches differing only in atom enumeration order
+  std::vector<int>   gpuIds;      ///< GPU device IDs to use (empty = current device only)
+  int                maxMatches = 0;      ///< Max matches per pair (0 = unlimited, like RDKit)
+  bool               uniquify   = false;  ///< Remove duplicate matches differing only in atom enumeration order
+  SubstructAlgorithm algorithm  = SubstructAlgorithm::GSI;  ///< Matching backend used by high-level APIs
 };
 
 /**

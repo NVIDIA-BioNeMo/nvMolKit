@@ -49,6 +49,13 @@ __all__ = [
 ]
 
 
+def _normalize_algorithm(value: str) -> str:
+    algorithm = str(value).lower()
+    if algorithm not in {"gsi", "dfs"}:
+        raise ValueError("algorithm must be 'gsi' or 'dfs'")
+    return algorithm
+
+
 class SubstructSearchConfig:
     """Configuration for GPU substructure search execution.
 
@@ -60,6 +67,7 @@ class SubstructSearchConfig:
         uniquify: If True, remove duplicate matches that differ only in
             atom enumeration order. Default False.
         gpuIds: GPU device IDs to use. ``None`` or empty list uses current device only.
+        algorithm: Matching backend, either ``"gsi"`` (default) or ``"dfs"``.
     """
 
     def __init__(
@@ -70,6 +78,7 @@ class SubstructSearchConfig:
         maxMatches: int = 0,
         uniquify: bool = False,
         gpuIds: list[int] | None = None,
+        algorithm: str = "gsi",
     ) -> None:
         native = _NativeSubstructSearchConfig()
         native.batchSize = int(batchSize)
@@ -78,6 +87,7 @@ class SubstructSearchConfig:
         native.maxMatches = int(maxMatches)
         native.uniquify = bool(uniquify)
         native.gpuIds = list(gpuIds) if gpuIds is not None else []
+        native.algorithm = _normalize_algorithm(algorithm)
         self._native = native
 
     @property
@@ -134,6 +144,15 @@ class SubstructSearchConfig:
     def gpuIds(self, value: list[int]) -> None:
         self._native.gpuIds = list(value)
 
+    @property
+    def algorithm(self) -> str:
+        """Matching backend: ``"gsi"`` or ``"dfs"``."""
+        return self._native.algorithm
+
+    @algorithm.setter
+    def algorithm(self, value: str) -> None:
+        self._native.algorithm = _normalize_algorithm(value)
+
     def _as_native(self):
         """Internal: return the underlying native config object."""
         return self._native
@@ -147,12 +166,13 @@ class SubstructSearchConfig:
             "maxMatches": self.maxMatches,
             "uniquify": self.uniquify,
             "gpuIds": list(self.gpuIds),
+            "algorithm": self.algorithm,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SubstructSearchConfig":
         """Create a :class:`SubstructSearchConfig` from a dictionary produced by :meth:`to_dict`."""
-        known = {"batchSize", "workerThreads", "preprocessingThreads", "maxMatches", "uniquify", "gpuIds"}
+        known = {"batchSize", "workerThreads", "preprocessingThreads", "maxMatches", "uniquify", "gpuIds", "algorithm"}
         unknown = set(data) - known
         if unknown:
             raise ValueError(f"Unknown SubstructSearchConfig keys: {sorted(unknown)}")

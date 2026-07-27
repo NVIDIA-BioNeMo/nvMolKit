@@ -20,6 +20,8 @@
 #include <boost/python/stl_iterator.hpp>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "nvmolkit/boost_python_utils.h"
@@ -92,6 +94,28 @@ void setGpuIdsPy(nvMolKit::SubstructSearchConfig& config, const object& iterable
   config.gpuIds = listFromIterable<int>(iterable);
 }
 
+std::string getAlgorithmPy(const nvMolKit::SubstructSearchConfig& config) {
+  switch (config.algorithm) {
+    case nvMolKit::SubstructAlgorithm::GSI:
+      return "gsi";
+    case nvMolKit::SubstructAlgorithm::DFS:
+      return "dfs";
+    case nvMolKit::SubstructAlgorithm::VF2:
+      return "vf2";
+  }
+  throw std::invalid_argument("Unknown substructure algorithm");
+}
+
+void setAlgorithmPy(nvMolKit::SubstructSearchConfig& config, const std::string& algorithm) {
+  if (algorithm == "gsi") {
+    config.algorithm = nvMolKit::SubstructAlgorithm::GSI;
+  } else if (algorithm == "dfs") {
+    config.algorithm = nvMolKit::SubstructAlgorithm::DFS;
+  } else {
+    throw std::invalid_argument("algorithm must be 'gsi' or 'dfs'");
+  }
+}
+
 }  // namespace
 
 BOOST_PYTHON_MODULE(_substructure) {
@@ -104,7 +128,8 @@ BOOST_PYTHON_MODULE(_substructure) {
     .def_readwrite("preprocessingThreads", &nvMolKit::SubstructSearchConfig::preprocessingThreads)
     .def_readwrite("maxMatches", &nvMolKit::SubstructSearchConfig::maxMatches)
     .def_readwrite("uniquify", &nvMolKit::SubstructSearchConfig::uniquify)
-    .add_property("gpuIds", &getGpuIdsPy, &setGpuIdsPy);
+    .add_property("gpuIds", &getGpuIdsPy, &setGpuIdsPy)
+    .add_property("algorithm", &getAlgorithmPy, &setAlgorithmPy);
 
   def(
     "getSubstructMatches",
@@ -133,12 +158,7 @@ BOOST_PYTHON_MODULE(_substructure) {
       extractRange.pop();
 
       nvMolKit::SubstructSearchResults results;
-      nvMolKit::getSubstructMatches(targetsVec,
-                                    queriesVec,
-                                    results,
-                                    nvMolKit::SubstructAlgorithm::GSI,
-                                    nullptr,
-                                    config);
+      nvMolKit::getSubstructMatches(targetsVec, queriesVec, results, config.algorithm, nullptr, config);
 
       auto csrPtr        = std::make_unique<SubstructMatchesCSR>();
       csrPtr->numTargets = results.numTargets;
@@ -244,12 +264,7 @@ BOOST_PYTHON_MODULE(_substructure) {
       const int numQueries = static_cast<int>(queriesVec.size());
 
       auto countsPtr = std::make_unique<std::vector<int>>();
-      nvMolKit::countSubstructMatches(targetsVec,
-                                      queriesVec,
-                                      *countsPtr,
-                                      nvMolKit::SubstructAlgorithm::GSI,
-                                      nullptr,
-                                      config);
+      nvMolKit::countSubstructMatches(targetsVec, queriesVec, *countsPtr, config.algorithm, nullptr, config);
 
       nvMolKit::ScopedNvtxRange wrapRange("Python: wrap numpy array", nvMolKit::NvtxColor::kGreen);
       int*                      dataPtr = countsPtr->data();
@@ -304,12 +319,7 @@ BOOST_PYTHON_MODULE(_substructure) {
       extractRange.pop();
 
       auto resultsPtr = std::make_unique<nvMolKit::HasSubstructMatchResults>();
-      nvMolKit::hasSubstructMatch(targetsVec,
-                                  queriesVec,
-                                  *resultsPtr,
-                                  nvMolKit::SubstructAlgorithm::GSI,
-                                  nullptr,
-                                  config);
+      nvMolKit::hasSubstructMatch(targetsVec, queriesVec, *resultsPtr, config.algorithm, nullptr, config);
 
       nvMolKit::ScopedNvtxRange wrapRange("Python: wrap numpy array", nvMolKit::NvtxColor::kGreen);
       const int                 numTargets = resultsPtr->numTargets;

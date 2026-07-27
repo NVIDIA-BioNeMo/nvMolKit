@@ -35,6 +35,9 @@ Usage:
     # Get all matches instead of just boolean:
     python substruct_bench.py --smiles <smiles_file> --smarts <smarts_file> --mode getSubstructMatches
 
+    # Select the adjacency-anchored DFS backend (GSI is the default):
+    python substruct_bench.py --smiles <smiles_file> --smarts <smarts_file> --algorithm dfs
+
     # Limit to first 10 matches per target/query pair:
     python substruct_bench.py --smiles <smiles_file> --smarts <smarts_file> --mode getSubstructMatches --max_matches 10
 
@@ -51,7 +54,8 @@ Usage:
     python substruct_bench.py --smiles <smiles_file> --smarts <smarts_file> \
         --rdkit_match_mode raw substructlib --rdkit_threads 1 4 16
 
-    # Run multiple configurations from a dataframe (smarts, batch_size, workers, prep_threads, mode, num_gpus):
+    # Run multiple configurations from a dataframe
+    # (smarts, batch_size, workers, prep_threads, mode, num_gpus, optional algorithm):
     python substruct_bench.py --smiles <smiles_file> --config <config.csv>
 
 """
@@ -325,7 +329,7 @@ def main():
         "--config",
         help=(
             "Path to config dataframe (.csv/.pkl/.pickle/.parquet) with columns: "
-            "smarts, batch_size, workers, prep_threads, mode, num_gpus"
+            "smarts, batch_size, workers, prep_threads, mode, num_gpus, optional algorithm"
         ),
     )
     parser.add_argument("--num_mols", "-n", type=int, default=0, help="Max number of molecules (default: 0 = all)")
@@ -345,6 +349,12 @@ def main():
         choices=["hasSubstructMatch", "getSubstructMatches", "countSubstructMatches"],
         default="hasSubstructMatch",
         help="Search mode (default: hasSubstructMatch)",
+    )
+    parser.add_argument(
+        "--algorithm",
+        choices=["gsi", "dfs"],
+        default="gsi",
+        help="nvmolkit matching backend (default: gsi)",
     )
     parser.add_argument(
         "--max_matches", type=int, default=0, help="Maximum matches per target/query pair, 0 = all (default: 0)"
@@ -510,6 +520,7 @@ def main():
         print(f"  Mode: {args.mode}")
         if not args.no_nvmolkit:
             print(f"  nvmolkit config:")
+            print(f"    algorithm: {args.algorithm}")
             print(f"    batch_size: {args.batch_size}")
             print(f"    num_gpus: {args.num_gpus}")
             print(f"    workers: {args.workers if args.workers >= 0 else 'auto'}")
@@ -536,6 +547,7 @@ def main():
                 "prep_threads": args.prep_threads,
                 "mode": args.mode,
                 "num_gpus": args.num_gpus,
+                "algorithm": args.algorithm,
             }
         ]
 
@@ -545,12 +557,18 @@ def main():
     for config_row in config_rows:
         smarts_path = config_row["smarts"]
         mode = config_row["mode"]
+        row_algorithm = config_row.get("algorithm", args.algorithm)
+        algorithm = args.algorithm if pd.isna(row_algorithm) else str(row_algorithm).lower()
+        if algorithm not in {"gsi", "dfs"}:
+            print(f"Error: algorithm must be 'gsi' or 'dfs', got {row_algorithm!r}")
+            sys.exit(1)
 
         print("\nRun configuration:")
         print(f"  SMARTS file: {smarts_path}")
         print(f"  Mode: {mode}")
         if not args.no_nvmolkit:
             print(f"  nvmolkit config:")
+            print(f"    algorithm: {algorithm}")
             print(f"    batch_size: {config_row['batch_size']}")
             print(f"    num_gpus: {config_row['num_gpus']}")
             print(f"    workers: {config_row['workers'] if config_row['workers'] >= 0 else 'auto'}")
@@ -625,6 +643,7 @@ def main():
                         api=api_for_mode,
                         maxMatches=args.max_matches,
                         gpuIds=gpu_ids,
+                        algorithm=algorithm,
                         n_trials=args.autotune_trials,
                         target_seconds_per_trial=args.autotune_time_budget,
                         calibration_set=explicit_calibration,
@@ -650,6 +669,7 @@ def main():
                     config.gpuIds = gpu_ids
                     if args.max_matches > 0:
                         config.maxMatches = args.max_matches
+                config.algorithm = algorithm
 
                 ran_nvmolkit = True
                 torch_module = torch
@@ -774,6 +794,7 @@ def main():
             applied_workers = config_row["workers"]
             applied_prep_threads = config_row["prep_threads"]
             applied_num_gpus = config_row["num_gpus"]
+        applied_algorithm = algorithm if ran_nvmolkit else "N/A"
 
         if args.autotune:
             config_source = "autotuned"
@@ -805,6 +826,7 @@ def main():
                 (
                     name,
                     mode,
+                    applied_algorithm if name == "nvmolkit" else "N/A",
                     smarts_path,
                     input_file,
                     input_type,
@@ -836,7 +858,7 @@ def main():
 
     print("\n\nCSV Results:")
     print(
-        "method,mode,smarts,input_file,input_type,sanitize,num_mols,num_patterns,"
+        "method,mode,algorithm,smarts,input_file,input_type,sanitize,num_mols,num_patterns,"
         "max_matches,batch_size,num_gpus,workers,prep_threads,nvmolkit_config_source,"
         "rdkit_threads,rdkit_match_mode,time_ms,std_ms,"
         "pairs_processed,rdkit_max_seconds,pairs_per_second,vs_rdkit_throughput_ratio"
@@ -845,6 +867,7 @@ def main():
         (
             name,
             mode,
+            algorithm,
             smarts_path,
             input_file,
             input_type,
@@ -871,7 +894,7 @@ def main():
             f"{rdkit_max_seconds:g}" if isinstance(rdkit_max_seconds, float) else str(rdkit_max_seconds)
         )
         print(
-            f"{name},{mode},{smarts_path},{input_file},{input_type},{sanitize},"
+            f"{name},{mode},{algorithm},{smarts_path},{input_file},{input_type},{sanitize},"
             f"{num_mols},{num_patterns},{max_matches},{batch_size},{num_gpus},{workers},{prep_threads},"
             f"{nvmolkit_config_source},{rdkit_threads},{rdkit_match_mode},{avg_ms:.2f},{std_ms:.2f},"
             f"{pairs_done},{rdkit_max_seconds_str},{throughput:.2f},{vs_rdkit_str}"

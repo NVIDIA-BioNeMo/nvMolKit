@@ -163,6 +163,7 @@ def test_substruct_config_to_from_dict_roundtrip():
         maxMatches=8,
         uniquify=True,
         gpuIds=[0],
+        algorithm="dfs",
     )
     encoded = config.to_dict()
     assert encoded == {
@@ -172,6 +173,7 @@ def test_substruct_config_to_from_dict_roundtrip():
         "maxMatches": 8,
         "uniquify": True,
         "gpuIds": [0],
+        "algorithm": "dfs",
     }
     restored = SubstructSearchConfig.from_dict(encoded)
     assert restored.batchSize == 512
@@ -180,6 +182,7 @@ def test_substruct_config_to_from_dict_roundtrip():
     assert restored.maxMatches == 8
     assert restored.uniquify is True
     assert restored.gpuIds == [0]
+    assert restored.algorithm == "dfs"
 
 
 def test_save_load_hardware_options_roundtrip(tmp_path):
