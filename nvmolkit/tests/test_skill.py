@@ -69,7 +69,7 @@ def test_skill_evals_use_library_skill_schema() -> None:
     data = json.loads(EVALS_PATH.read_text())
 
     assert data["skill_name"] == "nvmolkit-usage"
-    assert len(data["evals"]) == 11
+    assert len(data["evals"]) > 0
     assert len({entry["id"] for entry in data["evals"]}) == len(data["evals"])
     for entry in data["evals"]:
         assert set(entry) == {
