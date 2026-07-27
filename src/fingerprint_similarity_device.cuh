@@ -7,9 +7,9 @@
 #include <cuda_runtime.h>
 
 #include <cmath>
-#include <cuda/std/functional>
 
 #include "src/fingerprint_similarity.h"
+#include "src/utils/cub_helpers.cuh"
 
 namespace nvMolKit {
 
@@ -49,8 +49,8 @@ template <FingerprintSimilarityMetric Metric>
 __device__ __forceinline__ bool fingerprintSimilarityCanReach(const int   lhsBitCount,
                                                               const int   rhsBitCount,
                                                               const float threshold) {
-  const int minBitCount = cuda::std::min(lhsBitCount, rhsBitCount);
-  const int maxBitCount = cuda::std::max(lhsBitCount, rhsBitCount);
+  const int minBitCount = cubMin{}(lhsBitCount, rhsBitCount);
+  const int maxBitCount = cubMax{}(lhsBitCount, rhsBitCount);
   if constexpr (Metric == FingerprintSimilarityMetric::Tanimoto) {
     // The intersection cannot exceed the smaller population and the union cannot be smaller than the larger one.
     return static_cast<float>(minBitCount) >= threshold * static_cast<float>(maxBitCount);
