@@ -19,6 +19,8 @@
 #include <omp.h>
 
 #include <algorithm>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -36,6 +38,31 @@ namespace nvMolKit::MMFF {
 //! Cached molecule-specific preprocessing
 struct CachedMoleculeData {
   EnergyForceContribsHost ffParams;
+};
+
+//! Per-molecule MMFF atom typing/charges, shared across batch threads.
+//!
+//! RDKit's MMFFMolProperties constructor mutates the molecule it types (Kekulize,
+//! setMMFFAromaticity, and a _MMFFSanitized property write), and setMMFFAromaticity runs on every
+//! construction rather than only the first. Since a molecule's conformers can be spread over
+//! several batches, building properties inside the batch loop had concurrent threads mutating the
+//! same ROMol -- yielding wrong atom types (and so wrong energies) or a corrupted property dict.
+//!
+//! Build each molecule's properties exactly once instead. Only the first batch to touch a molecule
+//! pays for it, and batches for other molecules never block, so preprocessing stays interleaved
+//! with GPU work. The comparatively expensive contribs build stays per-batch and is read-only.
+class SharedMolProperties {
+ public:
+  explicit SharedMolProperties(size_t numMols) : initFlags_(numMols), properties_(numMols) {}
+
+  RDKit::MMFF::MMFFMolProperties* get(size_t molIdx, RDKit::ROMol& mol, const MMFFProperties& props) {
+    std::call_once(initFlags_[molIdx], [&]() { properties_[molIdx] = makeMMFFMolProperties(mol, props); });
+    return properties_[molIdx].get();
+  }
+
+ private:
+  std::vector<std::once_flag>                                  initFlags_;
+  std::vector<std::shared_ptr<RDKit::MMFF::MMFFMolProperties>> properties_;
 };
 
 std::vector<std::vector<double>> MMFFOptimizeMoleculesConfsBfgs(std::vector<RDKit::ROMol*>& mols,
@@ -135,24 +162,26 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>&       
       collector.converged.setStream(collector.stream);
     }
   }
+  SharedMolProperties             sharedMolProperties(mols.size());
   detail::OpenMPExceptionRegistry exceptionHandler;
-#pragma omp parallel for num_threads(ctx.numThreads) schedule(dynamic) default(none) shared(allConformers,        \
-                                                                                              moleculeEnergies,   \
-                                                                                              moleculeConverged,  \
-                                                                                              totalConformers,    \
-                                                                                              effectiveBatchSize, \
-                                                                                              maxIters,           \
-                                                                                              gradTol,            \
-                                                                                              properties,         \
-                                                                                              constraints,        \
-                                                                                              ctx,                \
-                                                                                              threadBuffers,      \
-                                                                                              deviceCollectors,   \
-                                                                                              deviceOutput,       \
-                                                                                              useDeviceInput,     \
-                                                                                              deviceInput,        \
-                                                                                              deviceInputIndex,   \
-                                                                                              backend,            \
+#pragma omp parallel for num_threads(ctx.numThreads) schedule(dynamic) default(none) shared(allConformers,         \
+                                                                                              moleculeEnergies,    \
+                                                                                              moleculeConverged,   \
+                                                                                              totalConformers,     \
+                                                                                              effectiveBatchSize,  \
+                                                                                              maxIters,            \
+                                                                                              gradTol,             \
+                                                                                              properties,          \
+                                                                                              constraints,         \
+                                                                                              ctx,                 \
+                                                                                              threadBuffers,       \
+                                                                                              deviceCollectors,    \
+                                                                                              deviceOutput,        \
+                                                                                              useDeviceInput,      \
+                                                                                              deviceInput,         \
+                                                                                              deviceInputIndex,    \
+                                                                                              backend,             \
+                                                                                              sharedMolProperties, \
                                                                                               exceptionHandler)
   for (size_t batchStart = 0; batchStart < totalConformers; batchStart += effectiveBatchSize) {
     try {
@@ -194,10 +223,18 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>&       
 
         auto it = moleculeCache.find(mol);
         if (it == moleculeCache.end()) {
-          ScopedNvtxRange    computeCacheRange("Preprocess single molecule");
-          CachedMoleculeData cached;
-          cached.ffParams = constructForcefieldContribs(*mol, properties[confInfo.molIdx]);
-          it              = moleculeCache.insert({mol, std::move(cached)}).first;
+          ScopedNvtxRange       computeCacheRange("Preprocess single molecule");
+          CachedMoleculeData    cached;
+          const MMFFProperties& molProps          = properties[confInfo.molIdx];
+          // Atom typing is shared and built once per molecule; the contribs build below is
+          // read-only and stays per-batch.
+          auto*                 mmffMolProperties = sharedMolProperties.get(confInfo.molIdx, *mol, molProps);
+          cached.ffParams                         = constructForcefieldContribs(*mol,
+                                                        mmffMolProperties,
+                                                        molProps.nonBondedThreshold,
+                                                        /*confId=*/-1,
+                                                        molProps.ignoreInterfragInteractions);
+          it                                      = moleculeCache.insert({mol, std::move(cached)}).first;
         }
 
         ScopedNvtxRange addToBatchRange("Add conformer to batch data");
@@ -394,21 +431,23 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
       collector.converged.setStream(collector.stream);
     }
   }
+  SharedMolProperties             sharedMolProperties(mols.size());
   detail::OpenMPExceptionRegistry exceptionHandler;
-#pragma omp parallel for num_threads(ctx.numThreads) schedule(dynamic) default(none) shared(allConformers,        \
-                                                                                              moleculeEnergies,   \
-                                                                                              moleculeConverged,  \
-                                                                                              totalConformers,    \
-                                                                                              effectiveBatchSize, \
-                                                                                              maxIters,           \
-                                                                                              fireOptions,        \
-                                                                                              properties,         \
-                                                                                              constraints,        \
-                                                                                              ctx,                \
-                                                                                              threadBuffers,      \
-                                                                                              deviceCollectors,   \
-                                                                                              deviceOutput,       \
-                                                                                              backend,            \
+#pragma omp parallel for num_threads(ctx.numThreads) schedule(dynamic) default(none) shared(allConformers,         \
+                                                                                              moleculeEnergies,    \
+                                                                                              moleculeConverged,   \
+                                                                                              totalConformers,     \
+                                                                                              effectiveBatchSize,  \
+                                                                                              maxIters,            \
+                                                                                              fireOptions,         \
+                                                                                              properties,          \
+                                                                                              constraints,         \
+                                                                                              ctx,                 \
+                                                                                              threadBuffers,       \
+                                                                                              deviceCollectors,    \
+                                                                                              deviceOutput,        \
+                                                                                              backend,             \
+                                                                                              sharedMolProperties, \
                                                                                               exceptionHandler)
   for (size_t batchStart = 0; batchStart < totalConformers; batchStart += effectiveBatchSize) {
     try {
@@ -435,10 +474,18 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
 
         auto it = moleculeCache.find(mol);
         if (it == moleculeCache.end()) {
-          ScopedNvtxRange    computeCacheRange("Preprocess single molecule");
-          CachedMoleculeData cached;
-          cached.ffParams = constructForcefieldContribs(*mol, properties[confInfo.molIdx]);
-          it              = moleculeCache.insert({mol, std::move(cached)}).first;
+          ScopedNvtxRange       computeCacheRange("Preprocess single molecule");
+          CachedMoleculeData    cached;
+          const MMFFProperties& molProps          = properties[confInfo.molIdx];
+          // Atom typing is shared and built once per molecule; the contribs build below is
+          // read-only and stays per-batch.
+          auto*                 mmffMolProperties = sharedMolProperties.get(confInfo.molIdx, *mol, molProps);
+          cached.ffParams                         = constructForcefieldContribs(*mol,
+                                                        mmffMolProperties,
+                                                        molProps.nonBondedThreshold,
+                                                        /*confId=*/-1,
+                                                        molProps.ignoreInterfragInteractions);
+          it                                      = moleculeCache.insert({mol, std::move(cached)}).first;
         }
 
         ScopedNvtxRange addToBatchRange("Add conformer to batch data");
