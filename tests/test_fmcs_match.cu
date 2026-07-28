@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <cstring>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include "src/mcs/fmcs_cuda/fmcs_match.cuh"
@@ -51,19 +52,7 @@ using mcs::fmcs::MatchTableDevice;
 using mcs::fmcs::PairMatchTablesDevice;
 using mcs::fmcs::SingleBondMatch;
 
-// Tiny CSR-view used by the match helpers via duck-typing; satisfies the
-// QueryTopology / TargetTopology template requirement (bondEndpoints +
-// numAtoms / numBonds), with optional CSR adjacency fields.
-struct TestCsrView {
-  static constexpr bool kHasAdjacencyBondIndices = false;
-
-  const std::uint32_t* bondEndpoints = nullptr;
-  int                  numAtoms      = 0;
-  int                  numBonds      = 0;
-  const std::uint32_t* rowOffsets    = nullptr;
-  const std::uint32_t* colIndices    = nullptr;
-  const std::uint32_t* bondIndices   = nullptr;
-};
+using mcs::fmcs::DeviceCsrView;
 
 // Match tables staged on the host and uploaded to device memory on
 // demand.  Both atom and bond tables are 32-bit row-packed bitmasks
@@ -125,15 +114,68 @@ struct ManagedMatchTables {
   bool                  dirty_ = true;
 };
 
-AsyncDeviceVector<std::uint32_t> makeBondEndpointsDevice(const std::vector<std::pair<int, int>>& edges) {
-  std::vector<std::uint32_t> host(edges.size());
-  for (size_t i = 0; i < edges.size(); ++i) {
-    host[i] = (static_cast<std::uint32_t>(edges[i].first) << 16) | static_cast<std::uint32_t>(edges[i].second);
+// Owns the device buffers behind a DeviceCsrView.  Built from an
+// undirected edge list: bond i is edges[i], and the CSR is the symmetric
+// expansion of that list (each edge contributes one entry to each
+// endpoint's row), matching what the host-side graph builder uploads for
+// real molecules.
+class TestGraph {
+ public:
+  TestGraph(int numAtoms, const std::vector<std::pair<int, int>>& edges) {
+    const int numBonds = static_cast<int>(edges.size());
+
+    std::vector<std::uint32_t> bondEndpointsHost(numBonds);
+    for (int i = 0; i < numBonds; ++i) {
+      bondEndpointsHost[i] =
+        (static_cast<std::uint32_t>(edges[i].first) << 16) | static_cast<std::uint32_t>(edges[i].second);
+    }
+
+    // Counting sort into CSR: degree pass, prefix sum, then scatter.
+    std::vector<std::uint32_t> rowOffsetsHost(numAtoms + 1, 0);
+    for (const auto& edge : edges) {
+      ++rowOffsetsHost[edge.first + 1];
+      ++rowOffsetsHost[edge.second + 1];
+    }
+    for (int atom = 0; atom < numAtoms; ++atom) {
+      rowOffsetsHost[atom + 1] += rowOffsetsHost[atom];
+    }
+
+    std::vector<std::uint32_t> colIndicesHost(2 * numBonds);
+    std::vector<std::uint32_t> bondIndicesHost(2 * numBonds);
+    std::vector<std::uint32_t> cursor(rowOffsetsHost.begin(), rowOffsetsHost.end() - 1);
+    for (int bond = 0; bond < numBonds; ++bond) {
+      const int u                = edges[bond].first;
+      const int v                = edges[bond].second;
+      colIndicesHost[cursor[u]]  = static_cast<std::uint32_t>(v);
+      bondIndicesHost[cursor[u]] = static_cast<std::uint32_t>(bond);
+      ++cursor[u];
+      colIndicesHost[cursor[v]]  = static_cast<std::uint32_t>(u);
+      bondIndicesHost[cursor[v]] = static_cast<std::uint32_t>(bond);
+      ++cursor[v];
+    }
+
+    bondEndpoints_.setFromVector(bondEndpointsHost);
+    rowOffsets_.setFromVector(rowOffsetsHost);
+    colIndices_.setFromVector(colIndicesHost);
+    bondIndices_.setFromVector(bondIndicesHost);
+
+    view_.bondEndpoints = bondEndpoints_.data();
+    view_.rowOffsets    = rowOffsets_.data();
+    view_.colIndices    = colIndices_.data();
+    view_.bondIndices   = bondIndices_.data();
+    view_.numAtoms      = numAtoms;
+    view_.numBonds      = numBonds;
   }
-  AsyncDeviceVector<std::uint32_t> dev(edges.size());
-  dev.copyFromHost(host);
-  return dev;
-}
+
+  DeviceCsrView view() const { return view_; }
+
+ private:
+  AsyncDeviceVector<std::uint32_t> bondEndpoints_;
+  AsyncDeviceVector<std::uint32_t> rowOffsets_;
+  AsyncDeviceVector<std::uint32_t> colIndices_;
+  AsyncDeviceVector<std::uint32_t> bondIndices_;
+  DeviceCsrView                    view_{};
+};
 
 // ---- matchSingleBondWithinThread ----
 
@@ -145,18 +187,12 @@ struct SingleBondTestOut {
 __global__ void matchSingleBondDriver(int                   qBondIdx,
                                       int                   tBondIdx,
                                       bool                  reversed,
-                                      const std::uint32_t*  qBondEndpoints,
-                                      int                   qNumAtoms,
-                                      int                   qNumBonds,
-                                      const std::uint32_t*  tBondEndpoints,
-                                      int                   tNumAtoms,
-                                      int                   tNumBonds,
+                                      DeviceCsrView         qView,
+                                      DeviceCsrView         tView,
                                       PairMatchTablesDevice tables,
                                       SingleBondTestOut*    out) {
   if (threadIdx.x != 0 || blockIdx.x != 0)
     return;
-  TestCsrView     qView{qBondEndpoints, qNumAtoms, qNumBonds};
-  TestCsrView     tView{tBondEndpoints, tNumAtoms, tNumBonds};
   SingleBondMatch sm{};
   out->ok    = mcs::fmcs::matchSingleBondWithinThread(qBondIdx, tBondIdx, reversed, qView, tView, tables, sm);
   out->match = sm;
@@ -166,11 +202,13 @@ __global__ void matchSingleBondDriver(int                   qBondIdx,
 
 TEST(FMCSUnit, MatchSingleBondForwardOrientation) {
   // Query bond (0,1), target bond (0,1).  All atoms / bonds compatible.
-  auto               qBE = makeBondEndpointsDevice({
-    {0, 1}
+  TestGraph          query(2,
+                           {
+                    {0, 1}
   });
-  auto               tBE = makeBondEndpointsDevice({
-    {0, 1}
+  TestGraph          target(2,
+                            {
+                     {0, 1}
   });
   ManagedMatchTables tables;
   tables.allocate(2, 2, 1, 1);
@@ -181,12 +219,8 @@ TEST(FMCSUnit, MatchSingleBondForwardOrientation) {
   matchSingleBondDriver<<<1, 1>>>(0,
                                   0,
                                   /*reversed=*/false,
-                                  qBE.data(),
-                                  2,
-                                  1,
-                                  tBE.data(),
-                                  2,
-                                  1,
+                                  query.view(),
+                                  target.view(),
                                   tables.device(),
                                   d_out.data());
   ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
@@ -199,11 +233,13 @@ TEST(FMCSUnit, MatchSingleBondForwardOrientation) {
 }
 
 TEST(FMCSUnit, MatchSingleBondReverseOrientation) {
-  auto               qBE = makeBondEndpointsDevice({
-    {0, 1}
+  TestGraph          query(2,
+                           {
+                    {0, 1}
   });
-  auto               tBE = makeBondEndpointsDevice({
-    {0, 1}
+  TestGraph          target(2,
+                            {
+                     {0, 1}
   });
   ManagedMatchTables tables;
   tables.allocate(2, 2, 1, 1);
@@ -214,12 +250,8 @@ TEST(FMCSUnit, MatchSingleBondReverseOrientation) {
   matchSingleBondDriver<<<1, 1>>>(0,
                                   0,
                                   /*reversed=*/true,
-                                  qBE.data(),
-                                  2,
-                                  1,
-                                  tBE.data(),
-                                  2,
-                                  1,
+                                  query.view(),
+                                  target.view(),
                                   tables.device(),
                                   d_out.data());
   ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
@@ -232,11 +264,13 @@ TEST(FMCSUnit, MatchSingleBondReverseOrientation) {
 }
 
 TEST(FMCSUnit, MatchSingleBondBondTableRejection) {
-  auto               qBE = makeBondEndpointsDevice({
-    {0, 1}
+  TestGraph          query(2,
+                           {
+                    {0, 1}
   });
-  auto               tBE = makeBondEndpointsDevice({
-    {0, 1}
+  TestGraph          target(2,
+                            {
+                     {0, 1}
   });
   ManagedMatchTables tables;
   tables.allocate(2, 2, 1, 1);
@@ -247,12 +281,8 @@ TEST(FMCSUnit, MatchSingleBondBondTableRejection) {
   matchSingleBondDriver<<<1, 1>>>(0,
                                   0,
                                   /*reversed=*/false,
-                                  qBE.data(),
-                                  2,
-                                  1,
-                                  tBE.data(),
-                                  2,
-                                  1,
+                                  query.view(),
+                                  target.view(),
                                   tables.device(),
                                   d_out.data());
   ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
@@ -263,11 +293,13 @@ TEST(FMCSUnit, MatchSingleBondBondTableRejection) {
 }
 
 TEST(FMCSUnit, MatchSingleBondAtomTableRejection) {
-  auto               qBE = makeBondEndpointsDevice({
-    {0, 1}
+  TestGraph          query(2,
+                           {
+                    {0, 1}
   });
-  auto               tBE = makeBondEndpointsDevice({
-    {0, 1}
+  TestGraph          target(2,
+                            {
+                     {0, 1}
   });
   ManagedMatchTables tables;
   tables.allocate(2, 2, 1, 1);
@@ -283,12 +315,8 @@ TEST(FMCSUnit, MatchSingleBondAtomTableRejection) {
   matchSingleBondDriver<<<1, 1>>>(0,
                                   0,
                                   /*reversed=*/false,
-                                  qBE.data(),
-                                  2,
-                                  1,
-                                  tBE.data(),
-                                  2,
-                                  1,
+                                  query.view(),
+                                  target.view(),
                                   tables.device(),
                                   d_out.data());
   ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
@@ -347,12 +375,8 @@ struct IncrementalTestOut {
 // One-warp driver: builds parent match in shared mem, then constructs
 // the child seed (parent + new bonds) and runs
 // matchIncrementalFastCooperative on it.
-__global__ void matchIncrementalAtomAddingDriver(const std::uint32_t*  qBE,
-                                                 int                   qNumAtoms,
-                                                 int                   qNumBonds,
-                                                 const std::uint32_t*  tBE,
-                                                 int                   tNumAtoms,
-                                                 int                   tNumBonds,
+__global__ void matchIncrementalAtomAddingDriver(DeviceCsrView         qView,
+                                                 DeviceCsrView         tView,
                                                  PairMatchTablesDevice tables,
                                                  IncrementalTestOut*   out) {
   __shared__ QueuedT16 child;
@@ -375,11 +399,9 @@ __global__ void matchIncrementalAtomAddingDriver(const std::uint32_t*  qBE,
   }
   __syncthreads();
 
-  auto        block = cooperative_groups::this_thread_block();
-  auto        warp  = cooperative_groups::tiled_partition<32>(block);
-  TestCsrView qView{qBE, qNumAtoms, qNumBonds};
-  TestCsrView tView{tBE, tNumAtoms, tNumBonds};
-  bool        ok = mcs::fmcs::matchIncrementalFastCooperative(warp, child.seed, qView, tView, tables, child.match);
+  auto block = cooperative_groups::this_thread_block();
+  auto warp  = cooperative_groups::tiled_partition<32>(block);
+  bool ok    = mcs::fmcs::matchIncrementalFastCooperative(warp, child.seed, qView, tView, tables, child.match);
   __syncthreads();
 
   if (threadIdx.x == 0) {
@@ -388,12 +410,8 @@ __global__ void matchIncrementalAtomAddingDriver(const std::uint32_t*  qBE,
   }
 }
 
-__global__ void matchIncrementalRingClosingDriver(const std::uint32_t*  qBE,
-                                                  int                   qNumAtoms,
-                                                  int                   qNumBonds,
-                                                  const std::uint32_t*  tBE,
-                                                  int                   tNumAtoms,
-                                                  int                   tNumBonds,
+__global__ void matchIncrementalRingClosingDriver(DeviceCsrView         qView,
+                                                  DeviceCsrView         tView,
                                                   PairMatchTablesDevice tables,
                                                   IncrementalTestOut*   out) {
   __shared__ QueuedT16 child;
@@ -414,11 +432,9 @@ __global__ void matchIncrementalRingClosingDriver(const std::uint32_t*  qBE,
   }
   __syncthreads();
 
-  auto        block = cooperative_groups::this_thread_block();
-  auto        warp  = cooperative_groups::tiled_partition<32>(block);
-  TestCsrView qView{qBE, qNumAtoms, qNumBonds};
-  TestCsrView tView{tBE, tNumAtoms, tNumBonds};
-  bool        ok = mcs::fmcs::matchIncrementalFastCooperative(warp, child.seed, qView, tView, tables, child.match);
+  auto block = cooperative_groups::this_thread_block();
+  auto warp  = cooperative_groups::tiled_partition<32>(block);
+  bool ok    = mcs::fmcs::matchIncrementalFastCooperative(warp, child.seed, qView, tView, tables, child.match);
   __syncthreads();
 
   if (threadIdx.x == 0) {
@@ -427,12 +443,8 @@ __global__ void matchIncrementalRingClosingDriver(const std::uint32_t*  qBE,
   }
 }
 
-__global__ void matchIncrementalVisitedConflictDriver(const std::uint32_t*  qBE,
-                                                      int                   qNumAtoms,
-                                                      int                   qNumBonds,
-                                                      const std::uint32_t*  tBE,
-                                                      int                   tNumAtoms,
-                                                      int                   tNumBonds,
+__global__ void matchIncrementalVisitedConflictDriver(DeviceCsrView         qView,
+                                                      DeviceCsrView         tView,
                                                       PairMatchTablesDevice tables,
                                                       IncrementalTestOut*   out) {
   __shared__ QueuedT16 child;
@@ -456,11 +468,9 @@ __global__ void matchIncrementalVisitedConflictDriver(const std::uint32_t*  qBE,
   }
   __syncthreads();
 
-  auto        block = cooperative_groups::this_thread_block();
-  auto        warp  = cooperative_groups::tiled_partition<32>(block);
-  TestCsrView qView{qBE, qNumAtoms, qNumBonds};
-  TestCsrView tView{tBE, tNumAtoms, tNumBonds};
-  bool        ok = mcs::fmcs::matchIncrementalFastCooperative(warp, child.seed, qView, tView, tables, child.match);
+  auto block = cooperative_groups::this_thread_block();
+  auto warp  = cooperative_groups::tiled_partition<32>(block);
+  bool ok    = mcs::fmcs::matchIncrementalFastCooperative(warp, child.seed, qView, tView, tables, child.match);
   __syncthreads();
 
   if (threadIdx.x == 0) {
@@ -469,12 +479,8 @@ __global__ void matchIncrementalVisitedConflictDriver(const std::uint32_t*  qBE,
   }
 }
 
-__global__ void matchIncrementalTwoBondChainDriver(const std::uint32_t*  qBE,
-                                                   int                   qNumAtoms,
-                                                   int                   qNumBonds,
-                                                   const std::uint32_t*  tBE,
-                                                   int                   tNumAtoms,
-                                                   int                   tNumBonds,
+__global__ void matchIncrementalTwoBondChainDriver(DeviceCsrView         qView,
+                                                   DeviceCsrView         tView,
                                                    PairMatchTablesDevice tables,
                                                    IncrementalTestOut*   out) {
   __shared__ QueuedT16 child;
@@ -498,11 +504,9 @@ __global__ void matchIncrementalTwoBondChainDriver(const std::uint32_t*  qBE,
   }
   __syncthreads();
 
-  auto        block = cooperative_groups::this_thread_block();
-  auto        warp  = cooperative_groups::tiled_partition<32>(block);
-  TestCsrView qView{qBE, qNumAtoms, qNumBonds};
-  TestCsrView tView{tBE, tNumAtoms, tNumBonds};
-  bool        ok = mcs::fmcs::matchIncrementalFastCooperative(warp, child.seed, qView, tView, tables, child.match);
+  auto block = cooperative_groups::this_thread_block();
+  auto warp  = cooperative_groups::tiled_partition<32>(block);
+  bool ok    = mcs::fmcs::matchIncrementalFastCooperative(warp, child.seed, qView, tView, tables, child.match);
   __syncthreads();
 
   if (threadIdx.x == 0) {
@@ -518,13 +522,15 @@ TEST(FMCSUnit, MatchIncrementalFastAtomAdding) {
   using mcs_fmcs_incremental_test::matchIncrementalAtomAddingDriver;
 
   // Query/target are both a 3-atom path 0-1-2 with bonds (0,1), (1,2).
-  auto               qBE = makeBondEndpointsDevice({
-    {0, 1},
-    {1, 2}
+  TestGraph          query(3,
+                           {
+                    {0, 1},
+                    {1, 2}
   });
-  auto               tBE = makeBondEndpointsDevice({
-    {0, 1},
-    {1, 2}
+  TestGraph          target(3,
+                            {
+                     {0, 1},
+                     {1, 2}
   });
   ManagedMatchTables tables;
   tables.allocate(3, 3, 2, 2);
@@ -532,7 +538,7 @@ TEST(FMCSUnit, MatchIncrementalFastAtomAdding) {
   tables.setAllBondBits();
 
   AsyncDevicePtr<IncrementalTestOut> d_out;
-  matchIncrementalAtomAddingDriver<<<1, 32>>>(qBE.data(), 3, 2, tBE.data(), 3, 2, tables.device(), d_out.data());
+  matchIncrementalAtomAddingDriver<<<1, 32>>>(query.view(), target.view(), tables.device(), d_out.data());
   ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
   IncrementalTestOut out{};
   d_out.get(out);
@@ -550,17 +556,19 @@ TEST(FMCSUnit, MatchIncrementalFastRingClosing) {
 
   // 4-atom square with one diagonal-free closure.  Bonds: (0,1) (1,2)
   // (2,3) (0,3).
-  auto               qBE = makeBondEndpointsDevice({
-    {0, 1},
-    {1, 2},
-    {2, 3},
-    {0, 3}
+  TestGraph          query(4,
+                           {
+                    {0, 1},
+                    {1, 2},
+                    {2, 3},
+                    {0, 3}
   });
-  auto               tBE = makeBondEndpointsDevice({
-    {0, 1},
-    {1, 2},
-    {2, 3},
-    {0, 3}
+  TestGraph          target(4,
+                            {
+                     {0, 1},
+                     {1, 2},
+                     {2, 3},
+                     {0, 3}
   });
   ManagedMatchTables tables;
   tables.allocate(4, 4, 4, 4);
@@ -568,7 +576,7 @@ TEST(FMCSUnit, MatchIncrementalFastRingClosing) {
   tables.setAllBondBits();
 
   AsyncDevicePtr<IncrementalTestOut> d_out;
-  matchIncrementalRingClosingDriver<<<1, 32>>>(qBE.data(), 4, 4, tBE.data(), 4, 4, tables.device(), d_out.data());
+  matchIncrementalRingClosingDriver<<<1, 32>>>(query.view(), target.view(), tables.device(), d_out.data());
   ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
   IncrementalTestOut out{};
   d_out.get(out);
@@ -587,12 +595,14 @@ TEST(FMCSUnit, MatchIncrementalFastVisitedConflictFails) {
   // Query: 3 atoms / 2 bonds.  Target: 2 atoms / 1 bond.  Parent has
   // bond (0,1) mapped; trying to extend with bond (0,2) forces atom 2
   // onto target atom 1, which is already visited.
-  auto               qBE = makeBondEndpointsDevice({
-    {0, 1},
-    {0, 2}
+  TestGraph          query(3,
+                           {
+                    {0, 1},
+                    {0, 2}
   });
-  auto               tBE = makeBondEndpointsDevice({
-    {0, 1}
+  TestGraph          target(2,
+                            {
+                     {0, 1}
   });
   ManagedMatchTables tables;
   tables.allocate(3, 2, 2, 1);
@@ -600,7 +610,7 @@ TEST(FMCSUnit, MatchIncrementalFastVisitedConflictFails) {
   tables.setAllBondBits();
 
   AsyncDevicePtr<IncrementalTestOut> d_out;
-  matchIncrementalVisitedConflictDriver<<<1, 32>>>(qBE.data(), 3, 2, tBE.data(), 2, 1, tables.device(), d_out.data());
+  matchIncrementalVisitedConflictDriver<<<1, 32>>>(query.view(), target.view(), tables.device(), d_out.data());
   ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
   IncrementalTestOut out{};
   d_out.get(out);
@@ -614,15 +624,17 @@ TEST(FMCSUnit, MatchIncrementalFastTwoBondChain) {
 
   // Both sides are the 4-atom path 0-1-2-3 with bonds 0=(0,1), 1=(1,2),
   // 2=(2,3).
-  auto               qBE = makeBondEndpointsDevice({
-    {0, 1},
-    {1, 2},
-    {2, 3}
+  TestGraph          query(4,
+                           {
+                    {0, 1},
+                    {1, 2},
+                    {2, 3}
   });
-  auto               tBE = makeBondEndpointsDevice({
-    {0, 1},
-    {1, 2},
-    {2, 3}
+  TestGraph          target(4,
+                            {
+                     {0, 1},
+                     {1, 2},
+                     {2, 3}
   });
   ManagedMatchTables tables;
   tables.allocate(4, 4, 3, 3);
@@ -630,7 +642,7 @@ TEST(FMCSUnit, MatchIncrementalFastTwoBondChain) {
   tables.setAllBondBits();
 
   AsyncDevicePtr<IncrementalTestOut> d_out;
-  matchIncrementalTwoBondChainDriver<<<1, 32>>>(qBE.data(), 4, 3, tBE.data(), 4, 3, tables.device(), d_out.data());
+  matchIncrementalTwoBondChainDriver<<<1, 32>>>(query.view(), target.view(), tables.device(), d_out.data());
   ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
   IncrementalTestOut out{};
   d_out.get(out);

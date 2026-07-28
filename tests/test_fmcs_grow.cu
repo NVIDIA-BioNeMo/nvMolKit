@@ -18,12 +18,6 @@ namespace {
 using nvMolKit::AsyncDevicePtr;
 using nvMolKit::AsyncDeviceVector;
 
-struct TestCsrView {
-  const std::uint32_t* bondEndpoints = nullptr;
-  int                  numAtoms      = 0;
-  int                  numBonds      = 0;
-};
-
 AsyncDeviceVector<std::uint32_t> makeBondEndpointsDevice(const std::vector<std::pair<int, int>>& edges) {
   std::vector<std::uint32_t> host(edges.size());
   for (std::size_t i = 0; i < edges.size(); ++i) {
@@ -74,10 +68,15 @@ __device__ __forceinline__ void fillNewBondsRun(SeedSetup&&          setup,
   }
   __syncthreads();
 
-  auto        block = cooperative_groups::this_thread_block();
-  auto        warp  = cooperative_groups::tiled_partition<32>(block);
-  TestCsrView qView{qBondEndpoints, qNumAtoms, qNumBonds};
-  bool        ok = mcs::fmcs::fillNewBondsCooperative(warp, seed, qView, bonds, &count, maxNewBonds);
+  auto                     block = cooperative_groups::this_thread_block();
+  auto                     warp  = cooperative_groups::tiled_partition<32>(block);
+  // fillNewBondsCooperative reads only the bond-endpoint side of the
+  // topology, so the CSR arrays stay null here.
+  mcs::fmcs::DeviceCsrView qView{};
+  qView.bondEndpoints = qBondEndpoints;
+  qView.numAtoms      = qNumAtoms;
+  qView.numBonds      = qNumBonds;
+  bool ok             = mcs::fmcs::fillNewBondsCooperative(warp, seed, qView, bonds, &count, maxNewBonds);
   __syncthreads();
 
   if (threadIdx.x == 0) {

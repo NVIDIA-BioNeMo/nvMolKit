@@ -19,13 +19,11 @@
 #include <cstdint>
 
 #include "src/mcs/fmcs_cuda/fmcs_seed.cuh"
+#include "src/mcs/fmcs_cuda/fmcs_topology.cuh"
 #include "src/mcs/mcs_common/mcs_cooperative_copy.cuh"
 
 namespace mcs {
 namespace fmcs {
-
-constexpr int           kGrowBondEndpointShift = 16;
-constexpr std::uint32_t kGrowBondEndpointMask  = 0xFFFFu;
 
 template <int maxAtoms, int maxBonds>
 __device__ __forceinline__ void seedAddNewBondWithinThread(Seed<maxAtoms, maxBonds>& seed, const NewBond& bond) {
@@ -68,10 +66,10 @@ __device__ __forceinline__ void seedAddNewBondWithinThread(Seed<maxAtoms, maxBon
 /// and clamps @p outCount to @p maxNewBonds (slots beyond that bound
 /// are not written).  No I/O ordering on @p outBonds is guaranteed --
 /// the order depends on lane race outcomes.
-template <int maxAtoms, int maxBonds, class QueryTopology, class GroupT>
+template <int maxAtoms, int maxBonds, class GroupT>
 __device__ __forceinline__ bool fillNewBondsCooperative(const GroupT&                   group,
                                                         const Seed<maxAtoms, maxBonds>& seed,
-                                                        const QueryTopology&            queryTopology,
+                                                        const DeviceCsrView&            queryTopology,
                                                         NewBond*                        outBonds,
                                                         int*                            outCount,
                                                         int                             maxNewBonds) {
@@ -96,8 +94,8 @@ __device__ __forceinline__ bool fillNewBondsCooperative(const GroupT&           
 
     // Decode this query bond's endpoints.
     const std::uint32_t queryEndpoints = queryTopology.bondEndpoints[q];
-    const int           queryEndpointU = static_cast<int>(queryEndpoints >> kGrowBondEndpointShift);
-    const int           queryEndpointV = static_cast<int>(queryEndpoints & kGrowBondEndpointMask);
+    const int           queryEndpointU = static_cast<int>(queryEndpoints >> kBondEndpointShift);
+    const int           queryEndpointV = static_cast<int>(queryEndpoints & kBondEndpointMask);
 
     // Bond is a "new boundary" candidate iff at least one endpoint
     // was added in the most recent grow step.
