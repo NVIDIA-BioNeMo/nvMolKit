@@ -108,6 +108,33 @@ TEST(FMCSPolicy, BondLabelsRestrictCompatibility) {
   EXPECT_FALSE(table.testBit(1, 1));
 }
 
+TEST(FMCSPolicy, MissingQueryEdgeLabelsBehaveAsZero) {
+  auto       query  = labeledPath({6, 6, 8}, 1, 2);
+  const auto target = labeledPath({6, 6, 8}, 1, 2);
+  query.edgeLabels.clear();
+
+  MatchTableHost table;
+  LabeledFMCSPolicy::buildBondMatchTable(query, target, table, true);
+
+  for (int q = 0; q < table.nRows; ++q)
+    for (int t = 0; t < table.nCols; ++t)
+      EXPECT_FALSE(table.testBit(q, t));
+}
+
+TEST(FMCSPolicy, UndersizedTargetEdgeLabelsBehaveAsZero) {
+  const auto query  = labeledPath({6, 6, 8}, 1, 2);
+  auto       target = labeledPath({6, 6, 8}, 1, 2);
+  target.edgeLabels.resize(2);
+
+  MatchTableHost table;
+  LabeledFMCSPolicy::buildBondMatchTable(query, target, table, true);
+
+  EXPECT_TRUE(table.testBit(0, 0));
+  EXPECT_FALSE(table.testBit(0, 1));
+  EXPECT_FALSE(table.testBit(1, 0));
+  EXPECT_FALSE(table.testBit(1, 1));
+}
+
 TEST(FMCSPolicy, LabelMatchingCanBeDisabled) {
   const auto query  = labeledPath({1, 2, 3}, 4, 5);
   const auto target = labeledPath({6, 7, 8}, 9, 10);

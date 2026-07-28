@@ -93,6 +93,11 @@ struct NullFMCSPolicy {
 struct LabeledFMCSPolicy {
   using graph_type = LabeledGraph;
 
+  static uint16_t edgeLabel(const LabeledGraph& labeledGraph, int u, int v) {
+    const std::size_t index = static_cast<std::size_t>(u) * labeledGraph.graph.numVertices + v;
+    return index < labeledGraph.edgeLabels.size() ? labeledGraph.edgeLabels[index] : 0;
+  }
+
   static void buildAtomMatchTable(const LabeledGraph& query,
                                   const LabeledGraph& target,
                                   MatchTableHost&     out,
@@ -127,18 +132,16 @@ struct LabeledFMCSPolicy {
       return;
     }
 
-    const int nQ = query.graph.numVertices;
-    const int nT = target.graph.numVertices;
     for (std::size_t i = 0; i < qBonds.size(); ++i) {
       const int      u  = qBonds[i].first;
       const int      v  = qBonds[i].second;
-      const uint16_t lq = query.edgeLabels[static_cast<std::size_t>(u) * nQ + v];
+      const uint16_t lq = edgeLabel(query, u, v);
       if (lq == 0)
         continue;
       for (std::size_t j = 0; j < tBonds.size(); ++j) {
         const int      x  = tBonds[j].first;
         const int      y  = tBonds[j].second;
-        const uint16_t lt = target.edgeLabels[static_cast<std::size_t>(x) * nT + y];
+        const uint16_t lt = edgeLabel(target, x, y);
         if (lt != 0 && lq == lt) {
           out.setBit(static_cast<int>(i), static_cast<int>(j));
         }
