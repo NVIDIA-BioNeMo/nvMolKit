@@ -174,7 +174,7 @@ __device__ __forceinline__ void pruneIndividualBondsCooperative(
   const GroupT&                                       group,
   const QueuedSeed<maxAtoms, maxBonds, maxTA, maxTB>& parent,
   QueuedSeed<maxAtoms, maxBonds, maxTA, maxTB>&       childWorkspace,
-  const NewBond*                                      bonds,
+  NewBond*                                            bonds,
   int                                                 nBonds,
   MatchFn&&                                           matchFn,
   ChildSink&&                                         childSink) {
@@ -197,6 +197,8 @@ __device__ __forceinline__ void pruneIndividualBondsCooperative(
     // Try to extend the parent's recorded match by this single bond.
     if (matchFn(childWorkspace)) {
       childSink(childWorkspace);
+    } else if (group.thread_rank() == 0) {
+      bonds[i].alive = false;
     }
     group.sync();
   }

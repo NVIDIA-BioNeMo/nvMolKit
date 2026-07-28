@@ -327,9 +327,10 @@ struct PruneOut {
   // We record the child seed's bondIdx-of-the-newly-added bond (the
   // first set bit beyond the parent's bond bitset).  That uniquely
   // identifies which NewBond the child was built from.
-  int survivorBondIdx[kMaxNewBondsPrune];
-  int numSurvivors;
-  int numMatchAttempts;
+  int  survivorBondIdx[kMaxNewBondsPrune];
+  bool bondAlive[kMaxNewBondsPrune];
+  int  numSurvivors;
+  int  numMatchAttempts;
 };
 
 __global__ void pruneStage1Driver(const NewBond* hostBonds, int nBonds, PruneOut* out) {
@@ -405,6 +406,8 @@ __global__ void pruneStage1Driver(const NewBond* hostBonds, int nBonds, PruneOut
   if (threadIdx.x == 0) {
     out->numMatchAttempts = matchAttempts;
     out->numSurvivors     = survivorIdx;
+    for (int i = 0; i < nBonds; ++i)
+      out->bondAlive[i] = bonds[i].alive;
   }
 }
 
@@ -412,31 +415,39 @@ __global__ void pruneStage1Driver(const NewBond* hostBonds, int nBonds, PruneOut
 
 TEST(FMCSUnit, PruneIndividualBondsStage1OnlySurvivorsSinked) {
   using namespace mcs_fmcs_prune_test;
-  // 4 candidate bonds with bondIdx 1, 2, 3, 4.  Stub matchFn passes
-  // even bondIdx (-> 2, 4 succeed; 1, 3 fail).  All 4 must be tried
-  // (matchAttempts == 4); only 2 survivors should reach childSink.
+  // Five candidate bonds with bondIdx 1..5. Bond 3 is already dead and
+  // must be skipped without a match attempt. Stub matchFn passes even
+  // bondIdx (-> 2, 4 succeed; 1, 5 fail). The failed live bonds must
+  // also be marked dead for Stage 2.
   const std::vector<NewBond> hostBonds = {
-    NewBond{1, 5, NewBond::kNotInSeed, true},
-    NewBond{2, 6, NewBond::kNotInSeed, true},
-    NewBond{3, 7, NewBond::kNotInSeed, true},
-    NewBond{4, 8, NewBond::kNotInSeed, true},
+    NewBond{1, 5, NewBond::kNotInSeed,  true},
+    NewBond{2, 6, NewBond::kNotInSeed,  true},
+    NewBond{3, 7, NewBond::kNotInSeed, false},
+    NewBond{4, 8, NewBond::kNotInSeed,  true},
+    NewBond{5, 9, NewBond::kNotInSeed,  true},
   };
   AsyncDeviceVector<NewBond> d_bonds(hostBonds.size());
   d_bonds.copyFromHost(hostBonds);
 
   AsyncDevicePtr<PruneOut> d_out;
-  pruneStage1Driver<<<1, 32>>>(d_bonds.data(), 4, d_out.data());
+  pruneStage1Driver<<<1, 32>>>(d_bonds.data(), 5, d_out.data());
   ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
   PruneOut out{};
   ASSERT_EQ(cudaMemcpy(&out, d_out.data(), sizeof(out), cudaMemcpyDeviceToHost), cudaSuccess);
 
-  EXPECT_EQ(out.numMatchAttempts, 4);  // all four bonds were tried
+  EXPECT_EQ(out.numMatchAttempts, 4);  // pre-dead bond 3 was skipped
   EXPECT_EQ(out.numSurvivors, 2);
   std::set<int> survivors{out.survivorBondIdx[0], out.survivorBondIdx[1]};
   EXPECT_TRUE(survivors.count(2));
   EXPECT_TRUE(survivors.count(4));
   EXPECT_FALSE(survivors.count(1));
   EXPECT_FALSE(survivors.count(3));
+  EXPECT_FALSE(survivors.count(5));
+  EXPECT_FALSE(out.bondAlive[0]);  // singleton match failed
+  EXPECT_TRUE(out.bondAlive[1]);   // singleton match survived
+  EXPECT_FALSE(out.bondAlive[2]);  // already dead and remained skipped
+  EXPECT_TRUE(out.bondAlive[3]);   // singleton match survived
+  EXPECT_FALSE(out.bondAlive[4]);  // singleton match failed
 }
 
 // ---------------------------------------------------------------------------
