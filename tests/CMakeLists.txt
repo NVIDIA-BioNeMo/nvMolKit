@@ -78,6 +78,9 @@ target_link_libraries(test_fmcs_grow PRIVATE CUDA::cudart device_vector)
 target_compile_options(test_fmcs_grow
                        PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>)
 
+add_executable(test_fmcs_foundations test_fmcs_foundations.cu)
+target_link_libraries(test_fmcs_foundations PRIVATE mcs_fmcs_foundations)
+
 add_executable(test_openmp_helpers test_openmp_helpers.cpp)
 target_link_libraries(test_openmp_helpers PRIVATE openmp_helpers
                                                   OpenMP::OpenMP_CXX)
@@ -423,6 +426,7 @@ set(TEST_LIST
     test_similarity
     test_thread_safe_queue
     test_fmcs_primitives
+    test_fmcs_foundations
     test_fmcs_grow
     test_work_splitting
     test_fire_minimizer
