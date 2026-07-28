@@ -5,7 +5,7 @@ Please see the official [NVIDIA nvMolKit Documentation](https://nvidia-bionemo.g
 
 ## Cursor / agent skill
 
-If you use [Cursor](https://cursor.com/) (or another agent that supports the `SKILL.md` format) to write code that calls nvMolKit, you can copy [`agent-skills/nvmolkit-usage/`](agent-skills/nvmolkit-usage/) into your project's `.cursor/skills/` (or `~/.cursor/skills/` for personal use). It gives the agent the public Python entry-point map, runtime requirements, and runnable recipes.
+If you use [Cursor](https://cursor.com/) (or another agent that supports the `SKILL.md` format) to write code that calls nvMolKit, you can copy [`skills/nvmolkit-usage/`](skills/nvmolkit-usage/) into your project's `.cursor/skills/` (or `~/.cursor/skills/` for personal use). It gives the agent the public Python entry-point map, runtime requirements, runnable recipes, and evaluation definitions.
 
 ## Installation Guide
 
