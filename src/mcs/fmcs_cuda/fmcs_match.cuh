@@ -110,10 +110,10 @@ __device__ __forceinline__ bool matchSingleBondWithinThread(const int           
   return true;
 }
 
-/// Cooperative: extend @p match by every query bond in @p seed.bonds
-/// whose @c match.targetBondIdx[q] is still @ref kUnmappedTargetIdx
-/// (i.e., unmapped by the parent's recorded embedding).  For each such
-/// bond:
+/// Cooperative greedy fast path: try to extend @p match by every query
+/// bond in @p seed.bonds whose @c match.targetBondIdx[q] is still
+/// @ref kUnmappedTargetIdx (i.e., unmapped by the parent's recorded
+/// embedding).  For each such bond:
 ///   - Both endpoints already mapped -> ring-closing case.  The lanes
 ///     of @p group scan target bonds in parallel for one whose endpoint
 ///     pair exactly matches the mapped (queryU, queryV) target atoms
@@ -122,22 +122,26 @@ __device__ __forceinline__ bool matchSingleBondWithinThread(const int           
 ///   - Exactly one endpoint mapped -> atom-adding case.  Lane-parallel
 ///     scan for a target bond incident to the mapped target atom whose
 ///     other end is unvisited, atom-table-compatible with the unmapped
-///     query atom, and bond-table-compatible.  First compatible
+///     query atom, and bond-table-compatible.  The first compatible
 ///     candidate commits both the new bond mapping and the new atom
-///     mapping, and marks both visited.
+///     mapping, and marks both visited.  This path does not backtrack
+///     if that greedy choice prevents a later bond from matching.
 ///   - Both endpoints unmapped -> defensive fail (shouldn't occur on
 ///     well-formed seeds, where Phase 1 maps both initial atoms before
 ///     pushing).
-/// Any bond that fails to extend causes the function to return false;
-/// @p match is left in an unspecified state and the caller should
-/// discard the seed.
+/// A true return proves that @p match was extended successfully.  A false
+/// return is inconclusive: the greedy choices may have missed another valid
+/// embedding.  The caller must run the exact substructure fallback before
+/// rejecting the seed or marking a NewBond dead.  On false, @p match is left
+/// in an unspecified state and must not be reused as a valid embedding.
 template <int maxAtoms, int maxBonds, int maxTA, int maxTB, class GroupT>
-__device__ __forceinline__ bool matchIncrementalFastCooperative(const GroupT&                   group,
-                                                                const Seed<maxAtoms, maxBonds>& seed,
-                                                                const DeviceCsrView&            queryTopology,
-                                                                const DeviceCsrView&            targetTopology,
-                                                                const PairMatchTablesDevice&    tables,
-                                                                MatchResult<maxAtoms, maxBonds, maxTA, maxTB>& match) {
+__device__ __forceinline__ bool tryMatchIncrementalGreedyCooperative(
+  const GroupT&                                  group,
+  const Seed<maxAtoms, maxBonds>&                seed,
+  const DeviceCsrView&                           queryTopology,
+  const DeviceCsrView&                           targetTopology,
+  const PairMatchTablesDevice&                   tables,
+  MatchResult<maxAtoms, maxBonds, maxTA, maxTB>& match) {
   using SeedT    = Seed<maxAtoms, maxBonds>;
   using MatchT   = MatchResult<maxAtoms, maxBonds, maxTA, maxTB>;
   using BondWord = typename SeedT::bond_word_type;

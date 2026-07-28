@@ -43,7 +43,7 @@ using mcs::fmcs::Seed;
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// matchSingleBondWithinThread / matchIncrementalFastCooperative
+// matchSingleBondWithinThread / tryMatchIncrementalGreedyCooperative
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -326,7 +326,7 @@ TEST(FMCSUnit, MatchSingleBondAtomTableRejection) {
   EXPECT_FALSE(out.ok);
 }
 
-// ---- matchIncrementalFastCooperative ----
+// ---- tryMatchIncrementalGreedyCooperative ----
 
 namespace {
 
@@ -374,7 +374,7 @@ struct IncrementalTestOut {
 
 // One-warp driver: builds parent match in shared mem, then constructs
 // the child seed (parent + new bonds) and runs
-// matchIncrementalFastCooperative on it.
+// tryMatchIncrementalGreedyCooperative on it.
 __global__ void matchIncrementalAtomAddingDriver(DeviceCsrView         qView,
                                                  DeviceCsrView         tView,
                                                  PairMatchTablesDevice tables,
@@ -401,7 +401,7 @@ __global__ void matchIncrementalAtomAddingDriver(DeviceCsrView         qView,
 
   auto block = cooperative_groups::this_thread_block();
   auto warp  = cooperative_groups::tiled_partition<32>(block);
-  bool ok    = mcs::fmcs::matchIncrementalFastCooperative(warp, child.seed, qView, tView, tables, child.match);
+  bool ok    = mcs::fmcs::tryMatchIncrementalGreedyCooperative(warp, child.seed, qView, tView, tables, child.match);
   __syncthreads();
 
   if (threadIdx.x == 0) {
@@ -434,7 +434,7 @@ __global__ void matchIncrementalRingClosingDriver(DeviceCsrView         qView,
 
   auto block = cooperative_groups::this_thread_block();
   auto warp  = cooperative_groups::tiled_partition<32>(block);
-  bool ok    = mcs::fmcs::matchIncrementalFastCooperative(warp, child.seed, qView, tView, tables, child.match);
+  bool ok    = mcs::fmcs::tryMatchIncrementalGreedyCooperative(warp, child.seed, qView, tView, tables, child.match);
   __syncthreads();
 
   if (threadIdx.x == 0) {
@@ -470,7 +470,7 @@ __global__ void matchIncrementalVisitedConflictDriver(DeviceCsrView         qVie
 
   auto block = cooperative_groups::this_thread_block();
   auto warp  = cooperative_groups::tiled_partition<32>(block);
-  bool ok    = mcs::fmcs::matchIncrementalFastCooperative(warp, child.seed, qView, tView, tables, child.match);
+  bool ok    = mcs::fmcs::tryMatchIncrementalGreedyCooperative(warp, child.seed, qView, tView, tables, child.match);
   __syncthreads();
 
   if (threadIdx.x == 0) {
@@ -506,7 +506,7 @@ __global__ void matchIncrementalTwoBondChainDriver(DeviceCsrView         qView,
 
   auto block = cooperative_groups::this_thread_block();
   auto warp  = cooperative_groups::tiled_partition<32>(block);
-  bool ok    = mcs::fmcs::matchIncrementalFastCooperative(warp, child.seed, qView, tView, tables, child.match);
+  bool ok    = mcs::fmcs::tryMatchIncrementalGreedyCooperative(warp, child.seed, qView, tView, tables, child.match);
   __syncthreads();
 
   if (threadIdx.x == 0) {
@@ -517,7 +517,7 @@ __global__ void matchIncrementalTwoBondChainDriver(DeviceCsrView         qView,
 
 }  // namespace mcs_fmcs_incremental_test
 
-TEST(FMCSUnit, MatchIncrementalFastAtomAdding) {
+TEST(FMCSUnit, TryMatchIncrementalGreedyAtomAdding) {
   using mcs_fmcs_incremental_test::IncrementalTestOut;
   using mcs_fmcs_incremental_test::matchIncrementalAtomAddingDriver;
 
@@ -550,7 +550,7 @@ TEST(FMCSUnit, MatchIncrementalFastAtomAdding) {
   EXPECT_EQ(out.child.match.matchedAtomSize, 3);
 }
 
-TEST(FMCSUnit, MatchIncrementalFastRingClosing) {
+TEST(FMCSUnit, TryMatchIncrementalGreedyRingClosing) {
   using mcs_fmcs_incremental_test::IncrementalTestOut;
   using mcs_fmcs_incremental_test::matchIncrementalRingClosingDriver;
 
@@ -588,7 +588,7 @@ TEST(FMCSUnit, MatchIncrementalFastRingClosing) {
   EXPECT_EQ(out.child.match.matchedAtomSize, 4);
 }
 
-TEST(FMCSUnit, MatchIncrementalFastVisitedConflictFails) {
+TEST(FMCSUnit, TryMatchIncrementalGreedyVisitedConflictNeedsFallback) {
   using mcs_fmcs_incremental_test::IncrementalTestOut;
   using mcs_fmcs_incremental_test::matchIncrementalVisitedConflictDriver;
 
@@ -618,7 +618,7 @@ TEST(FMCSUnit, MatchIncrementalFastVisitedConflictFails) {
   EXPECT_FALSE(out.ok);
 }
 
-TEST(FMCSUnit, MatchIncrementalFastTwoBondChain) {
+TEST(FMCSUnit, TryMatchIncrementalGreedyTwoBondChain) {
   using mcs_fmcs_incremental_test::IncrementalTestOut;
   using mcs_fmcs_incremental_test::matchIncrementalTwoBondChainDriver;
 

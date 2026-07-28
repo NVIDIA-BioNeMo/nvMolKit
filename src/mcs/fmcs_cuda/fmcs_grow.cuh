@@ -151,10 +151,12 @@ __device__ __forceinline__ bool fillNewBondsCooperative(const GroupT&           
 /// across all lanes of @p group), and within each iteration the only
 /// truly group-parallel step is the @c warpCopy of @c parent into
 /// @p childWorkspace.  Lane 0 then patches in the singleton bond /
-/// atom; the per-bond match call is whatever @p matchFn does (when
-/// the kernel passes @ref matchIncrementalFastCooperative the inner
-/// target-bond scan IS lane-parallel); @p childSink is typically lane
-/// 0 only (cache.insert + queue.push).
+/// atom; the per-bond match call is whatever @p matchFn does.  The
+/// kernel's callback may try @ref tryMatchIncrementalGreedyCooperative,
+/// but it must own the exact fallback too: a greedy miss alone must not
+/// prune the bond.  The greedy helper's inner target-bond scan is
+/// lane-parallel; @p childSink is typically lane 0 only (cache.insert +
+/// queue.push).
 ///
 /// In other words: this function is cooperative only for the
 /// parent->child copy and for delegating to its callbacks; it does
