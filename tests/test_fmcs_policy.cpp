@@ -17,10 +17,14 @@ using mcs::fmcs::MatchTableHost;
 using mcs::fmcs::NullFMCSPolicy;
 
 LabeledGraph labeledPath(const std::vector<std::uint16_t>& vertices,
-                         std::uint16_t                      firstBond,
-                         std::uint16_t                      secondBond) {
+                         std::uint16_t                     firstBond,
+                         std::uint16_t                     secondBond) {
   LabeledGraph result;
-  result.graph        = mcs::buildGraphFromEdges(3, {{0, 1}, {1, 2}});
+  result.graph        = mcs::buildGraphFromEdges(3,
+                                                 {
+                                            {0, 1},
+                                            {1, 2}
+  });
   result.vertexLabels = vertices;
   result.edgeLabels.assign(9, 0);
   result.edgeLabels[1] = result.edgeLabels[3] = firstBond;
@@ -29,14 +33,30 @@ LabeledGraph labeledPath(const std::vector<std::uint16_t>& vertices,
 }
 
 TEST(FMCSPolicy, EnumeratesUndirectedBondsDeterministically) {
-  const auto graph = mcs::buildGraphFromEdges(4, {{2, 3}, {0, 2}, {1, 2}});
+  const auto graph = mcs::buildGraphFromEdges(4,
+                                              {
+                                                {2, 3},
+                                                {0, 2},
+                                                {1, 2}
+  });
   EXPECT_EQ(mcs::fmcs::enumerateBonds(graph),
-            (std::vector<std::pair<int, int>>{{0, 2}, {1, 2}, {2, 3}}));
+            (std::vector<std::pair<int, int>>{
+              {0, 2},
+              {1, 2},
+              {2, 3}
+  }));
 }
 
 TEST(FMCSPolicy, NullPolicyMakesEveryPairCompatible) {
-  const auto query  = mcs::buildGraphFromEdges(2, {{0, 1}});
-  const auto target = mcs::buildGraphFromEdges(3, {{0, 1}, {1, 2}});
+  const auto query  = mcs::buildGraphFromEdges(2,
+                                               {
+                                                {0, 1}
+  });
+  const auto target = mcs::buildGraphFromEdges(3,
+                                               {
+                                                 {0, 1},
+                                                 {1, 2}
+  });
 
   MatchTableHost atoms;
   MatchTableHost bonds;
@@ -65,8 +85,8 @@ TEST(FMCSPolicy, VertexLabelsRestrictCompatibility) {
 }
 
 TEST(FMCSPolicy, MissingVertexLabelsBehaveAsZero) {
-  auto query         = labeledPath({}, 1, 2);
-  auto target        = labeledPath({0, 7, 0}, 1, 2);
+  auto           query  = labeledPath({}, 1, 2);
+  auto           target = labeledPath({0, 7, 0}, 1, 2);
   MatchTableHost table;
 
   LabeledFMCSPolicy::buildAtomMatchTable(query, target, table, true);
