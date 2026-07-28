@@ -318,78 +318,38 @@ __device__ __forceinline__ bool tryMatchIncrementalGreedyCooperative(
   return true;
 }
 
-template <class TargetTopology>
 __device__ __forceinline__ bool findTargetBondBetweenAtomsWithinThread(const int                    targetAtomA,
                                                                        const int                    targetAtomB,
                                                                        const int                    queryBondIdx,
-                                                                       const TargetTopology&        targetTopology,
+                                                                       const DeviceCsrView&         targetTopology,
                                                                        const PairMatchTablesDevice& tables,
                                                                        int&                         outTargetBondIdx) {
-  if constexpr (topologyHasAdjacencyBondIndices<TargetTopology>()) {
-    if (targetAtomA < 0 || targetAtomA >= targetTopology.numAtoms) {
-      return false;
-    }
-    const int begin = static_cast<int>(targetTopology.rowOffsets[targetAtomA]);
-    const int end   = static_cast<int>(targetTopology.rowOffsets[targetAtomA + 1]);
-    for (int adjIdx = begin; adjIdx < end; ++adjIdx) {
-      const int otherTargetAtom = static_cast<int>(targetTopology.colIndices[adjIdx]);
-      if (otherTargetAtom != targetAtomB)
-        continue;
-      const int targetBondIdx = static_cast<int>(targetTopology.bondIndices[adjIdx]);
-      if (targetBondIdx < 0 || targetBondIdx >= targetTopology.numBonds) {
-        continue;
-      }
-      if (!tables.bonds.testBit(queryBondIdx, targetBondIdx))
-        continue;
-      outTargetBondIdx = targetBondIdx;
-      return true;
-    }
-    return false;
-  } else {
-    const bool scanAdjacency = targetTopology.rowOffsets != nullptr && targetTopology.colIndices != nullptr &&
-                               targetTopology.bondIndices != nullptr && targetAtomA >= 0 &&
-                               targetAtomA < targetTopology.numAtoms;
-    if (scanAdjacency) {
-      const int begin = static_cast<int>(targetTopology.rowOffsets[targetAtomA]);
-      const int end   = static_cast<int>(targetTopology.rowOffsets[targetAtomA + 1]);
-      for (int adjIdx = begin; adjIdx < end; ++adjIdx) {
-        const int otherTargetAtom = static_cast<int>(targetTopology.colIndices[adjIdx]);
-        if (otherTargetAtom != targetAtomB)
-          continue;
-        const int targetBondIdx = static_cast<int>(targetTopology.bondIndices[adjIdx]);
-        if (targetBondIdx < 0 || targetBondIdx >= targetTopology.numBonds) {
-          continue;
-        }
-        if (!tables.bonds.testBit(queryBondIdx, targetBondIdx))
-          continue;
-        outTargetBondIdx = targetBondIdx;
-        return true;
-      }
-      return false;
-    }
-
-    for (int targetBondIdx = 0; targetBondIdx < targetTopology.numBonds; ++targetBondIdx) {
-      const std::uint32_t targetEndpoints = targetTopology.bondEndpoints[targetBondIdx];
-      const int           targetEndpointU = static_cast<int>(targetEndpoints >> kBondEndpointShift);
-      const int           targetEndpointV = static_cast<int>(targetEndpoints & kBondEndpointMask);
-      const bool          endpointsMatch  = (targetEndpointU == targetAtomA && targetEndpointV == targetAtomB) ||
-                                  (targetEndpointU == targetAtomB && targetEndpointV == targetAtomA);
-      if (!endpointsMatch)
-        continue;
-      if (!tables.bonds.testBit(queryBondIdx, targetBondIdx))
-        continue;
-      outTargetBondIdx = targetBondIdx;
-      return true;
-    }
+  if (targetAtomA < 0 || targetAtomA >= targetTopology.numAtoms) {
     return false;
   }
+  const int begin = static_cast<int>(targetTopology.rowOffsets[targetAtomA]);
+  const int end   = static_cast<int>(targetTopology.rowOffsets[targetAtomA + 1]);
+  for (int adjIdx = begin; adjIdx < end; ++adjIdx) {
+    const int otherTargetAtom = static_cast<int>(targetTopology.colIndices[adjIdx]);
+    if (otherTargetAtom != targetAtomB)
+      continue;
+    const int targetBondIdx = static_cast<int>(targetTopology.bondIndices[adjIdx]);
+    if (targetBondIdx < 0 || targetBondIdx >= targetTopology.numBonds) {
+      continue;
+    }
+    if (!tables.bonds.testBit(queryBondIdx, targetBondIdx))
+      continue;
+    outTargetBondIdx = targetBondIdx;
+    return true;
+  }
+  return false;
 }
 
-template <int maxAtoms, int maxBonds, int maxTA, int maxTB, class QueryTopology, class TargetTopology>
+template <int maxAtoms, int maxBonds, int maxTA, int maxTB>
 __device__ __forceinline__ bool rebuildMatchFromSubstructureMappingWithinThread(
   const Seed<maxAtoms, maxBonds>&                seed,
-  const QueryTopology&                           queryTopology,
-  const TargetTopology&                          targetTopology,
+  const DeviceCsrView&                           queryTopology,
+  const DeviceCsrView&                           targetTopology,
   const PairMatchTablesDevice&                   tables,
   MatchResult<maxAtoms, maxBonds, maxTA, maxTB>& match,
   FmcsSubstructureScratch<maxAtoms, maxTA>&      scratch) {
@@ -469,10 +429,10 @@ __device__ __forceinline__ bool rebuildMatchFromSubstructureMappingWithinThread(
   return true;
 }
 
-template <int maxAtoms, int maxTA, class TargetTopology, class GroupT>
+template <int maxAtoms, int maxTA, class GroupT>
 __device__ __forceinline__ void initializeSeedSubstructureScratchCooperative(
   const GroupT&                             group,
-  const TargetTopology&                     targetTopology,
+  const DeviceCsrView&                      targetTopology,
   FmcsSubstructureScratch<maxAtoms, maxTA>& scratch) {
   const int laneRank  = static_cast<int>(group.thread_rank());
   const int laneCount = static_cast<int>(group.num_threads());
@@ -484,32 +444,9 @@ __device__ __forceinline__ void initializeSeedSubstructureScratchCooperative(
     scratch.targetAtomForQuery[i] = kUnmappedTargetIdx;
   }
 
-  if constexpr (topologyHasAdjacencyBondIndices<TargetTopology>()) {
-    for (int targetAtomIdx = laneRank; targetAtomIdx < targetTopology.numAtoms; targetAtomIdx += laneCount) {
-      scratch.targetDegree[targetAtomIdx] = static_cast<std::uint8_t>(targetTopology.rowOffsets[targetAtomIdx + 1] -
-                                                                      targetTopology.rowOffsets[targetAtomIdx]);
-    }
-  } else {
-    if (targetTopology.rowOffsets != nullptr) {
-      for (int targetAtomIdx = laneRank; targetAtomIdx < targetTopology.numAtoms; targetAtomIdx += laneCount) {
-        scratch.targetDegree[targetAtomIdx] = static_cast<std::uint8_t>(targetTopology.rowOffsets[targetAtomIdx + 1] -
-                                                                        targetTopology.rowOffsets[targetAtomIdx]);
-      }
-    } else {
-      for (int i = laneRank; i < maxTA; i += laneCount) {
-        scratch.targetDegree[i] = 0;
-      }
-      group.sync();
-      if (laneRank == 0) {
-        for (int targetBondIdx = 0; targetBondIdx < targetTopology.numBonds; ++targetBondIdx) {
-          const std::uint32_t targetEndpoints = targetTopology.bondEndpoints[targetBondIdx];
-          const int           targetEndpointU = static_cast<int>(targetEndpoints >> kBondEndpointShift);
-          const int           targetEndpointV = static_cast<int>(targetEndpoints & kBondEndpointMask);
-          ++scratch.targetDegree[targetEndpointU];
-          ++scratch.targetDegree[targetEndpointV];
-        }
-      }
-    }
+  for (int targetAtomIdx = laneRank; targetAtomIdx < targetTopology.numAtoms; targetAtomIdx += laneCount) {
+    scratch.targetDegree[targetAtomIdx] = static_cast<std::uint8_t>(targetTopology.rowOffsets[targetAtomIdx + 1] -
+                                                                    targetTopology.rowOffsets[targetAtomIdx]);
   }
 
   if (laneRank == 0) {
@@ -521,11 +458,11 @@ __device__ __forceinline__ void initializeSeedSubstructureScratchCooperative(
   group.sync();
 }
 
-template <int maxAtoms, int maxBonds, int maxTA, class QueryTopology, class TargetTopology>
+template <int maxAtoms, int maxBonds, int maxTA>
 __device__ __forceinline__ bool prepareSeedSubstructureSearchWithinThread(
   const Seed<maxAtoms, maxBonds>&           seed,
-  const QueryTopology&                      queryTopology,
-  const TargetTopology&                     targetTopology,
+  const DeviceCsrView&                      queryTopology,
+  const DeviceCsrView&                      targetTopology,
   const PairMatchTablesDevice&              tables,
   FmcsSubstructureScratch<maxAtoms, maxTA>& scratch,
   int&                                      numSeedAtoms) {
@@ -595,63 +532,18 @@ __device__ __forceinline__ bool prepareSeedSubstructureSearchWithinThread(
 
       int mappedNeighborCount = 0;
       if (orderPos > 0) {
-        if constexpr (topologyHasAdjacencyBondIndices<QueryTopology>()) {
-          const int begin = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx]);
-          const int end   = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx + 1]);
-          for (int adjIdx = begin; adjIdx < end; ++adjIdx) {
-            const int queryBondIdx = static_cast<int>(queryTopology.bondIndices[adjIdx]);
-            if (queryBondIdx >= queryTopology.numBonds ||
-                !seedContainsBondWithinThread<maxAtoms, maxBonds>(seed, queryBondIdx)) {
-              continue;
-            }
-            const int otherQueryAtom = static_cast<int>(queryTopology.colIndices[adjIdx]);
-            if (otherQueryAtom >= 0 && otherQueryAtom < queryTopology.numAtoms &&
-                scratch.orderedQueryAtom[otherQueryAtom]) {
-              ++mappedNeighborCount;
-            }
+        const int begin = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx]);
+        const int end   = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx + 1]);
+        for (int adjIdx = begin; adjIdx < end; ++adjIdx) {
+          const int queryBondIdx = static_cast<int>(queryTopology.bondIndices[adjIdx]);
+          if (queryBondIdx >= queryTopology.numBonds ||
+              !seedContainsBondWithinThread<maxAtoms, maxBonds>(seed, queryBondIdx)) {
+            continue;
           }
-        } else {
-          const bool scanQueryAdjacency = queryTopology.rowOffsets != nullptr && queryTopology.colIndices != nullptr &&
-                                          queryTopology.bondIndices != nullptr && queryAtomIdx >= 0 &&
-                                          queryAtomIdx < queryTopology.numAtoms;
-          if (scanQueryAdjacency) {
-            const int begin = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx]);
-            const int end   = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx + 1]);
-            for (int adjIdx = begin; adjIdx < end; ++adjIdx) {
-              const int queryBondIdx = static_cast<int>(queryTopology.bondIndices[adjIdx]);
-              if (queryBondIdx >= queryTopology.numBonds ||
-                  !seedContainsBondWithinThread<maxAtoms, maxBonds>(seed, queryBondIdx)) {
-                continue;
-              }
-              const int otherQueryAtom = static_cast<int>(queryTopology.colIndices[adjIdx]);
-              if (otherQueryAtom >= 0 && otherQueryAtom < queryTopology.numAtoms &&
-                  scratch.orderedQueryAtom[otherQueryAtom]) {
-                ++mappedNeighborCount;
-              }
-            }
-          } else {
-            for (int wordIdx = 0; wordIdx < kBondWords; ++wordIdx) {
-              BondWord remaining = seed.bonds[wordIdx];
-              while (remaining != 0) {
-                int bitPosInWord;
-                if constexpr (sizeof(BondWord) == 4) {
-                  bitPosInWord = __ffs(static_cast<unsigned int>(remaining)) - 1;
-                } else {
-                  bitPosInWord = __ffsll(static_cast<unsigned long long>(remaining)) - 1;
-                }
-                const int queryBondIdx = wordIdx * kBondBitsPerWord + bitPosInWord;
-                remaining &= remaining - 1;
-
-                const std::uint32_t queryEndpoints = queryTopology.bondEndpoints[queryBondIdx];
-                const int           queryEndpointU = static_cast<int>(queryEndpoints >> kBondEndpointShift);
-                const int           queryEndpointV = static_cast<int>(queryEndpoints & kBondEndpointMask);
-                if (queryEndpointU == queryAtomIdx && scratch.orderedQueryAtom[queryEndpointV]) {
-                  ++mappedNeighborCount;
-                } else if (queryEndpointV == queryAtomIdx && scratch.orderedQueryAtom[queryEndpointU]) {
-                  ++mappedNeighborCount;
-                }
-              }
-            }
+          const int otherQueryAtom = static_cast<int>(queryTopology.colIndices[adjIdx]);
+          if (otherQueryAtom >= 0 && otherQueryAtom < queryTopology.numAtoms &&
+              scratch.orderedQueryAtom[otherQueryAtom]) {
+            ++mappedNeighborCount;
           }
         }
       }
@@ -713,10 +605,10 @@ __device__ __forceinline__ bool partialUsesTargetAtomWithinThread(const std::uin
   return false;
 }
 
-template <int maxAtoms, int maxBonds, int maxTA, class QueryTopology>
+template <int maxAtoms, int maxBonds, int maxTA>
 __device__ __forceinline__ bool findMappedQueryNeighborWithinThread(
   const Seed<maxAtoms, maxBonds>&                 seed,
-  const QueryTopology&                            queryTopology,
+  const DeviceCsrView&                            queryTopology,
   const FmcsSubstructureScratch<maxAtoms, maxTA>& scratch,
   const int                                       depth,
   const int                                       queryAtomIdx,
@@ -727,92 +619,32 @@ __device__ __forceinline__ bool findMappedQueryNeighborWithinThread(
   constexpr int kBondWords       = SeedT::kBondWords;
 
   outNeighborOrderPos = -1;
-  if constexpr (topologyHasAdjacencyBondIndices<QueryTopology>()) {
-    const int begin = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx]);
-    const int end   = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx + 1]);
-    for (int adjIdx = begin; adjIdx < end; ++adjIdx) {
-      const int queryBondIdx = static_cast<int>(queryTopology.bondIndices[adjIdx]);
-      if (queryBondIdx >= queryTopology.numBonds ||
-          !seedContainsBondWithinThread<maxAtoms, maxBonds>(seed, queryBondIdx)) {
-        continue;
-      }
-      const int otherQueryAtom = static_cast<int>(queryTopology.colIndices[adjIdx]);
-      if (otherQueryAtom < 0 || otherQueryAtom >= queryTopology.numAtoms) {
-        continue;
-      }
-      const int otherOrderPos = scratch.queryOrderPos[otherQueryAtom];
-      if (otherOrderPos != kUnmappedTargetIdx && otherOrderPos < depth) {
-        outNeighborOrderPos = otherOrderPos;
-        return true;
-      }
+  const int begin     = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx]);
+  const int end       = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx + 1]);
+  for (int adjIdx = begin; adjIdx < end; ++adjIdx) {
+    const int queryBondIdx = static_cast<int>(queryTopology.bondIndices[adjIdx]);
+    if (queryBondIdx >= queryTopology.numBonds ||
+        !seedContainsBondWithinThread<maxAtoms, maxBonds>(seed, queryBondIdx)) {
+      continue;
     }
-    return false;
-  } else {
-    const bool scanQueryAdjacency = queryTopology.rowOffsets != nullptr && queryTopology.colIndices != nullptr &&
-                                    queryTopology.bondIndices != nullptr && queryAtomIdx >= 0 &&
-                                    queryAtomIdx < queryTopology.numAtoms;
-    if (scanQueryAdjacency) {
-      const int begin = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx]);
-      const int end   = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx + 1]);
-      for (int adjIdx = begin; adjIdx < end; ++adjIdx) {
-        const int queryBondIdx = static_cast<int>(queryTopology.bondIndices[adjIdx]);
-        if (queryBondIdx >= queryTopology.numBonds ||
-            !seedContainsBondWithinThread<maxAtoms, maxBonds>(seed, queryBondIdx)) {
-          continue;
-        }
-        const int otherQueryAtom = static_cast<int>(queryTopology.colIndices[adjIdx]);
-        if (otherQueryAtom < 0 || otherQueryAtom >= queryTopology.numAtoms) {
-          continue;
-        }
-        const int otherOrderPos = scratch.queryOrderPos[otherQueryAtom];
-        if (otherOrderPos != kUnmappedTargetIdx && otherOrderPos < depth) {
-          outNeighborOrderPos = otherOrderPos;
-          return true;
-        }
-      }
-      return false;
+    const int otherQueryAtom = static_cast<int>(queryTopology.colIndices[adjIdx]);
+    if (otherQueryAtom < 0 || otherQueryAtom >= queryTopology.numAtoms) {
+      continue;
     }
-
-    for (int wordIdx = 0; wordIdx < kBondWords; ++wordIdx) {
-      BondWord remaining = seed.bonds[wordIdx];
-      while (remaining != 0) {
-        int bitPosInWord;
-        if constexpr (sizeof(BondWord) == 4) {
-          bitPosInWord = __ffs(static_cast<unsigned int>(remaining)) - 1;
-        } else {
-          bitPosInWord = __ffsll(static_cast<unsigned long long>(remaining)) - 1;
-        }
-        const int queryBondIdx = wordIdx * kBondBitsPerWord + bitPosInWord;
-        remaining &= remaining - 1;
-
-        const std::uint32_t queryEndpoints = queryTopology.bondEndpoints[queryBondIdx];
-        const int           queryEndpointU = static_cast<int>(queryEndpoints >> kBondEndpointShift);
-        const int           queryEndpointV = static_cast<int>(queryEndpoints & kBondEndpointMask);
-        int                 otherQueryAtom = -1;
-        if (queryEndpointU == queryAtomIdx) {
-          otherQueryAtom = queryEndpointV;
-        } else if (queryEndpointV == queryAtomIdx) {
-          otherQueryAtom = queryEndpointU;
-        } else {
-          continue;
-        }
-
-        const int otherOrderPos = scratch.queryOrderPos[otherQueryAtom];
-        if (otherOrderPos != kUnmappedTargetIdx && otherOrderPos < depth) {
-          outNeighborOrderPos = otherOrderPos;
-          return true;
-        }
-      }
+    const int otherOrderPos = scratch.queryOrderPos[otherQueryAtom];
+    if (otherOrderPos != kUnmappedTargetIdx && otherOrderPos < depth) {
+      outNeighborOrderPos = otherOrderPos;
+      return true;
     }
-    return false;
   }
+  return false;
 }
 
-template <int maxAtoms, int maxBonds, int maxTA, class QueryTopology, class TargetTopology>
+template <int maxAtoms, int maxBonds, int maxTA>
 __device__ __forceinline__ bool substructurePartialEdgeConsistentWithinThread(
   const Seed<maxAtoms, maxBonds>&                 seed,
-  const QueryTopology&                            queryTopology,
-  const TargetTopology&                           targetTopology,
+  const DeviceCsrView&                            queryTopology,
+  const DeviceCsrView&                            targetTopology,
   const PairMatchTablesDevice&                    tables,
   const FmcsSubstructureScratch<maxAtoms, maxTA>& scratch,
   const std::uint8_t*                             partial,
@@ -824,124 +656,43 @@ __device__ __forceinline__ bool substructurePartialEdgeConsistentWithinThread(
   constexpr int kBondBitsPerWord = SeedT::kBondBitsPerWord;
   constexpr int kBondWords       = SeedT::kBondWords;
 
-  if constexpr (topologyHasAdjacencyBondIndices<QueryTopology>()) {
-    const int begin = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx]);
-    const int end   = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx + 1]);
-    for (int adjIdx = begin; adjIdx < end; ++adjIdx) {
-      const int queryBondIdx = static_cast<int>(queryTopology.bondIndices[adjIdx]);
-      if (queryBondIdx >= queryTopology.numBonds ||
-          !seedContainsBondWithinThread<maxAtoms, maxBonds>(seed, queryBondIdx)) {
-        continue;
-      }
-      const int otherQueryAtom = static_cast<int>(queryTopology.colIndices[adjIdx]);
-      if (otherQueryAtom < 0 || otherQueryAtom >= queryTopology.numAtoms) {
-        continue;
-      }
-
-      const int otherOrderPos = scratch.queryOrderPos[otherQueryAtom];
-      if (otherOrderPos == kUnmappedTargetIdx || otherOrderPos >= depth) {
-        continue;
-      }
-      const int otherTargetAtom = partial[otherOrderPos];
-
-      int targetBondIdx = -1;
-      if (!findTargetBondBetweenAtomsWithinThread(targetAtomIdx,
-                                                  otherTargetAtom,
-                                                  queryBondIdx,
-                                                  targetTopology,
-                                                  tables,
-                                                  targetBondIdx)) {
-        return false;
-      }
+  const int begin = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx]);
+  const int end   = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx + 1]);
+  for (int adjIdx = begin; adjIdx < end; ++adjIdx) {
+    const int queryBondIdx = static_cast<int>(queryTopology.bondIndices[adjIdx]);
+    if (queryBondIdx >= queryTopology.numBonds ||
+        !seedContainsBondWithinThread<maxAtoms, maxBonds>(seed, queryBondIdx)) {
+      continue;
     }
-    return true;
-  } else {
-    const bool scanQueryAdjacency = queryTopology.rowOffsets != nullptr && queryTopology.colIndices != nullptr &&
-                                    queryTopology.bondIndices != nullptr && queryAtomIdx >= 0 &&
-                                    queryAtomIdx < queryTopology.numAtoms;
-    if (scanQueryAdjacency) {
-      const int begin = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx]);
-      const int end   = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx + 1]);
-      for (int adjIdx = begin; adjIdx < end; ++adjIdx) {
-        const int queryBondIdx = static_cast<int>(queryTopology.bondIndices[adjIdx]);
-        if (queryBondIdx >= queryTopology.numBonds ||
-            !seedContainsBondWithinThread<maxAtoms, maxBonds>(seed, queryBondIdx)) {
-          continue;
-        }
-        const int otherQueryAtom = static_cast<int>(queryTopology.colIndices[adjIdx]);
-        if (otherQueryAtom < 0 || otherQueryAtom >= queryTopology.numAtoms) {
-          continue;
-        }
-
-        const int otherOrderPos = scratch.queryOrderPos[otherQueryAtom];
-        if (otherOrderPos == kUnmappedTargetIdx || otherOrderPos >= depth) {
-          continue;
-        }
-        const int otherTargetAtom = partial[otherOrderPos];
-
-        int targetBondIdx = -1;
-        if (!findTargetBondBetweenAtomsWithinThread(targetAtomIdx,
-                                                    otherTargetAtom,
-                                                    queryBondIdx,
-                                                    targetTopology,
-                                                    tables,
-                                                    targetBondIdx)) {
-          return false;
-        }
-      }
-      return true;
+    const int otherQueryAtom = static_cast<int>(queryTopology.colIndices[adjIdx]);
+    if (otherQueryAtom < 0 || otherQueryAtom >= queryTopology.numAtoms) {
+      continue;
     }
 
-    for (int wordIdx = 0; wordIdx < kBondWords; ++wordIdx) {
-      BondWord remaining = seed.bonds[wordIdx];
-      while (remaining != 0) {
-        int bitPosInWord;
-        if constexpr (sizeof(BondWord) == 4) {
-          bitPosInWord = __ffs(static_cast<unsigned int>(remaining)) - 1;
-        } else {
-          bitPosInWord = __ffsll(static_cast<unsigned long long>(remaining)) - 1;
-        }
-        const int queryBondIdx = wordIdx * kBondBitsPerWord + bitPosInWord;
-        remaining &= remaining - 1;
-
-        const std::uint32_t queryEndpoints = queryTopology.bondEndpoints[queryBondIdx];
-        const int           queryEndpointU = static_cast<int>(queryEndpoints >> kBondEndpointShift);
-        const int           queryEndpointV = static_cast<int>(queryEndpoints & kBondEndpointMask);
-        int                 otherQueryAtom = -1;
-        if (queryEndpointU == queryAtomIdx) {
-          otherQueryAtom = queryEndpointV;
-        } else if (queryEndpointV == queryAtomIdx) {
-          otherQueryAtom = queryEndpointU;
-        } else {
-          continue;
-        }
-
-        const int otherOrderPos = scratch.queryOrderPos[otherQueryAtom];
-        if (otherOrderPos == kUnmappedTargetIdx || otherOrderPos >= depth) {
-          continue;
-        }
-        const int otherTargetAtom = partial[otherOrderPos];
-
-        int targetBondIdx = -1;
-        if (!findTargetBondBetweenAtomsWithinThread(targetAtomIdx,
-                                                    otherTargetAtom,
-                                                    queryBondIdx,
-                                                    targetTopology,
-                                                    tables,
-                                                    targetBondIdx)) {
-          return false;
-        }
-      }
+    const int otherOrderPos = scratch.queryOrderPos[otherQueryAtom];
+    if (otherOrderPos == kUnmappedTargetIdx || otherOrderPos >= depth) {
+      continue;
     }
-    return true;
+    const int otherTargetAtom = partial[otherOrderPos];
+
+    int targetBondIdx = -1;
+    if (!findTargetBondBetweenAtomsWithinThread(targetAtomIdx,
+                                                otherTargetAtom,
+                                                queryBondIdx,
+                                                targetTopology,
+                                                tables,
+                                                targetBondIdx)) {
+      return false;
+    }
   }
+  return true;
 }
 
-template <int maxAtoms, int maxBonds, int maxTA, int maxTB, class QueryTopology, class TargetTopology, class GroupT>
+template <int maxAtoms, int maxBonds, int maxTA, int maxTB, class GroupT>
 __device__ __forceinline__ bool matchSeedSubstructureCooperative(const GroupT&                   group,
                                                                  const Seed<maxAtoms, maxBonds>& seed,
-                                                                 const QueryTopology&            queryTopology,
-                                                                 const TargetTopology&           targetTopology,
+                                                                 const DeviceCsrView&            queryTopology,
+                                                                 const DeviceCsrView&            targetTopology,
                                                                  const PairMatchTablesDevice&    tables,
                                                                  MatchResult<maxAtoms, maxBonds, maxTA, maxTB>& match,
                                                                  FmcsSubstructureScratch<maxAtoms, maxTA>&      scratch,
@@ -1128,12 +879,12 @@ __device__ __forceinline__ bool matchSeedSubstructureCooperative(const GroupT&  
   return false;
 }
 
-template <int maxAtoms, int maxBonds, int maxTA, int maxTB, class QueryTopology, class TargetTopology, class GroupT>
+template <int maxAtoms, int maxBonds, int maxTA, int maxTB, class GroupT>
 __device__ __forceinline__ bool matchSeedWithSubstructureFallbackCooperative(
   const GroupT&                                  group,
   const Seed<maxAtoms, maxBonds>&                seed,
-  const QueryTopology&                           queryTopology,
-  const TargetTopology&                          targetTopology,
+  const DeviceCsrView&                           queryTopology,
+  const DeviceCsrView&                           targetTopology,
   const PairMatchTablesDevice&                   tables,
   MatchResult<maxAtoms, maxBonds, maxTA, maxTB>& match,
   FmcsSubstructureScratch<maxAtoms, maxTA>&      scratch,
@@ -1141,7 +892,7 @@ __device__ __forceinline__ bool matchSeedWithSubstructureFallbackCooperative(
   std::uint8_t*                                  partialStorage,
   int                                            partialCapacity,
   bool*                                          overflowedFlag) {
-  if (matchIncrementalFastCooperative(group, seed, queryTopology, targetTopology, tables, match)) {
+  if (tryMatchIncrementalGreedyCooperative(group, seed, queryTopology, targetTopology, tables, match)) {
     return true;
   }
   if (group.thread_rank() == 0) {

@@ -42,7 +42,7 @@ using mcs::fmcs::Seed;
 }  // namespace
 
 // ---------------------------------------------------------------------------
-// matchSingleBondWithinThread / matchIncrementalFastCooperative
+// matchSingleBondWithinThread / tryMatchIncrementalGreedyCooperative
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -51,19 +51,7 @@ using mcs::fmcs::MatchTableDevice;
 using mcs::fmcs::PairMatchTablesDevice;
 using mcs::fmcs::SingleBondMatch;
 
-// Tiny CSR-view used by the match helpers via duck-typing; satisfies the
-// QueryTopology / TargetTopology template requirement (bondEndpoints +
-// numAtoms / numBonds), with optional CSR adjacency fields.
-struct TestCsrView {
-  static constexpr bool kHasAdjacencyBondIndices = false;
-
-  const std::uint32_t* bondEndpoints = nullptr;
-  int                  numAtoms      = 0;
-  int                  numBonds      = 0;
-  const std::uint32_t* rowOffsets    = nullptr;
-  const std::uint32_t* colIndices    = nullptr;
-  const std::uint32_t* bondIndices   = nullptr;
-};
+using mcs::fmcs::DeviceCsrView;
 
 // Match tables staged on the host and uploaded to device memory on
 // demand.  Both atom and bond tables are 32-bit row-packed bitmasks
@@ -125,15 +113,68 @@ struct ManagedMatchTables {
   bool                  dirty_ = true;
 };
 
-AsyncDeviceVector<std::uint32_t> makeBondEndpointsDevice(const std::vector<std::pair<int, int>>& edges) {
-  std::vector<std::uint32_t> host(edges.size());
-  for (size_t i = 0; i < edges.size(); ++i) {
-    host[i] = (static_cast<std::uint32_t>(edges[i].first) << 16) | static_cast<std::uint32_t>(edges[i].second);
+// Owns the device buffers behind a DeviceCsrView.  Built from an
+// undirected edge list: bond i is edges[i], and the CSR is the symmetric
+// expansion of that list (each edge contributes one entry to each
+// endpoint's row), matching what the host-side graph builder uploads for
+// real molecules.
+class TestGraph {
+ public:
+  TestGraph(int numAtoms, const std::vector<std::pair<int, int>>& edges) {
+    const int numBonds = static_cast<int>(edges.size());
+
+    std::vector<std::uint32_t> bondEndpointsHost(numBonds);
+    for (int i = 0; i < numBonds; ++i) {
+      bondEndpointsHost[i] =
+        (static_cast<std::uint32_t>(edges[i].first) << 16) | static_cast<std::uint32_t>(edges[i].second);
+    }
+
+    // Counting sort into CSR: degree pass, prefix sum, then scatter.
+    std::vector<std::uint32_t> rowOffsetsHost(numAtoms + 1, 0);
+    for (const auto& edge : edges) {
+      ++rowOffsetsHost[edge.first + 1];
+      ++rowOffsetsHost[edge.second + 1];
+    }
+    for (int atom = 0; atom < numAtoms; ++atom) {
+      rowOffsetsHost[atom + 1] += rowOffsetsHost[atom];
+    }
+
+    std::vector<std::uint32_t> colIndicesHost(2 * numBonds);
+    std::vector<std::uint32_t> bondIndicesHost(2 * numBonds);
+    std::vector<std::uint32_t> cursor(rowOffsetsHost.begin(), rowOffsetsHost.end() - 1);
+    for (int bond = 0; bond < numBonds; ++bond) {
+      const int u                = edges[bond].first;
+      const int v                = edges[bond].second;
+      colIndicesHost[cursor[u]]  = static_cast<std::uint32_t>(v);
+      bondIndicesHost[cursor[u]] = static_cast<std::uint32_t>(bond);
+      ++cursor[u];
+      colIndicesHost[cursor[v]]  = static_cast<std::uint32_t>(u);
+      bondIndicesHost[cursor[v]] = static_cast<std::uint32_t>(bond);
+      ++cursor[v];
+    }
+
+    bondEndpoints_.setFromVector(bondEndpointsHost);
+    rowOffsets_.setFromVector(rowOffsetsHost);
+    colIndices_.setFromVector(colIndicesHost);
+    bondIndices_.setFromVector(bondIndicesHost);
+
+    view_.bondEndpoints = bondEndpoints_.data();
+    view_.rowOffsets    = rowOffsets_.data();
+    view_.colIndices    = colIndices_.data();
+    view_.bondIndices   = bondIndices_.data();
+    view_.numAtoms      = numAtoms;
+    view_.numBonds      = numBonds;
   }
-  AsyncDeviceVector<std::uint32_t> dev(edges.size());
-  dev.copyFromHost(host);
-  return dev;
-}
+
+  DeviceCsrView view() const { return view_; }
+
+ private:
+  AsyncDeviceVector<std::uint32_t> bondEndpoints_;
+  AsyncDeviceVector<std::uint32_t> rowOffsets_;
+  AsyncDeviceVector<std::uint32_t> colIndices_;
+  AsyncDeviceVector<std::uint32_t> bondIndices_;
+  DeviceCsrView                    view_{};
+};
 
 }  // namespace
 
@@ -198,12 +239,8 @@ __device__ __forceinline__ void addMaskSeed(QueuedT16& child, std::uint32_t atom
   }
 }
 
-__global__ void matchSubstructureMaskDriver(const std::uint32_t*  qBE,
-                                            int                   qNumAtoms,
-                                            int                   qNumBonds,
-                                            const std::uint32_t*  tBE,
-                                            int                   tNumAtoms,
-                                            int                   tNumBonds,
+__global__ void matchSubstructureMaskDriver(DeviceCsrView         qView,
+                                            DeviceCsrView         tView,
                                             PairMatchTablesDevice tables,
                                             std::uint32_t         atomMask,
                                             std::uint32_t         bondMask,
@@ -217,12 +254,10 @@ __global__ void matchSubstructureMaskDriver(const std::uint32_t*  qBE,
   }
   __syncthreads();
 
-  auto        block = cooperative_groups::this_thread_block();
-  auto        warp  = cooperative_groups::tiled_partition<32>(block);
-  TestCsrView qView{qBE, qNumAtoms, qNumBonds};
-  TestCsrView tView{tBE, tNumAtoms, tNumBonds};
-  bool        overflowed = false;
-  bool        ok         = mcs::fmcs::matchSeedSubstructureCooperative(warp,
+  auto block      = cooperative_groups::this_thread_block();
+  auto warp       = cooperative_groups::tiled_partition<32>(block);
+  bool overflowed = false;
+  bool ok         = mcs::fmcs::matchSeedSubstructureCooperative(warp,
                                                         child.seed,
                                                         qView,
                                                         tView,
@@ -241,12 +276,8 @@ __global__ void matchSubstructureMaskDriver(const std::uint32_t*  qBE,
   }
 }
 
-__global__ void matchFallbackBadParentDriver(const std::uint32_t*  qBE,
-                                             int                   qNumAtoms,
-                                             int                   qNumBonds,
-                                             const std::uint32_t*  tBE,
-                                             int                   tNumAtoms,
-                                             int                   tNumBonds,
+__global__ void matchFallbackBadParentDriver(DeviceCsrView         qView,
+                                             DeviceCsrView         tView,
                                              PairMatchTablesDevice tables,
                                              std::uint8_t*         partialStorage,
                                              int                   partialCapacity,
@@ -278,12 +309,10 @@ __global__ void matchFallbackBadParentDriver(const std::uint32_t*  qBE,
   }
   __syncthreads();
 
-  auto        block = cooperative_groups::this_thread_block();
-  auto        warp  = cooperative_groups::tiled_partition<32>(block);
-  TestCsrView qView{qBE, qNumAtoms, qNumBonds};
-  TestCsrView tView{tBE, tNumAtoms, tNumBonds};
-  bool        overflowed = false;
-  bool        ok         = mcs::fmcs::matchSeedWithSubstructureFallbackCooperative(warp,
+  auto block      = cooperative_groups::this_thread_block();
+  auto warp       = cooperative_groups::tiled_partition<32>(block);
+  bool overflowed = false;
+  bool ok         = mcs::fmcs::matchSeedWithSubstructureFallbackCooperative(warp,
                                                                     child.seed,
                                                                     qView,
                                                                     tView,
@@ -308,16 +337,18 @@ __global__ void matchFallbackBadParentDriver(const std::uint32_t*  qBE,
 TEST(FMCSUnit, MatchSeedSubstructurePath) {
   using namespace mcs_fmcs_substructure_test;
 
-  auto               qBE = makeBondEndpointsDevice({
-    {0, 1},
-    {1, 2},
-    {2, 3}
+  TestGraph          query(4,
+                           {
+                    {0, 1},
+                    {1, 2},
+                    {2, 3}
   });
-  auto               tBE = makeBondEndpointsDevice({
-    {0, 1},
-    {1, 2},
-    {2, 3},
-    {3, 4}
+  TestGraph          target(5,
+                            {
+                     {0, 1},
+                     {1, 2},
+                     {2, 3},
+                     {3, 4}
   });
   ManagedMatchTables tables;
   tables.allocate(4, 5, 3, 4);
@@ -326,12 +357,8 @@ TEST(FMCSUnit, MatchSeedSubstructurePath) {
 
   AsyncDevicePtr<SubstructureTestOut> d_out;
   AsyncDeviceVector<std::uint8_t>     partials(2 * kTestSubstructurePartialCapacity * 16);
-  matchSubstructureMaskDriver<<<1, 32>>>(qBE.data(),
-                                         4,
-                                         3,
-                                         tBE.data(),
-                                         5,
-                                         4,
+  matchSubstructureMaskDriver<<<1, 32>>>(query.view(),
+                                         target.view(),
                                          tables.device(),
                                          /*atomMask=*/0xFu,
                                          /*bondMask=*/0x7u,
@@ -357,14 +384,16 @@ TEST(FMCSUnit, MatchSeedSubstructurePath) {
 TEST(FMCSUnit, MatchSeedSubstructureRejectsNoMatch) {
   using namespace mcs_fmcs_substructure_test;
 
-  auto               qBE = makeBondEndpointsDevice({
-    {0, 1},
-    {1, 2},
-    {0, 2}
+  TestGraph          query(3,
+                           {
+                    {0, 1},
+                    {1, 2},
+                    {0, 2}
   });
-  auto               tBE = makeBondEndpointsDevice({
-    {0, 1},
-    {1, 2}
+  TestGraph          target(3,
+                            {
+                     {0, 1},
+                     {1, 2}
   });
   ManagedMatchTables tables;
   tables.allocate(3, 3, 3, 2);
@@ -373,12 +402,8 @@ TEST(FMCSUnit, MatchSeedSubstructureRejectsNoMatch) {
 
   AsyncDevicePtr<SubstructureTestOut> d_out;
   AsyncDeviceVector<std::uint8_t>     partials(2 * kTestSubstructurePartialCapacity * 16);
-  matchSubstructureMaskDriver<<<1, 32>>>(qBE.data(),
-                                         3,
-                                         3,
-                                         tBE.data(),
-                                         3,
-                                         2,
+  matchSubstructureMaskDriver<<<1, 32>>>(query.view(),
+                                         target.view(),
                                          tables.device(),
                                          /*atomMask=*/0x7u,
                                          /*bondMask=*/0x7u,
@@ -397,13 +422,15 @@ TEST(FMCSUnit, MatchSeedSubstructureRejectsNoMatch) {
 TEST(FMCSUnit, MatchSeedSubstructureRespectsAtomTable) {
   using namespace mcs_fmcs_substructure_test;
 
-  auto               qBE = makeBondEndpointsDevice({
-    {0, 1},
-    {1, 2}
+  TestGraph          query(3,
+                           {
+                    {0, 1},
+                    {1, 2}
   });
-  auto               tBE = makeBondEndpointsDevice({
-    {0, 1},
-    {1, 2}
+  TestGraph          target(3,
+                            {
+                     {0, 1},
+                     {1, 2}
   });
   ManagedMatchTables tables;
   tables.allocate(3, 3, 2, 2);
@@ -414,12 +441,8 @@ TEST(FMCSUnit, MatchSeedSubstructureRespectsAtomTable) {
 
   AsyncDevicePtr<SubstructureTestOut> d_out;
   AsyncDeviceVector<std::uint8_t>     partials(2 * kTestSubstructurePartialCapacity * 16);
-  matchSubstructureMaskDriver<<<1, 32>>>(qBE.data(),
-                                         3,
-                                         2,
-                                         tBE.data(),
-                                         3,
-                                         2,
+  matchSubstructureMaskDriver<<<1, 32>>>(query.view(),
+                                         target.view(),
                                          tables.device(),
                                          /*atomMask=*/0x7u,
                                          /*bondMask=*/0x3u,
@@ -442,14 +465,16 @@ TEST(FMCSUnit, MatchSeedSubstructureRespectsAtomTable) {
 TEST(FMCSUnit, MatchSeedSubstructureRespectsBondTable) {
   using namespace mcs_fmcs_substructure_test;
 
-  auto               qBE = makeBondEndpointsDevice({
-    {0, 1},
-    {1, 2}
+  TestGraph          query(3,
+                           {
+                    {0, 1},
+                    {1, 2}
   });
-  auto               tBE = makeBondEndpointsDevice({
-    {0, 1},
-    {1, 2},
-    {0, 2}
+  TestGraph          target(3,
+                            {
+                     {0, 1},
+                     {1, 2},
+                     {0, 2}
   });
   ManagedMatchTables tables;
   tables.allocate(3, 3, 2, 3);
@@ -459,12 +484,8 @@ TEST(FMCSUnit, MatchSeedSubstructureRespectsBondTable) {
 
   AsyncDevicePtr<SubstructureTestOut> d_out;
   AsyncDeviceVector<std::uint8_t>     partials(2 * kTestSubstructurePartialCapacity * 16);
-  matchSubstructureMaskDriver<<<1, 32>>>(qBE.data(),
-                                         3,
-                                         2,
-                                         tBE.data(),
-                                         3,
-                                         3,
+  matchSubstructureMaskDriver<<<1, 32>>>(query.view(),
+                                         target.view(),
                                          tables.device(),
                                          /*atomMask=*/0x7u,
                                          /*bondMask=*/0x3u,
@@ -486,18 +507,20 @@ TEST(FMCSUnit, MatchSeedSubstructureRespectsBondTable) {
 TEST(FMCSUnit, MatchSeedSubstructureFindsPathInsideTriangleWithLeaves) {
   using namespace mcs_fmcs_substructure_test;
 
-  auto               qBE = makeBondEndpointsDevice({
-    {0, 1},
-    {0, 2},
-    {0, 4},
-    {1, 2},
-    {1, 3}
+  TestGraph          query(5,
+                           {
+                    {0, 1},
+                    {0, 2},
+                    {0, 4},
+                    {1, 2},
+                    {1, 3}
   });
-  auto               tBE = makeBondEndpointsDevice({
-    {0, 3},
-    {1, 2},
-    {1, 4},
-    {2, 3}
+  TestGraph          target(5,
+                            {
+                     {0, 3},
+                     {1, 2},
+                     {1, 4},
+                     {2, 3}
   });
   ManagedMatchTables tables;
   tables.allocate(5, 5, 5, 4);
@@ -506,12 +529,8 @@ TEST(FMCSUnit, MatchSeedSubstructureFindsPathInsideTriangleWithLeaves) {
 
   AsyncDevicePtr<SubstructureTestOut> d_out;
   AsyncDeviceVector<std::uint8_t>     partials(2 * kTestSubstructurePartialCapacity * 16);
-  matchSubstructureMaskDriver<<<1, 32>>>(qBE.data(),
-                                         5,
-                                         5,
-                                         tBE.data(),
-                                         5,
-                                         4,
+  matchSubstructureMaskDriver<<<1, 32>>>(query.view(),
+                                         target.view(),
                                          tables.device(),
                                          /*atomMask=*/0x1Fu,
                                          /*bondMask=*/0x1Eu,
@@ -535,18 +554,20 @@ TEST(FMCSUnit, MatchSeedSubstructureFindsPathInsideTriangleWithLeaves) {
 TEST(FMCSUnit, MatchSeedFallbackRebuildsAfterGreedyFailure) {
   using namespace mcs_fmcs_substructure_test;
 
-  auto               qBE = makeBondEndpointsDevice({
-    {0, 1},
-    {0, 2},
-    {0, 4},
-    {1, 2},
-    {1, 3}
+  TestGraph          query(5,
+                           {
+                    {0, 1},
+                    {0, 2},
+                    {0, 4},
+                    {1, 2},
+                    {1, 3}
   });
-  auto               tBE = makeBondEndpointsDevice({
-    {0, 3},
-    {1, 2},
-    {1, 4},
-    {2, 3}
+  TestGraph          target(5,
+                            {
+                     {0, 3},
+                     {1, 2},
+                     {1, 4},
+                     {2, 3}
   });
   ManagedMatchTables tables;
   tables.allocate(5, 5, 5, 4);
@@ -555,12 +576,8 @@ TEST(FMCSUnit, MatchSeedFallbackRebuildsAfterGreedyFailure) {
 
   AsyncDevicePtr<SubstructureTestOut> d_out;
   AsyncDeviceVector<std::uint8_t>     partials(2 * kTestSubstructurePartialCapacity * 16);
-  matchFallbackBadParentDriver<<<1, 32>>>(qBE.data(),
-                                          5,
-                                          5,
-                                          tBE.data(),
-                                          5,
-                                          4,
+  matchFallbackBadParentDriver<<<1, 32>>>(query.view(),
+                                          target.view(),
                                           tables.device(),
                                           partials.data(),
                                           kTestSubstructurePartialCapacity,
