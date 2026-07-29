@@ -19,6 +19,7 @@ Re-exports timing primitives, file loaders, and molecule preparation helpers
 so individual bench scripts can ``from bench_utils import time_it, load_smiles``.
 """
 
+from bench_utils.cli import add_smiles_sanitization_args
 from bench_utils.loaders import load_pickle, load_sdf, load_smarts, load_smiles
 from bench_utils.molprep import clone_mols_with_conformers, embed_and_jitter, perturb_conformer, prep_mols
 from bench_utils.timing import (
@@ -34,6 +35,7 @@ __all__ = [
     "Deadline",
     "TimingResult",
     "add_rdkit_max_seconds_arg",
+    "add_smiles_sanitization_args",
     "clone_mols_with_conformers",
     "embed_and_jitter",
     "load_pickle",
