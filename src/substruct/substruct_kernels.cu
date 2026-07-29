@@ -57,6 +57,11 @@ template <std::size_t MaxQueryAtoms = kMaxQueryAtoms> struct SubstructMatchResul
     return overflowBuffer + (blockIdx.x * overflowBuffersPerBlock + bufferIdx) * overflowEntriesPerBuffer;
   }
 
+  __device__ __forceinline__ PartialMatchT<MaxQueryAtoms>* getPairOverflowBuffer(int miniBatchIdx,
+                                                                                 int bufferIdx = 0) const {
+    return overflowBuffer + (miniBatchIdx * overflowBuffersPerBlock + bufferIdx) * overflowEntriesPerBuffer;
+  }
+
   __device__ __forceinline__ int getOverflowCapacity() const { return overflowEntriesPerBuffer; }
 
   __device__ __forceinline__ uint32_t getRecursiveMatchBits(int miniBatchIdx, int atomIdx) const {
@@ -445,27 +450,34 @@ __global__ void substructMatchKernelT(TargetMoleculesDeviceView                 
     }
 
   } else if constexpr (Algo == SubstructAlgorithm::DFS) {
-    namespace cg       = cooperative_groups;
-    auto      tile32   = cg::tiled_partition<32>(cg::this_thread_block());
-    const int warpId   = tile32.meta_group_rank();
-    const int numWarps = tile32.meta_group_size();
+    using DFSScratchT                     = DFSBitsetScratchT<MaxTargetAtoms, MaxQueryAtoms>;
+    constexpr int         kScratchBuffers = MaxTargetAtoms >= 128 ? 2 : 1;
+    constexpr std::size_t kAvailableScratchBytes =
+      kScratchBuffers * kOverflowEntriesPerBuffer * sizeof(PartialMatchT<MaxQueryAtoms>);
+    static_assert(DFSScratchT::kBytes <= kAvailableScratchBytes, "DFS scratch exceeds overflow slab");
 
-    __shared__ DFSStateT<MaxTargetAtoms, MaxQueryAtoms> dfsStates[kWarpsPerBlock];
+    __shared__ uint64_t dfsLabelMasks[MaxQueryAtoms * DFSScratchT::kMaskWords];
+    buildDFSLabelMasks<MaxTargetAtoms, MaxQueryAtoms>(target, query, labelMatrix, dfsLabelMasks);
 
-    for (int startT = warpId; startT < target.numAtoms; startT += numWarps) {
-      dfsSearchGPU<MaxTargetAtoms, MaxQueryAtoms, MaxBondsPerAtom>(target,
-                                                                   query,
-                                                                   labelMatrix,
-                                                                   dfsStates[warpId],
-                                                                   startT,
-                                                                   &sharedMatchCount,
-                                                                   &sharedReportedCount,
-                                                                   results.matchIndices,
-                                                                   maxMatches,
-                                                                   matchOffset,
-                                                                   {},
-                                                                   maxMatchesToFind,
-                                                                   countOnly);
+    // Recursive depth groups execute concurrently on different streams. Their
+    // blockIdx.x values each start at zero, so DFS scratch must be keyed by the
+    // stable mini-batch pair index rather than the launch-local block index.
+    DFSScratchT dfsScratch(results.getPairOverflowBuffer(miniBatchIdx));
+    const int   worker = threadIdx.x;
+    if (worker < DFSScratchT::kWorkers) {
+      dfsBitsetSearchGPU<MaxTargetAtoms, MaxQueryAtoms, MaxBondsPerAtom>(target,
+                                                                         query,
+                                                                         dfsLabelMasks,
+                                                                         dfsScratch,
+                                                                         worker,
+                                                                         &sharedMatchCount,
+                                                                         &sharedReportedCount,
+                                                                         results.matchIndices,
+                                                                         maxMatches,
+                                                                         matchOffset,
+                                                                         {},
+                                                                         maxMatchesToFind,
+                                                                         countOnly);
     }
   } else if constexpr (Algo == SubstructAlgorithm::GSI) {
     constexpr int kBlockSizeT = getBlockSizeForConfig<MaxTargetAtoms>();
@@ -619,25 +631,30 @@ __global__ void substructPaintKernelT(TargetMoleculesDeviceView     targets,
   constexpr int gsiBuffersPerBlock = 2;
 
   if constexpr (Algo == SubstructAlgorithm::DFS) {
-    namespace cg       = cooperative_groups;
-    auto      tile32   = cg::tiled_partition<32>(cg::this_thread_block());
-    const int warpId   = tile32.meta_group_rank();
-    const int numWarps = tile32.meta_group_size();
+    using DFSScratchT = DFSBitsetScratchT<MaxTargetAtoms, MaxQueryAtoms>;
+    constexpr std::size_t kAvailableScratchBytes =
+      gsiBuffersPerBlock * kOverflowEntriesPerBuffer * sizeof(PartialMatchT<MaxQueryAtoms>);
+    static_assert(DFSScratchT::kBytes <= kAvailableScratchBytes, "DFS paint scratch exceeds overflow slab");
 
-    __shared__ DFSStateT<MaxTargetAtoms, MaxQueryAtoms> dfsStates[kWarpsPerBlock];
+    __shared__ uint64_t dfsLabelMasks[MaxQueryAtoms * DFSScratchT::kMaskWords];
+    buildDFSLabelMasks<MaxTargetAtoms, MaxQueryAtoms>(target, pattern, labelMatrix, dfsLabelMasks);
 
-    for (int startT = warpId; startT < target.numAtoms; startT += numWarps) {
-      dfsSearchGPU<MaxTargetAtoms, MaxQueryAtoms, MaxBondsPerAtom, SubstructOutputMode::PaintBits>(target,
-                                                                                                   pattern,
-                                                                                                   labelMatrix,
-                                                                                                   dfsStates[warpId],
-                                                                                                   startT,
-                                                                                                   &sharedMatchCount,
-                                                                                                   &sharedReportedCount,
-                                                                                                   nullptr,
-                                                                                                   0,
-                                                                                                   0,
-                                                                                                   paintParams);
+    PartialMatchT<MaxQueryAtoms>* blockOverflowA = overflowA + blockIdx.x * gsiBuffersPerBlock * overflowCapacity;
+    DFSScratchT                   dfsScratch(blockOverflowA);
+    const int                     worker = threadIdx.x;
+    if (worker < DFSScratchT::kWorkers) {
+      dfsBitsetSearchGPU<MaxTargetAtoms, MaxQueryAtoms, MaxBondsPerAtom, SubstructOutputMode::PaintBits>(
+        target,
+        pattern,
+        dfsLabelMasks,
+        dfsScratch,
+        worker,
+        &sharedMatchCount,
+        &sharedReportedCount,
+        nullptr,
+        0,
+        0,
+        paintParams);
     }
   } else if constexpr (Algo == SubstructAlgorithm::GSI) {
     constexpr int kBlockSizeT = getBlockSizeForConfig<MaxTargetAtoms>();

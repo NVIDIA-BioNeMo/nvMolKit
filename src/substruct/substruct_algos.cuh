@@ -252,168 +252,339 @@ __device__ void vf2SearchGPU(const TargetMoleculeView&                          
 // =============================================================================
 
 /**
- * @brief Per-warp state for the adjacency-anchored DFS backend.
+ * @brief Structure-of-arrays DFS state backed by a per-pair global scratch slab.
  *
- * State lives explicitly in shared memory so the compiler does not create
- * lane-private local-memory stacks for the maximum query configurations.
+ * One worker owns each possible target root. The depth-major layout keeps
+ * mapping and remaining-candidate accesses coalesced across adjacent workers.
+ * No per-thread arrays are placed in local memory.
  */
-template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms> struct alignas(8) DFSStateT {
-  static constexpr int kUsedWords = (MaxTargetAtoms + 63) / 64;
+template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms> class DFSBitsetScratchT {
+ public:
+  static constexpr int         kWorkers        = MaxTargetAtoms;
+  static constexpr int         kMaskWords      = (MaxTargetAtoms + 63) / 64;
+  static constexpr std::size_t kMappingBytes   = MaxQueryAtoms * kWorkers * sizeof(int8_t);
+  static constexpr std::size_t kUsedBytes      = kMaskWords * kWorkers * sizeof(uint64_t);
+  static constexpr std::size_t kRemainingBytes = MaxQueryAtoms * kMaskWords * kWorkers * sizeof(uint64_t);
+  static constexpr std::size_t kBytes          = kMappingBytes + kUsedBytes + kRemainingBytes;
 
-  int8_t   mapping[MaxQueryAtoms];
-  uint16_t candidateIdx[MaxQueryAtoms];
-  uint64_t usedTargets[kUsedWords];
-  int      depth;
+  __device__ __forceinline__ explicit DFSBitsetScratchT(void* storage)
+      : mapping_(reinterpret_cast<int8_t*>(storage)),
+        used_(reinterpret_cast<uint64_t*>(mapping_ + kMappingBytes)),
+        remaining_(reinterpret_cast<uint64_t*>(reinterpret_cast<uint8_t*>(used_) + kUsedBytes)) {}
 
-  __device__ __forceinline__ void init() {
-#pragma unroll
-    for (std::size_t i = 0; i < MaxQueryAtoms; ++i) {
-      candidateIdx[i] = 0;
-    }
-#pragma unroll
-    for (int i = 0; i < kUsedWords; ++i) {
-      usedTargets[i] = 0;
-    }
-    depth = 0;
+  __device__ __forceinline__ int8_t mapping(int worker, int queryAtom) const {
+    return mapping_[queryAtom * kWorkers + worker];
   }
 
-  __device__ __forceinline__ bool isTargetUsed(int targetAtom) const {
-    return (usedTargets[targetAtom >> 6] >> (targetAtom & 63)) & 1ULL;
+  __device__ __forceinline__ void setMapping(int worker, int queryAtom, int targetAtom) {
+    mapping_[queryAtom * kWorkers + worker] = static_cast<int8_t>(targetAtom);
   }
 
-  __device__ __forceinline__ void setTargetUsed(int targetAtom) {
-    usedTargets[targetAtom >> 6] |= 1ULL << (targetAtom & 63);
+  __device__ __forceinline__ uint64_t used(int worker, int word) const { return used_[word * kWorkers + worker]; }
+
+  __device__ __forceinline__ void setUsed(int worker, int word, uint64_t value) {
+    used_[word * kWorkers + worker] = value;
   }
 
-  __device__ __forceinline__ void clearTargetUsed(int targetAtom) {
-    usedTargets[targetAtom >> 6] &= ~(1ULL << (targetAtom & 63));
+  __device__ __forceinline__ uint64_t remaining(int worker, int queryAtom, int word) const {
+    return remaining_[(queryAtom * kMaskWords + word) * kWorkers + worker];
   }
+
+  __device__ __forceinline__ void setRemaining(int worker, int queryAtom, int word, uint64_t value) {
+    remaining_[(queryAtom * kMaskWords + word) * kWorkers + worker] = value;
+  }
+
+ private:
+  int8_t*   mapping_;
+  uint64_t* used_;
+  uint64_t* remaining_;
 };
 
+__device__ __forceinline__ int popLowestBit(uint64_t& bits, int word) {
+  const int atom = __ffsll(static_cast<long long>(bits)) - 1 + word * 64;
+  bits &= bits - 1;
+  return atom;
+}
+
 /**
- * @brief Iterative DFS using mapped-neighbor candidate enumeration.
+ * @brief Transpose the row-major label matrix into degree-filtered target masks.
+ */
+template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms>
+__device__ __forceinline__ void buildDFSLabelMasks(const TargetMoleculeView&                             target,
+                                                   const QueryMoleculeView&                              query,
+                                                   const BitMatrix2DView<MaxTargetAtoms, MaxQueryAtoms>& labelMatrix,
+                                                   uint64_t*                                             labelMasks) {
+  constexpr int kMaskWords = (MaxTargetAtoms + 63) / 64;
+  constexpr int kMaskU32s  = MaxTargetAtoms / 32;
+
+  const int targetAtom = threadIdx.x;
+  const int warp       = threadIdx.x >> 5;
+  const int lane       = threadIdx.x & (kWarpSize - 1);
+  uint32_t* labelU32   = reinterpret_cast<uint32_t*>(labelMasks);
+
+  for (int queryAtom = 0; queryAtom < query.numAtoms; ++queryAtom) {
+    const bool compatible = targetAtom < target.numAtoms && targetAtom < static_cast<int>(MaxTargetAtoms) &&
+                            labelMatrix.get(targetAtom, queryAtom) &&
+                            target.targetAtomBonds[targetAtom].degree >= query.getQueryBonds(queryAtom).degree;
+    const uint32_t compatibleBits = __ballot_sync(0xFFFFFFFFu, compatible);
+    if (lane == 0 && warp < kMaskU32s) {
+      labelU32[queryAtom * kMaskWords * 2 + warp] = compatibleBits;
+    }
+  }
+  __syncthreads();
+}
+
+/**
+ * @brief Reserve up to @p requested match slots without exceeding an optional limit.
+ */
+__device__ __forceinline__ int reserveDFSMatches(int* matchCount, int requested, int limit, int& firstMatch) {
+  if (limit < 0) {
+    firstMatch = atomicAdd(matchCount, requested);
+    return requested;
+  }
+
+  int observed = atomicAdd(matchCount, 0);
+  while (observed < limit) {
+    const int accepted = min(requested, limit - observed);
+    const int prior    = atomicCAS(matchCount, observed, observed + accepted);
+    if (prior == observed) {
+      firstMatch = observed;
+      return accepted;
+    }
+    observed = prior;
+  }
+  firstMatch = observed;
+  return 0;
+}
+
+/**
+ * @brief Build the candidate bitset for one DFS depth.
  *
- * Each warp owns one shared DFS state and explores a stripe of root atoms.
- * At connected depths, candidates come only from the adjacency list of an
- * already-mapped query neighbor. Disconnected components fall back to scanning
- * target atoms. A target-used bitset makes injectivity checks constant-time.
+ * Starts from the transposed label/degree mask, removes already-used target
+ * atoms, and intersects compatible adjacency masks for every mapped query
+ * neighbor.
+ */
+template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms, int MaxBondsPerAtom>
+__device__ __forceinline__ void buildDFSCandidateMask(const TargetMoleculeView& target,
+                                                      const QueryMoleculeView&  query,
+                                                      const uint64_t*           labelMasks,
+                                                      const DFSBitsetScratchT<MaxTargetAtoms, MaxQueryAtoms>& scratch,
+                                                      int                                                     worker,
+                                                      int                                                     queryAtom,
+                                                      uint64_t& candidatesLo,
+                                                      uint64_t& candidatesHi) {
+  constexpr int kMaskWords = DFSBitsetScratchT<MaxTargetAtoms, MaxQueryAtoms>::kMaskWords;
+  candidatesLo             = labelMasks[queryAtom * kMaskWords] & ~scratch.used(worker, 0);
+  candidatesHi             = 0;
+  if constexpr (kMaskWords == 2) {
+    candidatesHi = labelMasks[queryAtom * kMaskWords + 1] & ~scratch.used(worker, 1);
+  }
+
+  const QueryAtomBonds& queryBonds = query.getQueryBonds(queryAtom);
+  for (int queryBondIdx = 0; queryBondIdx < queryBonds.degree; ++queryBondIdx) {
+    const int neighborQueryAtom = queryBonds.neighborIdx[queryBondIdx];
+    if (neighborQueryAtom >= queryAtom) {
+      continue;
+    }
+
+    const int              neighborTargetAtom = scratch.mapping(worker, neighborQueryAtom);
+    const TargetAtomBonds& targetBonds        = target.targetAtomBonds[neighborTargetAtom];
+    const uint32_t         queryMask          = queryBonds.matchMask[queryBondIdx];
+    uint64_t               edgeCandidatesLo   = 0;
+    uint64_t               edgeCandidatesHi   = 0;
+
+#pragma unroll
+    for (int targetBondIdx = 0; targetBondIdx < MaxBondsPerAtom; ++targetBondIdx) {
+      if (targetBondIdx >= targetBonds.degree) {
+        break;
+      }
+      if (!packedBondMatches(queryMask, targetBonds.bondInfo[targetBondIdx])) {
+        continue;
+      }
+      const int candidateTarget = targetBonds.neighborIdx[targetBondIdx];
+      if (candidateTarget < 64) {
+        edgeCandidatesLo |= 1ULL << candidateTarget;
+      } else {
+        edgeCandidatesHi |= 1ULL << (candidateTarget - 64);
+      }
+    }
+
+    candidatesLo &= edgeCandidatesLo;
+    if constexpr (kMaskWords == 2) {
+      candidatesHi &= edgeCandidatesHi;
+    }
+    if ((candidatesLo | candidatesHi) == 0) {
+      break;
+    }
+  }
+}
+
+/**
+ * @brief Direct-root bitset DFS derived from the Kernel Factory winner.
  *
- * @tparam OutputMode Store complete mappings or paint recursive-match bits
+ * Every possible target root has an independent worker. Candidate columns are
+ * transposed once per pair, DFS candidates are bitsets constrained by mapped
+ * neighbors, and terminal count-only candidates are reduced with popcount.
+ * Paint mode stops after the first complete mapping for a root.
  */
 template <std::size_t         MaxTargetAtoms,
           std::size_t         MaxQueryAtoms,
           int                 MaxBondsPerAtom = kMaxBondsPerAtom,
           SubstructOutputMode OutputMode      = SubstructOutputMode::StoreMatches>
-__device__ __forceinline__ void dfsSearchGPU(const TargetMoleculeView&                             target,
-                                             const QueryMoleculeView&                              query,
-                                             const BitMatrix2DView<MaxTargetAtoms, MaxQueryAtoms>& labelMatrix,
-                                             DFSStateT<MaxTargetAtoms, MaxQueryAtoms>&             state,
-                                             int                                                   startingTargetAtom,
-                                             int*                                                  matchCount,
-                                             int*                                                  reportedCount,
-                                             int16_t*                                              matchIndices,
-                                             int             totalMatchStorageCapacity,
-                                             int             matchOffset,
-                                             PaintModeParams paintParams      = {},
-                                             int             maxMatchesToFind = -1,
-                                             bool            countOnly        = false) {
-  const int laneId = threadIdx.x & (kWarpSize - 1);
-  if (laneId != 0) {
+__device__ __forceinline__ void dfsBitsetSearchGPU(const TargetMoleculeView&                         target,
+                                                   const QueryMoleculeView&                          query,
+                                                   const uint64_t*                                   labelMasks,
+                                                   DFSBitsetScratchT<MaxTargetAtoms, MaxQueryAtoms>& scratch,
+                                                   int                                               worker,
+                                                   int*                                              matchCount,
+                                                   int*                                              reportedCount,
+                                                   int16_t*                                          matchIndices,
+                                                   int             totalMatchStorageCapacity,
+                                                   int             matchOffset,
+                                                   PaintModeParams paintParams      = {},
+                                                   int             maxMatchesToFind = -1,
+                                                   bool            countOnly        = false) {
+  constexpr int kMaskWords = DFSBitsetScratchT<MaxTargetAtoms, MaxQueryAtoms>::kMaskWords;
+
+  const int startingTargetAtom = worker;
+  const int numQueryAtoms      = query.numAtoms;
+  if (startingTargetAtom >= target.numAtoms ||
+      ((labelMasks[startingTargetAtom >> 6] >> (startingTargetAtom & 63)) & 1ULL) == 0) {
     return;
   }
 
-  const int numQueryAtoms = query.numAtoms;
-  if (startingTargetAtom >= target.numAtoms || !labelMatrix.get(startingTargetAtom, 0) ||
-      target.targetAtomBonds[startingTargetAtom].degree < query.getQueryBonds(0).degree) {
-    return;
+  scratch.setMapping(worker, 0, startingTargetAtom);
+  scratch.setUsed(worker, 0, 1ULL << (startingTargetAtom & 63));
+  if constexpr (kMaskWords == 2) {
+    scratch.setUsed(worker, 1, startingTargetAtom >= 64 ? 1ULL << (startingTargetAtom - 64) : 0);
+    if (startingTargetAtom >= 64) {
+      scratch.setUsed(worker, 0, 0);
+    }
   }
 
-  state.init();
-  state.mapping[0] = static_cast<int8_t>(startingTargetAtom);
-  state.setTargetUsed(startingTargetAtom);
-  state.depth = 1;
-
-  const bool hasEarlyExitLimit = maxMatchesToFind >= 0;
-
-  while (state.depth > 0) {
-    if (hasEarlyExitLimit && *matchCount >= maxMatchesToFind) {
-      break;
+  if (numQueryAtoms == 1) {
+    if constexpr (OutputMode == SubstructOutputMode::PaintBits) {
+      atomicOr(&paintParams.recursiveBits[paintParams.outputPairIdx * paintParams.maxTargetAtoms + startingTargetAtom],
+               1u << paintParams.patternId);
+      return;
     }
 
-    if (state.depth == numQueryAtoms) {
-      const int matchIdx = atomicAdd(matchCount, 1);
+    int firstMatch = 0;
+    if (reserveDFSMatches(matchCount, 1, maxMatchesToFind, firstMatch) == 0) {
+      return;
+    }
+    if (!countOnly && firstMatch < totalMatchStorageCapacity) {
+      matchIndices[matchOffset + firstMatch] = static_cast<int16_t>(startingTargetAtom);
+      atomicAdd(reportedCount, 1);
+    }
+    return;
+  }
 
-      if constexpr (OutputMode == SubstructOutputMode::StoreMatches) {
-        if (!countOnly && matchIdx < totalMatchStorageCapacity) {
-          const int writeOffset = matchOffset + matchIdx * numQueryAtoms;
-          for (int q = 0; q < numQueryAtoms; ++q) {
-            matchIndices[writeOffset + q] = state.mapping[q];
+  int  depth          = 1;
+  bool needCandidates = true;
+  int  localCount     = 0;
+
+  while (depth > 0) {
+    if constexpr (OutputMode == SubstructOutputMode::StoreMatches) {
+      if (maxMatchesToFind >= 0 && atomicAdd(matchCount, 0) >= maxMatchesToFind) {
+        break;
+      }
+    }
+
+    uint64_t candidatesLo = 0;
+    uint64_t candidatesHi = 0;
+    if (needCandidates) {
+      buildDFSCandidateMask<MaxTargetAtoms, MaxQueryAtoms, MaxBondsPerAtom>(target,
+                                                                            query,
+                                                                            labelMasks,
+                                                                            scratch,
+                                                                            worker,
+                                                                            depth,
+                                                                            candidatesLo,
+                                                                            candidatesHi);
+
+      if (depth == numQueryAtoms - 1) {
+        const int terminalCount = __popcll(candidatesLo) + __popcll(candidatesHi);
+        if (terminalCount > 0) {
+          if constexpr (OutputMode == SubstructOutputMode::PaintBits) {
+            atomicOr(
+              &paintParams.recursiveBits[paintParams.outputPairIdx * paintParams.maxTargetAtoms + startingTargetAtom],
+              1u << paintParams.patternId);
+            return;
           }
-          atomicAdd(reportedCount, 1);
+
+          if (countOnly && maxMatchesToFind < 0) {
+            localCount += terminalCount;
+          } else {
+            int       firstMatch = 0;
+            const int accepted   = reserveDFSMatches(matchCount, terminalCount, maxMatchesToFind, firstMatch);
+            int       written    = 0;
+            for (int terminalIdx = 0; terminalIdx < accepted; ++terminalIdx) {
+              const int candidateTarget =
+                candidatesLo != 0 ? popLowestBit(candidatesLo, 0) : popLowestBit(candidatesHi, 1);
+              if (!countOnly && firstMatch + terminalIdx < totalMatchStorageCapacity) {
+                const int writeOffset = matchOffset + (firstMatch + terminalIdx) * numQueryAtoms;
+                for (int q = 0; q < numQueryAtoms - 1; ++q) {
+                  matchIndices[writeOffset + q] = scratch.mapping(worker, q);
+                }
+                matchIndices[writeOffset + numQueryAtoms - 1] = static_cast<int16_t>(candidateTarget);
+                ++written;
+              }
+            }
+            if (written > 0) {
+              atomicAdd(reportedCount, written);
+            }
+          }
         }
-      } else {
-        const int rootTarget = state.mapping[0];
-        atomicOr(&paintParams.recursiveBits[paintParams.outputPairIdx * paintParams.maxTargetAtoms + rootTarget],
-                 1u << paintParams.patternId);
-        atomicAdd(reportedCount, 1);
+
+        --depth;
+        if (depth > 0) {
+          const int mappedTarget = scratch.mapping(worker, depth);
+          const int word         = mappedTarget >> 6;
+          scratch.setUsed(worker, word, scratch.used(worker, word) & ~(1ULL << (mappedTarget & 63)));
+        }
+        needCandidates = false;
+        continue;
       }
 
-      --state.depth;
-      if (state.depth > 0) {
-        state.clearTargetUsed(state.mapping[state.depth]);
-        ++state.candidateIdx[state.depth];
+      scratch.setRemaining(worker, depth, 0, candidatesLo);
+      if constexpr (kMaskWords == 2) {
+        scratch.setRemaining(worker, depth, 1, candidatesHi);
       }
+      needCandidates = false;
+    } else {
+      candidatesLo = scratch.remaining(worker, depth, 0);
+      if constexpr (kMaskWords == 2) {
+        candidatesHi = scratch.remaining(worker, depth, 1);
+      }
+    }
+
+    if ((candidatesLo | candidatesHi) == 0) {
+      --depth;
+      if (depth > 0) {
+        const int mappedTarget = scratch.mapping(worker, depth);
+        const int word         = mappedTarget >> 6;
+        scratch.setUsed(worker, word, scratch.used(worker, word) & ~(1ULL << (mappedTarget & 63)));
+      }
+      needCandidates = false;
       continue;
     }
 
-    const int             queryAtom       = state.depth;
-    const QueryAtomBonds& queryBonds      = query.getQueryBonds(queryAtom);
-    int                   anchorQueryAtom = -1;
-    for (int bondIdx = 0; bondIdx < queryBonds.degree; ++bondIdx) {
-      const int neighborQueryAtom = queryBonds.neighborIdx[bondIdx];
-      if (neighborQueryAtom < queryAtom) {
-        anchorQueryAtom = neighborQueryAtom;
-        break;
-      }
+    const int candidateTarget = candidatesLo != 0 ? popLowestBit(candidatesLo, 0) : popLowestBit(candidatesHi, 1);
+    scratch.setRemaining(worker, depth, 0, candidatesLo);
+    if constexpr (kMaskWords == 2) {
+      scratch.setRemaining(worker, depth, 1, candidatesHi);
     }
+    scratch.setMapping(worker, depth, candidateTarget);
+    const int word = candidateTarget >> 6;
+    scratch.setUsed(worker, word, scratch.used(worker, word) | (1ULL << (candidateTarget & 63)));
+    ++depth;
+    needCandidates = true;
+  }
 
-    const TargetAtomBonds* anchorBonds =
-      anchorQueryAtom >= 0 ? &target.targetAtomBonds[state.mapping[anchorQueryAtom]] : nullptr;
-    const int candidateCount = anchorBonds != nullptr ? anchorBonds->degree : target.numAtoms;
-
-    bool foundCandidate = false;
-    while (state.candidateIdx[queryAtom] < candidateCount) {
-      const int candidateTarget = anchorBonds != nullptr ? anchorBonds->neighborIdx[state.candidateIdx[queryAtom]] :
-                                                           state.candidateIdx[queryAtom];
-
-      const bool feasible = !state.isTargetUsed(candidateTarget) && labelMatrix.get(candidateTarget, queryAtom) &&
-                            target.targetAtomBonds[candidateTarget].degree >= queryBonds.degree &&
-                            checkEdgeConsistencyPacked<MaxBondsPerAtom>(target.targetAtomBonds,
-                                                                        queryBonds,
-                                                                        state.mapping,
-                                                                        queryAtom,
-                                                                        candidateTarget);
-
-      if (feasible) {
-        state.mapping[queryAtom] = static_cast<int8_t>(candidateTarget);
-        state.setTargetUsed(candidateTarget);
-        if (queryAtom + 1 < numQueryAtoms) {
-          state.candidateIdx[queryAtom + 1] = 0;
-        }
-        ++state.depth;
-        foundCandidate = true;
-        break;
-      }
-      ++state.candidateIdx[queryAtom];
-    }
-
-    if (!foundCandidate) {
-      state.candidateIdx[queryAtom] = 0;
-      --state.depth;
-      state.clearTargetUsed(state.mapping[state.depth]);
-      if (state.depth > 0) {
-        ++state.candidateIdx[state.depth];
-      }
+  if constexpr (OutputMode == SubstructOutputMode::StoreMatches) {
+    if (localCount > 0) {
+      atomicAdd(matchCount, localCount);
     }
   }
 }
