@@ -145,9 +145,10 @@ void uploadAndLaunchMiniBatch(GpuExecutor&                        executor,
                               SubstructAlgorithm                  algorithm) {
   ScopedNvtxRange uploadRange("uploadAndLaunchMiniBatch");
 
-  cudaStream_t executorStream = executor.stream();
-  const int    numBuffersPerBlock =
-    (algorithm == SubstructAlgorithm::GSI || (algorithm == SubstructAlgorithm::DFS && ctx.maxTargetAtoms > 64)) ? 2 : 1;
+  // DFS keeps all per-pair state lane-local, so only GSI needs the ping-pong
+  // partial-match overflow slab.
+  cudaStream_t executorStream     = executor.stream();
+  const int    numBuffersPerBlock = (algorithm == SubstructAlgorithm::GSI) ? 2 : 1;
 
   if (executor.plan.maxPipelineDepthInMiniBatch == 0) {
     ScopedNvtxRange nonRecursiveRange("Non-recursive path");
