@@ -17,6 +17,7 @@
 
 import argparse
 
+
 def add_smiles_sanitization_args(parser: argparse.ArgumentParser) -> None:
     """Add safe-by-default SMILES sanitization flags to ``parser``."""
     sanitize_group = parser.add_mutually_exclusive_group()

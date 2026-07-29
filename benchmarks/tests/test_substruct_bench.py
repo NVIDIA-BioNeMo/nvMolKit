@@ -8,6 +8,7 @@ import argparse
 import pytest
 from bench_utils.cli import add_smiles_sanitization_args
 
+
 def test_smiles_sanitization_is_enabled_by_default():
     parser = argparse.ArgumentParser()
     add_smiles_sanitization_args(parser)
