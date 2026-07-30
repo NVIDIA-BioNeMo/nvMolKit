@@ -13,14 +13,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Warp-per-pair bitset DFS ported from the Kernel Factory count-matches winner
-// (`gsi_count_bitset_dfs_v1`, candidate 81941d96..., 4.904x over the GSI
-// baseline). The execution model of the reference is preserved verbatim: eight
-// warps and eight independent pairs per CTA, one warp per target/query pair,
-// each lane owning the roots at bit positions `lane + 32*k`, and lane-local DFS
-// state. The extensions beyond the reference are 128-atom targets (two mask
-// words instead of one), match-limit handling, stored mappings, and recursive
-// paint, none of which change the reference's launch topology or search order.
+// Warp-per-pair depth-first substructure search.
+//
+// Given a pair's label matrix -- bit (t, q) set iff target atom t satisfies
+// query atom q's atom-level predicate, computed by populateLabelMatrix -- find
+// the injective maps from query atoms to target atoms that also satisfy the
+// query's bond constraints, which the label matrix does not cover.
+//
+// One warp per pair, kWarpsPerBlock pairs per CTA. Lane L searches the subtrees
+// rooted at target atoms L, L+32, L+64, L+96; those subtrees are disjoint, so
+// all search state is lane-local registers and lanes only meet at the final
+// reduction. Shared memory holds the per-warp lookup tables and result counters.
+//
+// Query atoms are matched in index order, so depth d means "choose the target
+// atom for query atom d", and every query atom below d is already mapped. The
+// legal choices are one bitset intersection over target atoms:
+//
+//   candidates(d) = labelCompatible(d) & ~used
+//                   & AND over each back edge d--e (e < d) of
+//                       { neighbours of mapping[e] reachable over a bond that
+//                         edge's query bond mask accepts }
+//
+// Forward edges need no check; they are back edges of the deeper atom. An empty
+// bitset pops the stack; a non-empty one at the last depth means each of its
+// bits completes an embedding.
+//
+// Three tables are built per pair before the search, each depending on the last:
+// tryBuildQueryAtomCandidates (first term), analyzeQueryBonds (the back edges),
+// buildTargetAdjacency (the per-edge neighbour sets).
 
 #ifndef NVMOLKIT_SUBSTRUCT_DFS_CUH
 #define NVMOLKIT_SUBSTRUCT_DFS_CUH
@@ -35,7 +55,7 @@
 namespace nvMolKit {
 namespace dfs {
 
-/// Warps, and therefore independent pairs, per CTA. This is the reference's WPB.
+/// Warps, and therefore independent pairs, per CTA.
 constexpr int      kWarpsPerBlock = 8;
 constexpr int      kBlockSize     = kWarpsPerBlock * 32;
 constexpr uint32_t kFullWarpMask  = 0xFFFFFFFFu;
@@ -51,9 +71,16 @@ enum class DfsOutputMode {
 // Warp reductions
 // =============================================================================
 //
-// The reference uses __reduce_*_sync unconditionally. nvMolKit still builds for
-// sm_70/sm_75 where those intrinsics do not exist, so pre-Ampere targets get a
-// butterfly shuffle that produces identical values.
+// __reduce_*_sync requires sm_80. nvMolKit also builds for sm_70/sm_75, which
+// fall back to a butterfly shuffle producing the same values.
+//
+// cub::WarpReduce is deliberately not used here. Its sm_80+ fast path lowers to
+// these same __reduce_*_sync intrinsics, so there is nothing to gain, and it is
+// worse in two ways: its contract returns the aggregate only to lane 0, while
+// the min/max/or call sites need the all-lane broadcast that redux.sync
+// provides for free (CUB would need an extra __shfl_sync); and CUB has no
+// redux-backed OR reduction at all, so warpReduceOr would regress to a
+// five-step shuffle loop even on sm_80+.
 
 __device__ __forceinline__ uint32_t warpReduceAdd(uint32_t value) {
 #if __CUDA_ARCH__ >= 800
@@ -108,11 +135,11 @@ __device__ __forceinline__ uint32_t warpReduceMax(uint32_t value) {
 // =============================================================================
 
 /**
- * @brief Bitset over target atoms, one bit per atom.
+ * @brief Set of target atoms, bit t meaning target atom t.
  *
- * Specialised rather than looped so that the 64-atom form is a bare uint64_t,
- * exactly as in the reference, and the 128-atom form never dynamically indexes
- * a register-resident array.
+ * Specialised on word count rather than looped over an array so that the 64-atom
+ * form is a bare uint64_t and the 128-atom form never dynamically indexes a
+ * register-resident array, which would spill it to local memory.
  */
 template <int Words> struct TargetMask;
 
@@ -123,8 +150,10 @@ template <> struct TargetMask<1> {
   __device__ __forceinline__ bool empty() const { return lo == 0; }
   __device__ __forceinline__ void set(int bit) { lo |= 1ULL << bit; }
   __device__ __forceinline__ void reset(int bit) { lo &= ~(1ULL << bit); }
+  /// Branch-free conditional set: @p value must be 0 or 1.
   __device__ __forceinline__ void setIf(int bit, uint64_t value) { lo |= value << bit; }
   __device__ __forceinline__ int  popcount() const { return __popcll(lo); }
+  /// Lowest set atom index; undefined if empty.
   __device__ __forceinline__ int  lowest() const { return __ffsll(static_cast<long long>(lo)) - 1; }
   __device__ __forceinline__ void clearLowest() { lo &= lo - 1; }
   __device__ __forceinline__ void andEq(const TargetMask& other) { lo &= other.lo; }
@@ -151,6 +180,7 @@ template <> struct TargetMask<2> {
       hi &= ~(1ULL << (bit - 64));
     }
   }
+  /// Branch-free conditional set: @p value must be 0 or 1.
   __device__ __forceinline__ void setIf(int bit, uint64_t value) {
     if (bit < 64) {
       lo |= value << bit;
@@ -159,6 +189,7 @@ template <> struct TargetMask<2> {
     }
   }
   __device__ __forceinline__ int popcount() const { return __popcll(lo) + __popcll(hi); }
+  /// Lowest set atom index; undefined if empty.
   __device__ __forceinline__ int lowest() const {
     return lo != 0 ? __ffsll(static_cast<long long>(lo)) - 1 : __ffsll(static_cast<long long>(hi)) + 63;
   }
@@ -180,39 +211,91 @@ template <> struct TargetMask<2> {
 };
 
 // =============================================================================
+// Query bond classification
+// =============================================================================
+
+// Entry layout in WarpSharedState::backEdges. A back edge of query atom d is an
+// edge to a query atom with a smaller index, i.e. one already mapped at depth d.
+constexpr unsigned char kBackEdgeAtomMask    = 63u;  ///< Low 6 bits: the earlier query atom's index.
+constexpr unsigned char kBackEdgeAltMaskFlag = 64u;  ///< Bit 6 (Dual only): use the Alt adjacency table.
+
+/**
+ * @brief How many distinct bond masks (QueryAtomBondsT::matchMask) the query's
+ *        back edges carry.
+ *
+ * With at most two, the target neighbour sets those masks induce can be
+ * precomputed once per pair, turning the per-edge work in the inner loop into a
+ * table lookup.
+ */
+enum class BondMaskCase {
+  Uniform,  ///< One mask. One adjacency table suffices.
+  Dual,     ///< Two masks. Two adjacency tables; each back edge flags which it uses.
+  General   ///< Three or more. Neighbour sets recomputed per edge during the search.
+};
+
+/// Classification of the query's bond constraints; identical in every lane.
+struct QueryBondPlan {
+  BondMaskCase maskCase       = BondMaskCase::General;
+  uint32_t     minBondMask    = 0;  ///< Smallest bond mask on any back edge.
+  uint32_t     maxBondMask    = 0;  ///< Largest bond mask on any back edge; equals minBondMask iff Uniform.
+  /// Bitset over query atoms: bit d set iff depth d's only back edge goes to
+  /// depth d-1 and resolves through targetAdjacency. Such a depth needs no
+  /// back-edge lookup, since the caller just chose depth d-1's target atom.
+  uint64_t     chainDepths    = 0;
+  /// As chainDepths, for depths resolving through targetAdjacencyAlt.
+  uint64_t     chainDepthsAlt = 0;
+};
+
+// =============================================================================
 // Per-warp shared state
 // =============================================================================
 
 /**
- * @brief The reference's per-warp shared arrays, sized for a whole CTA.
+ * @brief Per-warp lookup tables and counters, sized for a whole CTA.
  *
- * `tn8`/`tb8` serve double duty exactly as in the reference: bond-compatible
- * target neighbour masks in the uniform and dual cases, and the raw degree-8
- * packed adjacency rows in the general case, where only the low word is used.
+ * Warp w touches only [w][...], so no synchronisation beyond __syncwarp() is
+ * needed. This is the kernel's only __shared__ allocation, so its size alone
+ * determines how many CTAs fit per SM (minBlocksPerSM).
+ *
+ * The adjacency tables hold different things per BondMaskCase; buildTargetAdjacency
+ * is the only place that fills them:
+ *   Uniform: targetAdjacency[a] = atoms bonded to a over a bond the query's
+ *            single mask accepts. Alt unused.
+ *   Dual:    targetAdjacency[a] for minBondMask, targetAdjacencyAlt[a] for
+ *            maxBondMask; each back edge picks one via kBackEdgeAltMaskFlag.
+ *   General: nothing is precomputable, so the tables cache the packed adjacency
+ *            row instead -- targetAdjacency[a].lo the neighbour-index bytes,
+ *            targetAdjacencyAlt[a].lo the bond-info bytes.
  */
 template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms> struct WarpSharedState {
+  static_assert(MaxQueryAtoms <= 64, "Back-edge indices pack into 6 bits and chain depths into a 64-bit mask");
+
+  /// uint64_t words needed for one bit per target atom.
   static constexpr int kWords = static_cast<int>((MaxTargetAtoms + 63) / 64);
+  /// Roots each lane owns: lane, lane + 32, ... below MaxTargetAtoms.
   static constexpr int kRoots = static_cast<int>(MaxTargetAtoms / 32);
   using Mask                  = TargetMask<kWords>;
 
-  Mask          tn8[kWarpsPerBlock][MaxTargetAtoms];
-  Mask          tb8[kWarpsPerBlock][MaxTargetAtoms];
-  Mask          lm[kWarpsPerBlock][MaxQueryAtoms];
-  unsigned char bej[kWarpsPerBlock][MaxQueryAtoms][kMaxBondsPerAtom];
-  unsigned char bcnt[kWarpsPerBlock][MaxQueryAtoms];
-  int           matchCount[kWarpsPerBlock];
-  int           reportedCount[kWarpsPerBlock];
+  Mask          targetAdjacency[kWarpsPerBlock][MaxTargetAtoms];
+  Mask          targetAdjacencyAlt[kWarpsPerBlock][MaxTargetAtoms];
+  /// Transposed label matrix: the target atoms compatible with each query atom.
+  Mask          queryAtomCandidates[kWarpsPerBlock][MaxQueryAtoms];
+  /// Per query atom, its back edges, kBackEdge*-encoded.
+  unsigned char backEdges[kWarpsPerBlock][MaxQueryAtoms][kMaxBondsPerAtom];
+  unsigned char backEdgeCounts[kWarpsPerBlock][MaxQueryAtoms];  ///< Valid entries in backEdges[w][q].
+  int           matchCount[kWarpsPerBlock];                     ///< Embeddings found for the warp's pair.
+  int           reportedCount[kWarpsPerBlock];                  ///< Of those, how many fit in the output buffer.
 };
 
 /**
- * @brief Occupancy target for a DFS specialisation's __launch_bounds__.
+ * @brief Second __launch_bounds__ argument: CTAs this kernel should fit per SM.
  *
- * The reference pins `__launch_bounds__(256, 8)`. That second argument is what
- * caps its register allocation at 32 and is therefore part of the configuration
- * that produced its measured 4.904x, so it is matched here. The 128-atom target
- * specialisations cannot reach eight resident CTAs at any register count -- their
- * per-warp adjacency masks alone exceed the per-SM shared memory budget -- so
- * they ask only for what shared memory already allows.
+ * Eight resident CTAs is the occupancy the search is tuned at, and asking for it
+ * also caps the compiler at 32 registers per thread; the two go together.
+ * Whether eight fit is purely a shared memory question, WarpSharedState being
+ * the only shared allocation. The 128-atom target specialisations cannot reach
+ * eight at any register count -- their adjacency tables alone are too large --
+ * so they ask for what shared memory allows.
  */
 template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms> constexpr int minBlocksPerSM() {
   // Hopper's 164 KB per SM; the smallest per-SM budget among the architectures
@@ -227,14 +310,16 @@ template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms> constexpr int m
 // =============================================================================
 
 /**
- * @brief Pack a target atom's adjacency into the reference's two degree-8 words.
+ * @brief Pack one target atom's adjacency into two words, one byte per bond slot.
  *
- * The reference reads `tnbr`/`tbond` as separate 8-byte-stride arrays with a
- * single uint64_t load. nvMolKit interleaves degree, neighbours and bond info in
- * a 20-byte `TargetAtomBonds`, so the words are assembled here instead. Unused
- * slots take the reference's 255 sentinel so the consumers are unchanged.
+ * Byte j of @p neighbors is the j-th bonded atom's index, byte j of @p bondInfo
+ * its packed (bondType, isInRing) descriptor. Consumers then walk the bonds by
+ * shifting two registers instead of re-reading the 20-byte TargetAtomBonds.
+ * Slots past the atom's degree hold kNoNeighbor, which ends the walk.
  */
-__device__ __forceinline__ void packTargetRow(const TargetAtomBonds& bonds, uint64_t& neighbors, uint64_t& bondInfo) {
+__device__ __forceinline__ void packAdjacencyRow(const TargetAtomBonds& bonds,
+                                                 uint64_t&              neighbors,
+                                                 uint64_t&              bondInfo) {
   neighbors     = ~0ULL;
   bondInfo      = 0;
   const int deg = bonds.degree;
@@ -251,21 +336,27 @@ __device__ __forceinline__ void packTargetRow(const TargetAtomBonds& bonds, uint
 }
 
 /**
- * @brief Reference `tnbrmask`: target neighbours reachable over a bond the query mask allows.
+ * @brief Neighbours of one target atom reachable over a bond @p queryBondMask accepts.
+ *
+ * @p neighbors and @p bondInfo are that atom's packed row from packAdjacencyRow.
+ * A query bond mask holds one bit per (isInRing, bondType) at position
+ * `isInRing * 16 + bondType`; see QueryAtomBondsT.
  */
 template <int Words>
-__device__ __forceinline__ TargetMask<Words> tnbrMask(uint64_t neighbors, uint64_t bondInfo, uint32_t queryMask) {
+__device__ __forceinline__ TargetMask<Words> neighborsMatchingBondMask(uint64_t neighbors,
+                                                                       uint64_t bondInfo,
+                                                                       uint32_t queryBondMask) {
   TargetMask<Words> mask;
   mask.clear();
 #pragma unroll 1
   for (int k = 0; k < kMaxBondsPerAtom; ++k) {
     const uint32_t neighbor = static_cast<uint32_t>(neighbors & 0xFFu);
-    if (neighbor == 255u) {
+    if (neighbor == kNoNeighbor) {
       break;
     }
     const uint32_t info = static_cast<uint32_t>(bondInfo & 0xFFu);
     const uint32_t code = ((info >> 4) & 1u) * 16u + (info & 15u);
-    mask.setIf(static_cast<int>(neighbor), static_cast<uint64_t>((queryMask >> code) & 1u));
+    mask.setIf(static_cast<int>(neighbor), static_cast<uint64_t>((queryBondMask >> code) & 1u));
     neighbors >>= 8;
     bondInfo >>= 8;
   }
@@ -277,11 +368,19 @@ __device__ __forceinline__ TargetMask<Words> tnbrMask(uint64_t neighbors, uint64
 // =============================================================================
 
 /**
- * @brief Build the candidate set for one DFS depth.
+ * @brief The target atoms query atom @p depth may still map to.
  *
- * Mirrors the reference's CAND_BODY: the uniform and dual cases consume the
- * precomputed neighbour masks through the back-edge table, and the general case
- * recomputes per-edge masks from the raw packed rows.
+ * Evaluates the intersection given at the top of this file, in four shapes,
+ * cheapest first:
+ *   - chain depth: the only back edge goes to depth-1, whose target atom the
+ *     caller passes as @p prevTargetAtom, so the back-edge table is not read;
+ *   - Uniform: every back edge intersects targetAdjacency;
+ *   - Dual: each back edge's kBackEdgeAltMaskFlag picks its table;
+ *   - General: recompute the neighbour set per edge from the cached packed row.
+ *
+ * Only the General case needs @p seen: it walks the query atom's raw bond slots,
+ * which can name the same neighbour twice, whereas analyzeQueryBonds already
+ * deduplicated the table.
  */
 template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms>
 __device__ __forceinline__ TargetMask<WarpSharedState<MaxTargetAtoms, MaxQueryAtoms>::kWords> buildCandidates(
@@ -291,41 +390,39 @@ __device__ __forceinline__ TargetMask<WarpSharedState<MaxTargetAtoms, MaxQueryAt
   const unsigned char*                                                      mapping,
   const TargetMask<WarpSharedState<MaxTargetAtoms, MaxQueryAtoms>::kWords>& used,
   const QueryMoleculeView&                                                  query,
-  bool                                                                      uniform,
-  bool                                                                      dual,
-  uint64_t                                                                  prevOnlyPlain,
-  uint64_t                                                                  prevOnlyRing,
+  const QueryBondPlan&                                                      plan,
   int                                                                       prevTargetAtom) {
   constexpr int kWords = WarpSharedState<MaxTargetAtoms, MaxQueryAtoms>::kWords;
   using Mask           = TargetMask<kWords>;
 
-  Mask candidates = shared.lm[warp][depth];
+  Mask candidates = shared.queryAtomCandidates[warp][depth];
   candidates.andNotEq(used);
 
   const uint64_t depthBit = 1ULL << depth;
-  if (prevOnlyPlain & depthBit) {
-    candidates.andEq(shared.tn8[warp][prevTargetAtom]);
+  if (plan.chainDepths & depthBit) {
+    candidates.andEq(shared.targetAdjacency[warp][prevTargetAtom]);
     return candidates;
   }
-  if (prevOnlyRing & depthBit) {
-    candidates.andEq(shared.tb8[warp][prevTargetAtom]);
+  if (plan.chainDepthsAlt & depthBit) {
+    candidates.andEq(shared.targetAdjacencyAlt[warp][prevTargetAtom]);
     return candidates;
   }
 
-  const int backEdges = shared.bcnt[warp][depth];
+  const int numBackEdges = shared.backEdgeCounts[warp][depth];
 
-  if (uniform) {
-    for (int k = 0; k < backEdges && !candidates.empty(); ++k) {
-      candidates.andEq(shared.tn8[warp][mapping[shared.bej[warp][depth][k] & 63]]);
+  if (plan.maskCase == BondMaskCase::Uniform) {
+    for (int k = 0; k < numBackEdges && !candidates.empty(); ++k) {
+      candidates.andEq(shared.targetAdjacency[warp][mapping[shared.backEdges[warp][depth][k] & kBackEdgeAtomMask]]);
     }
     return candidates;
   }
 
-  if (dual) {
-    for (int k = 0; k < backEdges && !candidates.empty(); ++k) {
-      const uint32_t edge   = shared.bej[warp][depth][k];
-      const int      mapped = mapping[edge & 63u];
-      candidates.andEq((edge & 64u) ? shared.tb8[warp][mapped] : shared.tn8[warp][mapped]);
+  if (plan.maskCase == BondMaskCase::Dual) {
+    for (int k = 0; k < numBackEdges && !candidates.empty(); ++k) {
+      const uint32_t edge   = shared.backEdges[warp][depth][k];
+      const int      mapped = mapping[edge & kBackEdgeAtomMask];
+      candidates.andEq((edge & kBackEdgeAltMaskFlag) ? shared.targetAdjacencyAlt[warp][mapped] :
+                                                       shared.targetAdjacency[warp][mapped]);
     }
     return candidates;
   }
@@ -341,8 +438,9 @@ __device__ __forceinline__ TargetMask<WarpSharedState<MaxTargetAtoms, MaxQueryAt
     if (neighborQueryAtom < static_cast<uint32_t>(depth) && !((seen >> neighborQueryAtom) & 1ULL)) {
       seen |= 1ULL << neighborQueryAtom;
       const int mapped = mapping[neighborQueryAtom];
-      candidates.andEq(
-        tnbrMask<kWords>(shared.tn8[warp][mapped].lo, shared.tb8[warp][mapped].lo, queryBonds.matchMask[slot]));
+      candidates.andEq(neighborsMatchingBondMask<kWords>(shared.targetAdjacency[warp][mapped].lo,
+                                                         shared.targetAdjacencyAlt[warp][mapped].lo,
+                                                         queryBonds.matchMask[slot]));
     }
   }
   return candidates;
@@ -353,11 +451,11 @@ __device__ __forceinline__ TargetMask<WarpSharedState<MaxTargetAtoms, MaxQueryAt
 // =============================================================================
 
 /**
- * @brief Read target atom @p atom 's row out of the packed label matrix.
+ * @brief Target atom @p atom 's label matrix row, as a bitset over query atoms.
  *
- * nvMolKit's `BitMatrix2DView<MaxTargetAtoms, MaxQueryAtoms>` is row-major with
- * the target as the row and LSB-first bit packing, which is bit-for-bit the
- * layout the reference's transpose expects.
+ * The label matrix is a BitMatrix2DView<MaxTargetAtoms, MaxQueryAtoms>:
+ * row-major with the target atom as the row, packed least significant bit first,
+ * so a row is a contiguous MaxQueryAtoms-bit field.
  */
 template <std::size_t MaxQueryAtoms>
 __device__ __forceinline__ uint64_t readLabelRow(const uint32_t* labelWords, int atom) {
@@ -371,17 +469,25 @@ __device__ __forceinline__ uint64_t readLabelRow(const uint32_t* labelWords, int
 }
 
 /**
- * @brief Transpose the pair's label matrix into per-query-atom target masks.
+ * @brief Transpose the pair's label matrix into shared.queryAtomCandidates.
  *
- * @return true if every query atom has at least one candidate target atom.
+ * The label matrix is target-major (row t, bit q) but the search needs it
+ * query-major: at depth d, the target atoms compatible with query atom d. Each
+ * lane holds the rows of the target atoms it owns, so the transpose is one
+ * __ballot_sync per (query atom, root group) -- balloting bit d yields 32 bits
+ * of column d in target atom order.
+ *
+ * @return false if some query atom has no compatible target atom, in which case
+ *         the pair cannot match and the caller must stop. The table is fully
+ *         written either way.
  */
 template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms>
-__device__ __forceinline__ bool transposeLabelMatrix(WarpSharedState<MaxTargetAtoms, MaxQueryAtoms>& shared,
-                                                     int                                             warp,
-                                                     int                                             lane,
-                                                     const uint32_t*                                 labelWords,
-                                                     int                                             numTargetAtoms,
-                                                     int                                             numQueryAtoms) {
+__device__ __forceinline__ bool tryBuildQueryAtomCandidates(WarpSharedState<MaxTargetAtoms, MaxQueryAtoms>& shared,
+                                                            int                                             warp,
+                                                            int                                             lane,
+                                                            const uint32_t*                                 labelWords,
+                                                            int numTargetAtoms,
+                                                            int numQueryAtoms) {
   constexpr int kRoots = WarpSharedState<MaxTargetAtoms, MaxQueryAtoms>::kRoots;
   constexpr int kWords = WarpSharedState<MaxTargetAtoms, MaxQueryAtoms>::kWords;
 
@@ -403,6 +509,7 @@ __device__ __forceinline__ bool transposeLabelMatrix(WarpSharedState<MaxTargetAt
     }
     anyEmptyColumn |= static_cast<uint32_t>(occupied == 0u);
 
+    // Ballots are uniform across the warp, so one lane assembles and stores.
     if (lane == 0) {
       TargetMask<kWords> mask;
       mask.clear();
@@ -413,7 +520,7 @@ __device__ __forceinline__ bool transposeLabelMatrix(WarpSharedState<MaxTargetAt
       if constexpr (kRoots > 2) {
         mask.hi = static_cast<uint64_t>(ballots[2]) | (static_cast<uint64_t>(ballots[3]) << 32);
       }
-      shared.lm[warp][depth] = mask;
+      shared.queryAtomCandidates[warp][depth] = mask;
     }
   }
 
@@ -421,25 +528,26 @@ __device__ __forceinline__ bool transposeLabelMatrix(WarpSharedState<MaxTargetAt
 }
 
 /**
- * @brief Build the back-edge tables and classify the query's bond masks.
+ * @brief Build the back-edge table and classify the query's bond masks.
  *
- * Fills `bej`/`bcnt` with each query atom's earlier neighbours, decides whether
- * every back edge carries the same bond mask (uniform), only two distinct masks
- * (dual), or more (general), and reports the depths whose only back edge goes to
- * the immediately preceding depth.
+ * Three passes over the query atoms, striped across the warp:
+ *  1. Record each query atom's deduplicated back edges into
+ *     shared.backEdges/backEdgeCounts, reducing the smallest and largest bond
+ *     mask across the warp. Min and max are only a cheap fingerprint for the
+ *     number of distinct masks: all masks equal implies min == max, and if
+ *     exactly two values occur they are the min and the max.
+ *  2. If min != max, flag the max-mask edges and watch for a third value, which
+ *     demotes the pair to General.
+ *  3. Uniform and Dual only: find the chain depths (see QueryBondPlan).
  */
 template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms>
-__device__ __forceinline__ void classifyQueryBonds(WarpSharedState<MaxTargetAtoms, MaxQueryAtoms>& shared,
-                                                   int                                             warp,
-                                                   int                                             lane,
-                                                   const QueryMoleculeView&                        query,
-                                                   int                                             numQueryAtoms,
-                                                   bool&                                           uniform,
-                                                   bool&                                           dual,
-                                                   uint32_t&                                       groupMin,
-                                                   uint32_t&                                       groupMax,
-                                                   uint64_t&                                       prevOnlyPlain,
-                                                   uint64_t&                                       prevOnlyRing) {
+__device__ __forceinline__ QueryBondPlan analyzeQueryBonds(WarpSharedState<MaxTargetAtoms, MaxQueryAtoms>& shared,
+                                                           int                                             warp,
+                                                           int                                             lane,
+                                                           const QueryMoleculeView&                        query,
+                                                           int numQueryAtoms) {
+  QueryBondPlan plan;
+
   uint32_t laneMin = 0xFFFFFFFFu;
   uint32_t laneMax = 0u;
 
@@ -455,22 +563,24 @@ __device__ __forceinline__ void classifyQueryBonds(WarpSharedState<MaxTargetAtom
       const uint32_t neighbor = bonds.neighborIdx[slot];
       if (neighbor < static_cast<uint32_t>(depth) && !((seen >> neighbor) & 1ULL)) {
         seen |= 1ULL << neighbor;
-        const uint32_t mask            = bonds.matchMask[slot];
-        shared.bej[warp][depth][count] = static_cast<unsigned char>(neighbor);
-        laneMin                        = min(laneMin, mask);
-        laneMax                        = max(laneMax, mask);
+        const uint32_t mask                  = bonds.matchMask[slot];
+        shared.backEdges[warp][depth][count] = static_cast<unsigned char>(neighbor);
+        laneMin                              = min(laneMin, mask);
+        laneMax                              = max(laneMax, mask);
         ++count;
       }
     }
-    shared.bcnt[warp][depth] = static_cast<unsigned char>(count);
+    shared.backEdgeCounts[warp][depth] = static_cast<unsigned char>(count);
   }
 
-  groupMin = warpReduceMin(laneMin);
-  groupMax = warpReduceMax(laneMax);
-  uniform  = (groupMin == groupMax);
+  plan.minBondMask   = warpReduceMin(laneMin);
+  plan.maxBondMask   = warpReduceMax(laneMax);
+  const bool uniform = (plan.minBondMask == plan.maxBondMask);
   __syncwarp();
 
-  uint32_t offDual = 0;
+  // The walk here must mirror the first pass exactly: it re-derives the same
+  // slot ordering in order to flag the entries it wrote.
+  uint32_t sawThirdMask = 0;
   if (!uniform) {
     for (int depth = lane; depth < numQueryAtoms; depth += 32) {
       const QueryAtomBonds& bonds  = query.getQueryBonds(depth);
@@ -485,46 +595,49 @@ __device__ __forceinline__ void classifyQueryBonds(WarpSharedState<MaxTargetAtom
         if (neighbor < static_cast<uint32_t>(depth) && !((seen >> neighbor) & 1ULL)) {
           seen |= 1ULL << neighbor;
           const uint32_t mask = bonds.matchMask[slot];
-          if (mask != groupMin && mask != groupMax) {
-            offDual = 1;
+          if (mask != plan.minBondMask && mask != plan.maxBondMask) {
+            sawThirdMask = 1;
           }
-          if (mask == groupMax) {
-            shared.bej[warp][depth][count] |= 64u;
+          if (mask == plan.maxBondMask) {
+            shared.backEdges[warp][depth][count] |= kBackEdgeAltMaskFlag;
           }
           ++count;
         }
       }
     }
   }
-  dual = !uniform && (__ballot_sync(kFullWarpMask, offDual) == 0u);
+  const bool dual = !uniform && (__ballot_sync(kFullWarpMask, sawThirdMask) == 0u);
+  plan.maskCase   = uniform ? BondMaskCase::Uniform : (dual ? BondMaskCase::Dual : BondMaskCase::General);
   __syncwarp();
 
-  prevOnlyPlain = 0;
-  prevOnlyRing  = 0;
-  if (uniform || dual) {
-    uint64_t lanePlain = 0;
-    uint64_t laneRing  = 0;
+  if (plan.maskCase != BondMaskCase::General) {
+    uint64_t lanePrimary = 0;
+    uint64_t laneAlt     = 0;
     for (int depth = lane; depth < numQueryAtoms; depth += 32) {
-      if (depth >= 1 && shared.bcnt[warp][depth] == 1) {
-        const uint32_t edge = shared.bej[warp][depth][0];
-        if ((edge & 63u) == static_cast<uint32_t>(depth - 1)) {
-          if (edge & 64u) {
-            laneRing |= 1ULL << depth;
+      if (depth >= 1 && shared.backEdgeCounts[warp][depth] == 1) {
+        const uint32_t edge = shared.backEdges[warp][depth][0];
+        if ((edge & kBackEdgeAtomMask) == static_cast<uint32_t>(depth - 1)) {
+          if (edge & kBackEdgeAltMaskFlag) {
+            laneAlt |= 1ULL << depth;
           } else {
-            lanePlain |= 1ULL << depth;
+            lanePrimary |= 1ULL << depth;
           }
         }
       }
     }
-    prevOnlyPlain = static_cast<uint64_t>(warpReduceOr(static_cast<uint32_t>(lanePlain))) |
-                    (static_cast<uint64_t>(warpReduceOr(static_cast<uint32_t>(lanePlain >> 32))) << 32);
-    prevOnlyRing = static_cast<uint64_t>(warpReduceOr(static_cast<uint32_t>(laneRing))) |
-                   (static_cast<uint64_t>(warpReduceOr(static_cast<uint32_t>(laneRing >> 32))) << 32);
+    // Two 32-bit OR reductions per 64-bit lane mask; the reductions are 32-bit.
+    plan.chainDepths = static_cast<uint64_t>(warpReduceOr(static_cast<uint32_t>(lanePrimary))) |
+                       (static_cast<uint64_t>(warpReduceOr(static_cast<uint32_t>(lanePrimary >> 32))) << 32);
+    plan.chainDepthsAlt = static_cast<uint64_t>(warpReduceOr(static_cast<uint32_t>(laneAlt))) |
+                          (static_cast<uint64_t>(warpReduceOr(static_cast<uint32_t>(laneAlt >> 32))) << 32);
   }
+
+  return plan;
 }
 
 /**
- * @brief Fill the per-warp target adjacency masks for the classified bond case.
+ * @brief Fill the per-warp adjacency tables for the classified plan, target
+ *        atoms striped across the warp. See WarpSharedState for the contents.
  */
 template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms>
 __device__ __forceinline__ void buildTargetAdjacency(WarpSharedState<MaxTargetAtoms, MaxQueryAtoms>& shared,
@@ -532,31 +645,28 @@ __device__ __forceinline__ void buildTargetAdjacency(WarpSharedState<MaxTargetAt
                                                      int                                             lane,
                                                      const TargetMoleculeView&                       target,
                                                      int                                             numTargetAtoms,
-                                                     bool                                            uniform,
-                                                     bool                                            dual,
-                                                     uint32_t                                        groupMin,
-                                                     uint32_t                                        groupMax) {
+                                                     const QueryBondPlan&                            plan) {
   constexpr int kWords = WarpSharedState<MaxTargetAtoms, MaxQueryAtoms>::kWords;
 
   for (int atom = lane; atom < numTargetAtoms; atom += 32) {
     uint64_t neighbors;
     uint64_t bondInfo;
-    packTargetRow(target.targetAtomBonds[atom], neighbors, bondInfo);
+    packAdjacencyRow(target.targetAtomBonds[atom], neighbors, bondInfo);
 
-    if (uniform) {
-      shared.tn8[warp][atom] = tnbrMask<kWords>(neighbors, bondInfo, groupMax);
-    } else if (dual) {
-      shared.tn8[warp][atom] = tnbrMask<kWords>(neighbors, bondInfo, groupMin);
-      shared.tb8[warp][atom] = tnbrMask<kWords>(neighbors, bondInfo, groupMax);
+    if (plan.maskCase == BondMaskCase::Uniform) {
+      shared.targetAdjacency[warp][atom] = neighborsMatchingBondMask<kWords>(neighbors, bondInfo, plan.maxBondMask);
+    } else if (plan.maskCase == BondMaskCase::Dual) {
+      shared.targetAdjacency[warp][atom]    = neighborsMatchingBondMask<kWords>(neighbors, bondInfo, plan.minBondMask);
+      shared.targetAdjacencyAlt[warp][atom] = neighborsMatchingBondMask<kWords>(neighbors, bondInfo, plan.maxBondMask);
     } else {
-      TargetMask<kWords> rawNeighbors;
-      TargetMask<kWords> rawBondInfo;
-      rawNeighbors.clear();
-      rawBondInfo.clear();
-      rawNeighbors.lo        = neighbors;
-      rawBondInfo.lo         = bondInfo;
-      shared.tn8[warp][atom] = rawNeighbors;
-      shared.tb8[warp][atom] = rawBondInfo;
+      TargetMask<kWords> packedNeighbors;
+      TargetMask<kWords> packedBondInfo;
+      packedNeighbors.clear();
+      packedBondInfo.clear();
+      packedNeighbors.lo                    = neighbors;
+      packedBondInfo.lo                     = bondInfo;
+      shared.targetAdjacency[warp][atom]    = packedNeighbors;
+      shared.targetAdjacencyAlt[warp][atom] = packedBondInfo;
     }
   }
 }
@@ -581,6 +691,9 @@ struct DfsPairOutput {
 
 /**
  * @brief One warp searches one target/query pair.
+ *
+ * Builds the pair's three lookup tables, then backtracks from each root target
+ * atom the lane owns.
  *
  * The caller must have decoded the pair and pointed @p labelWords at that pair's
  * label matrix. All 32 lanes of the warp must call this.
@@ -624,46 +737,30 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
     shared.reportedCount[warp] = 0;
   }
 
-  if (!transposeLabelMatrix<MaxTargetAtoms,
-                            MaxQueryAtoms>(shared, warp, lane, labelWords, numTargetAtoms, numQueryAtoms)) {
+  if (!tryBuildQueryAtomCandidates<MaxTargetAtoms,
+                                   MaxQueryAtoms>(shared, warp, lane, labelWords, numTargetAtoms, numQueryAtoms)) {
     writeEmptyResult();
     return;
   }
 
-  bool     uniform       = false;
-  bool     dual          = false;
-  uint32_t groupMin      = 0;
-  uint32_t groupMax      = 0;
-  uint64_t prevOnlyPlain = 0;
-  uint64_t prevOnlyRing  = 0;
-  classifyQueryBonds<MaxTargetAtoms, MaxQueryAtoms>(shared,
-                                                    warp,
-                                                    lane,
-                                                    query,
-                                                    numQueryAtoms,
-                                                    uniform,
-                                                    dual,
-                                                    groupMin,
-                                                    groupMax,
-                                                    prevOnlyPlain,
-                                                    prevOnlyRing);
+  const QueryBondPlan plan = analyzeQueryBonds<MaxTargetAtoms, MaxQueryAtoms>(shared, warp, lane, query, numQueryAtoms);
 
-  buildTargetAdjacency<MaxTargetAtoms,
-                       MaxQueryAtoms>(shared, warp, lane, target, numTargetAtoms, uniform, dual, groupMin, groupMax);
+  buildTargetAdjacency<MaxTargetAtoms, MaxQueryAtoms>(shared, warp, lane, target, numTargetAtoms, plan);
   __syncwarp();
 
   const int  limit     = out.maxMatchesToFind;
   const bool hasLimit  = limit >= 0;
   const int  lastDepth = numQueryAtoms - 1;
 
-  // Roots owned by this lane: bit positions lane, lane+32, lane+64, lane+96.
+  // Query atom 0 is anchored on the roots this lane owns -- target atoms lane,
+  // lane+32, lane+64, lane+96 -- restricted to the label-compatible ones.
   Mask rootMask;
   rootMask.clear();
 #pragma unroll
   for (int k = 0; k < kRoots; ++k) {
     rootMask.set(lane + 32 * k);
   }
-  Mask roots = shared.lm[warp][0];
+  Mask roots = shared.queryAtomCandidates[warp][0];
   roots.andEq(rootMask);
 
   uint32_t laneTotal = 0;
@@ -683,7 +780,8 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
   };
 
   if (lastDepth == 0) {
-    // Single-atom query: every candidate root is a complete embedding.
+    // Single-atom query: no bonds to satisfy, so every candidate root is already
+    // a complete embedding.
     if constexpr (Mode == DfsOutputMode::Count) {
       laneTotal = static_cast<uint32_t>(roots.popcount());
     } else if constexpr (Mode == DfsOutputMode::Paint) {
@@ -704,10 +802,14 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
       }
     }
   } else {
+    // The lane-local stack: mapping[d] is the target atom assigned to query atom
+    // d, remaining[d] the candidates at depth d not yet tried, and used the
+    // target atoms taken by depths 0..depth-1, which keeps the mapping injective.
     Mask          remaining[MaxQueryAtoms];
     unsigned char mapping[MaxQueryAtoms];
 
     while (!roots.empty()) {
+      // Restart with query atom 0 anchored on the lane's next root.
       const int rootAtom = roots.lowest();
       roots.clearLowest();
 
@@ -716,23 +818,17 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
       used.set(rootAtom);
       mapping[0] = static_cast<unsigned char>(rootAtom);
 
-      int depth     = 1;
-      remaining[1]  = buildCandidates<MaxTargetAtoms, MaxQueryAtoms>(shared,
-                                                                    warp,
-                                                                    1,
-                                                                    mapping,
-                                                                    used,
-                                                                    query,
-                                                                    uniform,
-                                                                    dual,
-                                                                    prevOnlyPlain,
-                                                                    prevOnlyRing,
-                                                                    rootAtom);
-      bool rootDone = false;
-      bool pairDone = false;
+      int depth = 1;
+      remaining[1] =
+        buildCandidates<MaxTargetAtoms, MaxQueryAtoms>(shared, warp, 1, mapping, used, query, plan, rootAtom);
+      bool rootDone = false;  // Stop this root, move to the lane's next one.
+      bool pairDone = false;  // Stop the lane entirely; more work cannot change its answer.
 
       while (depth >= 1) {
         if (depth == lastDepth) {
+          // Nothing deeper constrains the last query atom, so every remaining
+          // candidate completes a distinct embedding. Consume the whole bitset,
+          // then fall through to the pop below with this depth emptied.
           if constexpr (Mode == DfsOutputMode::Count) {
             laneTotal += static_cast<uint32_t>(remaining[depth].popcount());
             // A lane that has already reached the pair limit on its own roots
@@ -743,6 +839,8 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
               pairDone = true;
             }
           } else if constexpr (Mode == DfsOutputMode::Paint) {
+            // Paint only asks whether the root can start an embedding, so the
+            // first hit settles the root and skips the rest of its subtree.
             if (!remaining[depth].empty()) {
               atomicOr(&out.paint.recursiveBits[out.paint.outputPairIdx * out.paint.maxTargetAtoms + rootAtom],
                        1u << out.paint.patternId);
@@ -766,6 +864,9 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
         }
 
         if (remaining[depth].empty()) {
+          // Exhausted: pop, releasing the atom the depth above had taken. Depth
+          // 0 is the root, which the outer loop advances, so the stack bottoms
+          // out at depth 1.
           --depth;
           if (depth >= 1) {
             used.reset(mapping[depth]);
@@ -773,22 +874,15 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
           continue;
         }
 
+        // Otherwise commit the lowest untried candidate and descend, building
+        // the next depth's candidate set under the extended mapping.
         const int candidate = remaining[depth].lowest();
         remaining[depth].clearLowest();
         mapping[depth] = static_cast<unsigned char>(candidate);
         used.set(candidate);
         ++depth;
-        remaining[depth] = buildCandidates<MaxTargetAtoms, MaxQueryAtoms>(shared,
-                                                                          warp,
-                                                                          depth,
-                                                                          mapping,
-                                                                          used,
-                                                                          query,
-                                                                          uniform,
-                                                                          dual,
-                                                                          prevOnlyPlain,
-                                                                          prevOnlyRing,
-                                                                          candidate);
+        remaining[depth] =
+          buildCandidates<MaxTargetAtoms, MaxQueryAtoms>(shared, warp, depth, mapping, used, query, plan, candidate);
       }
 
       if (pairDone) {
@@ -809,6 +903,8 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
       }
     }
   } else if constexpr (Mode == DfsOutputMode::Store) {
+    // Store accumulated into the shared counters as it went, so this is just a
+    // barrier before reading them.
     __syncwarp();
     if (lane == 0) {
       out.matchCounts[resultIdx] = shared.matchCount[warp];

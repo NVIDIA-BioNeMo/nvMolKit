@@ -634,12 +634,12 @@ __global__ void substructPaintKernelT(TargetMoleculesDeviceView     targets,
 // Dedicated DFS Kernels
 // =============================================================================
 //
-// DFS does not share the one-block-per-pair topology of the kernels above. It
-// keeps the Kernel Factory winner's model: eight warps per CTA, one warp per
-// (target, query) pair, each lane owning the roots at bit positions
-// `lane + 32*k`, and all DFS state lane-local. Everything a pair needs is
-// derived inside its owning warp, so no per-pair global scratch exists and
-// concurrent recursive depth groups on separate streams cannot collide.
+// DFS does not share the one-block-per-pair topology of the kernels above: it
+// runs one warp per (target, query) pair, kWarpsPerBlock pairs per CTA, with all
+// search state lane-local. See substruct_dfs.cuh for the algorithm. Everything a
+// pair needs is derived inside its owning warp, so no per-pair global scratch
+// exists and concurrent recursive depth groups on separate streams cannot
+// collide.
 
 /**
  * @brief Warp-per-pair DFS matching kernel.
