@@ -288,20 +288,61 @@ template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms> struct WarpShar
 };
 
 /**
+ * @brief Per-SM shared memory budget assumed when choosing minBlocksPerSM.
+ *
+ * Hopper and datacenter Blackwell (sm_90/100/103) have 228 KB per SM; everything
+ * else is modelled as A100's 164 KB, deliberately including the architectures
+ * with less (Turing 64 KB, Volta 96 KB, consumer Ampere/Ada/Blackwell 100 KB).
+ * ptxas does not validate .minnctapersm against shared memory, so on those an
+ * unreachable ask costs nothing at runtime -- occupancy just lands where shared
+ * memory puts it -- but it keeps the register cap as tight as the tuned
+ * configuration allows. Modelling the 228 KB parts does matter: the smaller
+ * assumed budget under-asks for the 128-atom shapes there, and the relaxed
+ * register cap can drop real occupancy below what shared memory allows.
+ */
+constexpr std::size_t sharedBudgetPerSMBytes() {
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900) && (__CUDA_ARCH__ < 1200)
+  return 228 * 1024;
+#else
+  return 164 * 1024;
+#endif
+}
+
+/**
+ * @brief Max resident threads per SM, from the CUDA occupancy tables.
+ *
+ * Unlike shared memory, ptxas validates .minnctapersm against this limit and
+ * fails the build when minBlocks * kBlockSize exceeds it, so minBlocksPerSM
+ * must clamp by it.
+ */
+constexpr int maxThreadsPerSM() {
+#if !defined(__CUDA_ARCH__)
+  return 2048;  // Host pass; the value is never used.
+#elif __CUDA_ARCH__ == 750
+  return 1024;  // Turing
+#elif (__CUDA_ARCH__ >= 860 && __CUDA_ARCH__ < 900) || __CUDA_ARCH__ >= 1200
+  return 1536;  // Consumer Ampere/Ada, Orin, consumer Blackwell
+#else
+  return 2048;  // Volta, A100, Hopper, datacenter Blackwell
+#endif
+}
+
+/**
  * @brief Second __launch_bounds__ argument: CTAs this kernel should fit per SM.
  *
  * Eight resident CTAs is the occupancy the search is tuned at, and asking for it
  * also caps the compiler at 32 registers per thread; the two go together.
- * Whether eight fit is purely a shared memory question, WarpSharedState being
- * the only shared allocation. The 128-atom target specialisations cannot reach
- * eight at any register count -- their adjacency tables alone are too large --
- * so they ask for what shared memory allows.
+ * WarpSharedState is the kernel's only shared allocation, so whether a given
+ * count fits is decided by its size against the shared budget, further clamped
+ * by the SM thread limit where that is the binding constraint. The 128-atom
+ * target specialisations cannot reach eight at any register count -- their
+ * adjacency tables alone are too large -- so they ask for what fits.
  */
 template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms> constexpr int minBlocksPerSM() {
-  // Hopper's 164 KB per SM; the smallest per-SM budget among the architectures
-  // that matter for this backend, so the target is never over-promised.
-  constexpr std::size_t kSharedBudgetBytes = 164 * 1024;
-  constexpr std::size_t kResident = kSharedBudgetBytes / sizeof(WarpSharedState<MaxTargetAtoms, MaxQueryAtoms>);
+  constexpr std::size_t kBySharedMem =
+    sharedBudgetPerSMBytes() / sizeof(WarpSharedState<MaxTargetAtoms, MaxQueryAtoms>);
+  constexpr std::size_t kByThreads = maxThreadsPerSM() / kBlockSize;
+  constexpr std::size_t kResident  = kBySharedMem < kByThreads ? kBySharedMem : kByThreads;
   return kResident >= 8 ? 8 : (kResident < 1 ? 1 : static_cast<int>(kResident));
 }
 
@@ -539,6 +580,9 @@ __device__ __forceinline__ bool tryBuildQueryAtomCandidates(WarpSharedState<MaxT
  *  2. If min != max, flag the max-mask edges and watch for a third value, which
  *     demotes the pair to General.
  *  3. Uniform and Dual only: find the chain depths (see QueryBondPlan).
+ *
+ * This is a pure function of the query but runs once per pair; it could be
+ * computed once per query at host pack time and loaded instead.
  */
 template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms>
 __device__ __forceinline__ QueryBondPlan analyzeQueryBonds(WarpSharedState<MaxTargetAtoms, MaxQueryAtoms>& shared,
@@ -743,27 +787,9 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
     return;
   }
 
-  const QueryBondPlan plan = analyzeQueryBonds<MaxTargetAtoms, MaxQueryAtoms>(shared, warp, lane, query, numQueryAtoms);
-
-  buildTargetAdjacency<MaxTargetAtoms, MaxQueryAtoms>(shared, warp, lane, target, numTargetAtoms, plan);
-  __syncwarp();
-
   const int  limit     = out.maxMatchesToFind;
   const bool hasLimit  = limit >= 0;
   const int  lastDepth = numQueryAtoms - 1;
-
-  // Query atom 0 is anchored on the roots this lane owns -- target atoms lane,
-  // lane+32, lane+64, lane+96 -- restricted to the label-compatible ones.
-  Mask rootMask;
-  rootMask.clear();
-#pragma unroll
-  for (int k = 0; k < kRoots; ++k) {
-    rootMask.set(lane + 32 * k);
-  }
-  Mask roots = shared.queryAtomCandidates[warp][0];
-  roots.andEq(rootMask);
-
-  uint32_t laneTotal = 0;
 
   // Writes one complete mapping. Returns true once the pair's limit is reached.
   auto emitMapping = [&](const unsigned char* mapping, int terminalAtom) -> bool {
@@ -779,9 +805,53 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
     return hasLimit && (slot + 1) >= limit;
   };
 
+  // Mode-dependent result write, shared by the single-atom and general paths.
+  auto finishPair = [&](uint32_t laneTotal) {
+    if constexpr (Mode == DfsOutputMode::Count) {
+      uint32_t pairTotal = warpReduceAdd(laneTotal);
+      if (hasLimit && pairTotal > static_cast<uint32_t>(limit)) {
+        pairTotal = static_cast<uint32_t>(limit);
+      }
+      if (lane == 0) {
+        out.matchCounts[resultIdx] = static_cast<int>(pairTotal);
+        if (!out.countOnly && out.reportedCounts != nullptr) {
+          out.reportedCounts[resultIdx] = 0;
+        }
+      }
+    } else if constexpr (Mode == DfsOutputMode::Store) {
+      // Store accumulated into the shared counters as it went, so this is just a
+      // barrier before reading them.
+      __syncwarp();
+      if (lane == 0) {
+        out.matchCounts[resultIdx] = shared.matchCount[warp];
+        if (!out.countOnly && out.reportedCounts != nullptr) {
+          out.reportedCounts[resultIdx] = shared.reportedCount[warp];
+        }
+      }
+    }
+  };
+
+  // Builds the roots this lane owns -- target atoms lane, lane+32, lane+64,
+  // lane+96 -- restricted to the ones label-compatible with query atom 0.
+  auto buildLaneRoots = [&]() -> Mask {
+    Mask rootMask;
+    rootMask.clear();
+#pragma unroll
+    for (int k = 0; k < kRoots; ++k) {
+      rootMask.set(lane + 32 * k);
+    }
+    Mask roots = shared.queryAtomCandidates[warp][0];
+    roots.andEq(rootMask);
+    return roots;
+  };
+
   if (lastDepth == 0) {
     // Single-atom query: no bonds to satisfy, so every candidate root is already
-    // a complete embedding.
+    // a complete embedding. Exits before the bond analysis and adjacency build,
+    // none of whose output it would read.
+    __syncwarp();  // The transpose's lane-0 shared writes.
+    Mask     roots     = buildLaneRoots();
+    uint32_t laneTotal = 0;
     if constexpr (Mode == DfsOutputMode::Count) {
       laneTotal = static_cast<uint32_t>(roots.popcount());
     } else if constexpr (Mode == DfsOutputMode::Paint) {
@@ -801,7 +871,19 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
         }
       }
     }
-  } else {
+    finishPair(laneTotal);
+    return;
+  }
+
+  const QueryBondPlan plan = analyzeQueryBonds<MaxTargetAtoms, MaxQueryAtoms>(shared, warp, lane, query, numQueryAtoms);
+
+  buildTargetAdjacency<MaxTargetAtoms, MaxQueryAtoms>(shared, warp, lane, target, numTargetAtoms, plan);
+  __syncwarp();
+
+  Mask     roots     = buildLaneRoots();
+  uint32_t laneTotal = 0;
+
+  {
     // The lane-local stack: mapping[d] is the target atom assigned to query atom
     // d, remaining[d] the candidates at depth d not yet tried, and used the
     // target atoms taken by depths 0..depth-1, which keeps the mapping injective.
@@ -891,28 +973,7 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
     }
   }
 
-  if constexpr (Mode == DfsOutputMode::Count) {
-    uint32_t pairTotal = warpReduceAdd(laneTotal);
-    if (hasLimit && pairTotal > static_cast<uint32_t>(limit)) {
-      pairTotal = static_cast<uint32_t>(limit);
-    }
-    if (lane == 0) {
-      out.matchCounts[resultIdx] = static_cast<int>(pairTotal);
-      if (!out.countOnly && out.reportedCounts != nullptr) {
-        out.reportedCounts[resultIdx] = 0;
-      }
-    }
-  } else if constexpr (Mode == DfsOutputMode::Store) {
-    // Store accumulated into the shared counters as it went, so this is just a
-    // barrier before reading them.
-    __syncwarp();
-    if (lane == 0) {
-      out.matchCounts[resultIdx] = shared.matchCount[warp];
-      if (!out.countOnly && out.reportedCounts != nullptr) {
-        out.reportedCounts[resultIdx] = shared.reportedCount[warp];
-      }
-    }
-  }
+  finishPair(laneTotal);
 }
 
 }  // namespace dfs
