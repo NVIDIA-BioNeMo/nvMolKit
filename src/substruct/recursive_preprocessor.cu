@@ -168,8 +168,7 @@ void LeafSubpatterns::syncToDevice(cudaStream_t stream) {
   }
   patternsDevice.copyFromHost(patternsHost, stream);
 
-  // The all-queries pattern table is the same for every mini-batch, so upload
-  // it once here. Callers synchronize this stream before any worker starts.
+  // Upload the immutable pattern table once.
   for (int depth = 0; depth <= kMaxSmartsNestingDepth; ++depth) {
     const auto& entries      = allQueriesPatternsAtDepth[depth];
     auto&       entriesOnGpu = allQueriesPatternsAtDepthDevice[depth];
@@ -243,8 +242,7 @@ void RecursivePatternPreprocessor::preprocessMiniBatch(
       const size_t numPatternsInSubBatch = patternEnd - patternStart;
       const size_t numBlocksInSubBatch   = numTargetsInMiniBatch * numPatternsInSubBatch;
 
-      // The pattern table already lives on the device; this sub-batch is a
-      // contiguous slice of it, so no staging or H2D copy is needed here.
+      // Use the device-resident pattern table directly.
       const BatchedPatternEntry* patternEntriesDevice =
         leafSubpatterns_.allQueriesPatternsAtDepthDevice[currentDepth].data() + patternStart;
 

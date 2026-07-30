@@ -121,7 +121,7 @@ def tune_substructure(
     gpuIds: Optional[Iterable[int]] = None,
     calibration_set: Optional[Iterable[int]] = None,
     calibration_fraction: float = 0.1,
-    calibration_max_size: Optional[int] = None,
+    calibration_max_size: int = 50_000,
     target_seconds_per_trial: float = 10.0,
     n_trials: int = 30,
     search_space_overrides: Optional[dict[str, Any]] = None,
@@ -145,9 +145,7 @@ def tune_substructure(
         gpuIds: GPU device IDs to use. Fixed across the study.
         calibration_set: Optional explicit indices into ``targets``.
         calibration_fraction: Fraction of the workload to auto-sample.
-        calibration_max_size: Cap on the auto-sampled calibration size, or
-            ``None`` (the default) for no cap. Small calibration slices
-            under-reward large ``batchSize`` values.
+        calibration_max_size: Cap on the auto-sampled calibration size.
         target_seconds_per_trial: Target wall-clock budget for one trial.
         n_trials: Number of Optuna trials to run after warm-up.
         search_space_overrides: Optional overrides for ``batchSize``,

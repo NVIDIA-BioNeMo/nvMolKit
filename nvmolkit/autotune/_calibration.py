@@ -25,7 +25,7 @@ def auto_subsample(
     workload_size: int,
     *,
     fraction: float = 0.1,
-    max_size: Optional[int] = 2000,
+    max_size: int = 2000,
     min_size: int = 1,
     seed: int = 0,
 ) -> list[int]:
@@ -33,14 +33,11 @@ def auto_subsample(
 
     The slice size is ``min(max_size, max(min_size, round(fraction * workload_size)))``
     and is shuffled deterministically with ``seed`` so trials sample roughly
-    uniformly across the workload. Passing ``max_size=None`` disables the cap,
-    leaving ``fraction`` as the only limit.
+    uniformly across the workload.
     """
     if workload_size <= 0:
         raise ValueError("workload_size must be positive")
-    target = max(min_size, int(round(fraction * workload_size)))
-    if max_size is not None:
-        target = min(max_size, target)
+    target = min(max_size, max(min_size, int(round(fraction * workload_size))))
     target = min(target, workload_size)
     rng = random.Random(seed)
     indices = list(range(workload_size))
@@ -53,7 +50,7 @@ def normalize_calibration_set(
     workload_size: int,
     *,
     fraction: float = 0.1,
-    max_size: Optional[int] = 2000,
+    max_size: int = 2000,
     seed: int = 0,
 ) -> list[int]:
     """Return calibration indices from an explicit set or auto-sample.
@@ -66,8 +63,7 @@ def normalize_calibration_set(
             auto-subsample.
         workload_size: Total size of the user workload.
         fraction: Auto-subsample fraction when ``calibration_set`` is ``None``.
-        max_size: Auto-subsample cap when ``calibration_set`` is ``None``, or
-            ``None`` for no cap.
+        max_size: Auto-subsample cap when ``calibration_set`` is ``None``.
         seed: Seed for auto-subsampling.
     """
     if calibration_set is None:

@@ -87,10 +87,7 @@ struct LeafSubpatterns {
   /// Max recursion depth across all queries
   int allQueriesMaxDepth = 0;
 
-  /// Device-resident copy of allQueriesPatternsAtDepth, uploaded once by
-  /// syncToDevice. The table is invariant across mini-batches, so workers
-  /// index into it directly rather than re-staging it through pinned memory
-  /// on every pattern sub-batch.
+  /// Device-resident pattern table shared across mini-batches.
   std::array<AsyncDeviceVector<BatchedPatternEntry>, kMaxSmartsNestingDepth + 1> allQueriesPatternsAtDepthDevice;
 
   int maxPatternAtoms_ = 0;
