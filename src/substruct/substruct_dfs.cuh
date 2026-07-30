@@ -41,6 +41,19 @@
 // Three tables are built per pair before the search, each depending on the last:
 // tryBuildQueryAtomCandidates (first term), analyzeQueryBonds (the back edges),
 // buildTargetAdjacency (the per-edge neighbour sets).
+//
+// Future optimization candidates:
+// - Store target adjacency as the two packed degree-8 words at construction,
+//   deleting packAdjacencyRow.
+// - Produce the label matrix query-major for this backend, deleting the ballot
+//   transpose in tryBuildQueryAtomCandidates.
+// - Have the label kernel flag pairs with an empty column and compact the DFS
+//   pair list on device.
+// - Precompute analyzeQueryBonds per query at host pack time (see its note).
+// - Reorder query atoms most-constrained-first at construction, with an inverse
+//   permutation on mapping download.
+// - Route size-1 queries to a popcount-over-label-column kernel.
+// - Drop query>target pairs in the minibatch planner.
 
 #ifndef NVMOLKIT_SUBSTRUCT_DFS_CUH
 #define NVMOLKIT_SUBSTRUCT_DFS_CUH
