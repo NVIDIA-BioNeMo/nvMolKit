@@ -1048,6 +1048,11 @@ def validate_against_rdkit(
     return ValidationResult(total_pairs, count_mismatches, mapping_mismatches)
 
 
+@pytest.fixture(params=["gsi", "dfs"])
+def substruct_algorithm(request: pytest.FixtureRequest) -> str:
+    return request.param
+
+
 @pytest.mark.long
 class TestIntegrationChemblSmarts:
     """Integration tests using ChEMBL molecules and SMARTS datasets."""
@@ -1068,7 +1073,7 @@ class TestIntegrationChemblSmarts:
             "openbabel_functional_groups_supported.txt",
         ],
     )
-    def test_chembl_vs_smarts_dataset(self, chembl_mols: list[Chem.Mol], smarts_file: str):
+    def test_chembl_vs_smarts_dataset(self, chembl_mols: list[Chem.Mol], smarts_file: str, substruct_algorithm: str):
         """Test ChEMBL molecules against SMARTS dataset files."""
         smarts_path = TEST_DATA_DIR / "SMARTS" / smarts_file
         if not smarts_path.exists():
@@ -1078,7 +1083,7 @@ class TestIntegrationChemblSmarts:
         if not queries:
             pytest.skip(f"No valid queries in {smarts_file}")
 
-        config = SubstructSearchConfig()
+        config = SubstructSearchConfig(algorithm=substruct_algorithm)
         config.batchSize = 128
 
         results = getSubstructMatches(chembl_mols, queries, config)
@@ -1118,7 +1123,7 @@ class TestIntegrationChemblSmarts:
                 f"Mapping mismatches: {len(validation.mapping_mismatches)}/{validation.total_pairs}\n{details}{more}"
             )
 
-    def test_chembl_basic_queries(self, chembl_mols: list[Chem.Mol]):
+    def test_chembl_basic_queries(self, chembl_mols: list[Chem.Mol], substruct_algorithm: str):
         """Test ChEMBL molecules against basic SMARTS queries."""
         smarts_strings = [
             "[CX3]=[OX1]",  # Carbonyl
@@ -1129,7 +1134,7 @@ class TestIntegrationChemblSmarts:
         ]
         queries = [Chem.MolFromSmarts(s) for s in smarts_strings]
 
-        config = SubstructSearchConfig()
+        config = SubstructSearchConfig(algorithm=substruct_algorithm)
         config.batchSize = 128
 
         results = getSubstructMatches(chembl_mols, queries, config)
@@ -1144,7 +1149,7 @@ class TestIntegrationChemblSmarts:
             )
             pytest.fail(f"Count mismatches: {len(validation.count_mismatches)}/{validation.total_pairs}\n{details}")
 
-    def test_chembl_has_substruct_match(self, chembl_mols: list[Chem.Mol]):
+    def test_chembl_has_substruct_match(self, chembl_mols: list[Chem.Mol], substruct_algorithm: str):
         """Test hasSubstructMatch on ChEMBL molecules."""
         queries = [
             Chem.MolFromSmarts("[CX3]=[OX1]"),
@@ -1152,7 +1157,7 @@ class TestIntegrationChemblSmarts:
             Chem.MolFromSmarts("[OX2H]"),
         ]
 
-        config = SubstructSearchConfig()
+        config = SubstructSearchConfig(algorithm=substruct_algorithm)
         config.batchSize = 128
 
         results = hasSubstructMatch(chembl_mols, queries, config)
@@ -1163,7 +1168,7 @@ class TestIntegrationChemblSmarts:
                 rdkit_has_match = target.HasSubstructMatch(query)
                 assert bool(results[t_idx, q_idx]) == rdkit_has_match, f"Mismatch at target {t_idx}, query {q_idx}"
 
-    def test_chembl_count_substruct_matches(self, chembl_mols: list[Chem.Mol]):
+    def test_chembl_count_substruct_matches(self, chembl_mols: list[Chem.Mol], substruct_algorithm: str):
         """Test countSubstructMatches on ChEMBL molecules."""
         queries = [
             Chem.MolFromSmarts("[CX3]=[OX1]"),
@@ -1171,7 +1176,7 @@ class TestIntegrationChemblSmarts:
             Chem.MolFromSmarts("[OX2H]"),
         ]
 
-        config = SubstructSearchConfig()
+        config = SubstructSearchConfig(algorithm=substruct_algorithm)
         config.batchSize = 128
 
         results = countSubstructMatches(chembl_mols, queries, config)
@@ -1204,11 +1209,11 @@ class TestIntegrationConfig:
         ]
         return targets, queries
 
-    def test_multithreaded_config(self, test_mols):
+    def test_multithreaded_config(self, test_mols, substruct_algorithm: str):
         """Test with multiple worker threads."""
         targets, queries = test_mols
 
-        config = SubstructSearchConfig()
+        config = SubstructSearchConfig(algorithm=substruct_algorithm)
         config.workerThreads = 2
 
         results = getSubstructMatches(targets, queries, config)
@@ -1216,11 +1221,11 @@ class TestIntegrationConfig:
         validation = validate_against_rdkit(targets, queries, results)
         assert len(validation.count_mismatches) == 0
 
-    def test_preprocessing_threads(self, test_mols):
+    def test_preprocessing_threads(self, test_mols, substruct_algorithm: str):
         """Test with preprocessing threads."""
         targets, queries = test_mols
 
-        config = SubstructSearchConfig()
+        config = SubstructSearchConfig(algorithm=substruct_algorithm)
         config.preprocessingThreads = 4
 
         results = getSubstructMatches(targets, queries, config)
@@ -1228,11 +1233,11 @@ class TestIntegrationConfig:
         validation = validate_against_rdkit(targets, queries, results)
         assert len(validation.count_mismatches) == 0
 
-    def test_small_batch_size(self, test_mols):
+    def test_small_batch_size(self, test_mols, substruct_algorithm: str):
         """Test with smaller batch size."""
         targets, queries = test_mols
 
-        config = SubstructSearchConfig()
+        config = SubstructSearchConfig(algorithm=substruct_algorithm)
         config.batchSize = 64
 
         results = getSubstructMatches(targets, queries, config)
@@ -1240,11 +1245,12 @@ class TestIntegrationConfig:
         validation = validate_against_rdkit(targets, queries, results)
         assert len(validation.count_mismatches) == 0
 
-    def test_results_exist(self, test_mols):
+    def test_results_exist(self, test_mols, substruct_algorithm: str):
         """Test basic match results exist."""
         targets, queries = test_mols
 
-        results = getSubstructMatches(targets, queries)
+        config = SubstructSearchConfig(algorithm=substruct_algorithm)
+        results = getSubstructMatches(targets, queries, config)
 
         validation = validate_against_rdkit(targets, queries, results)
         assert len(validation.count_mismatches) == 0
