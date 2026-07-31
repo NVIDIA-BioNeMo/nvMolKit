@@ -87,6 +87,9 @@ struct LeafSubpatterns {
   /// Max recursion depth across all queries
   int allQueriesMaxDepth = 0;
 
+  /// Device-resident pattern table shared across mini-batches.
+  std::array<AsyncDeviceVector<BatchedPatternEntry>, kMaxSmartsNestingDepth + 1> allQueriesPatternsAtDepthDevice;
+
   int maxPatternAtoms_ = 0;
 
   LeafSubpatterns() = default;

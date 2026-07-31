@@ -289,10 +289,11 @@ def test_default_substruct_search_space_caps_per_pool():
     assert space_4gpu["preprocessingThreads"] == (1, 16)
     assert space_64gpu["preprocessingThreads"] == (1, 16)
 
-    low, high, step = space_1gpu["batchSize"]
-    assert step % 64 == 0
-    assert low % step == 0 and high % step == 0
-    assert low <= high
+    # Unlike the FF and embed spaces, substruct batchSize is log-uniform rather
+    # than a stepped range: the useful span is two orders of magnitude.
+    low, high, distribution = space_1gpu["batchSize"]
+    assert distribution == "log"
+    assert 0 < low <= high
 
 
 class _RecordingTrial:

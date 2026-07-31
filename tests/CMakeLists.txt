@@ -81,6 +81,9 @@ target_compile_options(test_fmcs_grow
 add_executable(test_fmcs_foundations test_fmcs_foundations.cu)
 target_link_libraries(test_fmcs_foundations PRIVATE mcs_fmcs_foundations)
 
+add_executable(test_fmcs_policy test_fmcs_policy.cpp)
+target_link_libraries(test_fmcs_policy PRIVATE mcs_fmcs_foundations)
+
 add_executable(test_fmcs_match test_fmcs_match.cu)
 target_include_directories(test_fmcs_match PRIVATE ${CMAKE_SOURCE_DIR}/src/mcs)
 target_link_libraries(test_fmcs_match PRIVATE mcs_fmcs_foundations
@@ -440,6 +443,7 @@ set(TEST_LIST
     test_fmcs_foundations
     test_fmcs_grow
     test_fmcs_match
+    test_fmcs_policy
     test_fmcs_substructure
     test_work_splitting
     test_fire_minimizer

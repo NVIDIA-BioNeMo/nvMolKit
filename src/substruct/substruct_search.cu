@@ -439,6 +439,11 @@ void runGpuCoordinator(int                                 deviceId,
       localPreprocessor = std::make_unique<RecursivePatternPreprocessor>();
       localPreprocessor->buildPatterns(queriesHost);
       localPreprocessor->syncToDevice(nullptr);
+
+      // The workers use independent non-blocking streams, so fully publish the
+      // secondary-device queries and patterns before any worker can consume them.
+      cudaCheckError(cudaStreamSynchronize(nullptr));
+
       queriesPtr      = localQueries.get();
       preprocessorPtr = localPreprocessor.get();
     }

@@ -335,11 +335,9 @@ def main():
         default=42,
         help="Random seed for sampling SMILES when --num_mols > 0 (default: 42)",
     )
-    parser.add_argument("--sanitize", action="store_true", dest="sanitize", help="Sanitize SMILES during parsing")
-    parser.add_argument(
-        "--no_sanitize", action="store_false", dest="sanitize", help="Skip sanitization (preprocessed SMILES)"
-    )
-    parser.set_defaults(sanitize=False)
+    sanitize_group = parser.add_mutually_exclusive_group()
+    sanitize_group.add_argument("--sanitize", action="store_true", dest="sanitize", default=True)
+    sanitize_group.add_argument("--no_sanitize", action="store_false", dest="sanitize")
     parser.add_argument("--runs", "-r", type=int, default=1, help="Number of timing runs (default: 1)")
     parser.add_argument(
         "--mode",

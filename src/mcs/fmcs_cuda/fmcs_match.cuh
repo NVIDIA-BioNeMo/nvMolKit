@@ -318,6 +318,7 @@ __device__ __forceinline__ bool tryMatchIncrementalGreedyCooperative(
   return true;
 }
 
+<<<<<<< HEAD
 __device__ __forceinline__ bool findTargetBondBetweenAtomsWithinThread(const int                    targetAtomA,
                                                                        const int                    targetAtomB,
                                                                        const int                    queryBondIdx,
@@ -918,6 +919,8 @@ __device__ __forceinline__ bool matchSeedWithSubstructureFallbackCooperative(
   return ok;
 }
 
+=======
+>>>>>>> main
 }  // namespace fmcs
 }  // namespace mcs
 
