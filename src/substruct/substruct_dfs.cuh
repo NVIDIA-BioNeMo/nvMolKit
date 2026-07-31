@@ -20,27 +20,21 @@
 // the injective maps from query atoms to target atoms that also satisfy the
 // query's bond constraints, which the label matrix does not cover.
 //
+// The search itself is nvMolKit::dfsFromRoots (src/subgraph/warp_dfs.cuh);
+// this header is the substructure frontend: it builds the per-pair lookup
+// tables the candidates oracle reads, supplies that oracle, and implements the
+// output modes as terminal handlers. Query atoms are matched in index order,
+// so depth d means "choose the target atom for query atom d".
+//
 // One warp per pair, kWarpsPerBlock pairs per CTA. Lane L searches the subtrees
 // rooted at target atoms L, L+32, L+64, L+96; those subtrees are disjoint, so
 // all search state is lane-local registers and lanes only meet at the final
 // reduction. Shared memory holds the per-warp lookup tables and result counters.
 //
-// Query atoms are matched in index order, so depth d means "choose the target
-// atom for query atom d", and every query atom below d is already mapped. The
-// legal choices are one bitset intersection over target atoms:
-//
-//   candidates(d) = labelCompatible(d) & ~used
-//                   & AND over each back edge d--e (e < d) of
-//                       { neighbours of mapping[e] reachable over a bond that
-//                         edge's query bond mask accepts }
-//
-// Forward edges need no check; they are back edges of the deeper atom. An empty
-// bitset pops the stack; a non-empty one at the last depth means each of its
-// bits completes an embedding.
-//
 // Three tables are built per pair before the search, each depending on the last:
-// tryBuildQueryAtomCandidates (first term), analyzeQueryBonds (the back edges),
-// buildTargetAdjacency (the per-edge neighbour sets).
+// tryBuildQueryAtomCandidates (the label-compatibility term of the oracle's
+// intersection), analyzeQueryBonds (the back edges), buildTargetAdjacency (the
+// per-edge neighbour sets).
 //
 // Future optimization candidates:
 // - Store target adjacency as the two packed degree-8 words at construction,
@@ -61,6 +55,10 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "src/subgraph/occupancy.cuh"
+#include "src/subgraph/target_mask.cuh"
+#include "src/subgraph/warp_dfs.cuh"
+#include "src/subgraph/warp_reduce.cuh"
 #include "src/substruct/molecules_device.cuh"
 #include "src/substruct/packed_bonds_device.cuh"
 #include "src/substruct/substruct_algos.cuh"
@@ -69,194 +67,14 @@ namespace nvMolKit {
 namespace dfs {
 
 /// Warps, and therefore independent pairs, per CTA.
-constexpr int      kWarpsPerBlock = 8;
-constexpr int      kBlockSize     = kWarpsPerBlock * 32;
-constexpr uint32_t kFullWarpMask  = 0xFFFFFFFFu;
+constexpr int kWarpsPerBlock = 8;
+constexpr int kBlockSize     = kWarpsPerBlock * 32;
 
 /// How a warp records the embeddings it finds.
 enum class DfsOutputMode {
   Count,  ///< Per-pair embedding count only; no mapping storage, no per-match atomics.
   Store,  ///< Full mappings written to the match index buffer.
   Paint   ///< Recursive SMARTS bit painted for mapping[0]; stops each root at its first embedding.
-};
-
-// =============================================================================
-// Warp reductions
-// =============================================================================
-//
-// __reduce_*_sync requires sm_80. nvMolKit also builds for sm_70/sm_75, which
-// fall back to a butterfly shuffle producing the same values.
-//
-// cub::WarpReduce is deliberately not used here. Its sm_80+ fast path lowers to
-// these same __reduce_*_sync intrinsics, so there is nothing to gain, and it is
-// worse in two ways: its contract returns the aggregate only to lane 0, while
-// the min/max/or call sites need the all-lane broadcast that redux.sync
-// provides for free (CUB would need an extra __shfl_sync); and CUB has no
-// redux-backed OR reduction at all, so warpReduceOr would regress to a
-// five-step shuffle loop even on sm_80+.
-
-__device__ __forceinline__ uint32_t warpReduceAdd(uint32_t value) {
-#if __CUDA_ARCH__ >= 800
-  return __reduce_add_sync(kFullWarpMask, value);
-#else
-#pragma unroll
-  for (int offset = 16; offset > 0; offset >>= 1) {
-    value += __shfl_xor_sync(kFullWarpMask, value, offset);
-  }
-  return value;
-#endif
-}
-
-__device__ __forceinline__ uint32_t warpReduceOr(uint32_t value) {
-#if __CUDA_ARCH__ >= 800
-  return __reduce_or_sync(kFullWarpMask, value);
-#else
-#pragma unroll
-  for (int offset = 16; offset > 0; offset >>= 1) {
-    value |= __shfl_xor_sync(kFullWarpMask, value, offset);
-  }
-  return value;
-#endif
-}
-
-__device__ __forceinline__ uint32_t warpReduceMin(uint32_t value) {
-#if __CUDA_ARCH__ >= 800
-  return __reduce_min_sync(kFullWarpMask, value);
-#else
-#pragma unroll
-  for (int offset = 16; offset > 0; offset >>= 1) {
-    value = min(value, __shfl_xor_sync(kFullWarpMask, value, offset));
-  }
-  return value;
-#endif
-}
-
-__device__ __forceinline__ uint32_t warpReduceMax(uint32_t value) {
-#if __CUDA_ARCH__ >= 800
-  return __reduce_max_sync(kFullWarpMask, value);
-#else
-#pragma unroll
-  for (int offset = 16; offset > 0; offset >>= 1) {
-    value = max(value, __shfl_xor_sync(kFullWarpMask, value, offset));
-  }
-  return value;
-#endif
-}
-
-// =============================================================================
-// Target atom bitsets
-// =============================================================================
-
-/**
- * @brief Set of target atoms, bit t meaning target atom t.
- *
- * Specialised on the atom capacity rather than looped over an array so that each
- * form is exactly as wide as it needs to be -- a bare uint32_t at 32 atoms, a
- * uint64_t at 64 -- and the 128-atom form never dynamically indexes a
- * register-resident array, which would spill it to local memory. The 32-atom
- * form matters because these masks are the DFS inner loop: on 32-bit ALUs every
- * 64-bit operation is two instructions, and popcount/ffs are two-instruction
- * emulations, so the narrow form roughly halves the work per mask operation and
- * halves the local-memory traffic of the per-depth candidate stack.
- *
- * setWord32(k, v) writes the k-th 32-bit lane group, which is how the label
- * matrix transpose assembles a mask out of per-root ballots.
- */
-template <std::size_t MaxAtoms> struct TargetMask;
-
-template <> struct TargetMask<32> {
-  uint32_t bits;
-
-  __device__ __forceinline__ void clear() { bits = 0; }
-  __device__ __forceinline__ bool empty() const { return bits == 0; }
-  __device__ __forceinline__ void set(int bit) { bits |= 1u << bit; }
-  __device__ __forceinline__ void reset(int bit) { bits &= ~(1u << bit); }
-  /// Branch-free conditional set: @p value must be 0 or 1.
-  __device__ __forceinline__ void setIf(int bit, uint64_t value) { bits |= static_cast<uint32_t>(value) << bit; }
-  __device__ __forceinline__ void setWord32(int, uint32_t value) { bits |= value; }
-  __device__ __forceinline__ int  popcount() const { return __popc(bits); }
-  /// Lowest set atom index; undefined if empty.
-  __device__ __forceinline__ int  lowest() const { return __ffs(static_cast<int>(bits)) - 1; }
-  __device__ __forceinline__ void clearLowest() { bits &= bits - 1; }
-  __device__ __forceinline__ void andEq(const TargetMask& other) { bits &= other.bits; }
-  __device__ __forceinline__ void andNotEq(const TargetMask& other) { bits &= ~other.bits; }
-};
-
-template <> struct TargetMask<64> {
-  uint64_t lo;
-
-  __device__ __forceinline__ void clear() { lo = 0; }
-  __device__ __forceinline__ bool empty() const { return lo == 0; }
-  __device__ __forceinline__ void set(int bit) { lo |= 1ULL << bit; }
-  __device__ __forceinline__ void reset(int bit) { lo &= ~(1ULL << bit); }
-  /// Branch-free conditional set: @p value must be 0 or 1.
-  __device__ __forceinline__ void setIf(int bit, uint64_t value) { lo |= value << bit; }
-  __device__ __forceinline__ void setWord32(int word, uint32_t value) {
-    lo |= static_cast<uint64_t>(value) << (32 * word);
-  }
-  __device__ __forceinline__ int  popcount() const { return __popcll(lo); }
-  /// Lowest set atom index; undefined if empty.
-  __device__ __forceinline__ int  lowest() const { return __ffsll(static_cast<long long>(lo)) - 1; }
-  __device__ __forceinline__ void clearLowest() { lo &= lo - 1; }
-  __device__ __forceinline__ void andEq(const TargetMask& other) { lo &= other.lo; }
-  __device__ __forceinline__ void andNotEq(const TargetMask& other) { lo &= ~other.lo; }
-};
-
-template <> struct TargetMask<128> {
-  uint64_t lo;
-  uint64_t hi;
-
-  __device__ __forceinline__ void clear() { lo = hi = 0; }
-  __device__ __forceinline__ bool empty() const { return (lo | hi) == 0; }
-  __device__ __forceinline__ void set(int bit) {
-    if (bit < 64) {
-      lo |= 1ULL << bit;
-    } else {
-      hi |= 1ULL << (bit - 64);
-    }
-  }
-  __device__ __forceinline__ void reset(int bit) {
-    if (bit < 64) {
-      lo &= ~(1ULL << bit);
-    } else {
-      hi &= ~(1ULL << (bit - 64));
-    }
-  }
-  /// Branch-free conditional set: @p value must be 0 or 1.
-  __device__ __forceinline__ void setIf(int bit, uint64_t value) {
-    if (bit < 64) {
-      lo |= value << bit;
-    } else {
-      hi |= value << (bit - 64);
-    }
-  }
-  __device__ __forceinline__ void setWord32(int word, uint32_t value) {
-    if (word < 2) {
-      lo |= static_cast<uint64_t>(value) << (32 * word);
-    } else {
-      hi |= static_cast<uint64_t>(value) << (32 * (word - 2));
-    }
-  }
-  __device__ __forceinline__ int popcount() const { return __popcll(lo) + __popcll(hi); }
-  /// Lowest set atom index; undefined if empty.
-  __device__ __forceinline__ int lowest() const {
-    return lo != 0 ? __ffsll(static_cast<long long>(lo)) - 1 : __ffsll(static_cast<long long>(hi)) + 63;
-  }
-  __device__ __forceinline__ void clearLowest() {
-    if (lo != 0) {
-      lo &= lo - 1;
-    } else {
-      hi &= hi - 1;
-    }
-  }
-  __device__ __forceinline__ void andEq(const TargetMask& other) {
-    lo &= other.lo;
-    hi &= other.hi;
-  }
-  __device__ __forceinline__ void andNotEq(const TargetMask& other) {
-    lo &= ~other.lo;
-    hi &= ~other.hi;
-  }
 };
 
 // =============================================================================
@@ -339,71 +157,22 @@ template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms> struct WarpShar
   AdjacencyEntry targetAdjacency[kWarpsPerBlock][MaxTargetAtoms];
   AdjacencyEntry targetAdjacencyAlt[kWarpsPerBlock][MaxTargetAtoms];
   /// Transposed label matrix: the target atoms compatible with each query atom.
-  Mask          queryAtomCandidates[kWarpsPerBlock][MaxQueryAtoms];
+  Mask           queryAtomCandidates[kWarpsPerBlock][MaxQueryAtoms];
   /// Per query atom, its back edges, kBackEdge*-encoded.
-  unsigned char backEdges[kWarpsPerBlock][MaxQueryAtoms][kMaxBondsPerAtom];
-  unsigned char backEdgeCounts[kWarpsPerBlock][MaxQueryAtoms];  ///< Valid entries in backEdges[w][q].
-  int           matchCount[kWarpsPerBlock];                     ///< Embeddings found for the warp's pair.
-  int           reportedCount[kWarpsPerBlock];                  ///< Of those, how many fit in the output buffer.
+  unsigned char  backEdges[kWarpsPerBlock][MaxQueryAtoms][kMaxBondsPerAtom];
+  unsigned char  backEdgeCounts[kWarpsPerBlock][MaxQueryAtoms];  ///< Valid entries in backEdges[w][q].
+  int            matchCount[kWarpsPerBlock];                     ///< Embeddings found for the warp's pair.
+  int            reportedCount[kWarpsPerBlock];                  ///< Of those, how many fit in the output buffer.
 };
 
-/**
- * @brief Per-SM shared memory budget assumed when choosing minBlocksPerSM.
- *
- * Hopper and datacenter Blackwell (sm_90/100/103) have 228 KB per SM; everything
- * else is modelled as A100's 164 KB, deliberately including the architectures
- * with less (Turing 64 KB, Volta 96 KB, consumer Ampere/Ada/Blackwell 100 KB).
- * ptxas does not validate .minnctapersm against shared memory, so on those an
- * unreachable ask costs nothing at runtime -- occupancy just lands where shared
- * memory puts it -- but it keeps the register cap as tight as the tuned
- * configuration allows. Modelling the 228 KB parts does matter: the smaller
- * assumed budget under-asks for the 128-atom shapes there, and the relaxed
- * register cap can drop real occupancy below what shared memory allows.
- */
-constexpr std::size_t sharedBudgetPerSMBytes() {
-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900) && (__CUDA_ARCH__ < 1200)
-  return 228 * 1024;
-#else
-  return 164 * 1024;
-#endif
-}
-
-/**
- * @brief Max resident threads per SM, from the CUDA occupancy tables.
- *
- * Unlike shared memory, ptxas validates .minnctapersm against this limit and
- * fails the build when minBlocks * kBlockSize exceeds it, so minBlocksPerSM
- * must clamp by it.
- */
-constexpr int maxThreadsPerSM() {
-#if !defined(__CUDA_ARCH__)
-  return 2048;  // Host pass; the value is never used.
-#elif __CUDA_ARCH__ == 750
-  return 1024;  // Turing
-#elif (__CUDA_ARCH__ >= 860 && __CUDA_ARCH__ < 900) || __CUDA_ARCH__ >= 1200
-  return 1536;  // Consumer Ampere/Ada, Orin, consumer Blackwell
-#else
-  return 2048;  // Volta, A100, Hopper, datacenter Blackwell
-#endif
-}
-
-/**
- * @brief Second __launch_bounds__ argument: CTAs this kernel should fit per SM.
- *
- * Eight resident CTAs is the occupancy the search is tuned at, and asking for it
- * also caps the compiler at 32 registers per thread; the two go together.
- * WarpSharedState is the kernel's only shared allocation, so whether a given
- * count fits is decided by its size against the shared budget, further clamped
- * by the SM thread limit where that is the binding constraint. The 128-atom
- * target specialisations cannot reach eight at any register count -- their
- * adjacency tables alone are too large -- so they ask for what fits.
- */
+/// Second __launch_bounds__ argument for the DFS kernels: eight resident CTAs
+/// is the occupancy the search is tuned at, clamped to what WarpSharedState --
+/// the kernels' only shared allocation -- and the SM thread limit allow (see
+/// src/subgraph/occupancy.cuh). The 128-atom target specialisations cannot
+/// reach eight at any register count -- their adjacency tables alone are too
+/// large -- so they ask for what fits.
 template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms> constexpr int minBlocksPerSM() {
-  constexpr std::size_t kBySharedMem =
-    sharedBudgetPerSMBytes() / sizeof(WarpSharedState<MaxTargetAtoms, MaxQueryAtoms>);
-  constexpr std::size_t kByThreads = maxThreadsPerSM() / kBlockSize;
-  constexpr std::size_t kResident  = kBySharedMem < kByThreads ? kBySharedMem : kByThreads;
-  return kResident >= 8 ? 8 : (kResident < 1 ? 1 : static_cast<int>(kResident));
+  return nvMolKit::minBlocksPerSM<sizeof(WarpSharedState<MaxTargetAtoms, MaxQueryAtoms>), kBlockSize, 8>();
 }
 
 // =============================================================================
@@ -469,10 +238,11 @@ __device__ __forceinline__ TargetMask<MaxAtoms> neighborsMatchingBondMask(uint64
 // =============================================================================
 
 /**
- * @brief The target atoms query atom @p depth may still map to.
+ * @brief The target atoms query atom @p depth may still map to: the candidates
+ *        oracle handed to nvMolKit::dfsFromRoots.
  *
- * Evaluates the intersection given at the top of this file, in four shapes,
- * cheapest first:
+ * Evaluates the intersection described in src/subgraph/warp_dfs.cuh, in four
+ * shapes, cheapest first:
  *   - chain depth: the only back edge goes to depth-1, whose target atom the
  *     caller passes as @p prevTargetAtom, so the back-edge table is not read;
  *   - Uniform: every back edge intersects targetAdjacency;
@@ -787,8 +557,8 @@ struct DfsPairOutput {
 /**
  * @brief One warp searches one target/query pair.
  *
- * Builds the pair's three lookup tables, then backtracks from each root target
- * atom the lane owns.
+ * Builds the pair's three lookup tables, then runs nvMolKit::dfsFromRoots over
+ * each lane's roots, with the output mode expressed as the terminal handler.
  *
  * The caller must have decoded the pair and pointed @p labelWords at that pair's
  * label matrix. All 32 lanes of the warp must call this.
@@ -898,7 +668,8 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
   if (lastDepth == 0) {
     // Single-atom query: no bonds to satisfy, so every candidate root is already
     // a complete embedding. Exits before the bond analysis and adjacency build,
-    // none of whose output it would read.
+    // none of whose output it would read. (dfsFromRoots requires lastDepth >= 1,
+    // so single-atom queries are the frontend's job by contract.)
     __syncwarp();  // The transpose's lane-0 shared writes.
     Mask     roots     = buildLaneRoots();
     uint32_t laneTotal = 0;
@@ -930,98 +701,50 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
   buildTargetAdjacency<MaxTargetAtoms, MaxQueryAtoms>(shared, warp, lane, target, numTargetAtoms, plan);
   __syncwarp();
 
-  Mask     roots     = buildLaneRoots();
   uint32_t laneTotal = 0;
 
-  {
-    // The lane-local stack: mapping[d] is the target atom assigned to query atom
-    // d, remaining[d] the candidates at depth d not yet tried, and used the
-    // target atoms taken by depths 0..depth-1, which keeps the mapping injective.
-    Mask          remaining[MaxQueryAtoms];
-    unsigned char mapping[MaxQueryAtoms];
+  auto candidatesAt = [&](int depth, const unsigned char* mapping, const Mask& used, int prevTargetAtom) -> Mask {
+    return buildCandidates<MaxTargetAtoms,
+                           MaxQueryAtoms>(shared, warp, depth, mapping, used, query, plan, prevTargetAtom);
+  };
 
-    while (!roots.empty()) {
-      // Restart with query atom 0 anchored on the lane's next root.
-      const int rootAtom = roots.lowest();
-      roots.clearLowest();
-
-      Mask used;
-      used.clear();
-      used.set(rootAtom);
-      mapping[0] = static_cast<unsigned char>(rootAtom);
-
-      int depth = 1;
-      remaining[1] =
-        buildCandidates<MaxTargetAtoms, MaxQueryAtoms>(shared, warp, 1, mapping, used, query, plan, rootAtom);
-      bool rootDone = false;  // Stop this root, move to the lane's next one.
-      bool pairDone = false;  // Stop the lane entirely; more work cannot change its answer.
-
-      while (depth >= 1) {
-        if (depth == lastDepth) {
-          // Nothing deeper constrains the last query atom, so every remaining
-          // candidate completes a distinct embedding. Consume the whole bitset,
-          // then fall through to the pop below with this depth emptied.
-          if constexpr (Mode == DfsOutputMode::Count) {
-            laneTotal += static_cast<uint32_t>(remaining[depth].popcount());
-            // A lane that has already reached the pair limit on its own roots
-            // cannot change the clamped answer, so it stops. Lanes cannot see
-            // each other's partial totals mid-search without a warp collective
-            // in divergent code, so the other lanes run to exhaustion.
-            if (hasLimit && laneTotal >= static_cast<uint32_t>(limit)) {
-              pairDone = true;
-            }
-          } else if constexpr (Mode == DfsOutputMode::Paint) {
-            // Paint only asks whether the root can start an embedding, so the
-            // first hit settles the root and skips the rest of its subtree.
-            if (!remaining[depth].empty()) {
-              atomicOr(&out.paint.recursiveBits[out.paint.outputPairIdx * out.paint.maxTargetAtoms + rootAtom],
-                       1u << out.paint.patternId);
-              rootDone = true;
-            }
-          } else {
-            Mask terminal = remaining[depth];
-            while (!terminal.empty()) {
-              const int terminalAtom = terminal.lowest();
-              terminal.clearLowest();
-              if (emitMapping(mapping, terminalAtom)) {
-                pairDone = true;
-                break;
-              }
-            }
-          }
-          remaining[depth].clear();
-          if (rootDone || pairDone) {
-            break;
-          }
-        }
-
-        if (remaining[depth].empty()) {
-          // Exhausted: pop, releasing the atom the depth above had taken. Depth
-          // 0 is the root, which the outer loop advances, so the stack bottoms
-          // out at depth 1.
-          --depth;
-          if (depth >= 1) {
-            used.reset(mapping[depth]);
-          }
-          continue;
-        }
-
-        // Otherwise commit the lowest untried candidate and descend, building
-        // the next depth's candidate set under the extended mapping.
-        const int candidate = remaining[depth].lowest();
-        remaining[depth].clearLowest();
-        mapping[depth] = static_cast<unsigned char>(candidate);
-        used.set(candidate);
-        ++depth;
-        remaining[depth] =
-          buildCandidates<MaxTargetAtoms, MaxQueryAtoms>(shared, warp, depth, mapping, used, query, plan, candidate);
+  // The output mode as a terminal handler; every bit of @p terminals completes
+  // a distinct embedding with mapping[0..lastDepth-1].
+  auto onTerminal = [&](Mask terminals, const unsigned char* mapping) -> DfsTerminalVerdict {
+    DfsTerminalVerdict verdict{false, false};
+    if constexpr (Mode == DfsOutputMode::Count) {
+      laneTotal += static_cast<uint32_t>(terminals.popcount());
+      // A lane that has already reached the pair limit on its own roots
+      // cannot change the clamped answer, so it stops. Lanes cannot see
+      // each other's partial totals mid-search without a warp collective
+      // in divergent code, so the other lanes run to exhaustion.
+      if (hasLimit && laneTotal >= static_cast<uint32_t>(limit)) {
+        verdict.laneDone = true;
       }
-
-      if (pairDone) {
-        break;
+    } else if constexpr (Mode == DfsOutputMode::Paint) {
+      // Paint only asks whether the root can start an embedding, so the
+      // first hit settles the root and skips the rest of its subtree.
+      if (!terminals.empty()) {
+        atomicOr(&out.paint.recursiveBits[out.paint.outputPairIdx * out.paint.maxTargetAtoms + mapping[0]],
+                 1u << out.paint.patternId);
+        verdict.rootDone = true;
+      }
+    } else {
+      while (!terminals.empty()) {
+        const int terminalAtom = terminals.lowest();
+        terminals.clearLowest();
+        if (emitMapping(mapping, terminalAtom)) {
+          verdict.laneDone = true;
+          break;
+        }
       }
     }
-  }
+    return verdict;
+  };
+
+  dfsFromRoots<static_cast<int>(MaxQueryAtoms)>(buildLaneRoots(), lastDepth, candidatesAt, onTerminal, [] {
+    return false;
+  });
 
   finishPair(laneTotal);
 }
