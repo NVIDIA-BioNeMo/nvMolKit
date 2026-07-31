@@ -19,13 +19,11 @@
 #include <cstdint>
 
 #include "src/mcs/fmcs_cuda/fmcs_seed.cuh"
+#include "src/mcs/fmcs_cuda/fmcs_topology.cuh"
 #include "src/mcs/mcs_common/mcs_cooperative_copy.cuh"
 
 namespace mcs {
 namespace fmcs {
-
-constexpr int           kGrowBondEndpointShift = 16;
-constexpr std::uint32_t kGrowBondEndpointMask  = 0xFFFFu;
 
 template <int maxAtoms, int maxBonds>
 __device__ __forceinline__ void seedAddNewBondWithinThread(Seed<maxAtoms, maxBonds>& seed, const NewBond& bond) {
@@ -68,10 +66,10 @@ __device__ __forceinline__ void seedAddNewBondWithinThread(Seed<maxAtoms, maxBon
 /// and clamps @p outCount to @p maxNewBonds (slots beyond that bound
 /// are not written).  No I/O ordering on @p outBonds is guaranteed --
 /// the order depends on lane race outcomes.
-template <int maxAtoms, int maxBonds, class QueryTopology, class GroupT>
+template <int maxAtoms, int maxBonds, class GroupT>
 __device__ __forceinline__ bool fillNewBondsCooperative(const GroupT&                   group,
                                                         const Seed<maxAtoms, maxBonds>& seed,
-                                                        const QueryTopology&            queryTopology,
+                                                        const DeviceCsrView&            queryTopology,
                                                         NewBond*                        outBonds,
                                                         int*                            outCount,
                                                         int                             maxNewBonds) {
@@ -96,8 +94,8 @@ __device__ __forceinline__ bool fillNewBondsCooperative(const GroupT&           
 
     // Decode this query bond's endpoints.
     const std::uint32_t queryEndpoints = queryTopology.bondEndpoints[q];
-    const int           queryEndpointU = static_cast<int>(queryEndpoints >> kGrowBondEndpointShift);
-    const int           queryEndpointV = static_cast<int>(queryEndpoints & kGrowBondEndpointMask);
+    const int           queryEndpointU = static_cast<int>(queryEndpoints >> kBondEndpointShift);
+    const int           queryEndpointV = static_cast<int>(queryEndpoints & kBondEndpointMask);
 
     // Bond is a "new boundary" candidate iff at least one endpoint
     // was added in the most recent grow step.
@@ -153,10 +151,12 @@ __device__ __forceinline__ bool fillNewBondsCooperative(const GroupT&           
 /// across all lanes of @p group), and within each iteration the only
 /// truly group-parallel step is the @c warpCopy of @c parent into
 /// @p childWorkspace.  Lane 0 then patches in the singleton bond /
-/// atom; the per-bond match call is whatever @p matchFn does (when
-/// the kernel passes @ref matchIncrementalFastCooperative the inner
-/// target-bond scan IS lane-parallel); @p childSink is typically lane
-/// 0 only (cache.insert + queue.push).
+/// atom; the per-bond match call is whatever @p matchFn does.  The
+/// kernel's callback may try @ref tryMatchIncrementalGreedyCooperative,
+/// but it must own the exact fallback too: a greedy miss alone must not
+/// prune the bond.  The greedy helper's inner target-bond scan is
+/// lane-parallel; @p childSink is typically lane 0 only (cache.insert +
+/// queue.push).
 ///
 /// In other words: this function is cooperative only for the
 /// parent->child copy and for delegating to its callbacks; it does
