@@ -274,6 +274,7 @@ Guides
 
    similarity
    forcefield
+   fire_minimizer
    autotune
    agent_skill
 
