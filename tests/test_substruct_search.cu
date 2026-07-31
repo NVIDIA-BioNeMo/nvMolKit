@@ -354,6 +354,32 @@ TEST_P(SubstructureSearchTest, DifferentMoleculeSizes) {
   compareWithRDKit(results, targetMols, queryMols, true);
 }
 
+TEST_P(SubstructureSearchTest, SizeBracketsRingWithLargeHydrocarbon) {
+  // Cyclohexane with a long alkane tail, sized to land in each target bracket
+  // (<=32, <=64, <=128 atoms), against queries sized for each query bracket
+  // (<=16, <=32, <=64 atoms). The 40-carbon chain query cannot fit in the
+  // 28-atom target at all, matches the 50-atom target only by threading
+  // through the ring, and matches the 100-atom target's tail directly -- so
+  // every (target bracket, query bracket) pair exercises a distinct outcome.
+  const std::string ring = "C1CCCCC1";
+
+  std::vector<std::unique_ptr<RDKit::ROMol>> targetMols;
+  std::vector<std::unique_ptr<RDKit::ROMol>> queryMols;
+  parseMolecules({ring + std::string(22, 'C'),   // 28 atoms: 32-target bracket
+                  ring + std::string(44, 'C'),   // 50 atoms: 64-target bracket
+                  ring + std::string(94, 'C')},  // 100 atoms: 128-target bracket
+                 {ring,                          // 6 atoms: 16-query bracket
+                  std::string(20, 'C'),          // 20 atoms: 32-query bracket
+                  std::string(40, 'C')},         // 40 atoms: 64-query bracket
+                 targetMols,
+                 queryMols);
+
+  SubstructSearchResults results;
+  getSubstructMatches(getRawPtrs(targetMols), getRawPtrs(queryMols), results, algorithm(), stream_.stream());
+
+  compareWithRDKit(results, targetMols, queryMols, true);
+}
+
 TEST_P(SubstructureSearchTest, MultiAtomQuery) {
   std::vector<std::unique_ptr<RDKit::ROMol>> targetMols;
   std::vector<std::unique_ptr<RDKit::ROMol>> queryMols;
