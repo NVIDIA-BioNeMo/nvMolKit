@@ -67,7 +67,6 @@ class SubstructSearchConfig:
         uniquify: If True, remove duplicate matches that differ only in
             atom enumeration order. Default False.
         gpuIds: GPU device IDs to use. ``None`` or empty list uses current device only.
-        algorithm: Matching backend, either ``"gsi"`` (default) or ``"dfs"``.
     """
 
     def __init__(
@@ -78,7 +77,7 @@ class SubstructSearchConfig:
         maxMatches: int = 0,
         uniquify: bool = False,
         gpuIds: list[int] | None = None,
-        algorithm: str = "gsi",
+        algorithm: str = "dfs",
     ) -> None:
         native = _NativeSubstructSearchConfig()
         native.batchSize = int(batchSize)
@@ -146,7 +145,12 @@ class SubstructSearchConfig:
 
     @property
     def algorithm(self) -> str:
-        """Matching backend: ``"gsi"`` or ``"dfs"``."""
+        """Internal: matching backend, ``"dfs"`` (default) or ``"gsi"``.
+
+        Not part of the public API -- exposed for benchmarking and testing
+        the two backends against each other, and may be removed once ``gsi``
+        is retired.
+        """
         return self._native.algorithm
 
     @algorithm.setter

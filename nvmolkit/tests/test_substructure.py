@@ -810,7 +810,7 @@ class TestSubstructSearchConfig:
         assert config.preprocessingThreads == -1  # -1 = autoselect
         assert config.maxMatches == 0  # 0 = unlimited (like RDKit)
         assert config.uniquify is False
-        assert config.algorithm == "gsi"
+        assert config.algorithm == "dfs"
 
     def test_config_modification(self):
         """Test configuration parameter modification."""
@@ -819,13 +819,13 @@ class TestSubstructSearchConfig:
         config.workerThreads = 4
         config.preprocessingThreads = 8
         config.maxMatches = 100
-        config.algorithm = "dfs"
+        config.algorithm = "gsi"
 
         assert config.batchSize == 512
         assert config.workerThreads == 4
         assert config.preprocessingThreads == 8
         assert config.maxMatches == 100
-        assert config.algorithm == "dfs"
+        assert config.algorithm == "gsi"
 
     def test_algorithm_rejects_unknown_value(self):
         """Test that only implemented high-level backends are accepted."""
