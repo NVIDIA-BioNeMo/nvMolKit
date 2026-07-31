@@ -71,6 +71,9 @@ import nvtx
 import pandas as pd
 from bench_utils import add_rdkit_max_seconds_arg, load_pickle, load_smarts, load_smiles, time_it_bounded
 from benchmark_timing import time_it as _time_it
+from rdkit import Chem
+from rdkit.Chem import rdSubstructLibrary
+
 from nvmolkit import autotune as nv_autotune
 from nvmolkit.substructure import (
     SubstructSearchConfig,
@@ -78,8 +81,6 @@ from nvmolkit.substructure import (
     getSubstructMatches,
     hasSubstructMatch,
 )
-from rdkit import Chem
-from rdkit.Chem import rdSubstructLibrary
 
 OPTUNA_AVAILABLE = nv_autotune.is_available()
 
@@ -353,7 +354,7 @@ def main():
     parser.add_argument(
         "--algorithm",
         choices=["gsi", "dfs"],
-        default="gsi",
+        default=None,
         help="nvmolkit matching backend (default: gsi)",
     )
     parser.add_argument(
@@ -416,7 +417,8 @@ def main():
         default=None,
         help=(
             "Path to a previously-saved SubstructSearchConfig JSON. "
-            "Overrides --batch_size/--workers/--prep_threads (and --num_gpus if gpuIds present in the file)."
+            "Overrides --batch_size/--workers/--prep_threads (and --num_gpus if gpuIds present in the file); "
+            "its algorithm is retained unless --algorithm is specified."
         ),
     )
     parser.add_argument(
@@ -519,8 +521,11 @@ def main():
         print(f"  SMARTS file: {args.smarts}")
         print(f"  Mode: {args.mode}")
         if not args.no_nvmolkit:
-            print(f"  nvmolkit config:")
-            print(f"    algorithm: {args.algorithm}")
+            print("  nvmolkit config:")
+            if args.autotune_load and args.algorithm is None:
+                print("    algorithm: from loaded config")
+            else:
+                print(f"    algorithm: {args.algorithm or 'gsi'}")
             print(f"    batch_size: {args.batch_size}")
             print(f"    num_gpus: {args.num_gpus}")
             print(f"    workers: {args.workers if args.workers >= 0 else 'auto'}")
@@ -547,7 +552,7 @@ def main():
                 "prep_threads": args.prep_threads,
                 "mode": args.mode,
                 "num_gpus": args.num_gpus,
-                "algorithm": args.algorithm,
+                "algorithm": args.algorithm or "gsi",
             }
         ]
 
@@ -557,8 +562,8 @@ def main():
     for config_row in config_rows:
         smarts_path = config_row["smarts"]
         mode = config_row["mode"]
-        row_algorithm = config_row.get("algorithm", args.algorithm)
-        algorithm = args.algorithm if pd.isna(row_algorithm) else str(row_algorithm).lower()
+        row_algorithm = config_row.get("algorithm", args.algorithm or "gsi")
+        algorithm = "gsi" if pd.isna(row_algorithm) else str(row_algorithm).lower()
         if algorithm not in {"gsi", "dfs"}:
             print(f"Error: algorithm must be 'gsi' or 'dfs', got {row_algorithm!r}")
             sys.exit(1)
@@ -567,8 +572,11 @@ def main():
         print(f"  SMARTS file: {smarts_path}")
         print(f"  Mode: {mode}")
         if not args.no_nvmolkit:
-            print(f"  nvmolkit config:")
-            print(f"    algorithm: {algorithm}")
+            print("  nvmolkit config:")
+            if args.autotune_load and args.algorithm is None:
+                print("    algorithm: from loaded config")
+            else:
+                print(f"    algorithm: {algorithm}")
             print(f"    batch_size: {config_row['batch_size']}")
             print(f"    num_gpus: {config_row['num_gpus']}")
             print(f"    workers: {config_row['workers'] if config_row['workers'] >= 0 else 'auto'}")
@@ -618,7 +626,8 @@ def main():
                     if not config.gpuIds:
                         config.gpuIds = gpu_ids
                     print(
-                        f"  Loaded: batchSize={config.batchSize}, workerThreads={config.workerThreads}, "
+                        f"  Loaded: algorithm={config.algorithm}, batchSize={config.batchSize}, "
+                        f"workerThreads={config.workerThreads}, "
                         f"preprocessingThreads={config.preprocessingThreads}, gpuIds={list(config.gpuIds)}"
                     )
                 elif args.autotune:
@@ -669,7 +678,9 @@ def main():
                     config.gpuIds = gpu_ids
                     if args.max_matches > 0:
                         config.maxMatches = args.max_matches
-                config.algorithm = algorithm
+                if not args.autotune_load or args.algorithm is not None:
+                    config.algorithm = algorithm
+                algorithm = config.algorithm
 
                 ran_nvmolkit = True
                 torch_module = torch
