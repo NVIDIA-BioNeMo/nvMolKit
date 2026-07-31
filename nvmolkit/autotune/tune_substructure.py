@@ -64,8 +64,8 @@ def _default_substruct_search_space(num_gpus: int, cpus: int) -> dict:
     at trial sampling time by clamping ``preprocessingThreads`` to whatever
     cores are left after ``workerThreads`` is chosen.
 
-    * ``batchSize``: stepped int range in multiples of 128 (kernels are
-      tile-tuned for these sizes); stepping preserves numeric ordering for TPE.
+    * ``batchSize``: target-query pairs per mini-batch, log-uniform since the
+      useful range spans two orders of magnitude.
     * ``workerThreads`` (per-GPU): max = ``min(8, cpus // num_gpus)``.
       8 is the empirical point of diminishing returns; the physical-core
       floor prevents oversubscribing across GPUs.
@@ -74,7 +74,7 @@ def _default_substruct_search_space(num_gpus: int, cpus: int) -> dict:
     """
     per_gpu_worker_max = max(1, min(8, cpus // max(1, num_gpus)))
     return {
-        "batchSize": (128, 1024, 128),
+        "batchSize": (128, 8192, "log"),
         "workerThreads": (1, per_gpu_worker_max),
         "preprocessingThreads": (1, cpus),
     }
@@ -121,7 +121,7 @@ def tune_substructure(
     gpuIds: Optional[Iterable[int]] = None,
     calibration_set: Optional[Iterable[int]] = None,
     calibration_fraction: float = 0.1,
-    calibration_max_size: int = 2000,
+    calibration_max_size: int = 50_000,
     target_seconds_per_trial: float = 10.0,
     n_trials: int = 30,
     search_space_overrides: Optional[dict[str, Any]] = None,

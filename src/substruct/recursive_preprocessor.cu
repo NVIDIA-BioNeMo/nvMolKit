@@ -167,6 +167,18 @@ void LeafSubpatterns::syncToDevice(cudaStream_t stream) {
     return;
   }
   patternsDevice.copyFromHost(patternsHost, stream);
+
+  // Upload the immutable pattern table once.
+  for (int depth = 0; depth <= kMaxSmartsNestingDepth; ++depth) {
+    const auto& entries      = allQueriesPatternsAtDepth[depth];
+    auto&       entriesOnGpu = allQueriesPatternsAtDepthDevice[depth];
+    entriesOnGpu.setStream(stream);
+    if (entries.empty()) {
+      continue;
+    }
+    entriesOnGpu.resize(entries.size());
+    entriesOnGpu.copyFromHost(entries.data(), entries.size());
+  }
 }
 
 void RecursivePatternPreprocessor::buildPatterns(const MoleculesHost& queriesHost) {
@@ -230,14 +242,9 @@ void RecursivePatternPreprocessor::preprocessMiniBatch(
       const size_t numPatternsInSubBatch = patternEnd - patternStart;
       const size_t numBlocksInSubBatch   = numTargetsInMiniBatch * numPatternsInSubBatch;
 
-      ScopedNvtxRange prepareRange("GPU: Upload pattern entries");
-      const int       bufferIdx = scratch.acquireBufferIndex();
-      scratch.waitForBuffer(bufferIdx);
-      scratch.ensureCapacity(bufferIdx, static_cast<int>(numPatternsInSubBatch));
-      for (size_t i = 0; i < numPatternsInSubBatch; ++i) {
-        scratch.patternsAtDepthHost[bufferIdx][i] = patternsForDepth[patternStart + i];
-      }
-      prepareRange.pop();
+      // Use the device-resident pattern table directly.
+      const BatchedPatternEntry* patternEntriesDevice =
+        leafSubpatterns_.allQueriesPatternsAtDepthDevice[currentDepth].data() + patternStart;
 
       const int    buffersPerBlock = gsiBuffersPerBlock;
       const size_t overflowNeeded  = numBlocksInSubBatch * buffersPerBlock * kOverflowEntriesPerBuffer;
@@ -250,13 +257,6 @@ void RecursivePatternPreprocessor::preprocessMiniBatch(
       if (scratch.labelMatrixBuffer.size() < labelMatrixNeeded) {
         scratch.labelMatrixBuffer.resize(static_cast<size_t>(labelMatrixNeeded * 1.5));
       }
-
-      if (scratch.patternEntries.size() < numPatternsInSubBatch) {
-        scratch.patternEntries.resize(static_cast<size_t>(numPatternsInSubBatch * 1.5));
-      }
-
-      scratch.patternEntries.copyFromHost(scratch.patternsAtDepthHost[bufferIdx].data(), numPatternsInSubBatch);
-      scratch.recordCopy(bufferIdx, scratch.patternEntries.stream());
 
       const uint32_t* recursiveBitsForLabel = (currentDepth > 0) ? miniBatchResults.recursiveMatchBits() : nullptr;
 
@@ -272,7 +272,7 @@ void RecursivePatternPreprocessor::preprocessMiniBatch(
       launchLabelMatrixPaintKernel(paintConfig,
                                    targetsDevice.view<MoleculeType::Target>(),
                                    leafSubpatterns_.view(),
-                                   scratch.patternEntries.data(),
+                                   patternEntriesDevice,
                                    static_cast<int>(numPatternsInSubBatch),
                                    numBlocksInSubBatch,
                                    numQueries,
@@ -289,7 +289,7 @@ void RecursivePatternPreprocessor::preprocessMiniBatch(
                                  algorithm,
                                  targetsDevice.view<MoleculeType::Target>(),
                                  leafSubpatterns_.view(),
-                                 scratch.patternEntries.data(),
+                                 patternEntriesDevice,
                                  static_cast<int>(numPatternsInSubBatch),
                                  numBlocksInSubBatch,
                                  miniBatchResults.recursiveMatchBits(),
