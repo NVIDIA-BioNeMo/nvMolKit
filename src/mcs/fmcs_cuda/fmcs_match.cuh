@@ -318,7 +318,6 @@ __device__ __forceinline__ bool tryMatchIncrementalGreedyCooperative(
   return true;
 }
 
-<<<<<<< HEAD
 __device__ __forceinline__ bool findTargetBondBetweenAtomsWithinThread(const int                    targetAtomA,
                                                                        const int                    targetAtomB,
                                                                        const int                    queryBondIdx,
@@ -614,11 +613,6 @@ __device__ __forceinline__ bool findMappedQueryNeighborWithinThread(
   const int                                       depth,
   const int                                       queryAtomIdx,
   int&                                            outNeighborOrderPos) {
-  using SeedT                    = Seed<maxAtoms, maxBonds>;
-  using BondWord                 = typename SeedT::bond_word_type;
-  constexpr int kBondBitsPerWord = SeedT::kBondBitsPerWord;
-  constexpr int kBondWords       = SeedT::kBondWords;
-
   outNeighborOrderPos = -1;
   const int begin     = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx]);
   const int end       = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx + 1]);
@@ -652,11 +646,6 @@ __device__ __forceinline__ bool substructurePartialEdgeConsistentWithinThread(
   const int                                       depth,
   const int                                       queryAtomIdx,
   const int                                       targetAtomIdx) {
-  using SeedT                    = Seed<maxAtoms, maxBonds>;
-  using BondWord                 = typename SeedT::bond_word_type;
-  constexpr int kBondBitsPerWord = SeedT::kBondBitsPerWord;
-  constexpr int kBondWords       = SeedT::kBondWords;
-
   const int begin = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx]);
   const int end   = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx + 1]);
   for (int adjIdx = begin; adjIdx < end; ++adjIdx) {
@@ -919,8 +908,6 @@ __device__ __forceinline__ bool matchSeedWithSubstructureFallbackCooperative(
   return ok;
 }
 
-=======
->>>>>>> main
 }  // namespace fmcs
 }  // namespace mcs
 

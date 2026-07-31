@@ -92,8 +92,8 @@ target_link_libraries(test_fmcs_match PRIVATE mcs_fmcs_foundations
 add_executable(test_fmcs_substructure test_fmcs_substructure.cu)
 target_include_directories(test_fmcs_substructure
                            PRIVATE ${CMAKE_SOURCE_DIR}/src/mcs)
-target_link_libraries(test_fmcs_substructure
-                      PRIVATE mcs_fmcs_foundations device_vector)
+target_link_libraries(test_fmcs_substructure PRIVATE mcs_fmcs_foundations
+                                                     device_vector)
 
 add_executable(test_openmp_helpers test_openmp_helpers.cpp)
 target_link_libraries(test_openmp_helpers PRIVATE openmp_helpers
