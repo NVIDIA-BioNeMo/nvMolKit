@@ -32,7 +32,6 @@ Example:
 """
 
 import argparse
-import multiprocessing
 import os
 import pickle
 import sys
@@ -41,7 +40,7 @@ from typing import List, Tuple
 
 import pandas as pd
 import torch
-from bench_utils import embed_and_jitter, load_smiles
+from bench_utils import available_cpu_count, embed_and_jitter, load_smiles
 from rdkit import Chem
 from rdkit.Chem import TorsionFingerprints
 
@@ -89,7 +88,7 @@ def generate_conformers_batch(
     """
     if num_confs < 2:
         raise ValueError(f"num_confs must be >= 2 for TFD, got {num_confs}")
-    workers = num_workers if num_workers > 0 else max(1, multiprocessing.cpu_count() // 2)
+    workers = num_workers if num_workers > 0 else max(1, available_cpu_count() // 2)
     return embed_and_jitter(
         mols,
         confs_per_mol=num_confs,

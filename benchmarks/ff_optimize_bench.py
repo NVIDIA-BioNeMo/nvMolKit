@@ -41,6 +41,7 @@ import torch
 from bench_utils import (
     Deadline,
     add_rdkit_max_seconds_arg,
+    available_cpu_count,
     clone_mols_with_conformers,
     embed_and_jitter,
     load_pickle,
@@ -50,10 +51,11 @@ from bench_utils import (
     throughput_per_s,
     time_it,
 )
+from rdkit import Chem
+from rdkit.Chem import AllChem
+
 from nvmolkit import autotune as nv_autotune
 from nvmolkit.types import HardwareOptions
-from rdkit import Chem
-from rdkit.Chem import AllChem, rdDistGeom
 
 OPTUNA_AVAILABLE = nv_autotune.is_available()
 
@@ -273,6 +275,12 @@ def main() -> None:
         default=1,
         help="Threads passed to RDKit FF optimizer via numThreads (default: 1)",
     )
+    parser.add_argument(
+        "--conf_gen_workers",
+        type=int,
+        default=0,
+        help="Processes used to generate base conformers (default: 0 = all available CPUs)",
+    )
     add_rdkit_max_seconds_arg(
         parser,
         extra_help="The RDKit FF optimizer loop stops at the next molecule boundary once the budget is hit.",
@@ -391,6 +399,8 @@ def main() -> None:
     print(f"  Validate (energy diffs): {args.validate}")
     print(f"  Run nvmolkit: {not args.no_nvmolkit}")
     print(f"  Run RDKit: {not args.no_rdkit}")
+    conf_gen_workers = args.conf_gen_workers if args.conf_gen_workers > 0 else available_cpu_count()
+    print(f"  Conformer generation workers: {conf_gen_workers}")
     if not args.no_rdkit:
         print(f"  RDKit threads: {args.rdkit_threads}")
     if not args.no_nvmolkit:
@@ -402,24 +412,33 @@ def main() -> None:
 
     print("\nLoading molecules...")
     if args.smiles:
-        raw_mols = load_smiles(args.smiles, args.num_mols, args.sanitize, seed=args.seed)
+        raw_mols = load_smiles(args.smiles, args.num_mols, args.sanitize, seed=args.seed, keep_buffer=True)
     elif args.sdf:
-        raw_mols = load_sdf(args.sdf, args.num_mols, seed=args.seed, sanitize=args.sanitize)
+        raw_mols = load_sdf(args.sdf, args.num_mols, seed=args.seed, sanitize=args.sanitize, keep_buffer=True)
     else:
-        raw_mols = load_pickle(args.pickle, args.num_mols, seed=args.seed)
+        raw_mols = load_pickle(args.pickle, args.num_mols, seed=args.seed, keep_buffer=True)
     if not raw_mols:
         print("Error: No valid molecules loaded")
         sys.exit(1)
 
     print("\nPreparing molecules (AddHs / sanitize / clear conformers)...")
     mols = prep_mols(raw_mols)
+    if args.ff == "mmff":
+        mols = [mol for mol in mols if AllChem.MMFFHasAllMoleculeParams(mol)]
+    else:
+        mols = [mol for mol in mols if AllChem.UFFHasAllMoleculeParams(mol)]
+    if args.num_mols > 0:
+        mols = mols[: args.num_mols]
     if not mols:
-        print("Error: No molecules survived preparation")
+        print(f"Error: No molecules survived preparation with {args.ff.upper()} parameters")
         sys.exit(1)
     print(f"  {len(mols)} molecules ready")
 
-    print(f"\nEmbedding {args.confs_per_mol} conformer(s) per molecule with RDKit ETKDGv3...")
-    mols = embed_and_jitter(mols, args.confs_per_mol, seed=args.seed, num_workers=args.rdkit_threads)
+    print(
+        f"\nEmbedding one RDKit ETKDGv3 base conformer per molecule "
+        f"with {conf_gen_workers} processes, then jittering to {args.confs_per_mol}..."
+    )
+    mols = embed_and_jitter(mols, args.confs_per_mol, seed=args.seed, num_workers=conf_gen_workers)
     if not mols:
         print("Error: No molecules retained after embedding")
         sys.exit(1)
