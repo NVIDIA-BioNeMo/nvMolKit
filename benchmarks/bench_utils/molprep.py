@@ -15,6 +15,7 @@
 
 """Molecule preparation helpers shared across nvMolKit benchmarks."""
 
+import os
 import random
 from functools import partial
 
@@ -26,6 +27,17 @@ from tqdm.contrib.concurrent import process_map
 # Manually tuned so the per-conformer jitter recreates an ETKDGv3-like pairwise RMSD spread
 JITTER_CENTER = 1.3
 JITTER_SPREAD = 0.6
+
+
+def available_cpu_count() -> int:
+    """Return CPUs available to this process across supported Python versions."""
+    process_cpu_count = getattr(os, "process_cpu_count", None)
+    if process_cpu_count is not None:
+        return process_cpu_count() or 1
+    try:
+        return len(os.sched_getaffinity(0))
+    except AttributeError:
+        return os.cpu_count() or 1
 
 
 def prep_mols(

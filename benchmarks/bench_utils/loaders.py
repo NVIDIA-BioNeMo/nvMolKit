@@ -23,6 +23,7 @@ source contains more entries than requested.
 import pickle
 import random
 from functools import partial
+from math import ceil
 from typing import Iterator
 
 from rdkit import Chem, RDLogger
@@ -33,7 +34,17 @@ def _mol_from_binary(binary_mol: bytes) -> Chem.Mol:
     return Chem.Mol(binary_mol)
 
 
-def load_pickle(filepath: str, max_count: int = 0, seed: int | None = None) -> list[Chem.Mol]:
+def _buffered_count(max_count: int) -> int:
+    """Return a 10% candidate reserve for a positive requested count."""
+    return max_count + max(1, ceil(max_count * 0.1)) if max_count > 0 else 0
+
+
+def load_pickle(
+    filepath: str,
+    max_count: int = 0,
+    seed: int | None = None,
+    keep_buffer: bool = False,
+) -> list[Chem.Mol]:
     """Load molecules from a pickle file containing a list of RDKit binary molecules.
 
     Args:
@@ -42,6 +53,7 @@ def load_pickle(filepath: str, max_count: int = 0, seed: int | None = None) -> l
         max_count: When positive and the source has more entries, draw a
             uniform random sample of this size before unpickling.
         seed: Optional seed for the sampling RNG.
+        keep_buffer: Return the 10% candidate reserve instead of trimming it.
 
     Returns:
         List of parsed RDKit molecules. The list is always shuffled
@@ -51,8 +63,9 @@ def load_pickle(filepath: str, max_count: int = 0, seed: int | None = None) -> l
     with open(filepath, "rb") as fh:
         binary_mols = pickle.load(fh)
     rng = random.Random(seed)
-    if max_count > 0 and len(binary_mols) > max_count:
-        binary_mols = rng.sample(binary_mols, max_count)
+    sample_count = _buffered_count(max_count) if keep_buffer else max_count
+    if sample_count > 0 and len(binary_mols) > sample_count:
+        binary_mols = rng.sample(binary_mols, sample_count)
     else:
         binary_mols = list(binary_mols)
         rng.shuffle(binary_mols)
@@ -94,6 +107,7 @@ def load_smiles(
     max_count: int = 0,
     sanitize: bool = True,
     seed: int | None = None,
+    keep_buffer: bool = False,
 ) -> list[Chem.Mol]:
     """Load and parse molecules from a SMILES file.
 
@@ -105,8 +119,15 @@ def load_smiles(
     The returned list is always shuffled (deterministic with ``seed``) so
     benches that consume a head slice get a representative cross-section
     rather than file-order bias (some upstream files are sorted by size).
+
+    Args:
+        filepath: Path to the SMILES file.
+        max_count: Maximum number of requested molecules; zero loads all.
+        sanitize: Sanitize molecules while parsing.
+        seed: Optional seed for reservoir sampling and shuffling.
+        keep_buffer: Return the 10% candidate reserve instead of trimming it.
     """
-    read_limit = int(max_count * 1.1) if max_count > 0 else 0
+    read_limit = _buffered_count(max_count)
     rng = random.Random(seed)
 
     if read_limit > 0:
@@ -135,7 +156,7 @@ def load_smiles(
         if parse_failures > 0:
             print(f"    ({parse_failures} parse failures)")
 
-    if max_count > 0 and len(mols) > max_count:
+    if not keep_buffer and max_count > 0 and len(mols) > max_count:
         mols = rng.sample(mols, max_count)
     else:
         rng.shuffle(mols)
@@ -179,15 +200,24 @@ def load_sdf(
     seed: int | None = None,
     removeHs: bool = False,
     sanitize: bool = True,
+    keep_buffer: bool = False,
 ) -> list[Chem.Mol]:
     """Load molecules from an SDF file with optional reservoir sampling.
 
     The returned list is always shuffled (deterministic with ``seed``) so
     benches that consume a head slice get a representative cross-section
     rather than file-order bias (some upstream files are sorted by size).
+
+    Args:
+        filepath: Path to the SDF file.
+        max_count: Maximum number of requested molecules; zero loads all.
+        seed: Optional seed for reservoir sampling and shuffling.
+        removeHs: Remove hydrogens while reading the SDF.
+        sanitize: Sanitize molecules while reading the SDF.
+        keep_buffer: Return the 10% candidate reserve instead of trimming it.
     """
     supplier = Chem.SDMolSupplier(filepath, removeHs=removeHs, sanitize=sanitize)
-    read_limit = int(max_count * 1.1) if max_count > 0 else 0
+    read_limit = _buffered_count(max_count)
     rng = random.Random(seed)
 
     parse_failures = 0
@@ -214,7 +244,7 @@ def load_sdf(
                 continue
             mols.append(mol)
 
-    if max_count > 0 and len(mols) > max_count:
+    if not keep_buffer and max_count > 0 and len(mols) > max_count:
         mols = rng.sample(mols, max_count)
     else:
         rng.shuffle(mols)

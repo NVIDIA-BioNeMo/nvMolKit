@@ -21,13 +21,12 @@ CPU GetConformerRMSMatrix across varying conformer counts.
 
 import argparse
 import csv
-import multiprocessing as mp
 import statistics
 import time
 from pathlib import Path
 
 import torch
-from bench_utils import Deadline, add_rdkit_max_seconds_arg, embed_and_jitter, load_smiles
+from bench_utils import Deadline, add_rdkit_max_seconds_arg, available_cpu_count, embed_and_jitter, load_smiles
 from benchmark_timing import time_it
 from rdkit import Chem
 from rdkit.Chem import AllChem
@@ -42,7 +41,7 @@ def prepare_mols(
     num_workers: int,
 ) -> list[Chem.Mol]:
     """Embed one base conformer per mol, then perturb to ``confs_per_mol``."""
-    workers = num_workers if num_workers > 0 else max(1, mp.cpu_count() // 2)
+    workers = num_workers if num_workers > 0 else max(1, available_cpu_count() // 2)
     return embed_and_jitter(
         raw_mols,
         confs_per_mol=confs_per_mol,

@@ -42,6 +42,7 @@ import time
 from functools import partial
 
 import pandas as pd
+from bench_utils import available_cpu_count
 from rdkit import Chem, RDLogger
 from rdkit.Chem import AllChem
 
@@ -98,11 +99,12 @@ def main():
         default=0,
         help="Maximum number of molecules to prepare (default: 0 = all valid SMILES)",
     )
+    default_workers = max(1, available_cpu_count() // 2)
     parser.add_argument(
         "--workers",
         type=int,
-        default=max(1, multiprocessing.cpu_count() // 2),
-        help=f"Number of parallel workers (default: {max(1, multiprocessing.cpu_count() // 2)})",
+        default=default_workers,
+        help=f"Number of parallel workers (default: {default_workers})",
     )
     args = parser.parse_args()
 
