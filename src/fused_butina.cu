@@ -249,7 +249,7 @@ __global__ void initialArgMaxKernel(const cuda::std::span<const int> neighborCou
   __shared__ typename cub::BlockReduce<std::uint64_t, kInitialArgMaxBlockSize>::TempStorage storage;
   candidate = cub::BlockReduce<std::uint64_t, kInitialArgMaxBlockSize>(storage).Reduce(candidate, cubMax());
   if (threadIdx.x == 0) {
-    storeButinaCandidate(candidate, maxValue, maxIndex);
+    decodeAndStoreButinaCandidate(candidate, maxValue, maxIndex);
   }
 }
 
@@ -383,7 +383,7 @@ __global__ void selectNextCentroidKernel(const cuda::std::span<const std::uint64
   candidate = cub::BlockReduce<std::uint64_t, kIterationBlockSize>(storage).Reduce(candidate, cubMax());
   if (threadIdx.x == 0) {
     // Continue while the selected centroid has an active neighbor besides itself.
-    const int maxNeighborCount = storeButinaCandidate(candidate, maxValue, maxIndex);
+    const int maxNeighborCount = decodeAndStoreButinaCandidate(candidate, maxValue, maxIndex);
     cudaGraphSetConditional(handle, maxNeighborCount > 1 ? 1 : 0);
   }
 }
