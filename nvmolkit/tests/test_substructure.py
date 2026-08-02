@@ -827,10 +827,11 @@ class TestSubstructSearchConfig:
         assert config.maxMatches == 100
         assert config.algorithm == "gsi"
 
-    def test_algorithm_rejects_unknown_value(self):
+    @pytest.mark.parametrize("algorithm", ["vf2", "unknown"])
+    def test_algorithm_rejects_unsupported_value(self, algorithm):
         """Test that only implemented high-level backends are accepted."""
         with pytest.raises(ValueError, match="algorithm must be"):
-            SubstructSearchConfig(algorithm="unknown")
+            SubstructSearchConfig(algorithm=algorithm)
 
     def test_gpu_ids_property(self):
         """Test gpuIds property get/set."""

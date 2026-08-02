@@ -101,7 +101,7 @@ std::string getAlgorithmPy(const nvMolKit::SubstructSearchConfig& config) {
     case nvMolKit::SubstructAlgorithm::DFS:
       return "dfs";
     case nvMolKit::SubstructAlgorithm::VF2:
-      return "vf2";
+      throw std::invalid_argument("VF2 is not supported by the Python substructure bindings");
   }
   throw std::invalid_argument("Unknown substructure algorithm");
 }
