@@ -29,12 +29,6 @@
  * - Keep a live list of active indices and only dispatch counts for those.
  */
 
-/**
- * TODO: Butina standardization (and make deterministic)
- * - Align the non-fused reordering=true path with the other butina implementations and RDKit:
- * 1) select the higher-index argmax (on ties) for each iteration
- * 2) and keep selection-order cluster IDs instead of renumbering clusters by final size.
- */
 namespace nvMolKit {
 
 namespace {
@@ -186,11 +180,11 @@ __global__ void attemptAssignClustersFromNeighborlist(const cuda::std::span<int>
       return;
     }
 
-    // If neighbor has SAME cluster size and lower index, defer to them for consistency
+    // If neighbor has SAME cluster size and higher index, defer to them to match RDKit's argmax tie break.
     // Also defer if neighbor is the designated max (guarantees only designated max assigns among ties)
     // Designated max itself skips this check to guarantee forward progress
     if (!isDesignatedMax && candidateNeighborClusterSize == clusterSize &&
-        (candidateNeighbor < pointIdx || candidateNeighbor == *designatedMaxIdx)) {
+        (candidateNeighbor > pointIdx || candidateNeighbor == *designatedMaxIdx)) {
       return;
     }
 
@@ -322,14 +316,16 @@ __global__ void countClusterSizesKernel(const cuda::std::span<const int> cluster
   }
 }
 
-//! Build the remapping array from sorted cluster IDs. After sorting by (-size, originalId),
-//! the position in the sorted array is the new cluster ID.
-__global__ void createNewIndexMapping(const cuda::std::span<const int> sortedOriginalIds,
-                                      const cuda::std::span<int>       remap) {
+//! Build the ID remapping and reorder the centroids from the sorted cluster IDs.
+__global__ void buildClusterRemapping(const cuda::std::span<const int> sortedOriginalIds,
+                                      const cuda::std::span<const int> centroids,
+                                      const cuda::std::span<int>       remap,
+                                      const cuda::std::span<int>       remappedCentroids) {
   const int numClusters = static_cast<int>(sortedOriginalIds.size());
   for (int newId = blockIdx.x * blockDim.x + threadIdx.x; newId < numClusters; newId += blockDim.x * gridDim.x) {
-    const int originalId = sortedOriginalIds[newId];
-    remap[originalId]    = newId;
+    const int originalId     = sortedOriginalIds[newId];
+    remap[originalId]        = newId;
+    remappedCentroids[newId] = centroids[originalId];
   }
 }
 
@@ -342,33 +338,23 @@ __global__ void applyNewIndices(const cuda::std::span<int> clusters, const cuda:
   }
 }
 
-__global__ void remapCentroidsKernel(const cuda::std::span<const int> sortedOriginalIds,
-                                     const cuda::std::span<const int> centroids,
-                                     const cuda::std::span<int>       remappedCentroids) {
-  const int numClusters = static_cast<int>(sortedOriginalIds.size());
-  const int idx         = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
-  if (idx < numClusters) {
-    const int originalId   = sortedOriginalIds[idx];
-    remappedCentroids[idx] = centroids[originalId];
-  }
-}
-
-//! Setup sort keys for cluster renumbering: keys[i] = -sizes[i] (for descending), ids[i] = i
-__global__ void setupSortKeysKernel(const cuda::std::span<const int> sizes,
-                                    const cuda::std::span<int>       keys,
-                                    const cuda::std::span<int>       ids) {
-  const int numClusters = static_cast<int>(sizes.size());
+//! Setup sort keys for cluster renumbering: cluster size first, then centroid index (both descending).
+__global__ void setupSortKeysKernel(const cuda::std::span<const int> clusterSizes,
+                                    const cuda::std::span<const int> centroids,
+                                    const cuda::std::span<uint64_t>  keys,
+                                    const cuda::std::span<int>       originalIds) {
+  const int numClusters = static_cast<int>(clusterSizes.size());
   for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < numClusters; idx += blockDim.x * gridDim.x) {
-    keys[idx] = -sizes[idx];
-    ids[idx]  = idx;
+    keys[idx]        = makeButinaCandidate(clusterSizes[idx], centroids[idx]);
+    originalIds[idx] = idx;
   }
 }
 
 /**
  * @brief Renumber cluster IDs so larger clusters have smaller IDs
  *
- * 1. Maps clusters by size to cluster ID.
- * 2. Then sorts by size (descending)
+ * 1. Maps clusters by size and centroid index to cluster ID.
+ * 2. Then sorts by size and centroid index (both descending).
  * 3. Creates mapping of old ID -> new ID based on sorted order.
  * 4. Applies new IDs to all points.
  */
@@ -382,10 +368,11 @@ void renumberClustersBySize(const cuda::std::span<int> clusters,
 
   const int numPoints = static_cast<int>(clusters.size());
 
-  AsyncDeviceVector<int> clusterSizes(numClusters, stream);
-  AsyncDeviceVector<int> sortKeys(numClusters, stream);
-  AsyncDeviceVector<int> originalIds(numClusters, stream);
-  AsyncDeviceVector<int> sortedOriginalIds(numClusters, stream);
+  AsyncDeviceVector<int>      clusterSizes(numClusters, stream);
+  AsyncDeviceVector<uint64_t> sortKeys(numClusters, stream);
+  AsyncDeviceVector<uint64_t> sortedKeys(numClusters, stream);
+  AsyncDeviceVector<int>      originalIds(numClusters, stream);
+  AsyncDeviceVector<int>      sortedOriginalIds(numClusters, stream);
 
   clusterSizes.zero();
 
@@ -396,42 +383,48 @@ void renumberClustersBySize(const cuda::std::span<int> clusters,
   countClusterSizesKernel<<<numBlocksRenumber, blockSize, 0, stream>>>(clusters, toSpan(clusterSizes));
   cudaCheckError(cudaGetLastError());
 
-  // Prepare sort keys: negative size for descending order
+  // Combine each cluster's size and centroid index into one key, using the centroid to break size ties.
   setupSortKeysKernel<<<numBlocksRenumber, blockSize, 0, stream>>>(toSpan(clusterSizes),
+                                                                   centroids,
                                                                    toSpan(sortKeys),
                                                                    toSpan(originalIds));
   cudaCheckError(cudaGetLastError());
 
-  // Sort by (negative size, original id) to get descending size order with stable tiebreak
-  // Reuse clusterSizes as sortedKeys output (we never read the sorted keys)
+  // Sort by descending cluster size, breaking ties by descending centroid index.
   std::size_t sortTempBytes = 0;
-  cub::DeviceRadixSort::SortPairs(nullptr,
-                                  sortTempBytes,
-                                  sortKeys.data(),
-                                  clusterSizes.data(),
-                                  originalIds.data(),
-                                  sortedOriginalIds.data(),
-                                  numClusters,
-                                  0,
-                                  sizeof(int) * 8,
-                                  stream);
+  cub::DeviceRadixSort::SortPairsDescending(nullptr,
+                                            sortTempBytes,
+                                            sortKeys.data(),
+                                            sortedKeys.data(),
+                                            originalIds.data(),
+                                            sortedOriginalIds.data(),
+                                            numClusters,
+                                            0,
+                                            sizeof(uint64_t) * 8,
+                                            stream);
   const AsyncDeviceVector<uint8_t> sortTemp(sortTempBytes, stream);
-  cub::DeviceRadixSort::SortPairs(sortTemp.data(),
-                                  sortTempBytes,
-                                  sortKeys.data(),
-                                  clusterSizes.data(),
-                                  originalIds.data(),
-                                  sortedOriginalIds.data(),
-                                  numClusters,
-                                  0,
-                                  sizeof(int) * 8,
-                                  stream);
+  cub::DeviceRadixSort::SortPairsDescending(sortTemp.data(),
+                                            sortTempBytes,
+                                            sortKeys.data(),
+                                            sortedKeys.data(),
+                                            originalIds.data(),
+                                            sortedOriginalIds.data(),
+                                            numClusters,
+                                            0,
+                                            sizeof(uint64_t) * 8,
+                                            stream);
   cudaCheckError(cudaGetLastError());
 
-  // Build remap: remap[originalId] = newId
-  // Reuse sortKeys as remap (sortKeys is unused after the sort)
-  const auto remap = toSpan(sortKeys);
-  createNewIndexMapping<<<numBlocksRenumber, blockSize, 0, stream>>>(toSpan(sortedOriginalIds), remap);
+  // The sort copied originalIds into sortedOriginalIds, so reuse that buffer for the old ID -> new ID mapping.
+  const auto remap             = toSpan(originalIds);
+  // Cluster sizes are already stored in the sort keys, so reuse that buffer for the reordered centroids.
+  const auto remappedCentroids = toSpan(clusterSizes);
+
+  // Build remap[originalId] = newId and put the centroids in the same new-ID order.
+  buildClusterRemapping<<<numBlocksRenumber, blockSize, 0, stream>>>(toSpan(sortedOriginalIds),
+                                                                     centroids,
+                                                                     remap,
+                                                                     remappedCentroids);
   cudaCheckError(cudaGetLastError());
 
   // Apply new indices to all points
@@ -439,30 +432,20 @@ void renumberClustersBySize(const cuda::std::span<int> clusters,
   applyNewIndices<<<numBlocks, blockSize, 0, stream>>>(clusters, remap);
   cudaCheckError(cudaGetLastError());
 
-  if (!centroids.empty()) {
-    AsyncDeviceVector<int> remappedCentroids(numClusters, stream);
-    remapCentroidsKernel<<<numBlocksRenumber, blockSize, 0, stream>>>(toSpan(sortedOriginalIds),
-                                                                      centroids,
-                                                                      toSpan(remappedCentroids));
-    cudaCheckError(cudaGetLastError());
-    cudaCheckError(cudaMemcpyAsync(centroids.data(),
-                                   remappedCentroids.data(),
-                                   numClusters * sizeof(int),
-                                   cudaMemcpyDeviceToDevice,
-                                   stream));
-  }
+  cudaCheckError(cudaMemcpyAsync(centroids.data(),
+                                 remappedCentroids.data(),
+                                 numClusters * sizeof(int),
+                                 cudaMemcpyDeviceToDevice,
+                                 stream));
 }
 
 // Build packed sort keys: higher hit count (primary key), then higher point index (secondary key).
-// Bits 32-63 hold the hit count; bits 0-31 hold the point index and can be recovered with a bit mask.
 __global__ void setupFixedOrderSortKeysKernel(const cuda::std::span<const int> hitCounts,
                                               const cuda::std::span<uint64_t>  sortKeys) {
   const int numPoints = hitCounts.size();
   const int idx       = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < numPoints) {
-    const uint64_t count = hitCounts[idx];
-    const uint64_t point = idx;
-    sortKeys[idx]        = (count << 32) | point;
+    sortKeys[idx] = makeButinaCandidate(hitCounts[idx], idx);
   }
 }
 
@@ -541,8 +524,8 @@ __global__ void prepareFixedOrderCandidateKernel(const cuda::std::span<const uin
     int candidate = INT_MAX;
 
     if (sortedPos < numPoints) {
-      // Use the bit mask to get the point index from the packed sort key.
-      const int pointIdx = sortedKeys[sortedPos] & 0xffffffffULL;
+      // Decode the point index from the packed sort key.
+      const int pointIdx = butinaCandidateIndex(sortedKeys[sortedPos]);
       // Points already assigned to a cluster cannot become centroids.
       if (clusters[pointIdx] < 0) {
         candidate = sortedPos;
@@ -566,7 +549,7 @@ __global__ void prepareFixedOrderCandidateKernel(const cuda::std::span<const uin
       continue;
     }
 
-    const int pointIdx     = sortedKeys[firstPos] & 0xffffffffULL;
+    const int pointIdx     = butinaCandidateIndex(sortedKeys[firstPos]);
     bool      hasNeighbors = hitCounts[pointIdx] > 1;
 
     if (tid == 0) {
@@ -638,107 +621,26 @@ __global__ void assignFixedOrderActiveRowKernel(const cuda::std::span<const uint
 
 }  // namespace
 
-#if CUB_VERSION < 200800
 constexpr int argMaxBlockSize = 512;
 
-//! Custom ArgMax kernel that returns the largest value and index.
-//! Used when CUB's new ArgMax API is not available (CCCL < 2.8.0)
-__global__ void lastArgMaxKernel(const int* values, int numItems, int* outVal, int* outIdx) {
-  int            maxVal = cuda::std::numeric_limits<int>::min();
-  int            maxID  = -1;
-  __shared__ int foundMaxVal[argMaxBlockSize];
-  __shared__ int foundMaxIds[argMaxBlockSize];
-  const auto     tid = static_cast<int>(threadIdx.x);
-  for (int i = tid; i < numItems; i += argMaxBlockSize) {
-    if (const int val = values[i]; val >= maxVal) {
-      maxID  = i;
-      maxVal = val;
-    }
+//! Find the largest value, choosing the higher point index when values are tied.
+__global__ void lastArgMaxKernel(const int* values, const int numItems, int* outValue, int* outIndex) {
+  uint64_t candidate = 0;
+  for (int i = threadIdx.x; i < numItems; i += argMaxBlockSize) {
+    candidate = cubMax()(candidate, makeButinaCandidate(values[i], i));
   }
-  foundMaxVal[tid] = maxVal;
-  foundMaxIds[tid] = maxID;
 
-  __shared__ cub::BlockReduce<int, argMaxBlockSize>::TempStorage storage;
-  const int actualMaxVal = cub::BlockReduce<int, argMaxBlockSize>(storage).Reduce(maxVal, cubMax());
-  __syncthreads();  // For shared memory write of maxVal and maxID
-  if (tid == 0) {
-    *outVal = actualMaxVal;
-    for (int i = argMaxBlockSize - 1; i >= 0; i--) {
-      if (foundMaxVal[i] == actualMaxVal) {
-        *outIdx = foundMaxIds[i];
-        break;
-      }
-    }
+  __shared__ cub::BlockReduce<uint64_t, argMaxBlockSize>::TempStorage storage;
+  const uint64_t maxCandidate = cub::BlockReduce<uint64_t, argMaxBlockSize>(storage).Reduce(candidate, cubMax());
+  if (threadIdx.x == 0) {
+    decodeAndStoreButinaCandidate(maxCandidate, outValue, outIndex);
   }
 }
-#endif  // CUB_VERSION < 200800
 
-//! Helper class to run ArgMax on device data.
-//! Uses CUB's DeviceReduce::ArgMax when available (CCCL >= 2.8.0), otherwise falls back to custom kernel.
-class ArgMaxRunner {
- public:
-  ArgMaxRunner([[maybe_unused]] size_t num_items, cudaStream_t stream)
-      : stream_(stream)
-#if CUB_VERSION >= 200800
-        ,
-        temp_storage_(getTempStorageSize(num_items, stream), stream)
-#endif
-  {
-  }
-
-  void operator()(int* d_in, int* d_max_value_out, int* d_max_index_out, int num_items) {
-#if CUB_VERSION >= 200800
-    size_t temp_storage_bytes = temp_storage_.size();
-    cudaCheckError(cub::DeviceReduce::ArgMax(temp_storage_.data(),
-                                             temp_storage_bytes,
-                                             d_in,
-                                             d_max_value_out,
-                                             d_max_index_out,
-                                             static_cast<int64_t>(num_items),
-                                             stream_));
-#else
-    lastArgMaxKernel<<<1, argMaxBlockSize, 0, stream_>>>(d_in, num_items, d_max_value_out, d_max_index_out);
-    cudaCheckError(cudaGetLastError());
-#endif
-  }
-
-  //! Run ArgMax on a specific stream (used during graph capture)
-  void captureOn(cudaStream_t captureStream, int* d_in, int* d_max_value_out, int* d_max_index_out, int num_items) {
-#if CUB_VERSION >= 200800
-    size_t temp_storage_bytes = temp_storage_.size();
-    cudaCheckError(cub::DeviceReduce::ArgMax(temp_storage_.data(),
-                                             temp_storage_bytes,
-                                             d_in,
-                                             d_max_value_out,
-                                             d_max_index_out,
-                                             static_cast<int64_t>(num_items),
-                                             captureStream));
-#else
-    lastArgMaxKernel<<<1, argMaxBlockSize, 0, captureStream>>>(d_in, num_items, d_max_value_out, d_max_index_out);
-    cudaCheckError(cudaGetLastError());
-#endif
-  }
-
- private:
-#if CUB_VERSION >= 200800
-  static size_t getTempStorageSize(size_t num_items, cudaStream_t stream) {
-    size_t temp_storage_bytes = 0;
-    cub::DeviceReduce::ArgMax(nullptr,
-                              temp_storage_bytes,
-                              static_cast<int*>(nullptr),
-                              static_cast<int*>(nullptr),
-                              static_cast<int*>(nullptr),
-                              static_cast<int64_t>(num_items),
-                              stream);
-    return temp_storage_bytes;
-  }
-#endif
-
-  cudaStream_t stream_;
-#if CUB_VERSION >= 200800
-  AsyncDeviceVector<uint8_t> temp_storage_;
-#endif
-};
+void runArgMax(const int* values, const int numItems, int* maxValue, int* maxIndex, cudaStream_t stream) {
+  lastArgMaxKernel<<<1, argMaxBlockSize, 0, stream>>>(values, numItems, maxValue, maxIndex);
+  cudaCheckError(cudaGetLastError());
+}
 
 /**
  * @brief Prune neighborlists by removing assigned neighbors and reordering.
@@ -827,18 +729,13 @@ void innerButinaLoop(const cuda::std::span<const uint8_t> hitMatrix,
                      int*                                 maxIndexPtr,
                      int*                                 maxValuePtr,
                      int*                                 clusterIdxPtr,
-                     ArgMaxRunner&                        argMaxRunner,
                      cudaStream_t                         stream) {
   const int numBlocksFlat = ((static_cast<int>(clusterSizesSpan.size()) - 1) / blockSizeCount) + 1;
 
   butinaKernelCountClusterSize<<<clusters.size(), blockSizeCount, 0, stream>>>(hitMatrix, clusters, clusterSizesSpan);
   cudaCheckError(cudaGetLastError());
 
-  argMaxRunner.captureOn(stream,
-                         clusterSizesSpan.data(),
-                         maxValuePtr,
-                         maxIndexPtr,
-                         static_cast<int>(clusterSizesSpan.size()));
+  runArgMax(clusterSizesSpan.data(), static_cast<int>(clusterSizesSpan.size()), maxValuePtr, maxIndexPtr, stream);
 
   butinaWriteClusterValue<<<numBlocksFlat, blockSizeCount, 0, stream>>>(hitMatrix,
                                                                         clusters,
@@ -853,16 +750,15 @@ void innerButinaLoop(const cuda::std::span<const uint8_t> hitMatrix,
 
 //! Inner loop iteration that attempts assignment then prunes neighborlists.
 template <int NeighborlistMaxSize>
-void innerButinaLoopWithPruning(const int                  numPoints,
-                                const cuda::std::span<int> clusters,
+void innerButinaLoopWithPruning(const cuda::std::span<int> clusters,
                                 const cuda::std::span<int> clusterSizesSpan,
                                 const cuda::std::span<int> centroids,
                                 int*                       maxIndexPtr,
                                 int*                       maxValuePtr,
                                 int*                       clusterIdxPtr,
                                 const cuda::std::span<int> neighborList,
-                                ArgMaxRunner&              argMaxRunner,
                                 cudaStream_t               stream) {
+  const int numPoints       = static_cast<int>(clusters.size());
   const int numBlocksAssign = (numPoints + kTilesPerBlockAssign - 1) / kTilesPerBlockAssign;
   attemptAssignClustersFromNeighborlist<NeighborlistMaxSize>
     <<<numBlocksAssign, blockSizeAssign, 0, stream>>>(clusters,
@@ -882,11 +778,7 @@ void innerButinaLoopWithPruning(const int                  numPoints,
   cudaCheckError(cudaGetLastError());
 
   // Compute argmax for next iteration
-  argMaxRunner.captureOn(stream,
-                         clusterSizesSpan.data(),
-                         maxValuePtr,
-                         maxIndexPtr,
-                         static_cast<int>(clusterSizesSpan.size()));
+  runArgMax(clusterSizesSpan.data(), static_cast<int>(clusterSizesSpan.size()), maxValuePtr, maxIndexPtr, stream);
 }
 
 /**
@@ -977,14 +869,14 @@ int butinaGpuImpl(const cuda::std::span<const uint8_t> hitMatrix,
   const size_t           numPoints = clusters.size();
   AsyncDeviceVector<int> clusterSizes(clusters.size(), stream);
   AsyncDeviceVector<int> neighborList(NeighborlistMaxSize * numPoints, stream);
+  AsyncDeviceVector<int> internalCentroids(centroids.empty() ? numPoints : 0, stream);
   const auto             neighborListSpan = toSpan(neighborList);
+  const auto             workingCentroids = centroids.empty() ? toSpan(internalCentroids) : centroids;
 
   const AsyncDevicePtr<int> maxIndex(-1, stream);
   const AsyncDevicePtr<int> maxValue(std::numeric_limits<int>::max(), stream);
   const AsyncDevicePtr<int> clusterIdx(0, stream);
-  PinnedHostVector<int>     maxCluster(1);
-
-  ArgMaxRunner argMaxRunner(clusters.size(), stream);
+  int                       maxClusterSize = 0;
 
   setupRange.pop();
   const auto clusterSizesSpan = toSpan(clusterSizes);
@@ -1000,11 +892,10 @@ int butinaGpuImpl(const cuda::std::span<const uint8_t> hitMatrix,
       innerButinaLoop(hitMatrix,
                       clusters,
                       clusterSizesSpan,
-                      centroids,
+                      workingCentroids,
                       maxIndex.data(),
                       maxValue.data(),
                       clusterIdx.data(),
-                      argMaxRunner,
                       captureStream);
       setConditionalLoopGraphCondition<<<1, 1, 0, captureStream>>>(handle,
                                                                    maxValue.data(),
@@ -1018,29 +909,31 @@ int butinaGpuImpl(const cuda::std::span<const uint8_t> hitMatrix,
     innerLoopGraph.launch(stream);
 
     // Copy final maxValue to host for subsequent pruning loop
-    cudaCheckError(cudaMemcpyAsync(maxCluster.data(), maxValue.data(), sizeof(int), cudaMemcpyDefault, stream));
+    maxValue.get(maxClusterSize);
     cudaCheckError(cudaStreamSynchronize(stream));
   }
 
   // Build neighborlist once, then prune dynamically using CUDA Graph with conditional WHILE node
-  if (maxCluster[0] >= kMinLoopSizeForAssignment) {
+  if (maxClusterSize >= kMinLoopSizeForAssignment) {
     buildInitialNeighborlist<NeighborlistMaxSize>(hitMatrix, clusters, clusterSizesSpan, neighborListSpan, stream);
 
     // Prime the first pruning-loop iteration. Stream ordering makes this result visible to the graph launch below.
-    argMaxRunner(clusterSizesSpan.data(), maxValue.data(), maxIndex.data(), static_cast<int>(clusterSizesSpan.size()));
+    runArgMax(clusterSizesSpan.data(),
+              static_cast<int>(clusterSizesSpan.size()),
+              maxValue.data(),
+              maxIndex.data(),
+              stream);
 
     // Use CUDA Graph with conditional WHILE node for fully GPU-side pruning loop control
     ScopedNvtxRange            buildRange("Build pruning loop graph with WHILE node");
     const ConditionalLoopGraph pruningLoopGraph([&](cudaStream_t captureStream, cudaGraphConditionalHandle handle) {
-      innerButinaLoopWithPruning<NeighborlistMaxSize>(numPoints,
-                                                      clusters,
+      innerButinaLoopWithPruning<NeighborlistMaxSize>(clusters,
                                                       clusterSizesSpan,
-                                                      centroids,
+                                                      workingCentroids,
                                                       maxIndex.data(),
                                                       maxValue.data(),
                                                       clusterIdx.data(),
                                                       neighborListSpan,
-                                                      argMaxRunner,
                                                       captureStream);
       setConditionalLoopGraphCondition<<<1, 1, 0, captureStream>>>(handle, maxValue.data(), kMinLoopSizeForAssignment);
       cudaCheckError(cudaGetLastError());
@@ -1052,15 +945,15 @@ int butinaGpuImpl(const cuda::std::span<const uint8_t> hitMatrix,
     pruningLoopGraph.launch(stream);
   }
 
-  assignSingletonIdsKernel<<<1, kSingletonBlockSize, 0, stream>>>(clusters, centroids, clusterIdx.data());
+  assignSingletonIdsKernel<<<1, kSingletonBlockSize, 0, stream>>>(clusters, workingCentroids, clusterIdx.data());
   cudaCheckError(cudaGetLastError());
 
-  // Renumber clusters to be in descending order.
-  cudaCheckError(cudaMemcpyAsync(maxCluster.data(), clusterIdx.data(), sizeof(int), cudaMemcpyDefault, stream));
+  // Renumber clusters from largest to smallest, using the higher centroid index to break ties.
+  int numClusters = 0;
+  clusterIdx.get(numClusters);
   cudaCheckError(cudaStreamSynchronize(stream));
-  renumberClustersBySize(clusters, centroids, maxCluster[0], stream);
-  cudaCheckError(cudaStreamSynchronize(stream));
-  return maxCluster[0];
+  renumberClustersBySize(clusters, workingCentroids, numClusters, stream);
+  return numClusters;
 }
 
 static int runPreparedHitMatrixButina(const cuda::std::span<const uint8_t> hitMatrix,
