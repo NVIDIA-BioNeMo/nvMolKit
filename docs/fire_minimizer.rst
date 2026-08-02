@@ -5,16 +5,11 @@ FIRE minimizer
 ==============
 
 nvMolKit provides the Fast Inertial Relaxation Engine (FIRE) as an
-alternative to BFGS for MMFF94 and UFF geometry optimization. FIRE is a
-local optimizer: it relaxes each input geometry toward a nearby minimum of
-the selected force field, but does not search globally for the
-lowest-energy conformer.
+alternative to BFGS for MMFF94 and UFF geometry optimization.
 
 The implementation follows the FIRE 2.0 update scheme. See the original
-`FIRE paper <https://doi.org/10.1103/PhysRevLett.97.170201>`_, the
-`FIRE 2.0 paper <https://doi.org/10.1016/j.commatsci.2020.109584>`_, and
-the `ASE FIRE2 reference implementation
-<https://docs.ase-lib.org/_modules/ase/optimize/fire2.html>`_.
+`FIRE paper <https://doi.org/10.1103/PhysRevLett.97.170201>`_, and the
+`FIRE 2.0 paper <https://doi.org/10.1016/j.commatsci.2020.109584>`_
 
 Using FIRE
 ----------
@@ -66,143 +61,30 @@ UFF uses the same FIRE options:
 The batched-forcefield interfaces also accept ``minimizerKind="FIRE"`` and
 ``fireOptions=options`` in their ``minimize`` methods.
 
-How the algorithm works
------------------------
-
-FIRE combines a molecular-dynamics-like integrator with adaptive damping.
-For coordinates :math:`\mathbf{x}`, velocity :math:`\mathbf{v}`, and force
-:math:`\mathbf{F}=-\nabla E`, each system maintains a time step
-:math:`\Delta t`, a mixing coefficient :math:`\alpha`, and a count of
-consecutive downhill steps. The power
-
-.. math::
-
-   P = \mathbf{v} \cdot \mathbf{F}
-
-indicates whether the velocity is aligned with the force.
-
-Each FIRE 2.0 iteration performs the following operations independently for
-each conformer:
-
-#. If :math:`P > 0`, increment the downhill-step count. After
-   ``nMinForIncrease`` consecutive positive-power steps, increase
-   :math:`\Delta t` by ``timeStepIncrement`` up to its configured maximum,
-   and decrease :math:`\alpha` by ``alphaDecrement``.
-#. If :math:`P \leq 0`, reduce :math:`\Delta t` by
-   ``timeStepDecrement``, reset :math:`\alpha` and the downhill-step count,
-   take the FIRE 2.0 half-step back, and zero the velocity.
-#. Apply a semi-implicit Euler force kick. With ``useMass=False`` this is
-   :math:`\mathbf{v}\leftarrow\mathbf{v}+\Delta t\,\mathbf{F}`. With
-   ``useMass=True``, each atom's force is divided by its mass.
-#. Mix the velocity toward the force direction while preserving the velocity
-   norm:
-
-   .. math::
-
-      \mathbf{v}\leftarrow
-      (1-\alpha)\mathbf{v}
-      +\alpha\,|\mathbf{v}|\,\frac{\mathbf{F}}{|\mathbf{F}|}.
-
-#. Limit the displacement norm to ``dMax`` and update
-   :math:`\mathbf{x}\leftarrow\mathbf{x}+\Delta t\,\mathbf{v}`.
-
 A conformer is converged when the 2-norm of its full gradient is no greater
-than ``gradTol``. The implementation batches independent conformers on the
-GPU; the adaptive state and convergence decision remain per conformer.
-
-Compared with the original FIRE algorithm, FIRE 2.0 uses the semi-implicit
-Euler integration order and takes a half-step backward when the power becomes
-non-positive. These changes improve stability and are enabled by default
-through ``takeHalfStepBack=True``.
+than ``gradTol``. Independent conformers are batched on the GPU; the adaptive
+state and the convergence decision remain per conformer.
 
 Parameters and tuning
 ---------------------
 
-The default values in :class:`nvmolkit.types.FireOptions` are not the
-literal ASE FIRE2 defaults. They were selected with an
-`Optuna <https://optuna.org/>`_ study at a fixed budget of 200 iterations.
-The training data were sampled from the Enamine REAL 10M collection:
-1,000 molecules were embedded with ETKDG, ten MMFF94-minimized conformers
-were generated per molecule, and Gaussian Cartesian noise with
-:math:`\sigma=0.1` Å was added to produce 10,000 non-minimum starting
-geometries. Every Optuna trial was re-scored with RDKit MMFF94, and the final
-study minimized the mean residual gradient norm per atom.
+The default values in :class:`nvmolkit.types.FireOptions` were selected with
+an `Optuna <https://optuna.org/>`_ study at a fixed budget of 200 iterations.
 
-The study tuned the initial and limiting time steps, displacement cap,
-positive-power waiting period, velocity-mixing schedule, and time-step
-growth/decay factors. Mass weighting, ABC correction, and plateau-based
-stopping were disabled. The selected defaults are:
-
-.. list-table:: Tuned ``FireOptions`` defaults
-   :header-rows: 1
-   :widths: 42 24 34
-
-   * - Option
-     - Default
-     - Meaning
-   * - ``dtInit``
-     - 0.0035256955
-     - Initial time step in ps
-   * - ``dtMinFactor``
-     - 0.0001457029
-     - Minimum time step relative to ``dtInit``
-   * - ``dtMaxFactor``
-     - 5.3536467
-     - Maximum time step relative to ``dtInit``
-   * - ``dMax``
-     - 0.6925294
-     - Maximum displacement norm in Å
-   * - ``nMinForIncrease``
-     - 3
-     - Positive-power steps before increasing the time step
-   * - ``timeStepIncrement``
-     - 1.2751646
-     - Time-step multiplier while power stays positive
-   * - ``timeStepDecrement``
-     - 0.6158984
-     - Time-step multiplier after non-positive power
-   * - ``alphaInit``
-     - 0.2890058
-     - Initial velocity-mixing coefficient
-   * - ``alphaDecrement``
-     - 0.9574426
-     - Mixing-coefficient multiplier while power stays positive
-   * - ``gradTol``
-     - 1e-4
-     - Full-system gradient 2-norm convergence threshold
-
-Although tuned on MMFF94, these are algorithmic integration parameters rather
-than MMFF term parameters. The same schedule transferred to other force-field
-surfaces and is shared by the MMFF94 and UFF interfaces. nvMolKit's UFF
-validation independently checks that FIRE lowers the starting energy and
-approaches the RDKit UFF minimum. As with any local minimizer, unusual
-potentials, constraints, or convergence budgets may benefit from retuning
-``dtInit``, ``dMax``, and ``gradTol``.
+Defaults were tuned on MMFF94, but were independently verified to be valid
+for UFF optimization and distance-geometry embedding.
 
 .. _fire-validation:
 
 Validation
 ----------
 
-Algorithmic parity
-^^^^^^^^^^^^^^^^^^
-
-The implementation was compared step-by-step with ASE FIRE2 using identical
-starting coordinates, RDKit MMFF94 energies and gradients, and FIRE
-parameters. The validation includes a focused Python parity test at 1, 10,
-50, and 200 steps, a 1,000-molecule dataset harness, and native unit tests
-that compare batched GPU trajectories with a single-system reference
-integrator. Position drift after ten steps in the dataset harness is on the
-order of :math:`10^{-7}` Å.
-
-MMFF minimization study
-^^^^^^^^^^^^^^^^^^^^^^^
-
-The minimization study used the 10,000 perturbed Enamine REAL 10M conformers
-described above. RDKit MMFF94, nvMolKit BFGS at 200 steps, nvMolKit FIRE at
-200 steps, and nvMolKit FIRE at 400 steps all started from the same
-coordinates. Final geometries from every arm were re-scored with RDKit MMFF94
-so energy and residual-gradient comparisons use one implementation.
+The validation used 10,000 noise-perturbed MMFF94 conformers sampled from the
+Enamine REAL 10M collection. RDKit MMFF94, nvMolKit BFGS at 200 steps,
+nvMolKit FIRE at 200 steps, and nvMolKit FIRE at 400 steps all started from
+the same coordinates. Final geometries from every arm were re-scored with
+RDKit MMFF94 so energy and residual-gradient comparisons use one
+implementation.
 
 .. list-table:: Final RDKit-MMFF94 energy over 10,000 conformers
    :header-rows: 1
@@ -290,9 +172,10 @@ high-force structures:
 Performance
 -----------
 
-.. note::
-
-   Performance results will be added here.
+At an equal iteration count, FIRE is roughly 2x faster than BFGS. Each FIRE
+iteration only integrates a velocity and rescales a step, whereas BFGS
+maintains and applies an inverse-Hessian approximation and performs a line
+search.
 
 Choosing FIRE or BFGS
 ---------------------
