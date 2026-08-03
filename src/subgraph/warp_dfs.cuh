@@ -23,9 +23,9 @@
 // most-constrained-first permutation and apply the inverse permutation to the
 // resulting mapping.
 //
-// All constraint knowledge lives behind the candidates oracle: at each descent
+// All constraint knowledge lives behind the candidates callback: at each descent
 // the core asks it for the bitset of target atoms query atom `depth` may still
-// map to given the mapping so far. The canonical oracle shape is one bitset
+// map to given the mapping so far. That callback's canonical shape is one bitset
 // intersection over target atoms:
 //
 //   candidates(d) = labelCompatible(d) & ~used
@@ -34,7 +34,7 @@
 //                         edge's bond predicate accepts }
 //
 // Forward edges need no check; they are back edges of the deeper atom. How the
-// per-edge neighbour sets are produced is the oracle's business: the
+// per-edge neighbour sets are produced is the callback's business: the
 // substructure backend precomputes them per bond-mask class (see
 // substruct_dfs.cuh), an MCS backend can walk a CSR row testing a
 // bond-compatibility bit matrix. The core only ever sees the resulting masks.
@@ -51,7 +51,7 @@
 // DfsTerminalVerdict). The abort hook is polled between roots so a frontend
 // that only needs existence can stop every lane once one lane has found an
 // embedding (e.g. by polling a warp-shared flag; a finer-grained frontend can
-// additionally poll inside its oracle, which runs on every descent).
+// additionally poll inside its candidates callback, which runs on every descent).
 
 #ifndef NVMOLKIT_SUBGRAPH_WARP_DFS_CUH
 #define NVMOLKIT_SUBGRAPH_WARP_DFS_CUH
@@ -81,7 +81,7 @@ struct DfsTerminalVerdict {
  *                      const Mask& used, int prevTargetAtom). Must already
  *                      exclude atoms in @p used. @p mapping[0..depth-1] are the
  *                      committed target atoms; @p prevTargetAtom == mapping[depth-1],
- *                      passed separately so chain-shaped oracles skip the load.
+ *                      passed separately so chain-shaped callbacks skip the load.
  * @tparam TerminalFn   DfsTerminalVerdict onTerminal(Mask terminals,
  *                      const unsigned char* mapping). Called at @p lastDepth
  *                      with the candidate set for the final query atom; every
