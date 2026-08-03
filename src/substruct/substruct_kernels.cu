@@ -19,6 +19,7 @@
 #include "src/substruct/sm_shared_mem_config.cuh"
 #include "src/substruct/substruct_algos.cuh"
 #include "src/substruct/substruct_debug.h"
+#include "src/substruct/substruct_dfs.cuh"
 #include "src/substruct/substruct_kernels.h"
 #include "src/substruct/substruct_launch_config.h"
 #include "src/substruct/substruct_search_internal.h"
@@ -55,6 +56,11 @@ template <std::size_t MaxQueryAtoms = kMaxQueryAtoms> struct SubstructMatchResul
 
   __device__ __forceinline__ PartialMatchT<MaxQueryAtoms>* getOverflowBuffer(int bufferIdx = 0) const {
     return overflowBuffer + (blockIdx.x * overflowBuffersPerBlock + bufferIdx) * overflowEntriesPerBuffer;
+  }
+
+  __device__ __forceinline__ PartialMatchT<MaxQueryAtoms>* getPairOverflowBuffer(int miniBatchIdx,
+                                                                                 int bufferIdx = 0) const {
+    return overflowBuffer + (miniBatchIdx * overflowBuffersPerBlock + bufferIdx) * overflowEntriesPerBuffer;
   }
 
   __device__ __forceinline__ int getOverflowCapacity() const { return overflowEntriesPerBuffer; }
@@ -313,7 +319,7 @@ __global__ void labelMatrixPaintKernelT(TargetMoleculesDeviceView  targets,
  * @tparam MaxTargetAtoms Maximum target atoms for label matrix sizing
  * @tparam MaxQueryAtoms Maximum query atoms for label matrix and partial match sizing
  * @tparam MaxBondsPerAtom Maximum bonds per atom for edge consistency loop unrolling
- * @tparam Algo Algorithm to use (VF2 or GSI)
+ * @tparam Algo Algorithm to use (VF2, GSI, or DFS)
  */
 template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms, int MaxBondsPerAtom, SubstructAlgorithm Algo>
 __global__ void substructMatchKernelT(TargetMoleculesDeviceView                       targets,
@@ -495,7 +501,7 @@ __global__ void substructMatchKernelT(TargetMoleculesDeviceView                 
  * @tparam MaxTargetAtoms Maximum target atoms for label matrix sizing
  * @tparam MaxQueryAtoms Maximum query atoms for label matrix and partial match sizing
  * @tparam MaxBondsPerAtom Maximum bonds per atom for edge consistency loop unrolling
- * @tparam Algo Algorithm to use (VF2 or GSI)
+ * @tparam Algo Algorithm to use (GSI or DFS)
  */
 template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms, int MaxBondsPerAtom, SubstructAlgorithm Algo>
 __global__ void substructPaintKernelT(TargetMoleculesDeviceView     targets,
@@ -625,10 +631,152 @@ __global__ void substructPaintKernelT(TargetMoleculesDeviceView     targets,
 }
 
 // =============================================================================
+// Dedicated DFS Kernels
+// =============================================================================
+//
+// DFS does not share the one-block-per-pair topology of the kernels above: it
+// runs one warp per (target, query) pair, kWarpsPerBlock pairs per CTA, with all
+// search state lane-local. See substruct_dfs.cuh for the algorithm. Everything a
+// pair needs is derived inside its owning warp, so no per-pair global scratch
+// exists and concurrent recursive depth groups on separate streams cannot
+// collide.
+
+/**
+ * @brief Warp-per-pair DFS matching kernel.
+ *
+ * @tparam MaxTargetAtoms Maximum target atoms for label matrix and mask sizing
+ * @tparam MaxQueryAtoms Maximum query atoms for label matrix and mask sizing
+ * @tparam Mode Count (count-only) or Store (full mappings)
+ */
+template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms, dfs::DfsOutputMode Mode>
+__global__
+__launch_bounds__(dfs::kBlockSize, dfs::minBlocksPerSM<MaxTargetAtoms, MaxQueryAtoms>()) void substructDfsMatchKernelT(
+  TargetMoleculesDeviceView                       targets,
+  QueryMoleculesDeviceView                        queries,
+  SubstructMatchResultsDeviceViewT<MaxQueryAtoms> results,
+  const int*                                      pairIndices,
+  int                                             numPairs,
+  int                                             numQueries,
+  const int*                                      batchLocalIndices) {
+  __shared__ dfs::WarpSharedState<MaxTargetAtoms, MaxQueryAtoms> shared;
+
+  const int warp      = threadIdx.x >> 5;
+  const int lane      = threadIdx.x & (kWarpSize - 1);
+  const int launchIdx = blockIdx.x * dfs::kWarpsPerBlock + warp;
+  if (launchIdx >= numPairs) {
+    return;
+  }
+
+  const int miniBatchIdx  = batchLocalIndices ? batchLocalIndices[launchIdx] : launchIdx;
+  const int globalPairIdx = pairIndices[launchIdx];
+  const int targetIdx     = globalPairIdx / numQueries;
+  const int queryIdx      = globalPairIdx % numQueries;
+
+  if (targetIdx >= targets.numMolecules || queryIdx >= queries.numMolecules) {
+    return;
+  }
+
+  const TargetMoleculeView target = getMolecule(targets, targetIdx);
+  const QueryMoleculeView  query  = getMolecule(queries, queryIdx);
+
+  const bool countOnly   = results.countOnly;
+  const int  matchOffset = countOnly ? 0 : results.pairMatchStarts[miniBatchIdx];
+
+  dfs::DfsPairOutput out;
+  out.matchCounts      = results.matchCounts;
+  out.reportedCounts   = results.reportedCounts;
+  out.matchIndices     = results.matchIndices;
+  out.matchOffset      = matchOffset;
+  out.storageCapacity  = countOnly ? 0 : (results.pairMatchStarts[miniBatchIdx + 1] - matchOffset) / query.numAtoms;
+  out.maxMatchesToFind = results.maxMatchesToFind;
+  out.countOnly        = countOnly;
+
+  dfs::dfsSearchPair<MaxTargetAtoms, MaxQueryAtoms, Mode>(target,
+                                                          query,
+                                                          results.getLabelMatrixPtr(miniBatchIdx),
+                                                          shared,
+                                                          warp,
+                                                          lane,
+                                                          miniBatchIdx,
+                                                          out);
+}
+
+/**
+ * @brief Warp-per-pair DFS paint kernel for recursive SMARTS preprocessing.
+ *
+ * Pair indexing matches the one-block-per-pair label kernel that produced the
+ * label matrices: pair index = localTargetIdx * numPatterns + localPatternIdx.
+ */
+template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms>
+__global__
+__launch_bounds__(dfs::kBlockSize, dfs::minBlocksPerSM<MaxTargetAtoms, MaxQueryAtoms>()) void substructDfsPaintKernelT(
+  TargetMoleculesDeviceView  targets,
+  QueryMoleculesDeviceView   patterns,
+  const BatchedPatternEntry* patternEntries,
+  int                        numPatterns,
+  int                        numPairs,
+  uint32_t*                  outputRecursiveBits,
+  int                        maxTargetAtoms,
+  int                        outputNumQueries,
+  int                        defaultPatternId,
+  int                        defaultMainQueryIdx,
+  int                        miniBatchPairOffset,
+  int                        miniBatchSize,
+  const uint32_t*            labelMatrixBuffer,
+  int                        firstTargetIdx) {
+  constexpr std::size_t kLabelMatrixWordsT = MaxTargetAtoms * MaxQueryAtoms / 32;
+
+  __shared__ dfs::WarpSharedState<MaxTargetAtoms, MaxQueryAtoms> shared;
+
+  const int warp    = threadIdx.x >> 5;
+  const int lane    = threadIdx.x & (kWarpSize - 1);
+  const int pairIdx = blockIdx.x * dfs::kWarpsPerBlock + warp;
+  if (pairIdx >= numPairs) {
+    return;
+  }
+
+  const int localTargetIdx  = pairIdx / numPatterns;
+  const int targetIdx       = firstTargetIdx + localTargetIdx;
+  const int localPatternIdx = pairIdx % numPatterns;
+
+  if (targetIdx >= targets.numMolecules) {
+    return;
+  }
+
+  const int mainQueryIdx  = patternEntries ? patternEntries[localPatternIdx].mainQueryIdx : defaultMainQueryIdx;
+  const int patternId     = patternEntries ? patternEntries[localPatternIdx].patternId : defaultPatternId;
+  const int patternMolIdx = patternEntries ? patternEntries[localPatternIdx].patternMolIdx : localPatternIdx;
+
+  const int globalPairIdx = targetIdx * outputNumQueries + mainQueryIdx;
+  if (globalPairIdx < miniBatchPairOffset || globalPairIdx >= miniBatchPairOffset + miniBatchSize) {
+    return;
+  }
+
+  const TargetMoleculeView target  = getMolecule(targets, targetIdx);
+  const QueryMoleculeView  pattern = getMolecule(patterns, patternMolIdx);
+
+  dfs::DfsPairOutput out;
+  out.paint.recursiveBits  = outputRecursiveBits;
+  out.paint.patternId      = patternId;
+  out.paint.maxTargetAtoms = maxTargetAtoms;
+  out.paint.outputPairIdx  = globalPairIdx - miniBatchPairOffset;
+
+  dfs::dfsSearchPair<MaxTargetAtoms, MaxQueryAtoms, dfs::DfsOutputMode::Paint>(
+    target,
+    pattern,
+    labelMatrixBuffer + static_cast<std::size_t>(pairIdx) * kLabelMatrixWordsT,
+    shared,
+    warp,
+    lane,
+    0,
+    out);
+}
+
+// =============================================================================
 // Explicit Template Instantiations for All 24 Valid Configurations
 // =============================================================================
 
-// Helper macro to instantiate both VF2 and GSI for a given configuration
+// Helper macro to instantiate all supported algorithms for a given configuration
 #define INSTANTIATE_SUBSTRUCT_KERNELS(MaxT, MaxQ, MaxB)                                      \
   template __global__ void substructMatchKernelT<MaxT, MaxQ, MaxB, SubstructAlgorithm::VF2>( \
     TargetMoleculesDeviceView,                                                               \
@@ -705,6 +853,51 @@ INSTANTIATE_SUBSTRUCT_KERNELS(128, 64, 6)
 INSTANTIATE_SUBSTRUCT_KERNELS(128, 64, 8)
 
 #undef INSTANTIATE_SUBSTRUCT_KERNELS
+
+// DFS kernels do not depend on MaxBondsPerAtom: the degree-8 packed rows are
+// consumed whole, so there is no per-degree loop to unroll.
+#define INSTANTIATE_SUBSTRUCT_DFS_KERNELS(MaxT, MaxQ)                                       \
+  template __global__ void substructDfsMatchKernelT<MaxT, MaxQ, dfs::DfsOutputMode::Count>( \
+    TargetMoleculesDeviceView,                                                              \
+    QueryMoleculesDeviceView,                                                               \
+    SubstructMatchResultsDeviceViewT<MaxQ>,                                                 \
+    const int*,                                                                             \
+    int,                                                                                    \
+    int,                                                                                    \
+    const int*);                                                                            \
+  template __global__ void substructDfsMatchKernelT<MaxT, MaxQ, dfs::DfsOutputMode::Store>( \
+    TargetMoleculesDeviceView,                                                              \
+    QueryMoleculesDeviceView,                                                               \
+    SubstructMatchResultsDeviceViewT<MaxQ>,                                                 \
+    const int*,                                                                             \
+    int,                                                                                    \
+    int,                                                                                    \
+    const int*);                                                                            \
+  template __global__ void substructDfsPaintKernelT<MaxT, MaxQ>(TargetMoleculesDeviceView,  \
+                                                                QueryMoleculesDeviceView,   \
+                                                                const BatchedPatternEntry*, \
+                                                                int,                        \
+                                                                int,                        \
+                                                                uint32_t*,                  \
+                                                                int,                        \
+                                                                int,                        \
+                                                                int,                        \
+                                                                int,                        \
+                                                                int,                        \
+                                                                int,                        \
+                                                                const uint32_t*,            \
+                                                                int);
+
+INSTANTIATE_SUBSTRUCT_DFS_KERNELS(32, 16)
+INSTANTIATE_SUBSTRUCT_DFS_KERNELS(32, 32)
+INSTANTIATE_SUBSTRUCT_DFS_KERNELS(64, 16)
+INSTANTIATE_SUBSTRUCT_DFS_KERNELS(64, 32)
+INSTANTIATE_SUBSTRUCT_DFS_KERNELS(64, 64)
+INSTANTIATE_SUBSTRUCT_DFS_KERNELS(128, 16)
+INSTANTIATE_SUBSTRUCT_DFS_KERNELS(128, 32)
+INSTANTIATE_SUBSTRUCT_DFS_KERNELS(128, 64)
+
+#undef INSTANTIATE_SUBSTRUCT_DFS_KERNELS
 
 // Label matrix kernel instantiations (one per target/query combo, no MaxBonds needed)
 #define INSTANTIATE_LABEL_MATRIX_KERNEL(MaxT, MaxQ)                                        \
@@ -971,6 +1164,27 @@ void launchSubstructPaintKernelForConfig(SubstructAlgorithm         algorithm,
   switch (algorithm) {
     case SubstructAlgorithm::VF2:
       break;
+    case SubstructAlgorithm::DFS: {
+      // numBlocks is the pair count from the caller's one-block-per-pair view;
+      // DFS packs eight pairs into each CTA instead.
+      const int dfsBlocks = (numBlocks + dfs::kWarpsPerBlock - 1) / dfs::kWarpsPerBlock;
+      substructDfsPaintKernelT<MaxTargetAtoms, MaxQueryAtoms>
+        <<<dfsBlocks, dfs::kBlockSize, 0, stream>>>(targets,
+                                                    patterns,
+                                                    patternEntries,
+                                                    numPatterns,
+                                                    numBlocks,
+                                                    outputRecursiveBits,
+                                                    maxTargetAtoms,
+                                                    outputNumQueries,
+                                                    defaultPatternId,
+                                                    defaultMainQueryIdx,
+                                                    miniBatchPairOffset,
+                                                    miniBatchSize,
+                                                    labelMatrixBuffer,
+                                                    firstTargetIdx);
+      break;
+    }
     case SubstructAlgorithm::GSI:
       substructPaintKernelT<MaxTargetAtoms, MaxQueryAtoms, MaxBondsPerAtom, SubstructAlgorithm::GSI>
         <<<numBlocks, kBlockSize, 0, stream>>>(targets,
@@ -1046,6 +1260,9 @@ void configureSubstructKernelsSharedMem() {
     substructMatchKernelT<kMaxTargetAtoms, kMaxQueryAtoms, kMaxBondsPerAtom, SubstructAlgorithm::GSI>);
   configureSharedMemCarveout(
     substructPaintKernelT<kMaxTargetAtoms, kMaxQueryAtoms, kMaxBondsPerAtom, SubstructAlgorithm::GSI>);
+  configureSharedMemCarveout(substructDfsMatchKernelT<kMaxTargetAtoms, kMaxQueryAtoms, dfs::DfsOutputMode::Count>);
+  configureSharedMemCarveout(substructDfsMatchKernelT<kMaxTargetAtoms, kMaxQueryAtoms, dfs::DfsOutputMode::Store>);
+  configureSharedMemCarveout(substructDfsPaintKernelT<kMaxTargetAtoms, kMaxQueryAtoms>);
 
   sharedMemCarveoutConfigured() = true;
 }
@@ -1095,6 +1312,29 @@ void launchMatchKernelForConfig(SubstructAlgorithm            algorithm,
                                               batchLocalIndices,
                                               timings);
       break;
+    case SubstructAlgorithm::DFS: {
+      const int dfsBlocks = (numPairs + dfs::kWarpsPerBlock - 1) / dfs::kWarpsPerBlock;
+      if (miniBatchResults.countOnly()) {
+        substructDfsMatchKernelT<MaxTargetAtoms, MaxQueryAtoms, dfs::DfsOutputMode::Count>
+          <<<dfsBlocks, dfs::kBlockSize, 0, stream>>>(targets,
+                                                      queries,
+                                                      results,
+                                                      pairIndices,
+                                                      numPairs,
+                                                      numQueries,
+                                                      batchLocalIndices);
+      } else {
+        substructDfsMatchKernelT<MaxTargetAtoms, MaxQueryAtoms, dfs::DfsOutputMode::Store>
+          <<<dfsBlocks, dfs::kBlockSize, 0, stream>>>(targets,
+                                                      queries,
+                                                      results,
+                                                      pairIndices,
+                                                      numPairs,
+                                                      numQueries,
+                                                      batchLocalIndices);
+      }
+      break;
+    }
     case SubstructAlgorithm::GSI:
       substructMatchKernelT<MaxTargetAtoms, MaxQueryAtoms, MaxBondsPerAtom, SubstructAlgorithm::GSI>
         <<<numPairs, kBlockSize, 0, stream>>>(targets,

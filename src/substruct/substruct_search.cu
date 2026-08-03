@@ -145,6 +145,8 @@ void uploadAndLaunchMiniBatch(GpuExecutor&                        executor,
                               SubstructAlgorithm                  algorithm) {
   ScopedNvtxRange uploadRange("uploadAndLaunchMiniBatch");
 
+  // DFS keeps all per-pair state lane-local, so only GSI needs the ping-pong
+  // partial-match overflow slab.
   cudaStream_t executorStream     = executor.stream();
   const int    numBuffersPerBlock = (algorithm == SubstructAlgorithm::GSI) ? 2 : 1;
 

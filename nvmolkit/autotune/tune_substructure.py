@@ -119,6 +119,7 @@ def tune_substructure(
     maxMatches: int = 0,
     uniquify: bool = False,
     gpuIds: Optional[Iterable[int]] = None,
+    algorithm: str = "gsi",
     calibration_set: Optional[Iterable[int]] = None,
     calibration_fraction: float = 0.1,
     calibration_max_size: int = 50_000,
@@ -143,6 +144,7 @@ def tune_substructure(
             Held constant across trials.
         uniquify: ``uniquify`` flag forwarded to the resulting config.
         gpuIds: GPU device IDs to use. Fixed across the study.
+        algorithm: Matching backend to tune, either ``"gsi"`` or ``"dfs"``.
         calibration_set: Optional explicit indices into ``targets``.
         calibration_fraction: Fraction of the workload to auto-sample.
         calibration_max_size: Cap on the auto-sampled calibration size.
@@ -194,6 +196,7 @@ def tune_substructure(
             maxMatches=int(maxMatches),
             uniquify=bool(uniquify),
             gpuIds=fixed_gpu_ids if fixed_gpu_ids else None,
+            algorithm=algorithm,
         )
 
     queries_list = list(queries)
@@ -209,6 +212,7 @@ def tune_substructure(
                 maxMatches=int(maxMatches),
                 uniquify=bool(uniquify),
                 gpuIds=fixed_gpu_ids if fixed_gpu_ids else None,
+                algorithm=algorithm,
             ),
             state,
         )
