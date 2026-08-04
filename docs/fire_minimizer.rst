@@ -65,6 +65,11 @@ A conformer is converged when the 2-norm of its full gradient is no greater
 than ``gradTol``. Independent conformers are batched on the GPU; the adaptive
 state and the convergence decision remain per conformer.
 
+Performance
+-----------
+
+At an equal iteration count, FIRE is roughly 2x faster than BFGS on all tested hardware.
+
 Parameters and tuning
 ---------------------
 
@@ -79,110 +84,40 @@ for UFF optimization and distance-geometry embedding.
 Validation
 ----------
 
-The validation used 10,000 noise-perturbed MMFF94 conformers sampled from the
-Enamine REAL 10M collection. RDKit MMFF94, nvMolKit BFGS at 200 steps,
-nvMolKit FIRE at 200 steps, and nvMolKit FIRE at 400 steps all started from
-the same coordinates. Final geometries from every arm were re-scored with
-RDKit MMFF94 so energy and residual-gradient comparisons use one
+We validated FIRE on 10,000 noise-perturbed MMFF94 conformers sampled from the
+Enamine REAL 10M collection. RDKit MMFF94, nvMolKit BFGS, and nvMolKit FIRE all
+started from the same coordinates and ran for 200 steps. Every final geometry
+was re-scored with RDKit MMFF94 so all energy comparisons use one
 implementation.
 
-.. list-table:: Final RDKit-MMFF94 energy over 10,000 conformers
-   :header-rows: 1
-   :widths: 36 20 20 24
-
-   * - Arm
-     - Mean (kcal/mol)
-     - Median (kcal/mol)
-     - Correlation with RDKit
-   * - RDKit MMFF94, 200 steps
-     - 30.0764
-     - 32.4748
-     - 1.000000
-   * - nvMolKit BFGS, 200 steps
-     - 30.2991
-     - 32.6047
-     - 0.996979
-   * - nvMolKit FIRE, 200 steps
-     - 29.9992
-     - 32.4451
-     - 0.999752
-   * - nvMolKit FIRE, 400 steps
-     - 29.9979
-     - 32.4442
-     - 0.999752
-
-At 200 steps, the median absolute FIRE-to-RDKit energy difference was already
-near parity; 90% of conformers were within
-:math:`6.41\times10^{-5}` kcal/mol/atom. At 400 steps the central
-distribution tightened further: the median signed difference was
-:math:`2.10\times10^{-6}` kcal/mol/atom and 90% were within
-:math:`1.25\times10^{-5}` kcal/mol/atom. The remaining tail is dominated by
-arms reaching different nearby minima rather than a systematic energy offset.
-
-.. figure:: _static/fire_validation_energy_distributions.png
-   :alt: Histograms of final energy differences for BFGS and FIRE at 200 and 400 steps.
-   :width: 100%
-
-   Final-energy difference distributions. The right panel focuses on the
-   central 90% of the FIRE distributions so the improvement from 200 to 400
-   FIRE steps is visible.
+Comparing FIRE against BFGS from identical starting conformers, nearly all
+pairs sit on the parity line. Most of the conformers that fall off the diagonal
+are in FIRE's favor: they lie below the parity line, meaning FIRE found the
+lower-energy minimum from that starting geometry. 
 
 .. figure:: _static/fire_validation_bfgs_fire_scatter.png
-   :alt: Pairwise scatter plots comparing final BFGS and FIRE MMFF energies.
+   :alt: Pairwise scatter plot comparing final BFGS and FIRE MMFF energies at 200 steps.
    :width: 100%
 
-   Pairwise BFGS/FIRE final energies from identical starting conformers.
-   Most points lie on the parity line; points away from the diagonal identify
-   conformers for which the optimizers reached different local minima within
-   the iteration budget.
+   Pairwise BFGS/FIRE final energies from identical starting conformers. Points
+   below the diagonal are conformers where FIRE reached the lower energy.
 
-Residual gradients show that the energy agreement is not caused by accepting
-high-force structures:
+Against RDKit as the reference, 93% of FIRE conformers finish within
+:math:`10^{-4}` kcal/mol/atom of the RDKit energy, compared with 96% for BFGS.
+Within that bulk, FIRE sits slightly farther from RDKit: its median offset is
+:math:`+1.7\times10^{-5}` kcal/mol/atom against
+:math:`+3.0\times10^{-6}` for BFGS.
 
-.. list-table:: Residual RDKit-MMFF94 gradient norm over 10,000 conformers
-   :header-rows: 1
-   :widths: 36 16 16 16 16
+.. figure:: _static/fire_validation_energy_distributions.png
+   :alt: Histograms of final energy differences for BFGS and FIRE at 200 steps.
+   :width: 100%
 
-   * - Arm
-     - Median
-     - p90
-     - p99
-     - Maximum
-   * - RDKit MMFF94, 200 steps
-     - 7.72e-5
-     - 1.59e-3
-     - 0.605
-     - 44.97
-   * - nvMolKit BFGS, 200 steps
-     - 2.16e-3
-     - 2.28e-2
-     - 0.961
-     - 51.28
-   * - nvMolKit FIRE, 200 steps
-     - 1.02e-3
-     - 6.55e-3
-     - 0.0427
-     - 0.250
-   * - nvMolKit FIRE, 400 steps
-     - 2.09e-4
-     - 1.42e-3
-     - 0.0106
-     - 0.0742
+   Final-energy difference distributions at 200 steps, shown over
+   :math:`\pm 10^{-4}` kcal/mol/atom.
 
-Performance
------------
+Taken together, at an equal iteration budget, FIRE's bulk distribution is
+slightly looser than BFGS's, while FIRE reaches the lower minimum on most of
+the conformers where the two minimizers end up in different basins.
 
-At an equal iteration count, FIRE is roughly 2x faster than BFGS. Each FIRE
-iteration only integrates a velocity and rescales a step, whereas BFGS
-maintains and applies an inverse-Hessian approximation and performs a line
-search.
 
-Choosing FIRE or BFGS
----------------------
 
-BFGS remains the default and is the conservative choice when reproducing an
-existing nvMolKit or RDKit workflow. FIRE is useful when a robust,
-low-state optimizer is desirable or when a fixed iteration budget leaves a
-heavy tail of BFGS residual gradients. Both algorithms are local optimizers,
-and neither guarantees that two starting geometries—or two algorithms—will
-reach the same basin.
