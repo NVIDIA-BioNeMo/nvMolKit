@@ -26,57 +26,38 @@ def load_arrays(path: Path) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     with np.load(path, allow_pickle=False) as data:
         n_atoms = data["_n_atoms"]
         energies = {
-            "RDKit MMFF94 (200)": data["energy::rdkit"],
-            "nvMolKit BFGS (200)": data["energy::nvmolkit_bfgs"],
-            "nvMolKit FIRE (200)": data["energy::nvmolkit_fire"],
-            "nvMolKit FIRE (400)": data["energy::nvmolkit_fire_400"],
+            "RDKit MMFF94": data["energy::rdkit"],
+            "BFGS": data["energy::nvmolkit_bfgs"],
+            "FIRE": data["energy::nvmolkit_fire"],
         }
     return n_atoms, energies
 
 
 def plot_distributions(n_atoms: np.ndarray, energies: dict[str, np.ndarray], output_path: Path) -> None:
-    reference = energies["RDKit MMFF94 (200)"]
-    deltas = {
-        name: (values - reference) / n_atoms for name, values in energies.items() if name != "RDKit MMFF94 (200)"
-    }
+    reference = energies["RDKit MMFF94"]
+    deltas = {name: (values - reference) / n_atoms for name, values in energies.items() if name != "RDKit MMFF94"}
 
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.8))
-    colors = ("#76b900", "#1f77b4", "#ff7f0e")
-    joint = np.concatenate([values[np.isfinite(values)] for values in deltas.values()])
-    full_limit = float(np.quantile(np.abs(joint), 0.99))
-    zoom_joint = np.concatenate(
-        [
-            deltas["nvMolKit FIRE (200)"][np.isfinite(deltas["nvMolKit FIRE (200)"])],
-            deltas["nvMolKit FIRE (400)"][np.isfinite(deltas["nvMolKit FIRE (400)"])],
-        ]
-    )
-    zoom_limit = float(np.quantile(np.abs(zoom_joint), 0.90))
-
-    for ax, limit, title in (
-        (axes[0], full_limit, "Central 99%: all nvMolKit arms"),
-        (axes[1], zoom_limit, "Central 90%: FIRE convergence"),
-    ):
-        bins = np.linspace(-limit, limit, 100)
-        selected = (
-            deltas.items() if ax is axes[0] else ((name, values) for name, values in deltas.items() if "FIRE" in name)
+    fig, ax = plt.subplots(figsize=(8.0, 5.0))
+    limit = 1.0e-4
+    bins = np.linspace(-limit, limit, 51)
+    colors = ("#76b900", "#1f77b4")
+    for color, (name, values) in zip(colors, deltas.items()):
+        finite = values[np.isfinite(values)]
+        ax.hist(
+            finite,
+            bins=bins,
+            histtype="step",
+            linewidth=1.9,
+            color=color,
+            label=name,
         )
-        for color, (name, values) in zip(colors, selected):
-            finite = values[np.isfinite(values)]
-            ax.hist(
-                finite,
-                bins=bins,
-                histtype="step",
-                linewidth=1.7,
-                color=color,
-                label=name,
-            )
-        ax.axvline(0.0, color="black", linestyle="--", linewidth=1.0)
-        ax.set_xlim(-limit, limit)
-        ax.set_xlabel(r"$(E_{\mathrm{arm}}-E_{\mathrm{RDKit}})/N_{\mathrm{atoms}}$ (kcal/mol/atom)")
-        ax.set_ylabel("Conformers")
-        ax.set_title(title)
-        ax.grid(alpha=0.25)
-        ax.legend(fontsize=8)
+    ax.axvline(0.0, color="black", linestyle="--", linewidth=1.0)
+    ax.set_xlim(-limit, limit)
+    ax.set_xlabel(r"$(E_{\mathrm{arm}}-E_{\mathrm{RDKit}})/N_{\mathrm{atoms}}$ (kcal/mol/atom)")
+    ax.set_ylabel("Conformers")
+    ax.set_title("Final MMFF94 energy differences at 200 steps")
+    ax.grid(alpha=0.25)
+    ax.legend()
 
     fig.tight_layout()
     fig.savefig(output_path, dpi=180)
@@ -84,32 +65,29 @@ def plot_distributions(n_atoms: np.ndarray, energies: dict[str, np.ndarray], out
 
 
 def plot_bfgs_fire_scatter(energies: dict[str, np.ndarray], output_path: Path) -> None:
-    bfgs = energies["nvMolKit BFGS (200)"]
-    fire_arms = ("nvMolKit FIRE (200)", "nvMolKit FIRE (400)")
-    fig, axes = plt.subplots(1, 2, figsize=(10.5, 5.0), sharex=True, sharey=True)
+    bfgs = energies["BFGS"]
+    fire = energies["FIRE"]
+    fig, ax = plt.subplots(figsize=(6.2, 5.4))
 
-    finite_all = np.concatenate([bfgs, *(energies[name] for name in fire_arms)])
+    finite_all = np.concatenate([bfgs, fire])
     finite_all = finite_all[np.isfinite(finite_all)]
     lo, hi = np.quantile(finite_all, [0.001, 0.999])
 
-    for ax, name in zip(axes, fire_arms):
-        fire = energies[name]
-        mask = np.isfinite(bfgs) & np.isfinite(fire)
-        x = bfgs[mask]
-        y = fire[mask]
-        correlation = float(np.corrcoef(x, y)[0, 1])
-        median_delta = float(np.median(y - x))
+    mask = np.isfinite(bfgs) & np.isfinite(fire)
+    x = bfgs[mask]
+    y = fire[mask]
+    median_delta = float(np.median(y - x))
 
-        ax.scatter(x, y, s=5, alpha=0.25, edgecolors="none", rasterized=True)
-        ax.plot([lo, hi], [lo, hi], color="black", linestyle="--", linewidth=1.0)
-        ax.set_xlim(lo, hi)
-        ax.set_ylim(lo, hi)
-        ax.set_xlabel("nvMolKit BFGS energy (kcal/mol)")
-        ax.set_ylabel(f"{name} energy (kcal/mol)")
-        ax.set_title(f"{name}\nr={correlation:.6f}, median ΔE={median_delta:+.3g}")
-        ax.grid(alpha=0.25)
+    ax.scatter(x, y, s=5, alpha=0.32, edgecolors="none", rasterized=True)
+    ax.plot([lo, hi], [lo, hi], color="black", linestyle="--", linewidth=1.0)
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.set_xlabel("BFGS energy (kcal/mol)")
+    ax.set_ylabel("FIRE energy (kcal/mol)")
+    ax.set_title(f"200 steps; median ΔE={median_delta:+.3g} kcal/mol")
+    ax.grid(alpha=0.25)
 
-    fig.suptitle("Pairwise final MMFF94 energies from identical starting conformers")
+    fig.suptitle("Pairwise final MMFF94 energies")
     fig.tight_layout()
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
