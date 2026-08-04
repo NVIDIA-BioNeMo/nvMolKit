@@ -93,7 +93,7 @@ implementation.
 Comparing FIRE against BFGS from identical starting conformers, nearly all
 pairs sit on the parity line. Most of the conformers that fall off the diagonal
 are in FIRE's favor: they lie below the parity line, meaning FIRE found the
-lower-energy minimum from that starting geometry. 
+lower-energy minimum from that starting geometry.
 
 .. figure:: _static/fire_validation_bfgs_fire_scatter.png
    :alt: Pairwise scatter plot comparing final BFGS and FIRE MMFF energies at 200 steps.
