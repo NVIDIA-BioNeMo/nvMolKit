@@ -127,6 +127,7 @@ Types
    :template: class_template.rst
 
    types.AsyncGpuResult
+   types.FireOptions
    types.HardwareOptions
 
 Hardware Autotuning (optional ``optuna`` extra)
