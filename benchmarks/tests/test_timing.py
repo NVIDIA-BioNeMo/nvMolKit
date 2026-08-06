@@ -33,6 +33,14 @@ def test_deadline_independent_instances():
     assert not long.expired()
 
 
+def test_deadline_reports_remaining_seconds():
+    disabled = Deadline(0.0)
+    active = Deadline(1.0)
+
+    assert disabled.remaining_seconds() is None
+    assert 0.0 < active.remaining_seconds() <= 1.0
+
+
 def test_throughput_per_s_simple_conversion():
     # 100 items in 500ms -> 200 items/s
     assert throughput_per_s(100, 500.0) == pytest.approx(200.0)
@@ -115,6 +123,22 @@ def test_time_it_bounded_stddev_positive_for_multiple_completed_runs():
         run, runs=3, max_seconds=0.0, progress_getter=lambda: 1, progress_target=1
     )
     assert std_ms > 0.0
+
+
+def test_time_it_bounded_does_not_pair_full_timing_with_partial_progress():
+    progresses = iter([10, 3])
+    progress = [0]
+
+    def run(_deadline):
+        progress[0] = next(progresses)
+
+    avg_ms, std_ms, reported_progress = time_it_bounded(
+        run, runs=3, max_seconds=0.0, progress_getter=lambda: progress[0], progress_target=10
+    )
+
+    assert avg_ms >= 0.0
+    assert std_ms == 0.0
+    assert reported_progress == 10
 
 
 def test_time_it_bounded_shared_deadline_caps_inner_loop():

@@ -18,16 +18,15 @@ import json
 import sys
 
 import numpy as np
-import pandas as pd
 import torch
-from bench_utils import load_smiles
-from benchmark_timing import time_it
+from bench_utils import add_backend_selection_args, load_smiles, print_csv_rows, time_it, write_csv_rows
 from rdkit import DataStructs
 from rdkit.Chem import AllChem
 from rdkit.DataStructs import BulkTanimotoSimilarity
 from rdkit.ML.Cluster.Butina import ClusterData
 
-from nvmolkit.clustering import butina as butina_nvmol, fused_butina
+from nvmolkit.clustering import butina as butina_nvmol
+from nvmolkit.clustering import fused_butina
 from nvmolkit.fingerprints import MorganFingerprintGenerator as nvmolMorganGen
 from nvmolkit.similarity import crossTanimotoSimilarity
 
@@ -149,9 +148,8 @@ DEFAULT_SIZES = [1000, 5000, 10000, 20000, 30000, 40000]
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Benchmark Butina clustering")
     parser.add_argument("input_smiles_file", help="Path to input SMILES file")
-    parser.add_argument("--no-rdkit", action="store_true", help="Disable RDKit benchmarks")
     parser.add_argument("--no-fused", action="store_true", help="Disable fused Butina benchmarks")
-    parser.add_argument("--no-nvmolkit", action="store_true", help="Disable nvMolKit Butina benchmarks")
+    add_backend_selection_args(parser)
     parser.add_argument(
         "--rdkit-lowmem",
         action="store_true",
@@ -176,6 +174,17 @@ if __name__ == "__main__":
     )
     parser.add_argument("--runs", type=int, default=3, help="Number of timed repetitions (default: 3)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for sampling SMILES (default: 42)")
+    parser.add_argument(
+        "--allow-synthetic-padding",
+        action="store_true",
+        help="Pad undersized inputs with synthetic fingerprints/distances instead of failing",
+    )
+    parser.add_argument(
+        "--validate-max-size",
+        type=int,
+        default=10000,
+        help="Largest problem size for the expensive dense correctness check (default: 10000; 0 disables)",
+    )
     parser.add_argument(
         "-o", "--output", type=str, default="results.csv", help="Output CSV file path (default: results.csv)"
     )
@@ -220,8 +229,16 @@ if __name__ == "__main__":
     max_size = max(e["size"] for e in run_plan)
 
     mols = load_smiles(args.input_smiles_file, max_count=max_size + 100, sanitize=True, seed=args.seed)
+    if len(mols) < max_size and not args.allow_synthetic_padding:
+        print(
+            f"Error: requested size {max_size}, but only {len(mols)} molecules loaded; "
+            "pass --allow-synthetic-padding to benchmark synthetic padded data",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    fps = get_fingerprints(mols)
+    need_nvmolkit_fps = any("fused" in entry["run"] or "nvmolkit" in entry["run"] for entry in run_plan)
+    fps = get_fingerprints(mols) if need_nvmolkit_fps else None
 
     # All three rdkit paths (cluster_only, with_tanimoto, lowmem) need real
     # RDKit fingerprints, so build them once if any rdkit row is planned.
@@ -241,9 +258,7 @@ if __name__ == "__main__":
     results = []
 
     def save_results():
-        df = pd.DataFrame(results)
-        df.to_csv(output_path, index=False)
-        return df
+        write_csv_rows(results, output_path)
 
     try:
         for entry in run_plan:
@@ -354,7 +369,7 @@ if __name__ == "__main__":
                                 tuple(torch.argwhere(nvmol_res == i).flatten().tolist())
                                 for i in range(nvmol_res.max() + 1)
                             ]
-                            if nvmol_reordering:
+                            if nvmol_reordering and 0 < size <= args.validate_max_size:
                                 check_butina_correctness(dist_mat <= cutoff, nvmol_clusts)
 
                             results.append(
@@ -400,5 +415,8 @@ if __name__ == "__main__":
             save_results()
     except Exception as e:
         print(f"Got exception: {e}, exiting early")
-    df = save_results()
-    print(df)
+        save_results()
+        raise
+    save_results()
+    print("\nCSV Results:")
+    print_csv_rows(results)

@@ -35,20 +35,24 @@ import nvtx
 from bench_utils import (
     Deadline,
     TimingResult,
+    add_backend_selection_args,
     add_rdkit_max_seconds_arg,
     clone_mols_with_conformers,
     load_pickle,
     load_sdf,
     load_smiles,
     prep_mols,
+    print_csv_rows,
     throughput_per_s,
     time_it,
+    write_csv_rows,
 )
-from nvmolkit import autotune as nv_autotune
-from nvmolkit.types import HardwareOptions
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdDistGeom
 from tqdm.contrib.concurrent import process_map
+
+from nvmolkit import autotune as nv_autotune
+from nvmolkit.types import HardwareOptions
 
 OPTUNA_AVAILABLE = nv_autotune.is_available()
 
@@ -185,16 +189,16 @@ def bench_rdkit(
 
     @nvtx.annotate("etkdg_rdkit_run", color="yellow")
     def run() -> None:
-        cloned = clone_mols_with_conformers(mols)
         deadline = Deadline(max_seconds)
-        n_done = 0
-        for mol in cloned:
+        processed: list[Chem.Mol] = []
+        for source_mol in mols:
+            mol = Chem.RWMol(source_mol)
             rdDistGeom.EmbedMultipleConfs(mol, numConfs=confs_per_mol, params=params)
-            n_done += 1
+            processed.append(mol)
             if deadline.expired():
                 break
-        last_run_mols[0] = cloned[:n_done]
-        processed_count[0] = n_done
+        last_run_mols[0] = processed
+        processed_count[0] = len(processed)
 
     if warmup:
         warmup_mol = Chem.RWMol(mols[0])
@@ -228,15 +232,6 @@ def _build_hardware_options(
     )
 
 
-CSV_HEADER = (
-    "method,input_file,input_type,num_mols,mols_processed,confs_per_mol,max_iterations,"
-    "batch_size,batches_per_gpu,prep_threads,num_gpus,nvmolkit_config_source,"
-    "rdkit_threads,rdkit_max_seconds,time_ms,std_ms,conformers_generated,"
-    "confs_per_second,vs_rdkit_throughput_ratio,"
-    "mean_energy_diff,median_energy_diff,energy_diff_pairs"
-)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="ETKDG conformer generation benchmark: nvmolkit vs RDKit",
@@ -265,8 +260,7 @@ def main() -> None:
     parser.add_argument("--no_warmup", action="store_false", dest="warmup", help="Skip warmup")
     parser.set_defaults(warmup=True)
 
-    parser.add_argument("--no_nvmolkit", action="store_true", help="Skip nvmolkit benchmark")
-    parser.add_argument("--no_rdkit", action="store_true", help="Skip RDKit benchmark")
+    add_backend_selection_args(parser)
     parser.add_argument(
         "--rdkit_threads",
         type=int,
@@ -394,7 +388,7 @@ def main() -> None:
     if not args.no_rdkit:
         print(f"  RDKit threads: {args.rdkit_threads}")
     if not args.no_nvmolkit:
-        print(f"  nvmolkit hardware:")
+        print("  nvmolkit hardware:")
         print(f"    batch_size: {args.batch_size}")
         print(f"    batches_per_gpu: {args.batches_per_gpu if args.batches_per_gpu > 0 else 'auto'}")
         print(f"    prep_threads: {args.prep_threads if args.prep_threads > 0 else 'auto'}")
@@ -564,7 +558,7 @@ def main() -> None:
         else:
             print("  No paired conformers with valid energies on both sides")
 
-    csv_rows: list[str] = []
+    csv_rows: list[dict[str, object]] = []
     for name, (timing, run_mols) in results.items():
         is_nv = name == "nvmolkit"
         is_rdkit = name == "rdkit"
@@ -586,24 +580,37 @@ def main() -> None:
         median_diff = energy_median if (diff_computed and is_nv) else "N/A"
         pairs = energy_pairs if (diff_computed and is_nv) else "N/A"
         csv_rows.append(
-            f"{name},{input_file},{input_type},{len(mols)},{mols_processed},{args.confs_per_mol},"
-            f"{args.max_iterations},{batch_size},{batches_per_gpu},{prep_threads},{num_gpus},"
-            f"{nvmolkit_config_source},{rdkit_threads},{rdkit_max_seconds},"
-            f"{timing.mean_ms:.2f},{timing.std_ms:.2f},"
-            f"{confs_generated},{confs_per_second:.2f},{vs_rdkit_throughput_ratio},"
-            f"{mean_diff},{median_diff},{pairs}"
+            {
+                "method": name,
+                "input_file": input_file,
+                "input_type": input_type,
+                "num_mols": len(mols),
+                "mols_processed": mols_processed,
+                "confs_per_mol": args.confs_per_mol,
+                "max_iterations": args.max_iterations,
+                "batch_size": batch_size,
+                "batches_per_gpu": batches_per_gpu,
+                "prep_threads": prep_threads,
+                "num_gpus": num_gpus,
+                "nvmolkit_config_source": nvmolkit_config_source,
+                "rdkit_threads": rdkit_threads,
+                "rdkit_max_seconds": rdkit_max_seconds,
+                "time_ms": round(timing.mean_ms, 2),
+                "std_ms": round(timing.std_ms, 2),
+                "conformers_generated": confs_generated,
+                "confs_per_second": round(confs_per_second, 2),
+                "vs_rdkit_throughput_ratio": vs_rdkit_throughput_ratio,
+                "mean_energy_diff": mean_diff,
+                "median_energy_diff": median_diff,
+                "energy_diff_pairs": pairs,
+            }
         )
 
     print("\n\nCSV Results:")
-    print(CSV_HEADER)
-    for row in csv_rows:
-        print(row)
+    print_csv_rows(csv_rows)
 
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as fh:
-            fh.write(CSV_HEADER + "\n")
-            for row in csv_rows:
-                fh.write(row + "\n")
+        write_csv_rows(csv_rows, args.output)
         print(f"\nWrote results to {args.output}")
 
 
