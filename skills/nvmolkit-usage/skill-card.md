@@ -53,7 +53,7 @@ Mitigation: The skill's result-type documentation is explicit about when a resul
 Target agents: `claude-code`, `codex`. NVSkills-Eval has not yet been run against this skill — see Evaluation Results. <br>
 
 ## Evaluation Tasks: <br>
-11 functional evaluation tasks in `evals/evals.json` covering fingerprinting, similarity, conformer generation, optimization, clustering, and substructure search, plus 2 trigger-activation cases in `evals/trigger_evals.json`. <br>
+11 functional evaluation tasks in `evals/evals.json` covering fingerprinting, similarity, conformer generation, optimization, clustering, and substructure search, plus 3 trigger-activation cases and 2 non-trigger cases in `evals/trigger_evals.json`. <br>
 
 ## Evaluation Metrics Used: <br>
 Planned NVSkills-Eval dimensions: Security, Correctness, Discoverability, Effectiveness, Efficiency. <br>
