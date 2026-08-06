@@ -20,11 +20,10 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <cstdlib>
 #include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <memory>
-#include <random>
 #include <set>
 #include <string>
 #include <tuple>
@@ -43,10 +42,14 @@ using nvMolKit::MCSPair;
 using nvMolKit::MCSParameters;
 using nvMolKit::testing::readSmilesFileWithStrings;
 
-constexpr size_t       kMaxAtoms                = 24;
-constexpr size_t       kDefaultDatasetMolecules = 48;
-constexpr size_t       kDefaultRandomPairs      = 1;
-constexpr unsigned int kDefaultSeed             = 1337;
+constexpr size_t       kMaxAtoms          = 24;
+constexpr size_t       kMaxBonds          = 128;
+constexpr unsigned int kMaxDegree         = 8;
+constexpr size_t       kDatasetCandidates = 1000;
+constexpr size_t       kNumMolecules      = 160;
+constexpr size_t       kNumPairs          = 300;
+constexpr size_t       kPairingStrides[]  = {17, 53};
+constexpr size_t       kNumPairingStrides = sizeof(kPairingStrides) / sizeof(kPairingStrides[0]);
 
 struct RingConfig {
   bool        atomRingMatchesRingOnly = false;
@@ -55,26 +58,6 @@ struct RingConfig {
 };
 
 using FmcsIntegrationParams = std::tuple<MCSAtomCompare, MCSBondCompare, RingConfig>;
-
-unsigned int integrationSeed() {
-  if (const char* seedStr = std::getenv("NVMOLKIT_MCS_TEST_SEED")) {
-    try {
-      return static_cast<unsigned int>(std::stoul(seedStr));
-    } catch (const std::exception&) {
-    }
-  }
-  return kDefaultSeed;
-}
-
-size_t envSize(const char* name, size_t defaultValue) {
-  if (const char* value = std::getenv(name)) {
-    try {
-      return std::max<size_t>(1, std::stoull(value));
-    } catch (const std::exception&) {
-    }
-  }
-  return defaultValue;
-}
 
 const char* atomCompareName(MCSAtomCompare compare) {
   switch (compare) {
@@ -104,6 +87,7 @@ const char* bondCompareName(MCSBondCompare compare) {
 
 MCSParameters makeParams(MCSAtomCompare atomCompare, MCSBondCompare bondCompare, RingConfig ringConfig) {
   MCSParameters params;
+  params.requireGpu                                = true;
   params.atomCompare                               = atomCompare;
   params.bondCompare                               = bondCompare;
   params.atomCompareParameters.ringMatchesRingOnly = ringConfig.atomRingMatchesRingOnly;
@@ -410,12 +394,29 @@ Dataset loadDataset() {
   if (!std::filesystem::exists(smilesPath)) {
     throw std::runtime_error("SMILES file not found: " + smilesPath);
   }
-  auto [mols, smiles] =
-    readSmilesFileWithStrings(smilesPath, envSize("NVMOLKIT_MCS_TEST_MOLECULES", kDefaultDatasetMolecules), kMaxAtoms);
-  if (mols.empty()) {
+  auto [candidateMols, candidateSmiles] = readSmilesFileWithStrings(smilesPath, kDatasetCandidates, kMaxAtoms);
+
+  Dataset data;
+  data.mols.reserve(kNumMolecules);
+  data.smiles.reserve(kNumMolecules);
+  for (size_t i = 0; i < candidateMols.size() && data.mols.size() < kNumMolecules; ++i) {
+    const auto& mol             = candidateMols[i];
+    bool        degreeSupported = true;
+    for (const auto* atom : mol->atoms()) {
+      if (atom->getDegree() > kMaxDegree) {
+        degreeSupported = false;
+        break;
+      }
+    }
+    if (mol->getNumBonds() <= kMaxBonds && degreeSupported) {
+      data.mols.push_back(std::move(candidateMols[i]));
+      data.smiles.push_back(std::move(candidateSmiles[i]));
+    }
+  }
+  if (data.mols.empty()) {
     throw std::runtime_error("No molecules loaded from " + smilesPath);
   }
-  return Dataset{std::move(mols), std::move(smiles)};
+  return data;
 }
 
 const Dataset& dataset() {
@@ -447,7 +448,7 @@ void expectSameResultShape(const std::vector<nvMolKit::MCSResult>& expected,
 
 class FMCSIntegrationTest : public ::testing::TestWithParam<FmcsIntegrationParams> {};
 
-TEST_P(FMCSIntegrationTest, SeededChemblPairsMatchRDKit) {
+TEST_P(FMCSIntegrationTest, ChemblPairsMatchRDKitExactly) {
   const auto& data = dataset();
 
   const auto atomCompare = std::get<0>(GetParam());
@@ -455,48 +456,386 @@ TEST_P(FMCSIntegrationTest, SeededChemblPairsMatchRDKit) {
   const auto ringConfig  = std::get<2>(GetParam());
   const auto params      = makeParams(atomCompare, bondCompare, ringConfig);
 
-  const unsigned int seed =
-    integrationSeed() ^ (static_cast<unsigned int>(atomCompare) << 8) ^ (static_cast<unsigned int>(bondCompare) << 16) ^
-    (ringConfig.atomRingMatchesRingOnly ? 0x10000u : 0u) ^ (ringConfig.bondRingMatchesRingOnly ? 0x20000u : 0u);
-  const size_t                       numPairs = envSize("NVMOLKIT_MCS_TEST_PAIRS", kDefaultRandomPairs);
-  std::mt19937                       rng(seed);
-  std::uniform_int_distribution<int> dist(0, static_cast<int>(data.mols.size() - 1));
+  ASSERT_EQ(data.mols.size(), kNumMolecules);
 
   const auto           mols = moleculeTable(data);
-  std::vector<int>     indicesA;
-  std::vector<int>     indicesB;
   std::vector<MCSPair> pairs;
-  indicesA.reserve(numPairs);
-  indicesB.reserve(numPairs);
-  pairs.reserve(numPairs);
-
-  for (size_t i = 0; i < numPairs; ++i) {
-    const int idxA = dist(rng);
-    const int idxB = dist(rng);
-    indicesA.push_back(idxA);
-    indicesB.push_back(idxB);
-    pairs.emplace_back(static_cast<size_t>(idxA), static_cast<size_t>(idxB));
+  pairs.reserve(kNumPairs);
+  for (size_t i = 0; i < kNumPairs; ++i) {
+    const size_t idxA   = i % data.mols.size();
+    const size_t cycle  = i / data.mols.size();
+    const size_t stride = kPairingStrides[cycle % kNumPairingStrides];
+    const size_t idxB   = (idxA + stride) % data.mols.size();
+    pairs.emplace_back(idxA, idxB);
   }
 
   auto gpuResults = nvMolKit::findMCSBatch(mols, pairs, nullptr, params);
-  ASSERT_EQ(gpuResults.size(), numPairs);
+  ASSERT_EQ(gpuResults.size(), pairs.size());
 
-  for (size_t i = 0; i < numPairs; ++i) {
-    SCOPED_TRACE("pair=" + std::to_string(i) + " a=" + std::to_string(indicesA[i]) +
-                 " b=" + std::to_string(indicesB[i]) + " A=" + data.smiles[static_cast<size_t>(indicesA[i])] +
-                 " B=" + data.smiles[static_cast<size_t>(indicesB[i])] + " seed=" + std::to_string(seed) +
-                 " atomCompare=" + atomCompareName(atomCompare) + " bondCompare=" + bondCompareName(bondCompare) +
-                 " ringConfig=" + ringConfig.name);
-    const auto& molA = *data.mols[static_cast<size_t>(indicesA[i])];
-    const auto& molB = *data.mols[static_cast<size_t>(indicesB[i])];
+  for (size_t i = 0; i < pairs.size(); ++i) {
+    const auto [idxA, idxB] = pairs[i];
+    SCOPED_TRACE("pair=" + std::to_string(i) + " a=" + std::to_string(idxA) + " b=" + std::to_string(idxB) + " A=" +
+                 data.smiles[idxA] + " B=" + data.smiles[idxB] + " atomCompare=" + atomCompareName(atomCompare) +
+                 " bondCompare=" + bondCompareName(bondCompare) + " ringConfig=" + ringConfig.name);
+    const auto& molA = *data.mols[idxA];
+    const auto& molB = *data.mols[idxB];
     const auto  rd   = findRdkitMCS(molA, molB, params);
     const auto& gpu  = gpuResults[i];
 
+    EXPECT_TRUE(gpu.usedGpu);
+    EXPECT_FALSE(gpu.usedFallback);
+    EXPECT_FALSE(gpu.overflowed);
+    EXPECT_FALSE(gpu.canceled);
+    EXPECT_EQ(gpu.numAtoms, rd.NumAtoms);
+    EXPECT_EQ(gpu.numBonds, rd.NumBonds);
     const bool sizeMatches    = gpu.numAtoms == rd.NumAtoms && gpu.numBonds == rd.NumBonds;
     const bool mappingMatches = sizeMatches ? mappingMatchesRdkitMCS(gpu.atomMapping, molA, molB, rd) : false;
     const bool mappingValid   = sizeMatches ? mappingIsValidCommonSubgraph(gpu, molA, molB, params) : false;
-    EXPECT_TRUE(sizeMatches);
     EXPECT_TRUE(mappingMatches || mappingValid);
+  }
+}
+
+TEST(FMCSIntegration, NoCompatibleBondReturnsSingleAtomLikeRDKit) {
+  auto molA = std::unique_ptr<RDKit::ROMol>(RDKit::SmilesToMol("CC"));
+  auto molB = std::unique_ptr<RDKit::ROMol>(RDKit::SmilesToMol("C=C"));
+  ASSERT_NE(molA, nullptr);
+  ASSERT_NE(molB, nullptr);
+
+  const auto params = makeParams(MCSAtomCompare::Elements, MCSBondCompare::Order, RingConfig{});
+  const std::vector<const RDKit::ROMol*> mols{molA.get(), molB.get()};
+  const std::vector<MCSPair>             pairs{
+                {0, 1}
+  };
+
+  const auto gpuResults = nvMolKit::findMCSBatch(mols, pairs, nullptr, params);
+  const auto rd         = findRdkitMCS(*molA, *molB, params);
+  ASSERT_EQ(gpuResults.size(), 1u);
+  const auto& gpu = gpuResults.front();
+  EXPECT_TRUE(gpu.usedGpu);
+  EXPECT_FALSE(gpu.usedFallback);
+  EXPECT_EQ(gpu.numAtoms, rd.NumAtoms);
+  EXPECT_EQ(gpu.numBonds, rd.NumBonds);
+  EXPECT_TRUE(mappingMatchesRdkitMCS(gpu.atomMapping, *molA, *molB, rd));
+}
+
+TEST(FMCSIntegration, CuratedHigherTierChemblPairsMatchRDKitExactly) {
+  struct TierCase {
+    const char* largeSmiles;
+    const char* partnerSmiles;
+    size_t      lowerTierBound;
+    size_t      upperTierBound;
+    bool        largeFirst;
+  };
+
+  // Sparse ChEMBL molecules exercise the higher dispatch tiers without making
+  // exact RDKit comparison prohibitively expensive for a PR integration test.
+  // clang-format off
+  const TierCase cases[] = {
+    {"CCCCCCCCCCCCCC(=O)NCc1ccc(C(=O)N[C@H](C(=O)O)[C@@H](C)CC)cc1",
+     "CCO", 32, 64, true},
+    {"C#C/C=C\\CCCCCCCCCCCCCC/C=C\\CCCCC(O)/C=C/CCCC#C[C@H](O)C#CCCCCCC/C=C/[C@@H](O)C#C",
+     "CCO", 32, 64, false},
+    {"NCCCC[C@@H](C=O)NC(=O)CC(CCCN)NC(=O)CC(CCCN)NC(=O)CC(CCCN)NC(=O)CC(CCCN)NC(=O)CC(CCCN)NC(=O)CC(CCCN)"
+     "NC(=O)CC(CCCN)NC(=O)CC(N)CCCN",
+     "CCN", 64, 128, true},
+    {"CCCCCCCCCCCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCO",
+     "CCO", 64, 128, false},
+  };
+  // clang-format on
+
+  std::vector<std::unique_ptr<RDKit::ROMol>> ownedMols;
+  std::vector<const RDKit::ROMol*>           mols;
+  std::vector<MCSPair>                       pairs;
+  ownedMols.reserve(2 * std::size(cases));
+  mols.reserve(2 * std::size(cases));
+  pairs.reserve(std::size(cases));
+
+  for (const auto& testCase : cases) {
+    auto large   = std::unique_ptr<RDKit::ROMol>(RDKit::SmilesToMol(testCase.largeSmiles));
+    auto partner = std::unique_ptr<RDKit::ROMol>(RDKit::SmilesToMol(testCase.partnerSmiles));
+    ASSERT_NE(large, nullptr) << testCase.largeSmiles;
+    ASSERT_NE(partner, nullptr) << testCase.partnerSmiles;
+
+    const size_t graphSize = std::max<size_t>(large->getNumAtoms(), large->getNumBonds());
+    EXPECT_GT(graphSize, testCase.lowerTierBound);
+    EXPECT_LE(graphSize, testCase.upperTierBound);
+
+    const size_t largeIdx   = mols.size();
+    const size_t partnerIdx = largeIdx + 1;
+    mols.push_back(large.get());
+    mols.push_back(partner.get());
+    ownedMols.push_back(std::move(large));
+    ownedMols.push_back(std::move(partner));
+    pairs.emplace_back(testCase.largeFirst ? largeIdx : partnerIdx, testCase.largeFirst ? partnerIdx : largeIdx);
+  }
+
+  const auto params     = makeParams(MCSAtomCompare::Elements, MCSBondCompare::Order, RingConfig{});
+  const auto gpuResults = nvMolKit::findMCSBatch(mols, pairs, nullptr, params);
+  ASSERT_EQ(gpuResults.size(), pairs.size());
+
+  for (size_t i = 0; i < pairs.size(); ++i) {
+    const auto [idxA, idxB] = pairs[i];
+    SCOPED_TRACE("higher-tier case=" + std::to_string(i));
+    const auto& molA = *mols[idxA];
+    const auto& molB = *mols[idxB];
+    const auto  rd   = findRdkitMCS(molA, molB, params);
+    const auto& gpu  = gpuResults[i];
+
+    EXPECT_TRUE(gpu.usedGpu);
+    EXPECT_FALSE(gpu.usedFallback);
+    EXPECT_FALSE(gpu.overflowed);
+    EXPECT_FALSE(gpu.canceled);
+    EXPECT_EQ(gpu.numAtoms, rd.NumAtoms);
+    EXPECT_EQ(gpu.numBonds, rd.NumBonds);
+    const bool sizeMatches    = gpu.numAtoms == rd.NumAtoms && gpu.numBonds == rd.NumBonds;
+    const bool mappingMatches = sizeMatches ? mappingMatchesRdkitMCS(gpu.atomMapping, molA, molB, rd) : false;
+    const bool mappingValid   = sizeMatches ? mappingIsValidCommonSubgraph(gpu, molA, molB, params) : false;
+    EXPECT_TRUE(mappingMatches || mappingValid);
+  }
+}
+
+TEST(FMCSIntegration, TimeoutIsIsolatedPerPairWithinBatch) {
+  // Both pairs dispatch together through tier 128. The easy pair must finish
+  // even though the repetitive peptide pair exhausts its one-second budget.
+  auto easyA = std::unique_ptr<RDKit::ROMol>(
+    RDKit::SmilesToMol("CCCCCCCCCCCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCOCCO"));
+  auto easyB = std::unique_ptr<RDKit::ROMol>(RDKit::SmilesToMol("CCO"));
+  auto hardA = std::unique_ptr<RDKit::ROMol>(RDKit::SmilesToMol(
+    "C[C@H](NC(=O)[C@H](CCCNC(=N)N)NC(=O)[C@H](CCC(N)=O)NC(=O)[C@@H]1CCCN1C(=O)[C@@H](N)[C@@H](C)O)C(=O)N"
+    "[C@@H](CCCNC(=N)N)C(=O)N[C@@H](CCCNC(=N)N)C(=O)N[C@@H](CCCNC(=N)N)C(=O)N[C@@H](CCCCN)C(=O)N[C@@H](CCCCN)"
+    "C(=O)N[C@@H](CCCNC(=N)N)C(=O)N[C@@H](Cc1ccccc1)C(=O)O"));
+  auto hardB = std::unique_ptr<RDKit::ROMol>(RDKit::SmilesToMol(
+    "CSCC[C@H](NC(=O)[C@H](CC(C)C)NC(=O)CNC(=O)[C@H](Cc1ccccc1)NC(=O)[C@@H](Cc1ccccc1)NC(=O)[C@@H](CCC(N)=O)NC(=O)"
+    "[C@@H](CCC(N)=O)NC(=O)[C@@H]1CCCN1C(=O)[C@@H](CCCCN)NC(=O)[C@H]1CCCN1C(=O)[C@H](N)CCCN=C(N)N)C(N)=O"));
+  ASSERT_NE(easyA, nullptr);
+  ASSERT_NE(easyB, nullptr);
+  ASSERT_NE(hardA, nullptr);
+  ASSERT_NE(hardB, nullptr);
+
+  const auto graphSize = [](const RDKit::ROMol& mol) { return std::max<size_t>(mol.getNumAtoms(), mol.getNumBonds()); };
+  const size_t easyPairSize = std::max(graphSize(*easyA), graphSize(*easyB));
+  const size_t hardPairSize = std::max(graphSize(*hardA), graphSize(*hardB));
+  ASSERT_GT(easyPairSize, 64u);
+  ASSERT_LE(easyPairSize, 128u);
+  ASSERT_GT(hardPairSize, 64u);
+  ASSERT_LE(hardPairSize, 128u);
+
+  const std::vector<const RDKit::ROMol*> mols{easyA.get(), easyB.get(), hardA.get(), hardB.get()};
+  const std::vector<MCSPair>             pairs{
+                {0, 1},
+                {2, 3}
+  };
+  MCSParameters params;
+  params.timeoutSeconds       = 1;
+  params.requireGpu           = true;
+  params.batchSize            = 2;
+  params.workerThreads        = 1;
+  params.preprocessingThreads = 1;
+  params.executorsPerRunner   = 1;
+
+  const auto results = nvMolKit::findMCSBatch(mols, pairs, nullptr, params);
+  const auto rdEasy  = findRdkitMCS(*easyA, *easyB, params);
+  ASSERT_EQ(results.size(), 2u);
+
+  const auto& easy = results[0];
+  EXPECT_TRUE(easy.usedGpu);
+  EXPECT_FALSE(easy.usedFallback);
+  EXPECT_FALSE(easy.overflowed);
+  EXPECT_FALSE(easy.canceled);
+  EXPECT_EQ(easy.numAtoms, rdEasy.NumAtoms);
+  EXPECT_EQ(easy.numBonds, rdEasy.NumBonds);
+  EXPECT_TRUE(mappingMatchesRdkitMCS(easy.atomMapping, *easyA, *easyB, rdEasy));
+
+  const auto& hard = results[1];
+  EXPECT_TRUE(hard.usedGpu);
+  EXPECT_FALSE(hard.usedFallback);
+  EXPECT_FALSE(hard.overflowed);
+  EXPECT_TRUE(hard.canceled);
+  EXPECT_GT(hard.numAtoms, 0u);
+  EXPECT_GT(hard.numBonds, 0u);
+}
+
+TEST(FMCSIntegration, SpecialMoleculeSemanticsMatchRDKitExactly) {
+  struct SpecialCase {
+    const char*   name;
+    const char*   smilesA;
+    const char*   smilesB;
+    MCSParameters params;
+    unsigned int  expectedAtoms;
+    unsigned int  expectedBonds;
+    bool          expectGpu;
+  };
+
+  const auto gpuParams = [] {
+    MCSParameters params;
+    params.requireGpu = true;
+    return params;
+  };
+
+  std::vector<SpecialCase> cases;
+  {
+    auto params        = gpuParams();
+    params.atomCompare = MCSAtomCompare::Isotopes;
+    cases.push_back({"isotope-labelled atoms", "[13CH3]CO", "CCO", params, 2, 1, true});
+  }
+  {
+    auto params                                    = gpuParams();
+    params.atomCompareParameters.matchFormalCharge = true;
+    cases.push_back({"formal charge", "C[NH2+]C", "CNC", params, 1, 0, true});
+  }
+  {
+    auto params                                = gpuParams();
+    params.atomCompareParameters.matchValences = true;
+    cases.push_back({"different phosphorus valences", "P(C)(C)C", "P(C)(C)(C)(C)C", params, 1, 0, true});
+  }
+  cases.push_back({"disconnected salts", "CC.[Na+]", "CCC.[K+]", gpuParams(), 2, 1, true});
+  cases.push_back({"aromatic and aliphatic rings with CompareOrder", "c1ccccc1", "C1CCCCC1", gpuParams(), 6, 6, true});
+  {
+    auto params        = gpuParams();
+    params.bondCompare = MCSBondCompare::OrderExact;
+    cases.push_back(
+      {"aromatic and aliphatic rings with CompareOrderExact", "c1ccccc1", "C1CCCCC1", params, 1, 0, true});
+  }
+  {
+    auto params                                      = gpuParams();
+    params.atomCompareParameters.ringMatchesRingOnly = true;
+    cases.push_back({"ring atoms cannot match chain atoms", "C1CCCCC1", "CCCCCC", params, 0, 0, true});
+  }
+  {
+    auto params                                      = gpuParams();
+    params.bondCompareParameters.ringMatchesRingOnly = true;
+    cases.push_back({"ring bonds cannot match chain bonds", "C1CCCCC1", "CCCCCC", params, 1, 0, true});
+  }
+  cases.push_back({"no compatible atom", "[Na+]", "[Cl-]", gpuParams(), 0, 0, true});
+  cases.push_back({"empty molecule", "", "CC", gpuParams(), 0, 0, true});
+  cases.push_back(
+    {"opposite tetrahedral stereochemistry is ignored", "F[C@H](Cl)Br", "F[C@@H](Cl)Br", gpuParams(), 4, 3, true});
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.name);
+    auto molA = std::unique_ptr<RDKit::ROMol>(RDKit::SmilesToMol(testCase.smilesA));
+    auto molB = std::unique_ptr<RDKit::ROMol>(RDKit::SmilesToMol(testCase.smilesB));
+    ASSERT_NE(molA, nullptr) << testCase.smilesA;
+    ASSERT_NE(molB, nullptr) << testCase.smilesB;
+
+    const std::vector<const RDKit::ROMol*> mols{molA.get(), molB.get()};
+    const std::vector<MCSPair>             pairs{
+                  {0, 1}
+    };
+    const auto rd      = findRdkitMCS(*molA, *molB, testCase.params);
+    const auto results = nvMolKit::findMCSBatch(mols, pairs, nullptr, testCase.params);
+    ASSERT_EQ(results.size(), 1u);
+    const auto& result = results.front();
+
+    EXPECT_EQ(rd.NumAtoms, testCase.expectedAtoms);
+    EXPECT_EQ(rd.NumBonds, testCase.expectedBonds);
+    EXPECT_EQ(result.numAtoms, rd.NumAtoms);
+    EXPECT_EQ(result.numBonds, rd.NumBonds);
+    EXPECT_EQ(result.usedGpu, testCase.expectGpu);
+    EXPECT_EQ(result.usedFallback, !testCase.expectGpu);
+    EXPECT_FALSE(result.canceled);
+    EXPECT_FALSE(result.overflowed);
+
+    const bool sizeMatches    = result.numAtoms == rd.NumAtoms && result.numBonds == rd.NumBonds;
+    const bool mappingMatches = sizeMatches ? mappingMatchesRdkitMCS(result.atomMapping, *molA, *molB, rd) : false;
+    const bool mappingValid = sizeMatches ? mappingIsValidCommonSubgraph(result, *molA, *molB, testCase.params) : false;
+    EXPECT_TRUE(mappingMatches || mappingValid);
+  }
+}
+
+TEST(FMCSIntegration, UnsupportedBatchWideParametersThrowInsteadOfFallingBack) {
+  struct UnsupportedCase {
+    const char*   name;
+    MCSParameters params;
+  };
+
+  std::vector<UnsupportedCase> cases;
+  {
+    MCSParameters params;
+    params.storeAll = true;
+    cases.push_back({"StoreAll", params});
+  }
+  {
+    MCSParameters params;
+    params.connectedOnly = false;
+    cases.push_back({"disconnected MCS", params});
+  }
+  {
+    MCSParameters params;
+    params.maximizeBonds = false;
+    cases.push_back({"maximize atoms", params});
+  }
+  {
+    MCSParameters params;
+    params.threshold = 0.5;
+    cases.push_back({"Threshold", params});
+  }
+  {
+    MCSParameters params;
+    params.verbose = true;
+    cases.push_back({"Verbose", params});
+  }
+  {
+    MCSParameters params;
+    params.initialSeed = "CC";
+    cases.push_back({"initial SMARTS seed", params});
+  }
+  {
+    MCSParameters params;
+    params.atomCompare = MCSAtomCompare::AnyHeavyAtom;
+    cases.push_back({"AnyHeavyAtom", params});
+  }
+  {
+    MCSParameters params;
+    params.atomCompareParameters.matchChiralTag = true;
+    cases.push_back({"atom MatchChiralTag", params});
+  }
+  {
+    MCSParameters params;
+    params.atomCompareParameters.completeRingsOnly = true;
+    cases.push_back({"atom CompleteRingsOnly", params});
+  }
+  {
+    MCSParameters params;
+    params.atomCompareParameters.matchIsotope = true;
+    cases.push_back({"MatchIsotope flag", params});
+  }
+  {
+    MCSParameters params;
+    params.atomCompareParameters.maxDistance = 1.0;
+    cases.push_back({"atom MaxDistance", params});
+  }
+  {
+    MCSParameters params;
+    params.bondCompareParameters.completeRingsOnly = true;
+    cases.push_back({"bond CompleteRingsOnly", params});
+  }
+  {
+    MCSParameters params;
+    params.bondCompareParameters.matchFusedRings = true;
+    cases.push_back({"MatchFusedRings", params});
+  }
+  {
+    MCSParameters params;
+    params.bondCompareParameters.matchFusedRingsStrict = true;
+    cases.push_back({"MatchFusedRingsStrict", params});
+  }
+  {
+    MCSParameters params;
+    params.bondCompareParameters.matchStereo = true;
+    cases.push_back({"bond MatchStereo", params});
+  }
+  auto molA = std::unique_ptr<RDKit::ROMol>(RDKit::SmilesToMol("CN"));
+  auto molB = std::unique_ptr<RDKit::ROMol>(RDKit::SmilesToMol("CO"));
+  ASSERT_NE(molA, nullptr);
+  ASSERT_NE(molB, nullptr);
+  const std::vector<const RDKit::ROMol*> mols{molA.get(), molB.get()};
+  const std::vector<MCSPair>             pairs{
+                {0, 1}
+  };
+
+  for (const auto& testCase : cases) {
+    SCOPED_TRACE(testCase.name);
+    EXPECT_THROW((void)nvMolKit::findMCSBatch(mols, pairs, nullptr, testCase.params), std::invalid_argument);
   }
 }
 
@@ -592,7 +931,7 @@ std::string integrationParamName(const ::testing::TestParamInfo<FmcsIntegrationP
 }
 
 INSTANTIATE_TEST_SUITE_P(
-  AtomBondCompareSmoke,
+  AtomBondCompareIntegration,
   FMCSIntegrationTest,
   ::testing::Combine(::testing::Values(MCSAtomCompare::Any, MCSAtomCompare::Elements, MCSAtomCompare::Isotopes),
                      ::testing::Values(MCSBondCompare::Any, MCSBondCompare::Order, MCSBondCompare::OrderExact),
@@ -600,7 +939,7 @@ INSTANTIATE_TEST_SUITE_P(
   integrationParamName);
 
 INSTANTIATE_TEST_SUITE_P(
-  RingCompareSmoke,
+  RingCompareIntegration,
   FMCSIntegrationTest,
   ::testing::Values(
     FmcsIntegrationParams{

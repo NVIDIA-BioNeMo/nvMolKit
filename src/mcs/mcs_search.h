@@ -32,13 +32,27 @@ namespace nvMolKit {
 
 using MCSPair = std::pair<std::size_t, std::size_t>;
 
-/// Primary batch API. Each pair indexes into the single molecule table.
+/// Find an exact, connected, bond-maximizing MCS for every requested pair.
+///
+/// Each pair indexes into @p mols and results preserve pair order. With
+/// MCSParameters::requireGpu=false, only pair-specific GPU limits (more than
+/// 128 atoms/bonds, atom degree above 8, or GPU search overflow) cause that
+/// pair to be recomputed with RDKit. With requireGpu=true, those cases throw
+/// std::runtime_error. Unsupported batch-wide parameters always throw
+/// std::invalid_argument. Timeouts return canceled partial results and never
+/// fall back.
+///
+/// @throws std::invalid_argument for unsupported search parameters or invalid
+///         execution configuration.
+/// @throws std::runtime_error for invalid molecule references, required-GPU
+///         eligibility/overflow failures, or CUDA/runtime errors.
 std::vector<MCSResult> findMCSBatch(const std::vector<const RDKit::ROMol*>& mols,
                                     const std::vector<MCSPair>&             pairs,
                                     cudaStream_t                            stream = nullptr,
                                     const MCSParameters&                    params = MCSParameters{});
 
 /// Convenience wrapper for two same-sized lists, paired by index.
+/// @throws std::runtime_error if the lists have different sizes.
 std::vector<MCSResult> findMCSBatch(const std::vector<const RDKit::ROMol*>& molsA,
                                     const std::vector<const RDKit::ROMol*>& molsB,
                                     cudaStream_t                            stream = nullptr,

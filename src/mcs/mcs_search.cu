@@ -55,6 +55,7 @@ struct AtomLabelKey {
 
   [[nodiscard]] auto tie() const { return std::tie(atomCompareValue, isotope, totalValence, formalCharge, ringState); }
 
+  bool operator==(const AtomLabelKey& other) const { return tie() == other.tie(); }
   bool operator<(const AtomLabelKey& other) const { return tie() < other.tie(); }
 };
 
@@ -345,22 +346,56 @@ MCSResult runRDKitFallback(const RDKit::ROMol& molA, const RDKit::ROMol& molB, c
   return result;
 }
 
-bool shouldFallbackToRDKit(const RDKit::ROMol&  molA,
-                           const RDKit::ROMol&  molB,
-                           const MCSParameters& params,
-                           std::string&         reason) {
+void validateSupportedParameters(const MCSParameters& params) {
+  if (params.storeAll) {
+    throw std::invalid_argument("GPU fMCS does not support StoreAll");
+  }
   if (!params.connectedOnly) {
-    reason = "fMCS supports connected MCS only";
-    return true;
+    throw std::invalid_argument("GPU fMCS supports connected MCS only");
   }
   if (!params.maximizeBonds) {
-    reason = "fMCS currently supports MaximizeBonds only";
-    return true;
+    throw std::invalid_argument("GPU fMCS supports MaximizeBonds only");
+  }
+  if (params.threshold != 1.0) {
+    throw std::invalid_argument("GPU fMCS supports Threshold=1.0 only");
+  }
+  if (params.verbose) {
+    throw std::invalid_argument("GPU fMCS does not support Verbose output");
+  }
+  if (!params.initialSeed.empty()) {
+    throw std::invalid_argument("GPU fMCS does not support an initial SMARTS seed");
   }
   if (params.atomCompare == MCSAtomCompare::AnyHeavyAtom) {
-    reason = "AtomCompareAnyHeavyAtom is delegated to RDKit";
-    return true;
+    throw std::invalid_argument("GPU fMCS does not support AtomCompareAnyHeavyAtom");
   }
+  if (params.atomCompareParameters.matchChiralTag) {
+    throw std::invalid_argument("GPU fMCS does not support atom MatchChiralTag");
+  }
+  if (params.atomCompareParameters.completeRingsOnly) {
+    throw std::invalid_argument("GPU fMCS does not support atom CompleteRingsOnly");
+  }
+  if (params.atomCompareParameters.matchIsotope) {
+    throw std::invalid_argument(
+      "GPU fMCS does not support atomCompareParameters.matchIsotope; use AtomCompareIsotopes instead");
+  }
+  if (params.atomCompareParameters.maxDistance != -1.0) {
+    throw std::invalid_argument("GPU fMCS does not support atom MaxDistance");
+  }
+  if (params.bondCompareParameters.completeRingsOnly) {
+    throw std::invalid_argument("GPU fMCS does not support bond CompleteRingsOnly");
+  }
+  if (params.bondCompareParameters.matchFusedRings) {
+    throw std::invalid_argument("GPU fMCS does not support MatchFusedRings");
+  }
+  if (params.bondCompareParameters.matchFusedRingsStrict) {
+    throw std::invalid_argument("GPU fMCS does not support MatchFusedRingsStrict");
+  }
+  if (params.bondCompareParameters.matchStereo) {
+    throw std::invalid_argument("GPU fMCS does not support bond MatchStereo");
+  }
+}
+
+bool shouldFallbackToRDKit(const RDKit::ROMol& molA, const RDKit::ROMol& molB, std::string& reason) {
   if (std::max(molA.getNumAtoms(), molB.getNumAtoms()) > 128 ||
       std::max(molA.getNumBonds(), molB.getNumBonds()) > 128) {
     reason = "molecule exceeds fMCS tier-128 limits";
@@ -381,7 +416,10 @@ bool shouldFallbackToRDKit(const RDKit::ROMol&  molA,
   return false;
 }
 
-MCSResult convertGpuResult(const RDKit::ROMol& molA, const RDKit::ROMol& molB, const mcs::MCSResult& gpuResult) {
+MCSResult convertGpuResult(const RDKit::ROMol&   molA,
+                           const RDKit::ROMol&   molB,
+                           const mcs::MCSResult& gpuResult,
+                           const MCSParameters&  params) {
   MCSResult out;
   out.numAtoms   = static_cast<unsigned int>(gpuResult.numCommonVertices);
   out.numBonds   = static_cast<unsigned int>(gpuResult.numCommonEdges);
@@ -406,6 +444,22 @@ MCSResult convertGpuResult(const RDKit::ROMol& molA, const RDKit::ROMol& molB, c
       molB.getBondBetweenAtoms(static_cast<unsigned int>(edgeB.first), static_cast<unsigned int>(edgeB.second));
     if (bondA != nullptr && bondB != nullptr) {
       out.bondMapping.emplace_back(static_cast<int>(bondA->getIdx()), static_cast<int>(bondB->getIdx()));
+    }
+  }
+
+  // The fMCS engine searches the connected MCES lattice, whose seeds are
+  // compatible bond pairs. RDKit MCS still returns a one-atom result when no
+  // common bond exists, so complete that degenerate case in the public adapter.
+  if (out.numAtoms == 0 && !out.canceled) {
+    for (const auto* atomA : molA.atoms()) {
+      const auto labelA = makeAtomLabelKey(molA, *atomA, params);
+      for (const auto* atomB : molB.atoms()) {
+        if (labelA == makeAtomLabelKey(molB, *atomB, params)) {
+          out.numAtoms = 1;
+          out.atomMapping.emplace_back(static_cast<int>(atomA->getIdx()), static_cast<int>(atomB->getIdx()));
+          return out;
+        }
+      }
     }
   }
   return out;
@@ -446,7 +500,7 @@ std::vector<PreparedGpuPair> prepareGpuPairs(const std::vector<const RDKit::ROMo
     }
 
     std::string fallbackReason;
-    if (shouldFallbackToRDKit(*molA, *molB, params, fallbackReason)) {
+    if (shouldFallbackToRDKit(*molA, *molB, fallbackReason)) {
       if (params.requireGpu) {
         throw std::runtime_error("GPU MCS path unavailable: " + fallbackReason);
       }
@@ -575,7 +629,7 @@ void runGpuPairs(std::vector<PreparedGpuPair>&           gpuPairs,
         }
         results[resultIdx] = runRDKitFallback(*mols[idxA], *mols[idxB], params);
       } else {
-        results[resultIdx] = convertGpuResult(*mols[idxA], *mols[idxB], gpuResults[gpuIdx]);
+        results[resultIdx] = convertGpuResult(*mols[idxA], *mols[idxB], gpuResults[gpuIdx], params);
       }
     }
   };
@@ -624,6 +678,8 @@ std::vector<MCSResult> findMCSBatch(const std::vector<const RDKit::ROMol*>& mols
                                     const std::vector<MCSPair>&             pairs,
                                     cudaStream_t                            stream,
                                     const MCSParameters&                    params) {
+  validateSupportedParameters(params);
+
   std::vector<MCSResult> results(pairs.size());
   if (pairs.empty())
     return results;
