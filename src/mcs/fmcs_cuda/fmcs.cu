@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -32,6 +33,7 @@
 #include "src/mcs/fmcs_cuda/fmcs_match_tables.cuh"
 #include "src/mcs/fmcs_cuda/fmcs_policy.cuh"
 #include "src/utils/device.h"
+#include "src/utils/device_vector.h"
 #include "src/utils/gpu_executor_ring.h"
 
 namespace mcs {
@@ -159,19 +161,17 @@ HostPairDescriptor buildPairDescriptor(const InputT& sideA, const InputT& sideB,
   return desc;
 }
 
-/// Owning device allocations for one tier sub-batch.  @c dResultsBuffer
-/// and @c dQueueStorage are typed at launch time (per @c maxAtoms /
-/// @c maxBonds), so they are held as opaque pointers here.  The queue
-/// storage is one contiguous global-memory slab of
+/// Owning device allocations for one tier sub-batch. Results, queue, and
+/// scratch element types depend on the selected tier, so their storage is
+/// type-erased as bytes. The queue storage is one contiguous global-memory slab of
 /// @c kFmcsQueueCapacity * numPairs QueuedSeed entries; per-block slices
 /// are taken inside the kernel via @c blockIdx.x.
 struct BatchDeviceBuffers {
-  void*               csrBuffer       = nullptr;
-  size_t              csrBufferBytes  = 0;
-  DevicePerPairInput* dPairInputs     = nullptr;
-  void*               dResultsBuffer  = nullptr;
-  void*               dQueueStorage   = nullptr;
-  void*               dScratchStorage = nullptr;
+  nvMolKit::AsyncDeviceVector<uint32_t>           csrStorage;
+  nvMolKit::AsyncDeviceVector<DevicePerPairInput> pairInputs;
+  nvMolKit::AsyncDeviceVector<std::byte>          resultsStorage;
+  nvMolKit::AsyncDeviceVector<std::byte>          queueStorage;
+  nvMolKit::AsyncDeviceVector<std::byte>          scratchStorage;
 };
 
 constexpr int kMaxFmcsExecutorsPerRunner = 8;
@@ -180,7 +180,6 @@ struct FmcsExecutor {
   std::unique_ptr<nvMolKit::ScopedStream> ownedStream;
   cudaStream_t                            stream = nullptr;
   nvMolKit::ScopedCudaEvent               copyDoneEvent;
-  BatchDeviceBuffers                      bufs;
 
   FmcsExecutor(int executorIdx, cudaStream_t externalStream, bool useExternalStream) {
     if (useExternalStream) {
@@ -209,37 +208,13 @@ int validateRequestedBlockSize(const Parameters& params) {
   throw std::invalid_argument("fMCS blockSize must be one of 64, 128, 256, or 512");
 }
 
-void freeBatchBuffers(BatchDeviceBuffers& bufs, cudaStream_t stream) {
-  if (bufs.csrBuffer) {
-    cudaFreeAsync(bufs.csrBuffer, stream);
-    bufs.csrBuffer = nullptr;
-  }
-  if (bufs.dPairInputs) {
-    cudaFreeAsync(bufs.dPairInputs, stream);
-    bufs.dPairInputs = nullptr;
-  }
-  if (bufs.dResultsBuffer) {
-    cudaFreeAsync(bufs.dResultsBuffer, stream);
-    bufs.dResultsBuffer = nullptr;
-  }
-  if (bufs.dQueueStorage) {
-    cudaFreeAsync(bufs.dQueueStorage, stream);
-    bufs.dQueueStorage = nullptr;
-  }
-  if (bufs.dScratchStorage) {
-    cudaFreeAsync(bufs.dScratchStorage, stream);
-    bufs.dScratchStorage = nullptr;
-  }
-}
-
 /// Upload every pair's CSR and bond-endpoint arrays into one contiguous
 /// device buffer, returning per-pair descriptors whose pointers refer into
 /// that buffer.
 std::vector<DevicePerPairInput> uploadCsrAndAssemblePairInputs(const std::vector<HostPairDescriptor*>&   descs,
                                                                const std::vector<PairMatchTablesDevice>& tablesDev,
                                                                cudaStream_t                              stream,
-                                                               void**                                    outBuf,
-                                                               size_t*                                   outBufBytes) {
+                                                               nvMolKit::AsyncDeviceVector<uint32_t>&    storage) {
   size_t totalWords = 0;
   for (auto* d : descs) {
     totalWords += d->packedQuery.rowOffsets.size();
@@ -252,11 +227,8 @@ std::vector<DevicePerPairInput> uploadCsrAndAssemblePairInputs(const std::vector
     totalWords += d->packedTarget.bondEndpoints.size();
   }
 
-  void* buf = nullptr;
-  if (totalWords > 0) {
-    checkCuda(cudaMallocAsync(&buf, totalWords * sizeof(uint32_t), stream), "cudaMallocAsync (CSR)");
-  }
-  uint32_t* base = reinterpret_cast<uint32_t*>(buf);
+  storage        = nvMolKit::AsyncDeviceVector<uint32_t>(totalWords, stream);
+  uint32_t* base = storage.data();
 
   std::vector<DevicePerPairInput> out(descs.size());
   size_t                          cursor    = 0;
@@ -289,10 +261,6 @@ std::vector<DevicePerPairInput> uploadCsrAndAssemblePairInputs(const std::vector
     p.swapped             = d.swapped;
   }
 
-  if (outBuf)
-    *outBuf = buf;
-  if (outBufBytes)
-    *outBufBytes = totalWords * sizeof(uint32_t);
   return out;
 }
 
@@ -306,34 +274,30 @@ void launchTierAsync(const std::vector<DevicePerPairInput>&            hostPairI
   if (numPairs == 0)
     return;
 
-  checkCuda(cudaMallocAsync(reinterpret_cast<void**>(&bufs.dPairInputs), numPairs * sizeof(DevicePerPairInput), stream),
-            "cudaMallocAsync (pair inputs)");
-  checkCuda(cudaMemcpyAsync(bufs.dPairInputs,
+  bufs.pairInputs = nvMolKit::AsyncDeviceVector<DevicePerPairInput>(static_cast<size_t>(numPairs), stream);
+  checkCuda(cudaMemcpyAsync(bufs.pairInputs.data(),
                             hostPairInputs.data(),
                             numPairs * sizeof(DevicePerPairInput),
                             cudaMemcpyHostToDevice,
                             stream),
             "cudaMemcpyAsync (pair inputs)");
 
-  DeviceMCSResult<maxAtoms, maxBonds>* dResults = nullptr;
   const size_t resultsBytes = static_cast<size_t>(numPairs) * sizeof(DeviceMCSResult<maxAtoms, maxBonds>);
-  checkCuda(cudaMallocAsync(reinterpret_cast<void**>(&dResults), resultsBytes, stream), "cudaMallocAsync (results)");
-  bufs.dResultsBuffer = dResults;
+  bufs.resultsStorage       = nvMolKit::AsyncDeviceVector<std::byte>(resultsBytes, stream);
+  auto* dResults            = reinterpret_cast<DeviceMCSResult<maxAtoms, maxBonds>*>(bufs.resultsStorage.data());
 
   using QueuedT           = QueuedSeed<maxAtoms, maxBonds, maxAtoms, maxBonds>;
-  QueuedT*     dQueue     = nullptr;
   const size_t queueBytes = static_cast<size_t>(numPairs) * kFmcsQueueCapacity * sizeof(QueuedT);
-  checkCuda(cudaMallocAsync(reinterpret_cast<void**>(&dQueue), queueBytes, stream), "cudaMallocAsync (queue storage)");
-  bufs.dQueueStorage = dQueue;
+  bufs.queueStorage       = nvMolKit::AsyncDeviceVector<std::byte>(queueBytes, stream);
+  auto* dQueue            = reinterpret_cast<QueuedT*>(bufs.queueStorage.data());
 
   using ScratchT     = FmcsSubstructureScratch<maxAtoms, maxAtoms>;
   ScratchT* dScratch = nullptr;
   if constexpr (kUseGlobalSubstructureScratch<blockThreads, maxAtoms>) {
     const size_t scratchBytes =
       static_cast<size_t>(numPairs) * static_cast<size_t>(FmcsBlockConfig<blockThreads>::numGroups) * sizeof(ScratchT);
-    checkCuda(cudaMallocAsync(reinterpret_cast<void**>(&dScratch), scratchBytes, stream),
-              "cudaMallocAsync (global substructure scratch)");
-    bufs.dScratchStorage = dScratch;
+    bufs.scratchStorage = nvMolKit::AsyncDeviceVector<std::byte>(scratchBytes, stream);
+    dScratch            = reinterpret_cast<ScratchT*>(bufs.scratchStorage.data());
   }
 
   unsigned long long timeoutClocks = 0;
@@ -352,7 +316,7 @@ void launchTierAsync(const std::vector<DevicePerPairInput>&            hostPairI
   dim3 grid(static_cast<unsigned>(numPairs));
   dim3 block(static_cast<unsigned>(blockThreads));
   fmcsKernel<maxAtoms, maxBonds, blockThreads, Policy, kUseGlobalSubstructureScratch<blockThreads, maxAtoms>>
-    <<<grid, block, 0, stream>>>(bufs.dPairInputs,
+    <<<grid, block, 0, stream>>>(bufs.pairInputs.data(),
                                  dResults,
                                  dQueue,
                                  dScratch,
@@ -414,6 +378,7 @@ template <int maxAtoms, int maxBonds, class Policy> struct TierChunk {
   std::vector<HostPairDescriptor*>                 tierDescs;
   std::vector<PairMatchTablesHost>                 hostTables;
   UploadedPairMatchTables                          deviceTables;
+  BatchDeviceBuffers                               deviceBuffers;
   std::vector<DevicePerPairInput>                  hostPairInputs;
   std::vector<DeviceMCSResult<maxAtoms, maxBonds>> hostResults;
 };
@@ -462,27 +427,19 @@ void launchTierChunk(FmcsExecutor&                                           exe
                      std::unique_ptr<TierChunk<maxAtoms, maxBonds, Policy>>& chunk,
                      const Parameters&                                       params) {
   cudaStream_t executorStream = executor.stream;
-  try {
-    chunk->deviceTables = uploadPairMatchTables(chunk->hostTables, executorStream);
+  chunk->deviceTables         = uploadPairMatchTables(chunk->hostTables, executorStream);
+  chunk->hostPairInputs       = uploadCsrAndAssemblePairInputs(chunk->tierDescs,
+                                                         chunk->deviceTables.tables,
+                                                         executorStream,
+                                                         chunk->deviceBuffers.csrStorage);
 
-    chunk->hostPairInputs = uploadCsrAndAssemblePairInputs(chunk->tierDescs,
-                                                           chunk->deviceTables.tables,
-                                                           executorStream,
-                                                           &executor.bufs.csrBuffer,
-                                                           &executor.bufs.csrBufferBytes);
+  launchTierAsync<blockThreads, maxAtoms, maxBonds, Policy>(chunk->hostPairInputs,
+                                                            params,
+                                                            executorStream,
+                                                            chunk->deviceBuffers,
+                                                            chunk->hostResults);
 
-    launchTierAsync<blockThreads, maxAtoms, maxBonds, Policy>(chunk->hostPairInputs,
-                                                              params,
-                                                              executorStream,
-                                                              executor.bufs,
-                                                              chunk->hostResults);
-
-    checkCuda(cudaEventRecord(executor.copyDoneEvent.event(), executorStream),
-              "cudaEventRecord (fMCS chunk copy done)");
-  } catch (...) {
-    freeBatchBuffers(executor.bufs, executorStream);
-    throw;
-  }
+  checkCuda(cudaEventRecord(executor.copyDoneEvent.event(), executorStream), "cudaEventRecord (fMCS chunk copy done)");
 }
 
 template <int maxAtoms, int maxBonds, class Policy>
@@ -497,7 +454,6 @@ void drainTierChunk(FmcsExecutor&                                           exec
                                              chunk->tierDescs[k]->packedTarget.bondEndpoints,
                                              chunk->tierDescs[k]->swapped);
   }
-  freeBatchBuffers(executor.bufs, executor.stream);
 }
 
 template <int blockThreads, class Policy>
