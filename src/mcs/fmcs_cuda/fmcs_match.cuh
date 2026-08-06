@@ -18,6 +18,7 @@
 
 #include <cstdint>
 
+#include "src/mcs/fmcs_cuda/fmcs.cuh"
 #include "src/mcs/fmcs_cuda/fmcs_match_tables.cuh"
 #include "src/mcs/fmcs_cuda/fmcs_seed.cuh"
 #include "src/mcs/fmcs_cuda/fmcs_topology.cuh"
@@ -34,7 +35,8 @@ namespace fmcs {
 /// rectangular (query size != target size) tiers need no matcher changes.
 /// Largest seed-atom degree the degreeAtLeast buckets distinguish.  Degrees
 /// above this clamp to the last bucket, which only weakens the filter.
-constexpr int kFmcsMaxSeedDegree = 8;
+constexpr int kFmcsMaxSeedDegree = kMaxNeighborsPerAtom;
+static_assert(kMaxNeighborsPerAtom == nvMolKit::subgraph::kMaxEdgeSlotsPerAtom);
 
 template <int maxTargetAtoms>
 constexpr int kFmcsMaskAtoms = (maxTargetAtoms <= 32 ? 32 : (maxTargetAtoms <= 64 ? 64 : 128));
