@@ -20,14 +20,23 @@ CPU GetConformerRMSMatrix across varying conformer counts.
 """
 
 import argparse
-import csv
 import statistics
 import time
 from pathlib import Path
 
 import torch
-from bench_utils import Deadline, add_rdkit_max_seconds_arg, available_cpu_count, embed_and_jitter, load_smiles
-from benchmark_timing import time_it
+from bench_utils import (
+    Deadline,
+    add_backend_selection_args,
+    add_rdkit_max_seconds_arg,
+    available_cpu_count,
+    embed_and_jitter,
+    load_smiles,
+    print_csv_rows,
+    slice_conformers,
+    time_it,
+    write_csv_rows,
+)
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
@@ -108,18 +117,6 @@ def validate(mols: list[Chem.Mol], num_check: int, tol: float) -> None:
     print(f"  OK (max abs diff {max_abs_diff:.5f})")
 
 
-def _slice_to_confs(mols: list[Chem.Mol], target: int) -> list[Chem.Mol]:
-    """Return copies of ``mols`` keeping only the first ``target`` conformers each."""
-    out: list[Chem.Mol] = []
-    for mol in mols:
-        copy_mol = Chem.Mol(mol, True)  # quickCopy: keeps graph, drops conformers
-        confs = list(mol.GetConformers())[:target]
-        for conf in confs:
-            copy_mol.AddConformer(Chem.Conformer(conf), assignId=True)
-        out.append(copy_mol)
-    return out
-
-
 def run(
     smiles_path: str,
     num_mols: int,
@@ -154,7 +151,7 @@ def run(
     avg_atoms = sum(mol.GetNumAtoms() for mol in base_mols) / len(base_mols)
     print(f"  {len(base_mols)} mols, ~{avg_atoms:.1f} heavy atoms/mol")
     if validate_count > 0 and not no_rdkit and not no_nvmolkit:
-        validate(_slice_to_confs(base_mols, max_confs), validate_count, validate_tol)
+        validate(slice_conformers(base_mols, max_confs), validate_count, validate_tol)
     elif validate_count > 0:
         print("\nValidation skipped (requires both --rdkit and --nvmolkit enabled)")
 
@@ -162,7 +159,7 @@ def run(
 
     rows: list[dict[str, float | int | str]] = []
     for target_confs in sorted(confs_per_mol_list):
-        mols = _slice_to_confs(base_mols, target_confs)
+        mols = slice_conformers(base_mols, target_confs)
         actual_confs = [mol.GetNumConformers() for mol in mols]
         total_pairs = sum(count * (count - 1) // 2 for count in actual_confs)
         print(f"\n=== confs_per_mol={target_confs}: {len(mols)} mols, {total_pairs} RMSD pairs ===")
@@ -227,18 +224,13 @@ def run(
 
         rows.append(row)
 
+    if rows:
+        print("\nCSV Results:")
+        print_csv_rows(rows)
+
     if output and rows:
         out_path = Path(output)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        fieldnames: list[str] = []
-        for row in rows:
-            for key in row:
-                if key not in fieldnames:
-                    fieldnames.append(key)
-        with out_path.open("w", newline="") as csv_file:
-            writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
+        write_csv_rows(rows, out_path)
         print(f"\nWrote {out_path}")
 
 
@@ -272,8 +264,7 @@ def main():
     parser.add_argument("--no_validate", action="store_true", help="Skip the GPU-vs-RDKit correctness check")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--output", type=str, default=None, help="Optional CSV output path")
-    parser.add_argument("--no_rdkit", action="store_true", help="Skip RDKit CPU benchmark")
-    parser.add_argument("--no_nvmolkit", action="store_true", help="Skip nvMolKit GPU benchmark")
+    add_backend_selection_args(parser)
     args = parser.parse_args()
 
     if args.no_rdkit and args.no_nvmolkit:

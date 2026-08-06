@@ -101,15 +101,23 @@ class Deadline:
     """
 
     def __init__(self, max_seconds: float) -> None:
+        """Start a deadline lasting ``max_seconds``; non-positive disables it."""
         self._end: float | None = time.perf_counter() + max_seconds if max_seconds > 0 else None
 
     def expired(self) -> bool:
+        """Return whether the active deadline has elapsed."""
         return self._end is not None and time.perf_counter() >= self._end
 
     @property
     def active(self) -> bool:
         """``True`` when a real budget is being enforced."""
         return self._end is not None
+
+    def remaining_seconds(self) -> float | None:
+        """Seconds remaining, or ``None`` when the deadline is disabled."""
+        if self._end is None:
+            return None
+        return max(0.0, self._end - time.perf_counter())
 
 
 def throughput_per_s(items: float, elapsed_ms: float) -> float:
@@ -135,9 +143,10 @@ def time_it_bounded(
     workload was actually completed; a value below ``progress_target`` is
     treated as a partial run and further iterations are skipped.
 
-    Returns ``(avg_ms, std_ms, last_progress)``. ``avg`` and ``std`` are
-    computed only over runs that completed end-to-end; if no full run
-    finished, the single partial timing is returned with ``std=0``.
+    Returns ``(avg_ms, std_ms, measured_progress)``. ``avg`` and ``std`` are
+    computed only over runs that completed end-to-end, with
+    ``measured_progress == progress_target``. If no full run finished, the
+    single partial timing and its progress are returned with ``std=0``.
     """
     deadline = Deadline(max_seconds)
     completed_times_ms: list[float] = []
@@ -157,7 +166,9 @@ def time_it_bounded(
     if completed_times_ms:
         avg_ms = statistics.mean(completed_times_ms)
         std_ms = statistics.pstdev(completed_times_ms) if len(completed_times_ms) > 1 else 0.0
-        return avg_ms, std_ms, last_progress
+        # Partial work after one or more complete samples is not included in
+        # these timing statistics, so report the matching full-run progress.
+        return avg_ms, std_ms, progress_target
     if partial_time_ms is not None:
         return partial_time_ms, 0.0, last_progress
     return 0.0, 0.0, last_progress
