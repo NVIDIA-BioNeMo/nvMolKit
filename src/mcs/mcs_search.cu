@@ -302,7 +302,7 @@ void fillResultBondMapping(const RDKit::ROMol&                     molA,
 
 MCSResult runRDKitFallback(const RDKit::ROMol& molA, const RDKit::ROMol& molB, const MCSParameters& params) {
   MCSResult result;
-  result.usedFallback = true;
+  result.source = MCSResultSource::RDKitFallback;
 
   std::vector<RDKit::ROMOL_SPTR> mols;
   mols.emplace_back(new RDKit::ROMol(molA));
@@ -310,10 +310,9 @@ MCSResult runRDKitFallback(const RDKit::ROMol& molA, const RDKit::ROMol& molB, c
   auto       rdParams = buildRDKitParameters(params);
   const auto rdResult = RDKit::findMCS(mols, &rdParams);
 
-  result.numAtoms     = rdResult.NumAtoms;
-  result.numBonds     = rdResult.NumBonds;
-  result.canceled     = rdResult.Canceled;
-  result.smartsString = rdResult.SmartsString;
+  result.numAtoms = rdResult.NumAtoms;
+  result.numBonds = rdResult.NumBonds;
+  result.canceled = rdResult.Canceled;
 
   if (rdResult.QueryMol == nullptr) {
     return result;
@@ -421,11 +420,10 @@ MCSResult convertGpuResult(const RDKit::ROMol&   molA,
                            const mcs::MCSResult& gpuResult,
                            const MCSParameters&  params) {
   MCSResult out;
-  out.numAtoms   = static_cast<unsigned int>(gpuResult.numCommonVertices);
-  out.numBonds   = static_cast<unsigned int>(gpuResult.numCommonEdges);
-  out.canceled   = gpuResult.timedOut || gpuResult.killed;
-  out.overflowed = gpuResult.overflowed;
-  out.usedGpu    = true;
+  out.numAtoms = static_cast<unsigned int>(gpuResult.numCommonVertices);
+  out.numBonds = static_cast<unsigned int>(gpuResult.numCommonEdges);
+  out.canceled = gpuResult.timedOut || gpuResult.killed;
+  out.source   = MCSResultSource::GPU;
 
   const size_t numMappedAtoms = std::min(gpuResult.mappingA.size(), gpuResult.mappingB.size());
   out.atomMapping.reserve(numMappedAtoms);

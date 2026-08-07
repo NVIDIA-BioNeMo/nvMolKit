@@ -120,16 +120,17 @@ struct MCSParameters {
   MCSBondCompareParameters bondCompareParameters;
 };
 
-struct MCSResult {
-  unsigned int numAtoms     = 0;      ///< Atoms in the best common subgraph found.
-  unsigned int numBonds     = 0;      ///< Bonds in the best common subgraph found.
-  bool         canceled     = false;  ///< Timeout occurred; mappings may contain a valid partial result.
-  bool         overflowed   = false;  ///< Normally replaced by fallback or an exception in the public API.
-  bool         usedGpu      = false;  ///< Result came from the GPU solver.
-  bool         usedFallback = false;  ///< Pair was recomputed by RDKit on the CPU.
+/// Backend that produced a public MCS result.
+enum class MCSResultSource : std::uint8_t {
+  GPU,           ///< Native GPU fMCS solver.
+  RDKitFallback  ///< Per-pair RDKit CPU fallback.
+};
 
-  /// Populated for RDKit fallback results; native GPU results currently leave it empty.
-  std::string smartsString;
+struct MCSResult {
+  unsigned int    numAtoms = 0;      ///< Atoms in the best common subgraph found.
+  unsigned int    numBonds = 0;      ///< Bonds in the best common subgraph found.
+  bool            canceled = false;  ///< Timeout occurred; mappings may contain a valid partial result.
+  MCSResultSource source   = MCSResultSource::GPU;
 
   /// Atom-index pairs in (first molecule, second molecule) order.
   std::vector<std::pair<int, int>> atomMapping;

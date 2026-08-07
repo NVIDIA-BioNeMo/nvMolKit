@@ -40,6 +40,7 @@ using nvMolKit::MCSAtomCompare;
 using nvMolKit::MCSBondCompare;
 using nvMolKit::MCSPair;
 using nvMolKit::MCSParameters;
+using nvMolKit::MCSResultSource;
 using nvMolKit::testing::readSmilesFileWithStrings;
 
 constexpr size_t       kMaxAtoms          = 24;
@@ -440,9 +441,7 @@ void expectSameResultShape(const std::vector<nvMolKit::MCSResult>& expected,
   for (size_t i = 0; i < expected.size(); ++i) {
     EXPECT_EQ(actual[i].numAtoms, expected[i].numAtoms) << "result " << i;
     EXPECT_EQ(actual[i].numBonds, expected[i].numBonds) << "result " << i;
-    EXPECT_EQ(actual[i].usedGpu, expected[i].usedGpu) << "result " << i;
-    EXPECT_EQ(actual[i].usedFallback, expected[i].usedFallback) << "result " << i;
-    EXPECT_EQ(actual[i].overflowed, expected[i].overflowed) << "result " << i;
+    EXPECT_EQ(actual[i].source, expected[i].source) << "result " << i;
   }
 }
 
@@ -482,9 +481,7 @@ TEST_P(FMCSIntegrationTest, ChemblPairsMatchRDKitExactly) {
     const auto  rd   = findRdkitMCS(molA, molB, params);
     const auto& gpu  = gpuResults[i];
 
-    EXPECT_TRUE(gpu.usedGpu);
-    EXPECT_FALSE(gpu.usedFallback);
-    EXPECT_FALSE(gpu.overflowed);
+    EXPECT_EQ(gpu.source, MCSResultSource::GPU);
     EXPECT_FALSE(gpu.canceled);
     EXPECT_EQ(gpu.numAtoms, rd.NumAtoms);
     EXPECT_EQ(gpu.numBonds, rd.NumBonds);
@@ -511,8 +508,7 @@ TEST(FMCSIntegration, NoCompatibleBondReturnsSingleAtomLikeRDKit) {
   const auto rd         = findRdkitMCS(*molA, *molB, params);
   ASSERT_EQ(gpuResults.size(), 1u);
   const auto& gpu = gpuResults.front();
-  EXPECT_TRUE(gpu.usedGpu);
-  EXPECT_FALSE(gpu.usedFallback);
+  EXPECT_EQ(gpu.source, MCSResultSource::GPU);
   EXPECT_EQ(gpu.numAtoms, rd.NumAtoms);
   EXPECT_EQ(gpu.numBonds, rd.NumBonds);
   EXPECT_TRUE(mappingMatchesRdkitMCS(gpu.atomMapping, *molA, *molB, rd));
@@ -581,9 +577,7 @@ TEST(FMCSIntegration, CuratedHigherTierChemblPairsMatchRDKitExactly) {
     const auto  rd   = findRdkitMCS(molA, molB, params);
     const auto& gpu  = gpuResults[i];
 
-    EXPECT_TRUE(gpu.usedGpu);
-    EXPECT_FALSE(gpu.usedFallback);
-    EXPECT_FALSE(gpu.overflowed);
+    EXPECT_EQ(gpu.source, MCSResultSource::GPU);
     EXPECT_FALSE(gpu.canceled);
     EXPECT_EQ(gpu.numAtoms, rd.NumAtoms);
     EXPECT_EQ(gpu.numBonds, rd.NumBonds);
@@ -638,18 +632,14 @@ TEST(FMCSIntegration, TimeoutIsIsolatedPerPairWithinBatch) {
   ASSERT_EQ(results.size(), 2u);
 
   const auto& easy = results[0];
-  EXPECT_TRUE(easy.usedGpu);
-  EXPECT_FALSE(easy.usedFallback);
-  EXPECT_FALSE(easy.overflowed);
+  EXPECT_EQ(easy.source, MCSResultSource::GPU);
   EXPECT_FALSE(easy.canceled);
   EXPECT_EQ(easy.numAtoms, rdEasy.NumAtoms);
   EXPECT_EQ(easy.numBonds, rdEasy.NumBonds);
   EXPECT_TRUE(mappingMatchesRdkitMCS(easy.atomMapping, *easyA, *easyB, rdEasy));
 
   const auto& hard = results[1];
-  EXPECT_TRUE(hard.usedGpu);
-  EXPECT_FALSE(hard.usedFallback);
-  EXPECT_FALSE(hard.overflowed);
+  EXPECT_EQ(hard.source, MCSResultSource::GPU);
   EXPECT_TRUE(hard.canceled);
   EXPECT_GT(hard.numAtoms, 0u);
   EXPECT_GT(hard.numBonds, 0u);
@@ -663,7 +653,6 @@ TEST(FMCSIntegration, SpecialMoleculeSemanticsMatchRDKitExactly) {
     MCSParameters params;
     unsigned int  expectedAtoms;
     unsigned int  expectedBonds;
-    bool          expectGpu;
   };
 
   const auto gpuParams = [] {
@@ -676,40 +665,39 @@ TEST(FMCSIntegration, SpecialMoleculeSemanticsMatchRDKitExactly) {
   {
     auto params        = gpuParams();
     params.atomCompare = MCSAtomCompare::Isotopes;
-    cases.push_back({"isotope-labelled atoms", "[13CH3]CO", "CCO", params, 2, 1, true});
+    cases.push_back({"isotope-labelled atoms", "[13CH3]CO", "CCO", params, 2, 1});
   }
   {
     auto params                                    = gpuParams();
     params.atomCompareParameters.matchFormalCharge = true;
-    cases.push_back({"formal charge", "C[NH2+]C", "CNC", params, 1, 0, true});
+    cases.push_back({"formal charge", "C[NH2+]C", "CNC", params, 1, 0});
   }
   {
     auto params                                = gpuParams();
     params.atomCompareParameters.matchValences = true;
-    cases.push_back({"different phosphorus valences", "P(C)(C)C", "P(C)(C)(C)(C)C", params, 1, 0, true});
+    cases.push_back({"different phosphorus valences", "P(C)(C)C", "P(C)(C)(C)(C)C", params, 1, 0});
   }
-  cases.push_back({"disconnected salts", "CC.[Na+]", "CCC.[K+]", gpuParams(), 2, 1, true});
-  cases.push_back({"aromatic and aliphatic rings with CompareOrder", "c1ccccc1", "C1CCCCC1", gpuParams(), 6, 6, true});
+  cases.push_back({"disconnected salts", "CC.[Na+]", "CCC.[K+]", gpuParams(), 2, 1});
+  cases.push_back({"aromatic and aliphatic rings with CompareOrder", "c1ccccc1", "C1CCCCC1", gpuParams(), 6, 6});
   {
     auto params        = gpuParams();
     params.bondCompare = MCSBondCompare::OrderExact;
-    cases.push_back(
-      {"aromatic and aliphatic rings with CompareOrderExact", "c1ccccc1", "C1CCCCC1", params, 1, 0, true});
+    cases.push_back({"aromatic and aliphatic rings with CompareOrderExact", "c1ccccc1", "C1CCCCC1", params, 1, 0});
   }
   {
     auto params                                      = gpuParams();
     params.atomCompareParameters.ringMatchesRingOnly = true;
-    cases.push_back({"ring atoms cannot match chain atoms", "C1CCCCC1", "CCCCCC", params, 0, 0, true});
+    cases.push_back({"ring atoms cannot match chain atoms", "C1CCCCC1", "CCCCCC", params, 0, 0});
   }
   {
     auto params                                      = gpuParams();
     params.bondCompareParameters.ringMatchesRingOnly = true;
-    cases.push_back({"ring bonds cannot match chain bonds", "C1CCCCC1", "CCCCCC", params, 1, 0, true});
+    cases.push_back({"ring bonds cannot match chain bonds", "C1CCCCC1", "CCCCCC", params, 1, 0});
   }
-  cases.push_back({"no compatible atom", "[Na+]", "[Cl-]", gpuParams(), 0, 0, true});
-  cases.push_back({"empty molecule", "", "CC", gpuParams(), 0, 0, true});
+  cases.push_back({"no compatible atom", "[Na+]", "[Cl-]", gpuParams(), 0, 0});
+  cases.push_back({"empty molecule", "", "CC", gpuParams(), 0, 0});
   cases.push_back(
-    {"opposite tetrahedral stereochemistry is ignored", "F[C@H](Cl)Br", "F[C@@H](Cl)Br", gpuParams(), 4, 3, true});
+    {"opposite tetrahedral stereochemistry is ignored", "F[C@H](Cl)Br", "F[C@@H](Cl)Br", gpuParams(), 4, 3});
   for (const auto& testCase : cases) {
     SCOPED_TRACE(testCase.name);
     auto molA = std::unique_ptr<RDKit::ROMol>(RDKit::SmilesToMol(testCase.smilesA));
@@ -730,10 +718,8 @@ TEST(FMCSIntegration, SpecialMoleculeSemanticsMatchRDKitExactly) {
     EXPECT_EQ(rd.NumBonds, testCase.expectedBonds);
     EXPECT_EQ(result.numAtoms, rd.NumAtoms);
     EXPECT_EQ(result.numBonds, rd.NumBonds);
-    EXPECT_EQ(result.usedGpu, testCase.expectGpu);
-    EXPECT_EQ(result.usedFallback, !testCase.expectGpu);
+    EXPECT_EQ(result.source, MCSResultSource::GPU);
     EXPECT_FALSE(result.canceled);
-    EXPECT_FALSE(result.overflowed);
 
     const bool sizeMatches    = result.numAtoms == rd.NumAtoms && result.numBonds == rd.NumBonds;
     const bool mappingMatches = sizeMatches ? mappingMatchesRdkitMCS(result.atomMapping, *molA, *molB, rd) : false;
@@ -900,8 +886,7 @@ TEST(FMCSFallback, DegreeAboveEightUsesRDKit) {
 
   const auto results = nvMolKit::findMCSBatch(mols, pairs, nullptr, params);
   ASSERT_EQ(results.size(), 1u);
-  EXPECT_TRUE(results[0].usedFallback);
-  EXPECT_FALSE(results[0].usedGpu);
+  EXPECT_EQ(results[0].source, MCSResultSource::RDKitFallback);
 }
 
 TEST(FMCSFallback, DegreeAboveEightRejectedWhenGpuRequired) {
