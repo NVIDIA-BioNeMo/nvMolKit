@@ -54,6 +54,7 @@ from rdkit.Chem import TorsionFingerprints
 
 import nvmolkit.tfd as nvmol_tfd
 
+
 def generate_conformers_batch(
     mols: List[Chem.Mol],
     num_confs: int,
@@ -91,7 +92,7 @@ def prepare_molecules(
     """Prepare molecules with conformers from the explicitly supplied inputs.
 
     Args:
-        input_mols: Parsed RDKit molecules (used when no precomputed pickle is found).
+        input_mols: Parsed RDKit molecules to prepare with conformers.
         num_confs: Number of conformers per molecule
         max_mols: Maximum number of molecules to prepare
         num_workers: Parallel workers for ETKDG embedding (0 = auto, half of CPUs)
