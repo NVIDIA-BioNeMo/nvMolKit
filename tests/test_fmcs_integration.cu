@@ -868,6 +868,49 @@ TEST(FMCSDispatchRoutes, AllPairsUpperTriangleWrapperMatchesExplicitPairs) {
   expectSameResultShape(explicitResults, wrapperResults);
 }
 
+TEST(FMCSDispatchRoutes, ExternalStreamUsesConfiguredDevice) {
+  int deviceCount = 0;
+  ASSERT_EQ(cudaGetDeviceCount(&deviceCount), cudaSuccess);
+  if (deviceCount < 2) {
+    GTEST_SKIP() << "Need at least 2 GPUs to test an external stream on a configured device";
+  }
+
+  constexpr int callerDevice     = 0;
+  constexpr int configuredDevice = 1;
+  ASSERT_EQ(cudaSetDevice(configuredDevice), cudaSuccess);
+  cudaStream_t stream = nullptr;
+  ASSERT_EQ(cudaStreamCreate(&stream), cudaSuccess);
+  ASSERT_EQ(cudaSetDevice(callerDevice), cudaSuccess);
+
+  auto molA = std::unique_ptr<RDKit::ROMol>(RDKit::SmilesToMol("CCO"));
+  auto molB = std::unique_ptr<RDKit::ROMol>(RDKit::SmilesToMol("CCN"));
+  ASSERT_NE(molA, nullptr);
+  ASSERT_NE(molB, nullptr);
+  const std::vector<const RDKit::ROMol*> mols{molA.get(), molB.get()};
+  const std::vector<MCSPair>             pairs{
+                {0, 1}
+  };
+
+  MCSParameters params;
+  params.requireGpu           = true;
+  params.preprocessingThreads = 1;
+  params.workerThreads        = 1;
+  params.executorsPerRunner   = 1;
+  params.gpuIds               = {configuredDevice};
+
+  const auto results = nvMolKit::findMCSBatch(mols, pairs, stream, params);
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0].source, MCSResultSource::GPU);
+
+  int currentDevice = -1;
+  ASSERT_EQ(cudaGetDevice(&currentDevice), cudaSuccess);
+  EXPECT_EQ(currentDevice, callerDevice);
+
+  ASSERT_EQ(cudaSetDevice(configuredDevice), cudaSuccess);
+  EXPECT_EQ(cudaStreamDestroy(stream), cudaSuccess);
+  ASSERT_EQ(cudaSetDevice(callerDevice), cudaSuccess);
+}
+
 TEST(FMCSFallback, DegreeAboveEightUsesRDKit) {
   RDKit::SmilesParserParams parserParams;
   parserParams.sanitize = false;

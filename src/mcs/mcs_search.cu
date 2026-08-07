@@ -584,11 +584,8 @@ void runGpuPairs(std::vector<PreparedGpuPair>&           gpuPairs,
       return;
     }
 
-    const int                   deviceId = gpuIds[runnerIdx % static_cast<size_t>(numGpus)];
-    std::unique_ptr<WithDevice> setDevice;
-    if (stream == nullptr) {
-      setDevice = std::make_unique<WithDevice>(deviceId);
-    }
+    const int        deviceId = gpuIds[runnerIdx % static_cast<size_t>(numGpus)];
+    const WithDevice setDevice(deviceId);
 
     std::vector<LabeledGraph> gpuGraphsA;
     std::vector<LabeledGraph> gpuGraphsB;
