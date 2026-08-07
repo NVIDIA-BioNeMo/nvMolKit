@@ -45,6 +45,7 @@ from bench_utils import (
     print_csv_rows,
     throughput_per_s,
     time_it,
+    time_it_bounded_result,
     write_csv_rows,
 )
 from rdkit import Chem
@@ -178,18 +179,18 @@ def bench_rdkit(
 ) -> tuple[TimingResult, list[Chem.Mol], int]:
     """Benchmark RDKit ``EmbedMultipleConfs``; return ``(timing, processed_mols, processed_count)``.
 
-    When ``max_seconds > 0``, the inner loop stops processing molecules once
-    wall-clock elapsed exceeds the cap. The reported timing is over the
-    molecules actually processed; throughput is items / elapsed at the call
-    site. Cloned molecules that were never processed are omitted from the
-    returned list so downstream energy validation only sees comparable inputs.
+    When ``max_seconds > 0``, one deadline is shared across all timed runs and
+    the inner loop stops processing at the next molecule boundary. The timing,
+    processed count, and returned molecules always come from the same retained
+    sample set: complete samples take precedence over a later partial sample.
+    This keeps throughput and downstream energy validation comparable.
     """
     last_run_mols: list[list[Chem.Mol]] = [[]]
+    complete_run_mols: list[list[Chem.Mol]] = [[]]
     processed_count = [0]
 
     @nvtx.annotate("etkdg_rdkit_run", color="yellow")
-    def run() -> None:
-        deadline = Deadline(max_seconds)
+    def run(deadline: Deadline) -> None:
         processed: list[Chem.Mol] = []
         for source_mol in mols:
             mol = Chem.RWMol(source_mol)
@@ -199,13 +200,22 @@ def bench_rdkit(
                 break
         last_run_mols[0] = processed
         processed_count[0] = len(processed)
+        if processed_count[0] == len(mols):
+            complete_run_mols[0] = processed
 
     if warmup:
         warmup_mol = Chem.RWMol(mols[0])
         rdDistGeom.EmbedMultipleConfs(warmup_mol, numConfs=1, params=params)
 
-    timing = time_it(run, runs=runs, warmups=0, gpu_sync=False)
-    return timing, last_run_mols[0], processed_count[0]
+    timing, measured_count = time_it_bounded_result(
+        run,
+        runs=runs,
+        max_seconds=max_seconds,
+        progress_getter=lambda: processed_count[0],
+        progress_target=len(mols),
+    )
+    measured_mols = complete_run_mols[0] if measured_count == len(mols) else last_run_mols[0]
+    return timing, measured_mols, measured_count
 
 
 def _build_etkdg_params(max_iterations: int, num_threads: int, seed: int) -> rdDistGeom.EmbedParameters:
