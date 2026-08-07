@@ -13,8 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""
-Substructure search benchmark comparing nvmolkit GPU substructure search against RDKit.
+"""Substructure search benchmark comparing nvmolkit GPU substructure search against RDKit.
 
 Compares two approaches:
   1. nvmolkit GPU-accelerated substructure search
@@ -64,13 +63,26 @@ import argparse
 import gc
 import random
 import sys
-from multiprocessing import Pool
+from pathlib import Path
 from typing import Callable
 
 import nvtx
 import pandas as pd
-from bench_utils import add_rdkit_max_seconds_arg, load_pickle, load_smarts, load_smiles, time_it_bounded
-from benchmark_timing import time_it as _time_it
+from bench_utils import (
+    Deadline,
+    add_backend_selection_args,
+    add_rdkit_max_seconds_arg,
+    load_pickle,
+    load_smarts,
+    load_smiles,
+    print_csv_rows,
+    process_map_bounded,
+    time_it_bounded,
+    write_csv_rows,
+)
+from bench_utils import (
+    time_it as _time_it,
+)
 from rdkit import Chem
 from rdkit.Chem import rdSubstructLibrary
 
@@ -123,6 +135,21 @@ def _rdkit_worker_count(mol_binary: bytes) -> list[int]:
     return [len(mol.GetSubstructMatches(q, _worker_params)) for q in _worker_queries]
 
 
+def _rdkit_worker_has_batch(item: tuple[int, list[bytes]]) -> tuple[int, list[list[bool]]]:
+    start, mol_binaries = item
+    return start, [_rdkit_worker_has(mol_binary) for mol_binary in mol_binaries]
+
+
+def _rdkit_worker_get_batch(item: tuple[int, list[bytes]]) -> tuple[int, list[list[tuple]]]:
+    start, mol_binaries = item
+    return start, [_rdkit_worker_get(mol_binary) for mol_binary in mol_binaries]
+
+
+def _rdkit_worker_count_batch(item: tuple[int, list[bytes]]) -> tuple[int, list[list[int]]]:
+    start, mol_binaries = item
+    return start, [_rdkit_worker_count(mol_binary) for mol_binary in mol_binaries]
+
+
 @nvtx.annotate("bench_rdkit_substruct", color="green")
 def bench_rdkit_substruct(
     mols: list[Chem.Mol],
@@ -135,10 +162,9 @@ def bench_rdkit_substruct(
 ) -> tuple[float, float, list, int]:
     """Benchmark RDKit SubstructMatch API.
 
-    @param max_seconds  When > 0, abort additional runs (and the per-molecule
-                        loop in single-threaded mode) once the elapsed time
-                        exceeds this budget. The threaded path can only be
-                        bounded between runs since `pool.map` is monolithic.
+    @param max_seconds  When > 0, abort at a molecule boundary in single-threaded
+                        mode or at a completed molecule-batch boundary in the
+                        multiprocessing path.
     @return tuple of (avg_ms, std_ms, results_data, pairs_processed_per_run).
     """
     num_mols = len(mols)
@@ -150,25 +176,39 @@ def bench_rdkit_substruct(
         params.maxMatches = max_matches
 
     results_data = []
+    complete_results_data = None
     pairs_done_this_run = 0
 
     if threads > 1:
         mol_binaries = [mol.ToBinary() for mol in mols]
         query_binaries = [q.ToBinary() for q in queries]
         if mode == "hasSubstructMatch":
-            worker_func = _rdkit_worker_has
+            worker_func = _rdkit_worker_has_batch
         elif mode == "countSubstructMatches":
-            worker_func = _rdkit_worker_count
+            worker_func = _rdkit_worker_count_batch
         else:
-            worker_func = _rdkit_worker_get
-        chunksize = max(1, len(mol_binaries) // (threads * 4))
+            worker_func = _rdkit_worker_get_batch
+        batch_size = max(1, len(mol_binaries) // (threads * 8))
+        batches = [
+            (start, mol_binaries[start : start + batch_size]) for start in range(0, len(mol_binaries), batch_size)
+        ]
 
         @nvtx.annotate("substruct_run_mp", color="yellow")
-        def run(_deadline):
-            nonlocal results_data, pairs_done_this_run
-            with Pool(threads, initializer=_rdkit_worker_init, initargs=(query_binaries, max_matches)) as pool:
-                results_data = pool.map(worker_func, mol_binaries, chunksize=chunksize)
-            pairs_done_this_run = pairs_total
+        def run(deadline: Deadline):
+            nonlocal complete_results_data, results_data, pairs_done_this_run
+            mapped = process_map_bounded(
+                worker_func,
+                batches,
+                max_workers=threads,
+                deadline=deadline,
+                initializer=_rdkit_worker_init,
+                initargs=(query_binaries, max_matches),
+            )
+            completed = dict(mapped.results)
+            pairs_done_this_run = sum(len(rows) * num_queries for rows in completed.values())
+            results_data = [row for start in sorted(completed) for row in completed[start]]
+            if pairs_done_this_run == pairs_total:
+                complete_results_data = results_data
     else:
         if mode == "hasSubstructMatch":
             match_fn = lambda mol, query: mol.HasSubstructMatch(query, params)  # noqa: E731
@@ -179,7 +219,7 @@ def bench_rdkit_substruct(
 
         @nvtx.annotate("substruct_run", color="yellow")
         def run(deadline):
-            nonlocal results_data, pairs_done_this_run
+            nonlocal complete_results_data, results_data, pairs_done_this_run
             results_data = []
             pairs_done_this_run = 0
             for mol in mols:
@@ -187,8 +227,12 @@ def bench_rdkit_substruct(
                     break
                 results_data.append([match_fn(mol, query) for query in queries])
                 pairs_done_this_run += num_queries
+            if pairs_done_this_run == pairs_total:
+                complete_results_data = results_data
 
     avg_ms, std_ms, last_pairs = time_it_bounded(run, runs, max_seconds, lambda: pairs_done_this_run, pairs_total)
+    if last_pairs == pairs_total and complete_results_data is not None:
+        results_data = complete_results_data
     return avg_ms, std_ms, results_data, last_pairs
 
 
@@ -220,6 +264,7 @@ def bench_rdkit_substructlib(
         params.maxMatches = max_matches
 
     results_data = [[None] * num_queries for _ in range(num_mols)]
+    complete_results_data = None
     pairs_done_this_run = 0
 
     if mode == "hasSubstructMatch":
@@ -246,7 +291,7 @@ def bench_rdkit_substructlib(
 
     @nvtx.annotate("substructlib_run", color="yellow")
     def run(deadline):
-        nonlocal results_data, pairs_done_this_run
+        nonlocal complete_results_data, results_data, pairs_done_this_run
 
         mol_holder = rdSubstructLibrary.CachedMolHolder()
         fp_holder = rdSubstructLibrary.PatternHolder()
@@ -263,8 +308,12 @@ def bench_rdkit_substructlib(
             matching_set = set(lib.GetMatches(query, numThreads=threads))
             fill_column(q_idx, query, matching_set)
             pairs_done_this_run += num_mols
+        if pairs_done_this_run == pairs_total:
+            complete_results_data = results_data
 
     avg_ms, std_ms, last_pairs = time_it_bounded(run, runs, max_seconds, lambda: pairs_done_this_run, pairs_total)
+    if last_pairs == pairs_total and complete_results_data is not None:
+        results_data = complete_results_data
     return avg_ms, std_ms, results_data, last_pairs
 
 
@@ -290,7 +339,16 @@ def bench_nvmolkit(
 
 
 def _load_config_dataframe(config_path: str) -> list[dict]:
-    return pd.read_csv(config_path).to_dict("records")
+    suffix = Path(config_path).suffix.lower()
+    if suffix == ".csv":
+        dataframe = pd.read_csv(config_path)
+    elif suffix in {".pkl", ".pickle"}:
+        dataframe = pd.read_pickle(config_path)
+    elif suffix == ".parquet":
+        dataframe = pd.read_parquet(config_path)
+    else:
+        raise ValueError(f"unsupported config format {suffix!r}; expected .csv, .pkl, .pickle, or .parquet")
+    return dataframe.to_dict("records")
 
 
 def _validate_matches(mode: str, nvmolkit_data, rdkit_data, num_mols: int, num_queries: int) -> None:
@@ -312,7 +370,7 @@ def _validate_matches(mode: str, nvmolkit_data, rdkit_data, num_mols: int, num_q
     else:
         for t in range(num_mols):
             for q in range(num_queries):
-                nv_matches = set(tuple(m) for m in nvmolkit_data[t][q])
+                nv_matches = {tuple(m) for m in nvmolkit_data[t][q]}
                 rd_matches = set(rdkit_data[t][q])
                 if nv_matches == rd_matches:
                     matches += 1
@@ -360,8 +418,7 @@ def main():
     parser.add_argument(
         "--max_matches", type=int, default=0, help="Maximum matches per target/query pair, 0 = all (default: 0)"
     )
-    parser.add_argument("--no_nvmolkit", action="store_true", help="Skip nvmolkit benchmark")
-    parser.add_argument("--no_rdkit", action="store_true", help="Skip RDKit benchmark")
+    add_backend_selection_args(parser)
     parser.add_argument(
         "--rdkit_match_mode",
         choices=["raw", "substructlib"],
@@ -386,8 +443,8 @@ def main():
     add_rdkit_max_seconds_arg(
         parser,
         extra_help=(
-            "RDKit aborts between queries (substructlib) or molecules (raw, single-thread); "
-            "the threaded raw path can only be bounded between runs."
+            "RDKit aborts between queries (substructlib), molecules (raw single-thread), "
+            "or completed molecule batches (raw multiprocessing)."
         ),
     )
     parser.add_argument("--batch_size", "-b", type=int, default=1024, help="nvmolkit batch size (default: 1024)")
@@ -453,6 +510,7 @@ def main():
     )
     parser.add_argument("--no_validate", action="store_false", dest="validate", help="Skip validation checks")
     parser.set_defaults(validate=True)
+    parser.add_argument("--output", "-o", default=None, help="Optional path to write CSV results")
 
     args = parser.parse_args()
 
@@ -593,7 +651,7 @@ def main():
             smarts_cache[smarts_path] = (queries, smarts_list)
 
         num_patterns = len(queries)
-        print(f"\nBenchmarking substructure search ({mode}): {len(mols)} molecules × {num_patterns} patterns")
+        print(f"\nBenchmarking substructure search ({mode}): {len(mols)} molecules x {num_patterns} patterns")
         print("=" * 70)
 
         results = {}
@@ -834,31 +892,31 @@ def main():
             throughput = (pairs_done * 1000.0 / avg_ms) if avg_ms > 0 else 0.0
             vs_rdkit = (throughput / baseline_throughput) if (not is_rdkit and baseline_throughput > 0) else "N/A"
             csv_rows.append(
-                (
-                    name,
-                    mode,
-                    applied_algorithm if name == "nvmolkit" else "N/A",
-                    smarts_path,
-                    input_file,
-                    input_type,
-                    sanitize_value,
-                    len(mols),
-                    num_patterns,
-                    args.max_matches,
-                    batch_size,
-                    num_gpus,
-                    workers,
-                    prep_threads,
-                    nvmolkit_config_source,
-                    rdkit_threads,
-                    rdkit_match_mode,
-                    avg_ms,
-                    std_ms,
-                    pairs_done,
-                    rdkit_max_seconds,
-                    throughput,
-                    vs_rdkit,
-                )
+                {
+                    "method": name,
+                    "mode": mode,
+                    "algorithm": applied_algorithm if name == "nvmolkit" else "N/A",
+                    "smarts": smarts_path,
+                    "input_file": input_file,
+                    "input_type": input_type,
+                    "sanitize": sanitize_value,
+                    "num_mols": len(mols),
+                    "num_patterns": num_patterns,
+                    "max_matches": args.max_matches,
+                    "batch_size": batch_size,
+                    "num_gpus": num_gpus,
+                    "workers": workers,
+                    "prep_threads": prep_threads,
+                    "nvmolkit_config_source": nvmolkit_config_source,
+                    "rdkit_threads": rdkit_threads,
+                    "rdkit_match_mode": rdkit_match_mode,
+                    "time_ms": round(avg_ms, 2),
+                    "std_ms": round(std_ms, 2),
+                    "pairs_processed": pairs_done,
+                    "rdkit_max_seconds": rdkit_max_seconds,
+                    "pairs_per_second": round(throughput, 2),
+                    "vs_rdkit_throughput_ratio": vs_rdkit,
+                }
             )
 
         if ran_nvmolkit:
@@ -868,48 +926,10 @@ def main():
         gc.collect()
 
     print("\n\nCSV Results:")
-    print(
-        "method,mode,algorithm,smarts,input_file,input_type,sanitize,num_mols,num_patterns,"
-        "max_matches,batch_size,num_gpus,workers,prep_threads,nvmolkit_config_source,"
-        "rdkit_threads,rdkit_match_mode,time_ms,std_ms,"
-        "pairs_processed,rdkit_max_seconds,pairs_per_second,vs_rdkit_throughput_ratio"
-    )
-    for row in csv_rows:
-        (
-            name,
-            mode,
-            algorithm,
-            smarts_path,
-            input_file,
-            input_type,
-            sanitize,
-            num_mols,
-            num_patterns,
-            max_matches,
-            batch_size,
-            num_gpus,
-            workers,
-            prep_threads,
-            nvmolkit_config_source,
-            rdkit_threads,
-            rdkit_match_mode,
-            avg_ms,
-            std_ms,
-            pairs_done,
-            rdkit_max_seconds,
-            throughput,
-            vs_rdkit,
-        ) = row
-        vs_rdkit_str = f"{vs_rdkit:.4f}" if isinstance(vs_rdkit, float) else str(vs_rdkit)
-        rdkit_max_seconds_str = (
-            f"{rdkit_max_seconds:g}" if isinstance(rdkit_max_seconds, float) else str(rdkit_max_seconds)
-        )
-        print(
-            f"{name},{mode},{algorithm},{smarts_path},{input_file},{input_type},{sanitize},"
-            f"{num_mols},{num_patterns},{max_matches},{batch_size},{num_gpus},{workers},{prep_threads},"
-            f"{nvmolkit_config_source},{rdkit_threads},{rdkit_match_mode},{avg_ms:.2f},{std_ms:.2f},"
-            f"{pairs_done},{rdkit_max_seconds_str},{throughput:.2f},{vs_rdkit_str}"
-        )
+    print_csv_rows(csv_rows)
+    if args.output:
+        write_csv_rows(csv_rows, args.output)
+        print(f"\nWrote results to {args.output}")
 
 
 if __name__ == "__main__":

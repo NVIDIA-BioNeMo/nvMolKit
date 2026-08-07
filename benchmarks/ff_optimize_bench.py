@@ -40,6 +40,7 @@ import nvtx
 import torch
 from bench_utils import (
     Deadline,
+    add_backend_selection_args,
     add_rdkit_max_seconds_arg,
     available_cpu_count,
     clone_mols_with_conformers,
@@ -48,8 +49,11 @@ from bench_utils import (
     load_sdf,
     load_smiles,
     prep_mols,
+    print_csv_rows,
     throughput_per_s,
     time_it,
+    time_it_bounded_result,
+    write_csv_rows,
 )
 from rdkit import Chem
 from rdkit.Chem import AllChem
@@ -162,10 +166,10 @@ def bench_rdkit(
 ) -> tuple[float, float, list[float], int]:
     """Benchmark RDKit MMFF/UFF optimization; return ``(mean_ms, std_ms, energies, processed_mols)``.
 
-    When ``max_seconds > 0`` the per-molecule loop stops once wall-clock
-    elapsed exceeds the cap. Throughput at the call site should be measured
-    as items / elapsed; the returned timing is over the molecules actually
-    processed.
+    When ``max_seconds > 0``, one deadline is shared across all timed runs and
+    the inner loop stops processing at the next molecule boundary. The timing,
+    processed count, and returned energies always come from the same retained
+    sample set: complete samples take precedence over a later partial sample.
     """
     if ff == "mmff":
         rdkit_optimize = lambda mol: AllChem.MMFFOptimizeMoleculeConfs(  # noqa: E731
@@ -179,32 +183,39 @@ def bench_rdkit(
         raise ValueError(f"Unknown ff: {ff!r}")
 
     last_results: list[list[list[tuple[int, float]]]] = [[]]
+    complete_results: list[list[list[tuple[int, float]]]] = [[]]
     processed_count = [0]
 
     @nvtx.annotate("ff_rdkit_run", color="yellow")
-    def run() -> None:
-        cloned = clone_mols_with_conformers(mols)
-        deadline = Deadline(max_seconds)
+    def run(deadline: Deadline) -> None:
         out: list[list[tuple[int, float]]] = []
-        n_done = 0
-        for mol in cloned:
+        for source_mol in mols:
+            mol = Chem.RWMol(source_mol)
             out.append(rdkit_optimize(mol))
-            n_done += 1
             if deadline.expired():
                 break
         last_results[0] = out
-        processed_count[0] = n_done
+        processed_count[0] = len(out)
+        if processed_count[0] == len(mols):
+            complete_results[0] = out
 
     if warmup:
         warmup_mols = clone_mols_with_conformers(mols[: min(4, len(mols))])
         for warmup_mol in warmup_mols:
             rdkit_optimize(warmup_mol)
 
-    result = time_it(run, runs=runs, warmups=0, gpu_sync=False)
-    energies, not_converged = _flatten_rdkit_energies(last_results[0])
+    timing, measured_count = time_it_bounded_result(
+        run,
+        runs=runs,
+        max_seconds=max_seconds,
+        progress_getter=lambda: processed_count[0],
+        progress_target=len(mols),
+    )
+    measured_results = complete_results[0] if measured_count == len(mols) else last_results[0]
+    energies, not_converged = _flatten_rdkit_energies(measured_results)
     if not_converged > 0:
         print(f"  RDKit: {not_converged} conformer(s) reported non-zero status (not converged)")
-    return result.mean_ms, result.std_ms, energies, processed_count[0]
+    return timing.mean_ms, timing.std_ms, energies, measured_count
 
 
 def _build_hardware_options(
@@ -219,15 +230,6 @@ def _build_hardware_options(
         batchesPerGpu=batches_per_gpu,
         gpuIds=list(range(num_gpus)) if num_gpus > 0 else None,
     )
-
-
-CSV_HEADER = (
-    "method,ff,minimizer_kind,input_file,input_type,num_mols,mols_processed,confs_per_mol,max_iters,"
-    "batch_size,batches_per_gpu,prep_threads,num_gpus,nvmolkit_config_source,"
-    "rdkit_threads,rdkit_max_seconds,time_ms,std_ms,"
-    "confs_per_second,vs_rdkit_throughput_ratio,"
-    "energies_compared,mean_abs_energy_diff,max_abs_energy_diff"
-)
 
 
 def main() -> None:
@@ -267,8 +269,7 @@ def main() -> None:
     parser.add_argument("--no_warmup", action="store_false", dest="warmup", help="Skip warmup")
     parser.set_defaults(warmup=True)
 
-    parser.add_argument("--no_nvmolkit", action="store_true", help="Skip nvmolkit benchmark")
-    parser.add_argument("--no_rdkit", action="store_true", help="Skip RDKit benchmark")
+    add_backend_selection_args(parser)
     parser.add_argument(
         "--rdkit_threads",
         type=int,
@@ -483,16 +484,16 @@ def main() -> None:
                 rng = random.Random(args.autotune_seed)
                 size = min(args.autotune_calibration_size, len(mols))
                 explicit_calibration = rng.sample(range(len(mols)), size)
-            tune_kwargs = dict(
-                maxIters=args.max_iters,
-                minimizerKind=args.minimizer_kind,
-                gpuIds=gpu_ids,
-                n_trials=args.autotune_trials,
-                target_seconds_per_trial=args.autotune_time_budget,
-                calibration_set=explicit_calibration,
-                seed=args.autotune_seed,
-                verbose=True,
-            )
+            tune_kwargs = {
+                "maxIters": args.max_iters,
+                "minimizerKind": args.minimizer_kind,
+                "gpuIds": gpu_ids,
+                "n_trials": args.autotune_trials,
+                "target_seconds_per_trial": args.autotune_time_budget,
+                "calibration_set": explicit_calibration,
+                "seed": args.autotune_seed,
+                "verbose": True,
+            }
             if args.ff == "mmff":
                 tune_result = nv_autotune.tune_mmff_optimize(mols, **tune_kwargs)
             else:
@@ -582,7 +583,7 @@ def main() -> None:
         applied_prep_threads = args.prep_threads
         applied_num_gpus = args.num_gpus
 
-    csv_rows: list[str] = []
+    csv_rows: list[dict[str, object]] = []
     for name, (avg_ms, std_ms, energies) in results.items():
         is_nv = name == "nvmolkit"
         is_rdkit = name == "rdkit"
@@ -603,25 +604,38 @@ def main() -> None:
         max_diff = energy_max if (args.validate and is_nv) else "N/A"
         pairs = energy_pairs if (args.validate and is_nv) else "N/A"
         csv_rows.append(
-            f"{name},{args.ff},{args.minimizer_kind if is_nv else 'N/A'},{input_file},{input_type},"
-            f"{len(mols)},{mols_processed},{args.confs_per_mol},"
-            f"{args.max_iters},{batch_size},{batches_per_gpu},{prep_threads},{num_gpus},"
-            f"{nvmolkit_config_source},{rdkit_threads},{rdkit_max_seconds},"
-            f"{avg_ms:.2f},{std_ms:.2f},"
-            f"{confs_per_second:.2f},{vs_rdkit_throughput_ratio},"
-            f"{pairs},{mean_diff},{max_diff}"
+            {
+                "method": name,
+                "ff": args.ff,
+                "minimizer_kind": args.minimizer_kind if is_nv else "N/A",
+                "input_file": input_file,
+                "input_type": input_type,
+                "num_mols": len(mols),
+                "mols_processed": mols_processed,
+                "confs_per_mol": args.confs_per_mol,
+                "max_iters": args.max_iters,
+                "batch_size": batch_size,
+                "batches_per_gpu": batches_per_gpu,
+                "prep_threads": prep_threads,
+                "num_gpus": num_gpus,
+                "nvmolkit_config_source": nvmolkit_config_source,
+                "rdkit_threads": rdkit_threads,
+                "rdkit_max_seconds": rdkit_max_seconds,
+                "time_ms": round(avg_ms, 2),
+                "std_ms": round(std_ms, 2),
+                "confs_per_second": round(confs_per_second, 2),
+                "vs_rdkit_throughput_ratio": vs_rdkit_throughput_ratio,
+                "energies_compared": pairs,
+                "mean_abs_energy_diff": mean_diff,
+                "max_abs_energy_diff": max_diff,
+            }
         )
 
     print("\n\nCSV Results:")
-    print(CSV_HEADER)
-    for row in csv_rows:
-        print(row)
+    print_csv_rows(csv_rows)
 
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as fh:
-            fh.write(CSV_HEADER + "\n")
-            for row in csv_rows:
-                fh.write(row + "\n")
+        write_csv_rows(csv_rows, args.output)
         print(f"\nWrote results to {args.output}")
 
     if not args.no_nvmolkit:

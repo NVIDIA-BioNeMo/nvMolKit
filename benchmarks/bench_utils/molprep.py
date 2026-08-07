@@ -87,6 +87,19 @@ def clone_mols_with_conformers(mols: list[Chem.Mol]) -> list[Chem.RWMol]:
     return [Chem.RWMol(mol) for mol in mols]
 
 
+def slice_conformers(mols: list[Chem.Mol], target: int) -> list[Chem.Mol]:
+    """Copy molecules while retaining at most the first ``target`` conformers."""
+    if target < 0:
+        raise ValueError(f"target must be non-negative, got {target}")
+    out: list[Chem.Mol] = []
+    for mol in mols:
+        copy_mol = Chem.Mol(mol, True)
+        for conf in list(mol.GetConformers())[:target]:
+            copy_mol.AddConformer(Chem.Conformer(conf), assignId=True)
+        out.append(copy_mol)
+    return out
+
+
 def perturb_conformer(
     conf: Chem.Conformer,
     seed: int,

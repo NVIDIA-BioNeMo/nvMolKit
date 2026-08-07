@@ -18,19 +18,17 @@ import json
 import sys
 
 import numpy as np
-import pandas as pd
 import torch
-from bench_utils import load_smiles
-from benchmark_timing import time_it
+from bench_utils import add_backend_selection_args, load_smiles, print_csv_rows, time_it, write_csv_rows
 from rdkit import DataStructs
 from rdkit.Chem import AllChem
 from rdkit.DataStructs import BulkTanimotoSimilarity
 from rdkit.ML.Cluster.Butina import ClusterData
 
-from nvmolkit.clustering import butina as butina_nvmol, fused_butina
+from nvmolkit.clustering import butina as butina_nvmol
+from nvmolkit.clustering import fused_butina
 from nvmolkit.fingerprints import MorganFingerprintGenerator as nvmolMorganGen
 from nvmolkit.similarity import crossTanimotoSimilarity
-
 
 def check_butina_correctness(hit_mat, clusts):
     hit_mat = hit_mat.clone()
@@ -67,32 +65,6 @@ def get_fingerprints(molecules):
     nvmol_gen = nvmolMorganGen(radius=2, fpSize=1024)
     nvmol_fps = nvmol_gen.GetFingerprints(molecules, 10)
     return nvmol_fps.torch()
-
-
-def resize_and_fill(distance_mat: torch.Tensor, want_size):
-    current_size = distance_mat.shape[0]
-    if current_size >= want_size:
-        return distance_mat[:want_size, :want_size].contiguous()
-    full_mat = torch.rand(want_size, want_size, dtype=distance_mat.dtype, device=distance_mat.device)
-    full_mat = torch.abs(full_mat - full_mat.T).clip(0.01, 0.99)
-    full_mat.fill_diagonal_(0.0)
-    full_mat[:current_size, :current_size] = distance_mat
-    return full_mat
-
-
-def resize_and_fill_fingerprints(fps: torch.Tensor, want_size: int) -> torch.Tensor:
-    current_size = fps.shape[0]
-    if current_size >= want_size:
-        return fps[:want_size].contiguous()
-    full_fps = torch.randint(
-        -(2**31),
-        2**31 - 1,
-        (want_size, fps.shape[1]),
-        dtype=torch.int32,
-        device=fps.device,
-    )
-    full_fps[:current_size] = fps
-    return full_fps
 
 
 def bench_rdkit(data, threshold, runs=3, reordering=True):
@@ -149,9 +121,8 @@ DEFAULT_SIZES = [1000, 5000, 10000, 20000, 30000, 40000]
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Benchmark Butina clustering")
     parser.add_argument("input_smiles_file", help="Path to input SMILES file")
-    parser.add_argument("--no-rdkit", action="store_true", help="Disable RDKit benchmarks")
     parser.add_argument("--no-fused", action="store_true", help="Disable fused Butina benchmarks")
-    parser.add_argument("--no-nvmolkit", action="store_true", help="Disable nvMolKit Butina benchmarks")
+    add_backend_selection_args(parser)
     parser.add_argument(
         "--rdkit-lowmem",
         action="store_true",
@@ -176,6 +147,12 @@ if __name__ == "__main__":
     )
     parser.add_argument("--runs", type=int, default=3, help="Number of timed repetitions (default: 3)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for sampling SMILES (default: 42)")
+    parser.add_argument(
+        "--validate-max-size",
+        type=int,
+        default=10000,
+        help="Largest problem size for the expensive dense correctness check (default: 10000; 0 disables)",
+    )
     parser.add_argument(
         "-o", "--output", type=str, default="results.csv", help="Output CSV file path (default: results.csv)"
     )
@@ -220,8 +197,15 @@ if __name__ == "__main__":
     max_size = max(e["size"] for e in run_plan)
 
     mols = load_smiles(args.input_smiles_file, max_count=max_size + 100, sanitize=True, seed=args.seed)
+    if len(mols) < max_size:
+        print(
+            f"Error: requested size {max_size}, but only {len(mols)} valid molecules were loaded",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    fps = get_fingerprints(mols)
+    need_nvmolkit_fps = any("fused" in entry["run"] or "nvmolkit" in entry["run"] for entry in run_plan)
+    fps = get_fingerprints(mols) if need_nvmolkit_fps else None
 
     # All three rdkit paths (cluster_only, with_tanimoto, lowmem) need real
     # RDKit fingerprints, so build them once if any rdkit row is planned.
@@ -241,9 +225,7 @@ if __name__ == "__main__":
     results = []
 
     def save_results():
-        df = pd.DataFrame(results)
-        df.to_csv(output_path, index=False)
-        return df
+        write_csv_rows(results, output_path)
 
     try:
         for entry in run_plan:
@@ -251,37 +233,19 @@ if __name__ == "__main__":
             runs = entry["run"]
             max_nl_sizes = entry.get("neighborlist_sizes", default_nl_sizes)
 
-            # with_tanimoto and lowmem need real fingerprints for every mol up to
-            # `size`; when the input is smaller, those rows are skipped here.
-            have_real_fps_for_size = rdkit_fps is not None and len(rdkit_fps) >= size
-
             need_real_fps_mat = "fused" in runs or "nvmolkit" in runs
-            if need_real_fps_mat and len(mols) >= size:
-                fps_mat_real = fps[:size].contiguous()
-            else:
-                fps_mat_real = None
-            if need_real_fps_mat and fps_mat_real is None:
-                fps_mat_synth = resize_and_fill_fingerprints(fps, size)
-            else:
-                fps_mat_synth = None
-            fps_mat = fps_mat_real if fps_mat_real is not None else fps_mat_synth
+            fps_mat = fps[:size].contiguous() if need_real_fps_mat else None
 
             need_dist = "nvmolkit" in runs or "rdkit" in runs
             if need_dist:
-                real_size = min(size, len(mols))
                 if "nvmolkit" in runs or "fused" in runs:
-                    base_dists = 1.0 - crossTanimotoSimilarity(fps[:real_size]).torch()
+                    dist_mat = (1.0 - crossTanimotoSimilarity(fps_mat).torch()).contiguous()
                 else:
-                    rdkit_dist = np.empty((real_size, real_size), dtype=np.float64)
-                    for i in range(real_size):
-                        rdkit_dist[i] = BulkTanimotoSimilarity(rdkit_fps[i], rdkit_fps[:real_size])
+                    rdkit_dist = np.empty((size, size), dtype=np.float64)
+                    for i in range(size):
+                        rdkit_dist[i] = BulkTanimotoSimilarity(rdkit_fps[i], rdkit_fps[:size])
                     np.subtract(1.0, rdkit_dist, out=rdkit_dist)
-                    base_dists = torch.from_numpy(rdkit_dist)
-                if real_size >= size:
-                    dist_mat = base_dists.contiguous()
-                else:
-                    dist_mat = resize_and_fill(base_dists, size)
-                    del base_dists
+                    dist_mat = torch.from_numpy(rdkit_dist)
 
             for cutoff in cutoffs:
                 # Don't run large sizes for edge cases.
@@ -294,14 +258,13 @@ if __name__ == "__main__":
                     print(f"Running rdkit_cluster_only size {size} cutoff {cutoff}")
                     dist_mat_numpy = dist_mat.cpu().numpy()
                     rdkit_cluster_only_time, rdkit_cluster_only_std = bench_rdkit(dist_mat_numpy, cutoff, runs=n_runs)
-                    if have_real_fps_for_size:
-                        print(f"Running rdkit_with_tanimoto size {size} cutoff {cutoff}")
-                        rdkit_with_tanimoto_time, rdkit_with_tanimoto_std = bench_rdkit_with_tanimoto(
-                            rdkit_fps[:size], cutoff, runs=n_runs
-                        )
+                    print(f"Running rdkit_with_tanimoto size {size} cutoff {cutoff}")
+                    rdkit_with_tanimoto_time, rdkit_with_tanimoto_std = bench_rdkit_with_tanimoto(
+                        rdkit_fps[:size], cutoff, runs=n_runs
+                    )
 
                 rdkit_lm_time, rdkit_lm_std = float("nan"), float("nan")
-                if "rdkit_lowmem" in runs and have_real_fps_for_size:
+                if "rdkit_lowmem" in runs:
                     print(f"Running rdkit_lowmem size {size} cutoff {cutoff}")
                     rdkit_lm_time, rdkit_lm_std = bench_rdkit_lowmem(rdkit_fps[:size], cutoff, runs=n_runs)
 
@@ -336,10 +299,10 @@ if __name__ == "__main__":
                             nvmolkit_cluster_only_std = nvmolkit_cluster_only_result.std_ms
 
                             nvmolkit_with_tanimoto_time, nvmolkit_with_tanimoto_std = float("nan"), float("nan")
-                            if fps_mat_real is not None and nvmol_reordering:
+                            if nvmol_reordering:
                                 print(f"Running nvmolkit_with_tanimoto size {size} cutoff {cutoff} max_nl {max_nl}")
                                 nvmolkit_with_tanimoto_result = time_it(
-                                    lambda: bench_nvmol_with_tanimoto(fps_mat_real, cutoff, max_nl),
+                                    lambda: bench_nvmol_with_tanimoto(fps_mat, cutoff, max_nl),
                                     gpu_sync=True,
                                     runs=n_runs,
                                 )
@@ -354,7 +317,7 @@ if __name__ == "__main__":
                                 tuple(torch.argwhere(nvmol_res == i).flatten().tolist())
                                 for i in range(nvmol_res.max() + 1)
                             ]
-                            if nvmol_reordering:
+                            if nvmol_reordering and 0 < size <= args.validate_max_size:
                                 check_butina_correctness(dist_mat <= cutoff, nvmol_clusts)
 
                             results.append(
@@ -400,5 +363,8 @@ if __name__ == "__main__":
             save_results()
     except Exception as e:
         print(f"Got exception: {e}, exiting early")
-    df = save_results()
-    print(df)
+        save_results()
+        raise
+    save_results()
+    print("\nCSV Results:")
+    print_csv_rows(results)

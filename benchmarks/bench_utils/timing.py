@@ -101,15 +101,23 @@ class Deadline:
     """
 
     def __init__(self, max_seconds: float) -> None:
+        """Start a deadline lasting ``max_seconds``; non-positive disables it."""
         self._end: float | None = time.perf_counter() + max_seconds if max_seconds > 0 else None
 
     def expired(self) -> bool:
+        """Return whether the active deadline has elapsed."""
         return self._end is not None and time.perf_counter() >= self._end
 
     @property
     def active(self) -> bool:
         """``True`` when a real budget is being enforced."""
         return self._end is not None
+
+    def remaining_seconds(self) -> float | None:
+        """Seconds remaining, or ``None`` when the deadline is disabled."""
+        if self._end is None:
+            return None
+        return max(0.0, self._end - time.perf_counter())
 
 
 def throughput_per_s(items: float, elapsed_ms: float) -> float:
@@ -135,16 +143,52 @@ def time_it_bounded(
     workload was actually completed; a value below ``progress_target`` is
     treated as a partial run and further iterations are skipped.
 
-    Returns ``(avg_ms, std_ms, last_progress)``. ``avg`` and ``std`` are
-    computed only over runs that completed end-to-end; if no full run
-    finished, the single partial timing is returned with ``std=0``.
+    Returns ``(avg_ms, std_ms, measured_progress)``. ``avg`` and ``std`` are
+    computed only over runs that completed end-to-end, with
+    ``measured_progress == progress_target``. If no full run finished, the
+    single partial timing and its progress are returned with ``std=0``.
     """
+    timing, measured_progress = time_it_bounded_result(
+        run,
+        runs,
+        max_seconds,
+        progress_getter,
+        progress_target,
+    )
+    if not timing.times_ms:
+        return 0.0, 0.0, measured_progress
+    std_ms = statistics.pstdev(timing.times_ms) if len(timing.times_ms) > 1 else 0.0
+    return timing.mean_ms, std_ms, measured_progress
+
+
+def time_it_bounded_result(
+    run: Callable[[Deadline], None],
+    runs: int,
+    max_seconds: float,
+    progress_getter: Callable[[], int],
+    progress_target: int,
+) -> tuple[TimingResult, int]:
+    """Return the actual timing samples retained by :func:`time_it_bounded`.
+
+    Complete samples are retained together and a later partial sample is
+    discarded. If the first sample is partial, that sample and its measured
+    progress are returned. This form is useful when callers need a
+    :class:`TimingResult` without pairing aggregate timing from one run with
+    progress or output captured from another.
+
+    At least one timed invocation is attempted for valid input, even when an
+    active deadline has already expired. Bounded callers need one indivisible
+    unit of work to produce a partial timing suitable for extrapolation.
+    """
+    if runs <= 0:
+        raise ValueError(f"runs must be positive, got {runs}")
+
     deadline = Deadline(max_seconds)
     completed_times_ms: list[float] = []
     partial_time_ms: float | None = None
     last_progress = 0
-    for _ in range(runs):
-        if deadline.expired():
+    for run_idx in range(runs):
+        if run_idx > 0 and deadline.expired():
             break
         start = time.perf_counter()
         run(deadline)
@@ -155,12 +199,12 @@ def time_it_bounded(
             break
         completed_times_ms.append(elapsed_ms)
     if completed_times_ms:
-        avg_ms = statistics.mean(completed_times_ms)
-        std_ms = statistics.pstdev(completed_times_ms) if len(completed_times_ms) > 1 else 0.0
-        return avg_ms, std_ms, last_progress
-    if partial_time_ms is not None:
-        return partial_time_ms, 0.0, last_progress
-    return 0.0, 0.0, last_progress
+        # Partial work after one or more complete samples is not included in
+        # these timing statistics, so report the matching full-run progress.
+        return TimingResult(times_ms=completed_times_ms), progress_target
+    if partial_time_ms is None:
+        raise RuntimeError("bounded timing completed without recording a sample")
+    return TimingResult(times_ms=[partial_time_ms]), last_progress
 
 
 def add_rdkit_max_seconds_arg(parser: argparse.ArgumentParser, *, extra_help: str = "") -> None:
