@@ -7,7 +7,7 @@ import math
 import time
 
 import pytest
-from bench_utils.timing import Deadline, throughput_per_s, time_it_bounded
+from bench_utils.timing import Deadline, throughput_per_s, time_it_bounded, time_it_bounded_result
 
 
 @pytest.mark.parametrize("max_seconds", [0.0, -1.0])
@@ -104,13 +104,30 @@ def test_time_it_bounded_stops_when_budget_exhausted_between_runs():
     assert avg_ms > 0
 
 
-def test_time_it_bounded_zero_runs_returns_zero():
-    avg_ms, std_ms, progress = time_it_bounded(
-        lambda _deadline: None, runs=0, max_seconds=0.0, progress_getter=lambda: 0, progress_target=1
+@pytest.mark.parametrize("timing_func", [time_it_bounded, time_it_bounded_result])
+def test_time_it_bounded_rejects_non_positive_runs(timing_func):
+    with pytest.raises(ValueError, match="runs must be positive"):
+        timing_func(lambda _deadline: None, runs=0, max_seconds=0.0, progress_getter=lambda: 0, progress_target=1)
+
+
+def test_time_it_bounded_result_runs_first_sample_when_deadline_already_expired(monkeypatch):
+    monkeypatch.setattr(Deadline, "expired", lambda _self: True)
+    call_count = [0]
+
+    def run(_deadline):
+        call_count[0] += 1
+
+    timing, reported_progress = time_it_bounded_result(
+        run,
+        runs=3,
+        max_seconds=1.0,
+        progress_getter=lambda: call_count[0],
+        progress_target=1,
     )
-    assert avg_ms == 0.0
-    assert std_ms == 0.0
-    assert progress == 0
+
+    assert call_count[0] == 1
+    assert len(timing.times_ms) == 1
+    assert reported_progress == 1
 
 
 def test_time_it_bounded_stddev_positive_for_multiple_completed_runs():
@@ -139,6 +156,36 @@ def test_time_it_bounded_does_not_pair_full_timing_with_partial_progress():
     assert avg_ms >= 0.0
     assert std_ms == 0.0
     assert reported_progress == 10
+
+
+def test_time_it_bounded_result_retains_complete_samples_not_later_partial():
+    progresses = iter([10, 10, 3])
+    progress = [0]
+
+    def run(_deadline):
+        progress[0] = next(progresses)
+
+    timing, reported_progress = time_it_bounded_result(
+        run, runs=3, max_seconds=0.0, progress_getter=lambda: progress[0], progress_target=10
+    )
+
+    assert len(timing.times_ms) == 2
+    assert reported_progress == 10
+
+
+def test_time_it_bounded_result_returns_first_partial_sample_and_progress():
+    progress = [3]
+
+    timing, reported_progress = time_it_bounded_result(
+        lambda _deadline: None,
+        runs=3,
+        max_seconds=0.0,
+        progress_getter=lambda: progress[0],
+        progress_target=10,
+    )
+
+    assert len(timing.times_ms) == 1
+    assert reported_progress == 3
 
 
 def test_time_it_bounded_shared_deadline_caps_inner_loop():

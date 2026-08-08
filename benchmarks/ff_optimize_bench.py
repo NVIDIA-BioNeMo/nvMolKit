@@ -52,6 +52,7 @@ from bench_utils import (
     print_csv_rows,
     throughput_per_s,
     time_it,
+    time_it_bounded_result,
     write_csv_rows,
 )
 from rdkit import Chem
@@ -165,10 +166,10 @@ def bench_rdkit(
 ) -> tuple[float, float, list[float], int]:
     """Benchmark RDKit MMFF/UFF optimization; return ``(mean_ms, std_ms, energies, processed_mols)``.
 
-    When ``max_seconds > 0`` the per-molecule loop stops once wall-clock
-    elapsed exceeds the cap. Throughput at the call site should be measured
-    as items / elapsed; the returned timing is over the molecules actually
-    processed.
+    When ``max_seconds > 0``, one deadline is shared across all timed runs and
+    the inner loop stops processing at the next molecule boundary. The timing,
+    processed count, and returned energies always come from the same retained
+    sample set: complete samples take precedence over a later partial sample.
     """
     if ff == "mmff":
         rdkit_optimize = lambda mol: AllChem.MMFFOptimizeMoleculeConfs(  # noqa: E731
@@ -182,11 +183,11 @@ def bench_rdkit(
         raise ValueError(f"Unknown ff: {ff!r}")
 
     last_results: list[list[list[tuple[int, float]]]] = [[]]
+    complete_results: list[list[list[tuple[int, float]]]] = [[]]
     processed_count = [0]
 
     @nvtx.annotate("ff_rdkit_run", color="yellow")
-    def run() -> None:
-        deadline = Deadline(max_seconds)
+    def run(deadline: Deadline) -> None:
         out: list[list[tuple[int, float]]] = []
         for source_mol in mols:
             mol = Chem.RWMol(source_mol)
@@ -195,17 +196,26 @@ def bench_rdkit(
                 break
         last_results[0] = out
         processed_count[0] = len(out)
+        if processed_count[0] == len(mols):
+            complete_results[0] = out
 
     if warmup:
         warmup_mols = clone_mols_with_conformers(mols[: min(4, len(mols))])
         for warmup_mol in warmup_mols:
             rdkit_optimize(warmup_mol)
 
-    result = time_it(run, runs=runs, warmups=0, gpu_sync=False)
-    energies, not_converged = _flatten_rdkit_energies(last_results[0])
+    timing, measured_count = time_it_bounded_result(
+        run,
+        runs=runs,
+        max_seconds=max_seconds,
+        progress_getter=lambda: processed_count[0],
+        progress_target=len(mols),
+    )
+    measured_results = complete_results[0] if measured_count == len(mols) else last_results[0]
+    energies, not_converged = _flatten_rdkit_energies(measured_results)
     if not_converged > 0:
         print(f"  RDKit: {not_converged} conformer(s) reported non-zero status (not converged)")
-    return result.mean_ms, result.std_ms, energies, processed_count[0]
+    return timing.mean_ms, timing.std_ms, energies, measured_count
 
 
 def _build_hardware_options(

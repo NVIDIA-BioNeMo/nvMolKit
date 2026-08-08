@@ -38,6 +38,7 @@ from bench_utils.timing import (
     throughput_per_s,
     time_it,
     time_it_bounded,
+    time_it_bounded_result,
 )
 
 __all__ = [
@@ -62,5 +63,6 @@ __all__ = [
     "throughput_per_s",
     "time_it",
     "time_it_bounded",
+    "time_it_bounded_result",
     "write_csv_rows",
 ]
