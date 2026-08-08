@@ -690,6 +690,10 @@ std::vector<MCSResult> findMCSBatch(const std::vector<const RDKit::ROMol*>& mols
     if ((params.workerThreads != -1 && effectiveWorkerThreads > 1) || gpuIds.size() > 1) {
       throw std::invalid_argument("MCS multi-worker or multi-GPU dispatch does not support an external CUDA stream");
     }
+    const WithDevice streamDevice(gpuIds.front());
+    if (!acquireExternalStream(reinterpret_cast<std::uintptr_t>(stream)).has_value()) {
+      throw std::invalid_argument("MCS external CUDA stream does not belong to the configured GPU");
+    }
     effectiveWorkerThreads = 1;
   }
 
