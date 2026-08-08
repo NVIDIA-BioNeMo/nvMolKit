@@ -339,8 +339,7 @@ def main():
     add_rdkit_max_seconds_arg(
         parser,
         extra_help=(
-            "RDKit aborts between molecules when single-threaded or completed "
-            "molecule batches when multiprocessing."
+            "RDKit aborts between molecules when single-threaded or completed molecule batches when multiprocessing."
         ),
     )
     parser.add_argument("--batch_size", "-b", type=int, default=1024, help="nvmolkit batch size (default: 1024)")
@@ -726,10 +725,7 @@ def main():
             print("\nValidation:")
             pairs_total = len(mols) * len(queries)
             if validation_key is None:
-                print(
-                    f"  Skipping validation: every RDKit variant hit max_seconds budget before "
-                    f"{pairs_total} pairs."
-                )
+                print(f"  Skipping validation: every RDKit variant hit max_seconds budget before {pairs_total} pairs.")
             else:
                 print(f"  Validating against {validation_key}")
                 _validate_matches(mode, results["nvmolkit"][2], results[validation_key][2], len(mols), len(queries))
