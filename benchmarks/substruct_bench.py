@@ -764,11 +764,9 @@ def main():
             num_gpus = applied_num_gpus if name == "nvmolkit" else config_row["num_gpus"]
             nvmolkit_config_source = config_source if name == "nvmolkit" else "N/A"
             if is_rdkit:
-                rdkit_match_mode = "raw"
                 rdkit_threads = rdkit_variant_meta[name]
                 rdkit_max_seconds = args.rdkit_max_seconds
             else:
-                rdkit_match_mode = "N/A"
                 rdkit_threads = "N/A"
                 rdkit_max_seconds = "N/A"
             throughput = (pairs_done * 1000.0 / avg_ms) if avg_ms > 0 else 0.0
@@ -791,7 +789,6 @@ def main():
                     "prep_threads": prep_threads,
                     "nvmolkit_config_source": nvmolkit_config_source,
                     "rdkit_threads": rdkit_threads,
-                    "rdkit_match_mode": rdkit_match_mode,
                     "time_ms": round(avg_ms, 2),
                     "std_ms": round(std_ms, 2),
                     "pairs_processed": pairs_done,
