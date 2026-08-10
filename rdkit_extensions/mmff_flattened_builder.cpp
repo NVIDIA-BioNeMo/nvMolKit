@@ -406,7 +406,7 @@ void addVdW(const ROMol&                             mol,
 
   INT_VECT fragMapping;
   if (ignoreInterfragInteractions) {
-    std::ignore = MolOps::getMolFrags(mol, true, &fragMapping);
+    MolOps::getMolFrags(mol, fragMapping);
   }
 
   unsigned int     nAtoms = mol.getNumAtoms();
@@ -446,7 +446,7 @@ void addEle(const ROMol&                             mol,
 
   INT_VECT fragMapping;
   if (ignoreInterfragInteractions) {
-    std::ignore = MolOps::getMolFrags(mol, true, &fragMapping);
+    MolOps::getMolFrags(mol, fragMapping);
   }
   unsigned int nAtoms = mol.getNumAtoms();
 
