@@ -13,44 +13,56 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
+#include <stdexcept>
+
 #include "src/mcs/fmcs_cuda/fmcs_match_tables.cuh"
 
 namespace mcs {
 namespace fmcs {
 
-UploadedPairMatchTables uploadPairMatchTables(const std::vector<PairMatchTablesHost>& host, cudaStream_t stream) {
+size_t computePairMatchTableWords(const std::vector<PairMatchTablesHost>& host) {
   size_t totalWords = 0;
   for (const auto& p : host) {
     totalWords += p.atoms.data.size();
     totalWords += p.bonds.data.size();
+  }
+  return totalWords;
+}
+
+UploadedPairMatchTables uploadPairMatchTables(const std::vector<PairMatchTablesHost>& host,
+                                              std::span<uint32_t>                     packedHost,
+                                              cudaStream_t                            stream) {
+  const size_t totalWords = computePairMatchTableWords(host);
+  if (packedHost.size() < totalWords) {
+    throw std::out_of_range("Pinned match-table staging buffer is too small");
   }
 
   UploadedPairMatchTables out;
   out.storage = nvMolKit::AsyncDeviceVector<uint32_t>(totalWords, stream);
   out.tables.resize(host.size());
 
-  std::vector<uint32_t> packed;
-  packed.reserve(totalWords);
-  uint32_t* base = out.storage.data();
+  uint32_t* base   = out.storage.data();
+  size_t    cursor = 0;
   for (size_t i = 0; i < host.size(); ++i) {
     const auto& ph = host[i];
     auto&       pd = out.tables[i];
 
     if (!ph.atoms.data.empty()) {
-      const size_t offset = packed.size();
-      packed.insert(packed.end(), ph.atoms.data.begin(), ph.atoms.data.end());
-      pd.atoms = {base + offset, ph.atoms.nRows, ph.atoms.nCols, ph.atoms.wordsPerRow};
+      std::copy(ph.atoms.data.begin(), ph.atoms.data.end(), packedHost.begin() + cursor);
+      pd.atoms = {base + cursor, ph.atoms.nRows, ph.atoms.nCols, ph.atoms.wordsPerRow};
+      cursor += ph.atoms.data.size();
     }
 
     if (!ph.bonds.data.empty()) {
-      const size_t offset = packed.size();
-      packed.insert(packed.end(), ph.bonds.data.begin(), ph.bonds.data.end());
-      pd.bonds = {base + offset, ph.bonds.nRows, ph.bonds.nCols, ph.bonds.wordsPerRow};
+      std::copy(ph.bonds.data.begin(), ph.bonds.data.end(), packedHost.begin() + cursor);
+      pd.bonds = {base + cursor, ph.bonds.nRows, ph.bonds.nCols, ph.bonds.wordsPerRow};
+      cursor += ph.bonds.data.size();
     }
   }
 
-  if (!packed.empty()) {
-    out.storage.copyFromHost(packed);
+  if (totalWords > 0) {
+    out.storage.copyFromHost(packedHost.data(), totalWords);
   }
   return out;
 }
