@@ -13,7 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""GPU-accelerated maximum common substructure search."""
+"""GPU-accelerated maximum common substructure search.
+
+The public :func:`findMCS` entry point searches many independent molecule
+pairs in one call.  It can generate pairs from one molecule table, accept an
+explicit list of pairs, or zip two equally sized molecule lists.  See the
+function docstring for the pair ordering, index spaces, fallback behavior, and
+currently unsupported RDKit fMCS features.
+"""
 
 from __future__ import annotations
 
@@ -120,7 +127,7 @@ class MCSConfig:
         executorsPerRunner: Number of asynchronous GPU executor streams used
             for chunked fMCS tier dispatch. ``-1`` autoselects.
         gpuIds: GPU device IDs to use. ``None`` or empty uses the current
-            device.
+            device only, not all available devices.
     """
 
     def __init__(
@@ -254,19 +261,79 @@ def findMCS(
 ) -> MCSBatchResult:
     """Find maximum common substructures for a batch of molecule pairs.
 
+    Input modes:
+        ``mode="all_pairs"`` uses ``mols`` as a single indexed table.  The
+        default generates ``(i, j)`` in upper-triangle row-major order for
+        ``i <= j``, including self-pairs.  Set ``include_diagonal=False`` to
+        omit self-pairs.  Set ``upper_triangle=False`` to generate the full
+        row-major Cartesian square instead; ``include_diagonal`` still
+        controls self-pairs.
+
+        ``mode="pairs"`` also uses one ``mols`` table.  ``pairs`` is a
+        sequence of index pairs such as ``[(i, j), (i, j), ...]``; the search
+        processes exactly those entries in their given order.  Repeated,
+        reversed, and self-pairs are retained, and both indices in every pair
+        address ``mols``.
+
+        ``mode="paired_lists"`` zips two equally sized lists, searching
+        ``mols[i]`` against ``mols_b[i]``.  Internally the lists are combined,
+        so ``result.pairs`` contains ``(i, len(mols) + i)``.  The first and
+        second columns of each atom or bond mapping still refer to the
+        corresponding molecules from ``mols`` and ``mols_b``, respectively.
+
+    Results are flat and follow the generated pair order.  ``result[k]``
+    materializes the MCS for ``result.pairs[k]``; it does not index results by
+    molecule ID.  Mapping arrays contain ``(first_molecule_index,
+    second_molecule_index)`` atom or bond index pairs.
+
+    Fallback behavior:
+        Molecule pairs outside the native GPU limits (currently more than 128
+        atoms, more than 128 bonds, or atom degree greater than 8), and pairs
+        whose GPU search queue overflows, transparently use RDKit on the CPU.
+        Set ``require_gpu=True`` to raise instead.  This fallback is
+        pair-specific; unsupported search options listed below raise for the
+        whole call and do not trigger fallback.
+
+    Timeouts:
+        ``timeout_seconds`` is an independent budget for each generated pair,
+        not one deadline shared by the batch.  A timed-out pair has
+        ``canceled=True`` and may contain the best valid partial MCS found so
+        far; other pairs continue independently.  GPU timing starts when that
+        pair's kernel block begins and therefore excludes host preprocessing
+        and dispatch time.  A pair routed to RDKit receives the same timeout.
+        Zero disables the timeout.
+
+    Unsupported features:
+        The interface currently supports exact, connected, bond-maximizing
+        two-molecule MCS searches only.  ``connected_only=False`` and
+        ``maximize_bonds=False`` raise :class:`ValueError`.
+
+        ``atom_compare="any_heavy_atom"`` and ``match_isotope=True`` are not
+        implemented and also raise.  Use ``atom_compare="isotopes"`` for
+        isotope-based atom comparison.
+
+        Other RDKit fMCS features are not exposed: disconnected results,
+        ``StoreAll``, thresholds other than 1.0, initial SMARTS seeds, custom
+        atom/bond typers or callbacks, chirality and bond-stereo matching,
+        complete-ring and fused-ring constraints, atom maximum-distance
+        constraints, and verbose progress output.
+
     Args:
         mols: Primary molecule table. In ``pairs`` and ``all_pairs`` modes,
             generated pair indices refer to this table.
         mode: Dispatch shape. ``"all_pairs"`` builds square pair specs from
             ``mols``. ``"pairs"`` uses explicit ``pairs`` over ``mols``.
             ``"paired_lists"`` pairs ``mols[i]`` with ``mols_b[i]``.
-        pairs: Explicit index pairs for ``mode="pairs"``.
+        pairs: For ``mode="pairs"``, a sequence of molecule-index pairs such
+            as ``[(0, 1), (2, 3)]``. Each ``(i, j)`` searches ``mols[i]``
+            against ``mols[j]``, and results preserve the sequence order.
         mols_b: Second molecule list for ``mode="paired_lists"``.
         upper_triangle: For ``mode="all_pairs"``, generate only upper-triangle
             pairs when true, otherwise generate full row-major square pairs.
         include_diagonal: Include ``(i, i)`` all-pairs entries.
-        atom_compare: ``"any"``, ``"elements"``, ``"isotopes"``, or
-            ``"any_heavy_atom"``.
+        atom_compare: ``"any"``, ``"elements"``, or ``"isotopes"``.
+            ``"any_heavy_atom"`` is recognized but not implemented and
+            raises.
         bond_compare: ``"any"``, ``"order"``, or ``"order_exact"``.
         match_valences: Match atom total valence.
         match_formal_charge: Match atom formal charge.
@@ -274,13 +341,14 @@ def findMCS(
             ring matching unless the axis-specific arguments are supplied.
         atom_ring_matches_ring_only: Match ring atoms only to ring atoms.
         bond_ring_matches_ring_only: Match ring bonds only to ring bonds.
-        match_isotope: Match isotope labels in addition to ``atom_compare``.
+        match_isotope: Not currently implemented; ``True`` raises. Use
+            ``atom_compare="isotopes"`` for isotope-based comparison.
         maximize_bonds: Maximize bonds, matching RDKit's default fMCS objective.
-        connected_only: Require connected MCS. The GPU path supports connected
-            MCS only; unsupported settings use RDKit fallback unless
-            ``require_gpu`` is true.
-        require_gpu: Raise instead of using RDKit fallback for unsupported or
-            overflowed pairs.
+            ``False`` is not currently supported and raises.
+        connected_only: Require connected MCS. ``False`` is not currently
+            supported and raises.
+        require_gpu: Raise instead of using per-pair RDKit fallback for native
+            GPU size, degree, or queue-capacity limits.
         timeout_seconds: Per-pair timeout in seconds. GPU results canceled by
             timeout return the best partial MCS found so far; RDKit fallback
             receives the same timeout.
@@ -296,7 +364,7 @@ def findMCS(
         executors_per_runner: Number of asynchronous GPU executor streams used
             for chunked fMCS tier dispatch. ``-1`` autoselects.
         gpu_ids: GPU device IDs to use. ``None`` or empty uses the current
-            device.
+            device only, not all available devices.
 
     Returns:
         :class:`MCSBatchResult` in generated-pair order.
