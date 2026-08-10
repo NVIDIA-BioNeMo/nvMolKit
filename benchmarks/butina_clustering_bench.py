@@ -30,6 +30,7 @@ from nvmolkit.clustering import fused_butina
 from nvmolkit.fingerprints import MorganFingerprintGenerator as nvmolMorganGen
 from nvmolkit.similarity import crossTanimotoSimilarity
 
+
 def check_butina_correctness(hit_mat, clusts):
     hit_mat = hit_mat.clone()
     seen = set()
