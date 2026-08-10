@@ -120,6 +120,13 @@ target_include_directories(_substructure PUBLIC ${Boost_INCLUDE_DIRS}
                                                 ${Python_INCLUDE_DIRS})
 installpythontarget(_substructure ./)
 
+add_library(_mcs MODULE mcs.cpp)
+target_link_libraries(_mcs PUBLIC ${Boost_LIBRARIES} ${PYTHON_LIBRARIES})
+target_link_libraries(_mcs PRIVATE ${RDKit_LIBS} mcs_search CUDA::cudart)
+target_include_directories(_mcs PUBLIC ${Boost_INCLUDE_DIRS}
+                                       ${Python_INCLUDE_DIRS})
+installpythontarget(_mcs ./)
+
 add_library(_TFD MODULE tfd.cpp)
 target_link_libraries(_TFD PUBLIC ${Boost_LIBRARIES} ${PYTHON_LIBRARIES}
                                   device_vector)

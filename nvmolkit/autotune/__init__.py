@@ -44,6 +44,7 @@ from nvmolkit.autotune._core import (
 from nvmolkit.autotune._persistence import load, save
 from nvmolkit.autotune.tune_batched_forcefield import tune_batched_forcefield
 from nvmolkit.autotune.tune_embed_molecules import tune_embed_molecules
+from nvmolkit.autotune.tune_mcs import tune_mcs
 from nvmolkit.autotune.tune_mmff_optimize import tune_mmff_optimize
 from nvmolkit.autotune.tune_substructure import tune_substructure
 from nvmolkit.autotune.tune_uff_optimize import tune_uff_optimize
@@ -55,8 +56,8 @@ def is_available() -> bool:
 
 
 __all__ = [
-    "CalibrationState",
     "OPTUNA_INSTALL_HINT",
+    "CalibrationState",
     "TuneResult",
     "is_available",
     "is_optuna_available",
@@ -64,6 +65,7 @@ __all__ = [
     "save",
     "tune_batched_forcefield",
     "tune_embed_molecules",
+    "tune_mcs",
     "tune_mmff_optimize",
     "tune_substructure",
     "tune_uff_optimize",
