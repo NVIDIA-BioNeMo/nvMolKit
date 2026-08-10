@@ -58,10 +58,6 @@ class MCSResult:
     num_atoms: int
     num_bonds: int
     canceled: bool
-    overflowed: bool
-    used_gpu: bool
-    used_fallback: bool
-    smarts_string: str
     atom_mapping: np.ndarray
     bond_mapping: np.ndarray
 
@@ -75,10 +71,6 @@ class MCSBatchResult:
     num_atoms: np.ndarray
     num_bonds: np.ndarray
     canceled: np.ndarray
-    overflowed: np.ndarray
-    used_gpu: np.ndarray
-    used_fallback: np.ndarray
-    smarts_strings: tuple[str, ...]
     atom_mapping: np.ndarray
     atom_mapping_indptr: np.ndarray
     bond_mapping: np.ndarray
@@ -109,10 +101,6 @@ class MCSBatchResult:
             num_atoms=int(self.num_atoms[pair_idx]),
             num_bonds=int(self.num_bonds[pair_idx]),
             canceled=bool(self.canceled[pair_idx]),
-            overflowed=bool(self.overflowed[pair_idx]),
-            used_gpu=bool(self.used_gpu[pair_idx]),
-            used_fallback=bool(self.used_fallback[pair_idx]),
-            smarts_string=self.smarts_strings[pair_idx],
             atom_mapping=self.atom_mapping[atom_start:atom_end],
             bond_mapping=self.bond_mapping[bond_start:bond_end],
         )
@@ -144,6 +132,7 @@ class MCSConfig:
         executorsPerRunner: int = -1,
         gpuIds: Sequence[int] | None = None,
     ) -> None:
+        """Initialize GPU execution settings."""
         self.batchSize = int(batchSize)
         self.blockSize = int(blockSize)
         self.workerThreads = int(workerThreads)
@@ -374,10 +363,6 @@ def findMCS(
         num_atoms,
         num_bonds,
         canceled,
-        overflowed,
-        used_gpu,
-        used_fallback,
-        smarts_strings,
         atom_mapping,
         atom_mapping_indptr,
         bond_mapping,
@@ -416,10 +401,6 @@ def findMCS(
         num_atoms=num_atoms,
         num_bonds=num_bonds,
         canceled=canceled,
-        overflowed=overflowed,
-        used_gpu=used_gpu,
-        used_fallback=used_fallback,
-        smarts_strings=tuple(smarts_strings),
         atom_mapping=atom_mapping,
         atom_mapping_indptr=atom_mapping_indptr,
         bond_mapping=bond_mapping,

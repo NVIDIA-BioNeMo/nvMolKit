@@ -1,0 +1,5 @@
+num_pairs,batch_size,block_size,workers,prep_threads,executors_per_runner,num_gpus,atom_compare,bond_compare,match_valences,match_formal_charge,ring_matches_ring_only,timeout_seconds
+1000,0,64,-1,-1,-1,1,elements,order,false,false,false,0
+1000,0,128,-1,-1,-1,1,elements,order,false,false,false,0
+1000,0,256,-1,-1,-1,1,elements,order,false,false,false,0
+1000,0,512,-1,-1,-1,1,elements,order,false,false,false,0

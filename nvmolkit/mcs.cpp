@@ -36,10 +36,6 @@ struct MCSResultBuffers {
   std::vector<unsigned int> numAtoms;
   std::vector<unsigned int> numBonds;
   std::vector<std::uint8_t> canceled;
-  std::vector<std::uint8_t> overflowed;
-  std::vector<std::uint8_t> usedGpu;
-  std::vector<std::uint8_t> usedFallback;
-  std::vector<std::string>  smartsStrings;
 
   std::vector<std::int32_t> atomMapping;
   std::vector<std::int32_t> atomMappingIndptr;
@@ -128,14 +124,6 @@ std::vector<int> optionIntVector(const dict& options, const char* key) {
   return vectorFromIterable<int>(options[key]);
 }
 
-list stringsToPythonList(const std::vector<std::string>& values) {
-  list out;
-  for (const auto& value : values) {
-    out.append(value);
-  }
-  return out;
-}
-
 template <typename T> boost::python::numpy::ndarray make1dArray(std::vector<T>& values, const object& owner) {
   const Py_intptr_t shape  = static_cast<Py_intptr_t>(values.size());
   const Py_intptr_t stride = static_cast<Py_intptr_t>(sizeof(T));
@@ -196,10 +184,6 @@ BOOST_PYTHON_MODULE(_mcs) {
       buffers->numAtoms.reserve(results.size());
       buffers->numBonds.reserve(results.size());
       buffers->canceled.reserve(results.size());
-      buffers->overflowed.reserve(results.size());
-      buffers->usedGpu.reserve(results.size());
-      buffers->usedFallback.reserve(results.size());
-      buffers->smartsStrings.reserve(results.size());
       buffers->atomMappingIndptr.reserve(results.size() + 1);
       buffers->bondMappingIndptr.reserve(results.size() + 1);
       buffers->atomMappingIndptr.push_back(0);
@@ -209,10 +193,6 @@ BOOST_PYTHON_MODULE(_mcs) {
         buffers->numAtoms.push_back(result.numAtoms);
         buffers->numBonds.push_back(result.numBonds);
         buffers->canceled.push_back(result.canceled ? 1 : 0);
-        buffers->overflowed.push_back(result.overflowed ? 1 : 0);
-        buffers->usedGpu.push_back(result.usedGpu ? 1 : 0);
-        buffers->usedFallback.push_back(result.usedFallback ? 1 : 0);
-        buffers->smartsStrings.push_back(result.smartsString);
 
         for (const auto& [a, b] : result.atomMapping) {
           buffers->atomMapping.push_back(static_cast<std::int32_t>(a));
@@ -243,10 +223,6 @@ BOOST_PYTHON_MODULE(_mcs) {
       return make_tuple(make1dArray(ptr->numAtoms, owner),
                         make1dArray(ptr->numBonds, owner),
                         make1dArray(ptr->canceled, owner),
-                        make1dArray(ptr->overflowed, owner),
-                        make1dArray(ptr->usedGpu, owner),
-                        make1dArray(ptr->usedFallback, owner),
-                        stringsToPythonList(ptr->smartsStrings),
                         makePairArray(ptr->atomMapping, owner),
                         make1dArray(ptr->atomMappingIndptr, owner),
                         makePairArray(ptr->bondMapping, owner),

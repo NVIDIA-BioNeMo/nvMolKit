@@ -26,13 +26,14 @@ import json
 from os import PathLike
 from typing import Union
 
+from nvmolkit.mcs import MCSConfig
 from nvmolkit.substructure import SubstructSearchConfig
 from nvmolkit.types import HardwareOptions
 
 _TYPE_TAG = "_nvmolkit_config_type"
 
 
-def save(config: Union[HardwareOptions, SubstructSearchConfig], path: Union[str, PathLike]) -> None:
+def save(config: Union[HardwareOptions, SubstructSearchConfig, MCSConfig], path: Union[str, PathLike]) -> None:
     """Persist ``config`` to a JSON file at ``path``.
 
     The serialized payload includes a type tag so :func:`load` can return the
@@ -42,15 +43,18 @@ def save(config: Union[HardwareOptions, SubstructSearchConfig], path: Union[str,
         payload = {_TYPE_TAG: "HardwareOptions", "fields": config.to_dict()}
     elif isinstance(config, SubstructSearchConfig):
         payload = {_TYPE_TAG: "SubstructSearchConfig", "fields": config.to_dict()}
+    elif isinstance(config, MCSConfig):
+        payload = {_TYPE_TAG: "MCSConfig", "fields": config.to_dict()}
     else:
         raise TypeError(
-            f"Unsupported config type {type(config).__name__}; expected HardwareOptions or SubstructSearchConfig"
+            f"Unsupported config type {type(config).__name__}; expected HardwareOptions, "
+            "SubstructSearchConfig, or MCSConfig"
         )
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2)
 
 
-def load(path: Union[str, PathLike]) -> Union[HardwareOptions, SubstructSearchConfig]:
+def load(path: Union[str, PathLike]) -> Union[HardwareOptions, SubstructSearchConfig, MCSConfig]:
     """Load a configuration object previously saved with :func:`save`."""
     with open(path, "r", encoding="utf-8") as fh:
         payload = json.load(fh)
@@ -60,4 +64,6 @@ def load(path: Union[str, PathLike]) -> Union[HardwareOptions, SubstructSearchCo
         return HardwareOptions.from_dict(fields)
     if type_tag == "SubstructSearchConfig":
         return SubstructSearchConfig.from_dict(fields)
+    if type_tag == "MCSConfig":
+        return MCSConfig.from_dict(fields)
     raise ValueError(f"Unrecognized configuration type tag: {type_tag!r}")
