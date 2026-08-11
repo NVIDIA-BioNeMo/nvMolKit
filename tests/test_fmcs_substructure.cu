@@ -243,7 +243,9 @@ __global__ void matchSubstructureMaskDriver(DeviceCsrView         qView,
                                             std::uint32_t         bondMask,
                                             SubstructureTestOut*  out) {
   __shared__ QueuedT16 child;
-  __shared__ mcs::fmcs::FmcsSubstructureScratch<16, 16> scratch;
+  __shared__ __align__(16) unsigned char sharedRaw[sizeof(mcs::fmcs::FmcsPairShared<16, 16>)];
+  auto&                                  S = *reinterpret_cast<mcs::fmcs::FmcsPairShared<16, 16>*>(sharedRaw);
+  mcs::fmcs::loadPairSharedCooperative(S, qView, tView, tables, static_cast<int>(threadIdx.x), blockDim.x);
   if (threadIdx.x == 0) {
     addMaskSeed(child, atomMask, bondMask);
   }
@@ -251,7 +253,7 @@ __global__ void matchSubstructureMaskDriver(DeviceCsrView         qView,
 
   auto block = cooperative_groups::this_thread_block();
   auto warp  = cooperative_groups::tiled_partition<32>(block);
-  bool ok = mcs::fmcs::matchSeedSubstructureCooperative(warp, child.seed, qView, tView, tables, child.match, scratch);
+  bool ok    = mcs::fmcs::matchSeedSubstructureCooperative(warp, S, child.seed, child.match, /*g=*/0);
   __syncthreads();
 
   if (threadIdx.x == 0) {
@@ -265,8 +267,9 @@ __global__ void matchFallbackBadParentDriver(DeviceCsrView         qView,
                                              PairMatchTablesDevice tables,
                                              SubstructureTestOut*  out) {
   __shared__ QueuedT16 child;
-  __shared__ mcs::fmcs::FmcsSubstructureScratch<16, 16> scratch;
-  __shared__ int                                        scratchLock;
+  __shared__ __align__(16) unsigned char sharedRaw[sizeof(mcs::fmcs::FmcsPairShared<16, 16>)];
+  auto&                                  S = *reinterpret_cast<mcs::fmcs::FmcsPairShared<16, 16>*>(sharedRaw);
+  mcs::fmcs::loadPairSharedCooperative(S, qView, tView, tables, static_cast<int>(threadIdx.x), blockDim.x);
   if (threadIdx.x == 0) {
     // Query seed is the 4-edge path inside the triangle-with-leaves
     // repro: query bonds 1,2,3,4 and all five atoms.  The stored parent
@@ -287,20 +290,12 @@ __global__ void matchFallbackBadParentDriver(DeviceCsrView         qView,
     child.match.matchedAtomSize = 2;
     child.match.matchedBondSize = 1;
     child.match.empty           = false;
-    scratchLock                 = 0;
   }
   __syncthreads();
 
   auto block = cooperative_groups::this_thread_block();
   auto warp  = cooperative_groups::tiled_partition<32>(block);
-  bool ok    = mcs::fmcs::matchSeedWithSubstructureFallbackCooperative(warp,
-                                                                    child.seed,
-                                                                    qView,
-                                                                    tView,
-                                                                    tables,
-                                                                    child.match,
-                                                                    scratch,
-                                                                    &scratchLock);
+  bool ok    = mcs::fmcs::checkSeedMatchAndAppendCooperative(warp, S, child, /*g=*/0);
   __syncthreads();
 
   if (threadIdx.x == 0) {

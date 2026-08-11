@@ -607,7 +607,6 @@ void runGpuPairs(std::vector<PreparedGpuPair>&           gpuPairs,
 
     mcs::fmcs::Parameters fmcsParams;
     fmcsParams.batchSize          = params.batchSize;
-    fmcsParams.blockSize          = params.blockSize;
     fmcsParams.executorsPerRunner = effectiveExecutorsPerRunner;
     fmcsParams.matchVertexLabels  = usesAtomLabels(params);
     fmcsParams.matchEdgeLabels    = usesBondLabels(params);

@@ -218,7 +218,6 @@ def test_save_load_substruct_config_roundtrip(tmp_path):
 def test_mcs_config_to_from_dict_roundtrip():
     config = MCSConfig(
         batchSize=256,
-        blockSize=512,
         workerThreads=2,
         preprocessingThreads=4,
         executorsPerRunner=3,
@@ -233,7 +232,6 @@ def test_mcs_config_to_from_dict_roundtrip():
 def test_save_load_mcs_config_roundtrip(tmp_path):
     config = MCSConfig(
         batchSize=128,
-        blockSize=256,
         workerThreads=2,
         preprocessingThreads=6,
         executorsPerRunner=4,
@@ -335,7 +333,6 @@ def test_default_mcs_search_space_covers_supported_execution_settings():
     space = _default_mcs_search_space(num_gpus=4, cpus=16)
 
     assert space["batchSize"] == [0, 64, 128, 256, 512]
-    assert space["blockSize"] == [64, 128, 256, 512]
     assert space["workerThreads"] == (1, 4)
     assert space["preprocessingThreads"] == (1, 16)
     assert space["executorsPerRunner"] == (1, 8)
@@ -614,7 +611,6 @@ def test_tune_mcs_smoke():
         calibration_max_size=len(pairs),
         search_space_overrides={
             "batchSize": [0, 64, 128, 256],
-            "blockSize": [64, 128, 256, 512],
             "workerThreads": 1,
             "preprocessingThreads": 1,
             "executorsPerRunner": 1,
@@ -626,7 +622,6 @@ def test_tune_mcs_smoke():
     assert result.best_throughput > 0
     assert result.n_trials_run == 2
     assert result.calibration_size == len(pairs)
-    assert result.best_config.blockSize in {64, 128, 256, 512}
     assert result.best_config.gpuIds == [0]
 
     final = findMCS(mols, mode="pairs", pairs=pairs, require_gpu=True, config=result.best_config)

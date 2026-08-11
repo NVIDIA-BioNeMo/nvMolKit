@@ -129,37 +129,6 @@ __device__ __forceinline__ void updateIncumbentCooperative(const GroupT&  group,
   group.sync();
 }
 
-template <int maxAtoms, int maxBonds, int maxTA, int maxTB, class GroupT>
-__device__ __forceinline__ bool checkSeedMatchAndAppendCooperative(
-  const GroupT&                                 group,
-  QueuedSeed<maxAtoms, maxBonds, maxTA, maxTB>& candidate,
-  const DeviceCsrView&                          queryTopology,
-  const DeviceCsrView&                          targetTopology,
-  const PairMatchTablesDevice&                  tables,
-  FmcsSubstructureScratch<maxAtoms, maxTA>&     scratch) {
-  bool ok = false;
-  if (!candidate.match.empty) {
-    ok = tryMatchIncrementalGreedyCooperative(group,
-                                              candidate.seed,
-                                              queryTopology,
-                                              targetTopology,
-                                              tables,
-                                              candidate.match);
-  }
-
-  if (!ok) {
-    ok = matchSeedSubstructureCooperative(group,
-                                          candidate.seed,
-                                          queryTopology,
-                                          targetTopology,
-                                          tables,
-                                          candidate.match,
-                                          scratch);
-    group.sync();
-  }
-  return ok;
-}
-
 __device__ __forceinline__ bool isPowerOfTwo64(unsigned long long value) {
   return value != 0ULL && (value & (value - 1ULL)) == 0ULL;
 }
@@ -266,131 +235,10 @@ template <class GroupT> __device__ __forceinline__ bool readFlagCooperative(cons
   return group.shfl(value, 0) != 0;
 }
 
-template <int maxAtoms, int maxBonds, class GroupT>
-__device__ __forceinline__ void seedComputeRemainingSizeRdkitCooperative(
-  const GroupT&                                      group,
-  Seed<maxAtoms, maxBonds>&                          seed,
-  const DeviceCsrView&                               queryTopology,
-  std::uint8_t*                                      atomStack,
-  typename Seed<maxAtoms, maxBonds>::atom_word_type* visitedAtoms,
-  typename Seed<maxAtoms, maxBonds>::bond_word_type* visitedBonds,
-  int*                                               stackSize) {
-  using SeedT                    = Seed<maxAtoms, maxBonds>;
-  using AtomWord                 = typename SeedT::atom_word_type;
-  using BondWord                 = typename SeedT::bond_word_type;
-  constexpr int kAtomBitsPerWord = SeedT::kAtomBitsPerWord;
-  constexpr int kBondBitsPerWord = SeedT::kBondBitsPerWord;
-
-  if (group.thread_rank() == 0) {
-    seed.remainingAtoms = 0;
-    seed.remainingBonds = 0;
-    *stackSize          = 0;
-    for (int i = 0; i < SeedT::kAtomWords; ++i) {
-      visitedAtoms[i] = seed.atoms[i];
-    }
-    for (int i = 0; i < SeedT::kBondWords; ++i) {
-      visitedBonds[i] = seed.excludedBonds[i];
-    }
-
-    for (int wordIdx = 0; wordIdx < SeedT::kAtomWords; ++wordIdx) {
-      AtomWord remaining = seed.lastAddedAtoms[wordIdx];
-      while (remaining != 0) {
-        int bitPosInWord;
-        if constexpr (sizeof(AtomWord) == 4) {
-          bitPosInWord = __ffs(static_cast<unsigned int>(remaining)) - 1;
-        } else {
-          bitPosInWord = __ffsll(static_cast<unsigned long long>(remaining)) - 1;
-        }
-        const int atomIdx = wordIdx * kAtomBitsPerWord + bitPosInWord;
-        remaining &= remaining - 1;
-
-        for (int bondIdx = 0; bondIdx < queryTopology.numBonds; ++bondIdx) {
-          const int      bondWordIdx = bondIdx / kBondBitsPerWord;
-          const BondWord bondMask    = static_cast<BondWord>(1) << (bondIdx % kBondBitsPerWord);
-          if ((visitedBonds[bondWordIdx] & bondMask) != 0)
-            continue;
-
-          const std::uint32_t endpoints = queryTopology.bondEndpoints[bondIdx];
-          const int           endpointU = static_cast<int>(endpoints >> kBondEndpointShift);
-          const int           endpointV = static_cast<int>(endpoints & kBondEndpointMask);
-          int                 otherAtom = -1;
-          if (endpointU == atomIdx) {
-            otherAtom = endpointV;
-          } else if (endpointV == atomIdx) {
-            otherAtom = endpointU;
-          } else {
-            continue;
-          }
-
-          visitedBonds[bondWordIdx] |= bondMask;
-          seed.remainingBonds += 1;
-          const int      atomWordIdx = otherAtom / kAtomBitsPerWord;
-          const AtomWord atomMask    = static_cast<AtomWord>(1) << (otherAtom % kAtomBitsPerWord);
-          if ((visitedAtoms[atomWordIdx] & atomMask) == 0) {
-            visitedAtoms[atomWordIdx] |= atomMask;
-            seed.remainingAtoms += 1;
-            atomStack[(*stackSize)++] = static_cast<std::uint8_t>(otherAtom);
-          }
-        }
-      }
-    }
-
-    while (*stackSize > 0) {
-      const int atomIdx = atomStack[--(*stackSize)];
-      for (int bondIdx = 0; bondIdx < queryTopology.numBonds; ++bondIdx) {
-        const int      bondWordIdx = bondIdx / kBondBitsPerWord;
-        const BondWord bondMask    = static_cast<BondWord>(1) << (bondIdx % kBondBitsPerWord);
-        if ((visitedBonds[bondWordIdx] & bondMask) != 0)
-          continue;
-
-        const std::uint32_t endpoints = queryTopology.bondEndpoints[bondIdx];
-        const int           endpointU = static_cast<int>(endpoints >> kBondEndpointShift);
-        const int           endpointV = static_cast<int>(endpoints & kBondEndpointMask);
-        int                 otherAtom = -1;
-        if (endpointU == atomIdx) {
-          otherAtom = endpointV;
-        } else if (endpointV == atomIdx) {
-          otherAtom = endpointU;
-        } else {
-          continue;
-        }
-
-        visitedBonds[bondWordIdx] |= bondMask;
-        seed.remainingBonds += 1;
-        const int      atomWordIdx = otherAtom / kAtomBitsPerWord;
-        const AtomWord atomMask    = static_cast<AtomWord>(1) << (otherAtom % kAtomBitsPerWord);
-        if ((visitedAtoms[atomWordIdx] & atomMask) == 0) {
-          visitedAtoms[atomWordIdx] |= atomMask;
-          seed.remainingAtoms += 1;
-          atomStack[(*stackSize)++] = static_cast<std::uint8_t>(otherAtom);
-        }
-      }
-    }
-  }
-  group.sync();
-}
-
 /// Per-block seed worklist capacity.  The backing slab lives in global
-/// memory; only the cursor/header lives in shared memory.  Approach 1 uses
-/// atomic LIFO push/pop so multiple warp groups can own grow work
-/// concurrently.
-constexpr int kFmcsQueueCapacity    = 4096;
-/// Block / cooperative-group sizing.  Phase 2 partitions each block into warp
-/// groups; each group pops one seed at a time from the block worklist and
-/// cooperates on matching, remaining-size checks, seed copying, and fallback
-/// substructure search.  Supported block sizes are compile-time kernel
-/// specializations selected at launch time.
-constexpr int kFmcsDefaultBlockSize = 128;
-constexpr int kFmcsGroupSize        = 32;
-static_assert(kFmcsGroupSize <= 32, "kFmcsGroupSize must be <= 32 (warp shuffle / ballot scope)");
-static_assert((kFmcsGroupSize & (kFmcsGroupSize - 1)) == 0, "kFmcsGroupSize must be a power of two");
-
-template <int blockThreads> struct FmcsBlockConfig {
-  static_assert(blockThreads == 64 || blockThreads == 128 || blockThreads == 256 || blockThreads == 512,
-                "fMCS block size must be 64, 128, 256, or 512");
-  static_assert(blockThreads % kFmcsGroupSize == 0, "fMCS block size must be a multiple of kFmcsGroupSize");
-  static constexpr int numGroups = blockThreads / kFmcsGroupSize;
-};
+/// memory; only the cursor/header lives in shared memory.  Atomic LIFO
+/// push/pop lets multiple warp groups own grow work concurrently.
+constexpr int kFmcsQueueCapacity = 4096;
 
 }  // namespace fmcs
 }  // namespace mcs

@@ -163,7 +163,6 @@ BOOST_PYTHON_MODULE(_mcs) {
       params.requireGpu           = optionValue<bool>(options, "require_gpu", false);
       params.timeoutSeconds       = optionValue<unsigned int>(options, "timeout_seconds", 0);
       params.batchSize            = optionValue<int>(options, "batch_size", 0);
-      params.blockSize            = optionValue<int>(options, "block_size", 128);
       params.workerThreads        = optionValue<int>(options, "worker_threads", -1);
       params.preprocessingThreads = optionValue<int>(options, "preprocessing_threads", -1);
       params.executorsPerRunner   = optionValue<int>(options, "executors_per_runner", -1);

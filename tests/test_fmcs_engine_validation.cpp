@@ -350,29 +350,15 @@ TEST(FMCSTiers, MaxSize128) {
   expectFullSelfPair(r, p);
 }
 
-TEST(FMCSBlockSize, SupportedSpecializationsMatchDefault) {
+// A nonzero timeout routes tiers <= 64 to the production kernel instead of
+// the fast block-per-pair kernel; keep that path covered with a timeout far
+// too generous to actually fire.
+TEST(FMCSTiers, GenerousTimeoutMatchesFastKernelResult) {
   const auto p = path(32);
-  for (int blockSize : {64, 128, 256, 512}) {
-    Parameters params;
-    params.blockSize = blockSize;
-    auto r           = findSingleMCES(p, p, params);
-    expectFullSelfPair(r, p);
-  }
-}
-
-TEST(FMCSBlockSize, Block512SupportsTier128WithGlobalScratch) {
-  const auto p = path(128);
   Parameters params;
-  params.blockSize = 512;
+  params.timeoutMs = 60000.0f;
   auto r           = findSingleMCES(p, p, params);
   expectFullSelfPair(r, p);
-}
-
-TEST(FMCSBlockSize, RejectsOneWarpBlockSize) {
-  const auto p = path(8);
-  Parameters params;
-  params.blockSize = 32;
-  EXPECT_THROW((void)mcs::fmcs::findMCESfMCSBatch({p}, {p}, params), std::invalid_argument);
 }
 
 TEST(FMCSInputValidation, RejectsDegreeAboveEight) {

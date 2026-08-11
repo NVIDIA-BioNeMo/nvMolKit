@@ -13,6 +13,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Seed-in-target matching for the fMCS kernel.
+//
+// The kernel runs one block per pair (see fmcs_kernel.cuh); this header owns
+// the block-shared pair state and the matcher that runs against it.
+// Everything invariant for the pair -- both CSRs (byte-packed), the atom/bond
+// compatibility rows as bitsets, per-atom incident-bond sets, degree buckets,
+// and per-class target adjacency tables -- is loaded or derived once by
+// @ref loadPairSharedCooperative and then shared by every grow group.  Per
+// seed, only the most-constrained-first search order and its back-edge table
+// are built (warp-parallel).
+//
+// The exact check is the shared lane-parallel DFS core
+// (nvMolKit::dfsFromRoots, the same engine the substructure search product
+// runs on), fed by candidate masks read from the per-class adjacency tables
+// (src/subgraph/class_adjacency.cuh) -- the K-class generalisation of the
+// substructure frontend's Uniform/Dual precompute, keyed here on
+// deduplicated bond-compatibility rows.
+//
+// A greedy incremental extension of the parent's recorded witness runs
+// first; a greedy miss is inconclusive and falls through to the exact
+// search.
+
 #ifndef FMCS_CUDA_FMCS_MATCH_CUH
 #define FMCS_CUDA_FMCS_MATCH_CUH
 
@@ -21,905 +43,947 @@
 #include "src/mcs/fmcs_cuda/fmcs.cuh"
 #include "src/mcs/fmcs_cuda/fmcs_match_tables.cuh"
 #include "src/mcs/fmcs_cuda/fmcs_seed.cuh"
+#include "src/mcs/fmcs_cuda/fmcs_seed_queue.cuh"
 #include "src/mcs/fmcs_cuda/fmcs_topology.cuh"
-#include "src/subgraph/candidate_tables.cuh"
+#include "src/subgraph/class_adjacency.cuh"
 #include "src/subgraph/target_mask.cuh"
 #include "src/subgraph/warp_dfs.cuh"
 
 namespace mcs {
 namespace fmcs {
 
-/// Target-atom bitset wide enough for a tier's target capacity.  Tiers 16
-/// and 32 share the 32-bit form.  Deliberately keyed on the target size
-/// alone -- the DFS stack depth is keyed on the query size -- so
-/// rectangular (query size != target size) tiers need no matcher changes.
 /// Largest seed-atom degree the degreeAtLeast buckets distinguish.  Degrees
 /// above this clamp to the last bucket, which only weakens the filter.
-constexpr int kFmcsMaxSeedDegree = kMaxNeighborsPerAtom;
-static_assert(kMaxNeighborsPerAtom == nvMolKit::subgraph::kMaxEdgeSlotsPerAtom);
+constexpr int kFmcsMaxSeedDegree  = kMaxNeighborsPerAtom;
+/// Back-edge slots per search depth; molecular degree is capped at 8.
+constexpr int kFmcsMaxBackEdges   = kMaxNeighborsPerAtom;
+/// Bond-compatibility classes precomputed per pair.  Query bonds beyond this
+/// many distinct compatibility rows fall back to a shared-CSR recompute in
+/// the candidate build.
+constexpr int kFmcsMaxBondClasses = 8;
+/// Cooperative-group (warp) size for the grow groups and the matcher.
+constexpr int kFmcsGroupSize      = 32;
 
+/// Bitset wide enough for a tier's index space (query and target sides are
+/// square).  Tiers 16 and 32 share the 32-bit form.
 template <int maxTargetAtoms>
 constexpr int kFmcsMaskAtoms = (maxTargetAtoms <= 32 ? 32 : (maxTargetAtoms <= 64 ? 64 : 128));
 
 template <int maxTargetAtoms> using FmcsTargetMask = nvMolKit::TargetMask<kFmcsMaskAtoms<maxTargetAtoms>>;
 
-/// Resolved target endpoints for a successful single-(query bond, target
-/// bond, orientation) compatibility check.  Populated by
-/// @ref matchSingleBondWithinThread on success only; contents are
-/// unspecified on failure.  @c targetAtomU is the target atom that the
-/// query bond's u endpoint was mapped to (likewise V).
+/// Per-tier block configuration.  Tiers up to 64 run sixteen grow groups and
+/// cache per-depth candidate masks; tier 128 halves the group count and
+/// recomputes depth candidates on the fly so the block state fits the 64 KB
+/// opt-in shared-memory limit of the smallest supported architectures.
+template <int maxAtoms> struct FmcsKernelConfig {
+  static constexpr bool cacheDepthCandidates = maxAtoms <= 64;
+  static constexpr int  numGroups            = maxAtoms <= 64 ? 16 : 8;
+  static constexpr int  blockThreads         = numGroups * kFmcsGroupSize;
+};
+
+// ---------------------------------------------------------------------------
+// TargetMask <-> Seed/MatchResult bit-word bridging.  Seed and MatchResult
+// keep their word-array layouts (shared with the rest of fmcs_cuda and its
+// tests); the matcher does its bitset math on TargetMask and converts at the
+// boundaries.  All forms are layout-compatible 32/64/2x64-bit words.
+// ---------------------------------------------------------------------------
+
+__device__ __forceinline__ uint32_t maskWord32(const nvMolKit::TargetMask<32>& m, int /*word*/) {
+  return m.bits;
+}
+__device__ __forceinline__ uint32_t maskWord32(const nvMolKit::TargetMask<64>& m, int word) {
+  return static_cast<uint32_t>(m.lo >> (32 * word));
+}
+__device__ __forceinline__ uint32_t maskWord32(const nvMolKit::TargetMask<128>& m, int word) {
+  return static_cast<uint32_t>((word < 2 ? m.lo : m.hi) >> (32 * (word & 1)));
+}
+
+__device__ __forceinline__ bool maskEquals(const nvMolKit::TargetMask<32>& a, const nvMolKit::TargetMask<32>& b) {
+  return a.bits == b.bits;
+}
+__device__ __forceinline__ bool maskEquals(const nvMolKit::TargetMask<64>& a, const nvMolKit::TargetMask<64>& b) {
+  return a.lo == b.lo;
+}
+__device__ __forceinline__ bool maskEquals(const nvMolKit::TargetMask<128>& a, const nvMolKit::TargetMask<128>& b) {
+  return a.lo == b.lo && a.hi == b.hi;
+}
+
+__device__ __forceinline__ void maskOrEq(nvMolKit::TargetMask<32>& a, const nvMolKit::TargetMask<32>& b) {
+  a.bits |= b.bits;
+}
+__device__ __forceinline__ void maskOrEq(nvMolKit::TargetMask<64>& a, const nvMolKit::TargetMask<64>& b) {
+  a.lo |= b.lo;
+}
+__device__ __forceinline__ void maskOrEq(nvMolKit::TargetMask<128>& a, const nvMolKit::TargetMask<128>& b) {
+  a.lo |= b.lo;
+  a.hi |= b.hi;
+}
+
+template <class GroupT>
+__device__ __forceinline__ nvMolKit::TargetMask<32> warpOrMask(const GroupT& group, nvMolKit::TargetMask<32> m) {
+#pragma unroll
+  for (int off = 16; off > 0; off >>= 1)
+    m.bits |= group.shfl_xor(m.bits, off);
+  return m;
+}
+template <class GroupT>
+__device__ __forceinline__ nvMolKit::TargetMask<64> warpOrMask(const GroupT& group, nvMolKit::TargetMask<64> m) {
+#pragma unroll
+  for (int off = 16; off > 0; off >>= 1)
+    m.lo |= group.shfl_xor(m.lo, off);
+  return m;
+}
+template <class GroupT>
+__device__ __forceinline__ nvMolKit::TargetMask<128> warpOrMask(const GroupT& group, nvMolKit::TargetMask<128> m) {
+#pragma unroll
+  for (int off = 16; off > 0; off >>= 1) {
+    m.lo |= group.shfl_xor(m.lo, off);
+    m.hi |= group.shfl_xor(m.hi, off);
+  }
+  return m;
+}
+
+/// Load a Seed/MatchResult bit-word array into the tier's TargetMask form.
+template <std::size_t MaskBits, class Word, int NumWords>
+__device__ __forceinline__ nvMolKit::TargetMask<MaskBits> maskFromWords(const Word (&words)[NumWords]) {
+  nvMolKit::TargetMask<MaskBits> m;
+  m.clear();
+  constexpr int kSub = static_cast<int>(sizeof(Word) / 4);
+#pragma unroll
+  for (int w = 0; w < NumWords; ++w)
+#pragma unroll
+    for (int k = 0; k < kSub; ++k)
+      m.setWord32(w * kSub + k, static_cast<uint32_t>(words[w] >> (32 * k)));
+  return m;
+}
+
+/// Store a TargetMask back into a Seed/MatchResult bit-word array.
+template <class Word, int NumWords, std::size_t MaskBits>
+__device__ __forceinline__ void maskToWords(const nvMolKit::TargetMask<MaskBits>& m, Word (&words)[NumWords]) {
+  constexpr int kSub = static_cast<int>(sizeof(Word) / 4);
+#pragma unroll
+  for (int w = 0; w < NumWords; ++w) {
+    Word v = 0;
+#pragma unroll
+    for (int k = 0; k < kSub; ++k)
+      v |= static_cast<Word>(maskWord32(m, w * kSub + k)) << (32 * k);
+    words[w] = v;
+  }
+}
+
+template <class Word, int NumWords> __device__ __forceinline__ bool wordsTest(const Word (&words)[NumWords], int bit) {
+  constexpr int kBits = static_cast<int>(sizeof(Word) * 8);
+  return ((words[bit / kBits] >> (bit % kBits)) & 1) != 0;
+}
+
+template <class Word, int NumWords> __device__ __forceinline__ void wordsSet(Word (&words)[NumWords], int bit) {
+  constexpr int kBits = static_cast<int>(sizeof(Word) * 8);
+  words[bit / kBits] |= static_cast<Word>(1) << (bit % kBits);
+}
+
+/// Mask with bits [0, bit] set; clear mask for bit < 0.
+template <std::size_t MaskBits> __device__ __forceinline__ nvMolKit::TargetMask<MaskBits> lowMaskThrough(int bit) {
+  nvMolKit::TargetMask<MaskBits> m;
+  m.clear();
+#pragma unroll
+  for (int k = 0; k * 32 < static_cast<int>(MaskBits); ++k) {
+    const int lowBit = k * 32;
+    uint32_t  v      = 0;
+    if (bit >= lowBit + 31) {
+      v = 0xFFFFFFFFu;
+    } else if (bit >= lowBit) {
+      v = (1u << (bit - lowBit + 1)) - 1u;
+    }
+    m.setWord32(k, v);
+  }
+  return m;
+}
+
+// ---------------------------------------------------------------------------
+// Block-shared per-pair state.
+// ---------------------------------------------------------------------------
+
+template <int maxAtoms, int maxBonds> struct FmcsPairShared {
+  using Config   = FmcsKernelConfig<maxAtoms>;
+  using SeedT    = Seed<maxAtoms, maxBonds>;
+  using MatchT   = MatchResult<maxAtoms, maxBonds, maxAtoms, maxBonds>;
+  using QueuedT  = QueuedSeed<maxAtoms, maxBonds, maxAtoms, maxBonds>;
+  using AtomMask = FmcsTargetMask<maxAtoms>;
+  using BondMask = FmcsTargetMask<maxBonds>;
+
+  static constexpr int kNumGroups = Config::numGroups;
+  static constexpr int kAtomRegs  = (maxAtoms + 31) / 32;
+
+  // --- per-group hot state (16B-aligned members first) ---
+  QueuedT current[kNumGroups];
+  QueuedT biggest[kNumGroups];
+  QueuedT best;
+
+  // --- pair invariants ---
+  AtomMask atomRow[maxAtoms];        ///< query atom -> compatible target atoms
+  BondMask incidentBonds[maxAtoms];  ///< query atom -> incident query bonds
+  BondMask bondRow[maxBonds];        ///< query bond -> compatible target bonds
+  AtomMask degreeAtLeast[kFmcsMaxSeedDegree + 1];
+  BondMask classRep[kFmcsMaxBondClasses];  ///< representative bondRow per class
+  /// Per-class target adjacency, shared with src/subgraph.
+  nvMolKit::subgraph::ClassAdjacency<kFmcsMaskAtoms<maxAtoms>, kFmcsMaxBondClasses> classAdj;
+  BondMask                                                                          phase1Matched;
+
+  /// Per-depth candidate masks; recomputed on the fly at tier 128 (see
+  /// FmcsKernelConfig::cacheDepthCandidates), where caching them would push
+  /// the block state past the smallest supported shared-memory limit.
+  AtomMask depthCandidates[kNumGroups][Config::cacheDepthCandidates ? maxAtoms : 1];
+
+  /// Back edge: low byte = earlier order position, high byte = query bond.
+  uint16_t backEdges[kNumGroups][maxAtoms][kFmcsMaxBackEdges];
+  NewBond  newBonds[kNumGroups][maxBonds];
+
+  // Byte-packed CSRs for both graphs.
+  uint8_t qRow[maxAtoms + 1], tRow[maxAtoms + 1];
+  uint8_t qCol[2 * maxBonds], qBnd[2 * maxBonds], tCol[2 * maxBonds], tBnd[2 * maxBonds];
+  uint8_t qEpU[maxBonds], qEpV[maxBonds], tEpU[maxBonds], tEpV[maxBonds];
+  uint8_t bondClass[maxBonds];
+  /// Phase-1 per-query-bond direct match results.
+  uint8_t phase1TargetBond[maxBonds], phase1AtomU[maxBonds], phase1AtomV[maxBonds];
+
+  // Per-group per-seed search tables.
+  uint8_t order[kNumGroups][maxAtoms];     ///< order position -> query atom
+  uint8_t orderPos[kNumGroups][maxAtoms];  ///< inverse of order
+  uint8_t seedDegree[kNumGroups][maxAtoms];
+  uint8_t targetForQuery[kNumGroups][maxAtoms];  ///< winning embedding
+  uint8_t backEdgeCount[kNumGroups][maxAtoms];
+
+  SeedQueue<QueuedT, ThreadBlockScope> queue;
+
+  int  newBondCount[kNumGroups];
+  bool popped[kNumGroups];
+  int  found[kNumGroups];
+
+  unsigned int       bestScore;
+  int                bestCopyLock;
+  bool               overflowed;
+  bool               timedOut;
+  bool               phase2Done;
+  unsigned long long startClock;
+  int                qNA, qNB, tNA, tNB, numClasses, phase1Count;
+};
+
+// ---------------------------------------------------------------------------
+// Per-pair shared-state preload.  Block-cooperative: every thread of the
+// block participates, striding by @p blockThreads; the caller must
+// __syncthreads() after (the final barrier is included here).
+// ---------------------------------------------------------------------------
+template <int maxAtoms, int maxBonds>
+__device__ void loadPairSharedCooperative(FmcsPairShared<maxAtoms, maxBonds>& S,
+                                          const DeviceCsrView&                queryView,
+                                          const DeviceCsrView&                targetView,
+                                          const PairMatchTablesDevice&        tables,
+                                          int                                 tid,
+                                          int                                 blockThreads) {
+  using AtomMask               = typename FmcsPairShared<maxAtoms, maxBonds>::AtomMask;
+  using BondMask               = typename FmcsPairShared<maxAtoms, maxBonds>::BondMask;
+  constexpr int kAtomMaskWords = static_cast<int>(sizeof(AtomMask) / 4);
+  constexpr int kBondMaskWords = static_cast<int>(sizeof(BondMask) / 4);
+
+  const int qNA = queryView.numAtoms;
+  const int qNB = queryView.numBonds;
+  const int tNA = targetView.numAtoms;
+  const int tNB = targetView.numBonds;
+  const int qE  = static_cast<int>(queryView.rowOffsets[qNA]);
+  const int tE  = static_cast<int>(targetView.rowOffsets[tNA]);
+
+  if (tid == 0) {
+    S.qNA          = qNA;
+    S.qNB          = qNB;
+    S.tNA          = tNA;
+    S.tNB          = tNB;
+    S.bestScore    = 0;
+    S.bestCopyLock = 0;
+    S.overflowed   = false;
+    S.timedOut     = false;
+    S.phase2Done   = false;
+  }
+
+  for (int i = tid; i <= qNA; i += blockThreads)
+    S.qRow[i] = static_cast<uint8_t>(queryView.rowOffsets[i]);
+  for (int i = tid; i <= tNA; i += blockThreads)
+    S.tRow[i] = static_cast<uint8_t>(targetView.rowOffsets[i]);
+  for (int i = tid; i < qE; i += blockThreads) {
+    S.qCol[i] = static_cast<uint8_t>(queryView.colIndices[i]);
+    S.qBnd[i] = static_cast<uint8_t>(queryView.bondIndices[i]);
+  }
+  for (int i = tid; i < tE; i += blockThreads) {
+    S.tCol[i] = static_cast<uint8_t>(targetView.colIndices[i]);
+    S.tBnd[i] = static_cast<uint8_t>(targetView.bondIndices[i]);
+  }
+  for (int i = tid; i < qNB; i += blockThreads) {
+    const std::uint32_t e = queryView.bondEndpoints[i];
+    S.qEpU[i]             = static_cast<uint8_t>(e >> kBondEndpointShift);
+    S.qEpV[i]             = static_cast<uint8_t>(e & kBondEndpointMask);
+    BondMask row;
+    row.clear();
+#pragma unroll
+    for (int w = 0; w < kBondMaskWords; ++w)
+      if (w < tables.bonds.wordsPerRow)
+        row.setWord32(w, tables.bonds.data[static_cast<size_t>(i) * tables.bonds.wordsPerRow + w]);
+    S.bondRow[i] = row;
+  }
+  for (int i = tid; i < tNB; i += blockThreads) {
+    const std::uint32_t e = targetView.bondEndpoints[i];
+    S.tEpU[i]             = static_cast<uint8_t>(e >> kBondEndpointShift);
+    S.tEpV[i]             = static_cast<uint8_t>(e & kBondEndpointMask);
+  }
+  for (int i = tid; i < qNA; i += blockThreads) {
+    AtomMask row;
+    row.clear();
+#pragma unroll
+    for (int w = 0; w < kAtomMaskWords; ++w)
+      if (w < tables.atoms.wordsPerRow)
+        row.setWord32(w, tables.atoms.data[static_cast<size_t>(i) * tables.atoms.wordsPerRow + w]);
+    S.atomRow[i] = row;
+  }
+  __syncthreads();
+
+  // Derived per-atom bitsets.
+  for (int a = tid; a < qNA; a += blockThreads) {
+    BondMask inc;
+    inc.clear();
+    const int b0 = S.qRow[a], b1 = S.qRow[a + 1];
+    for (int e = b0; e < b1; ++e)
+      inc.set(S.qBnd[e]);
+    S.incidentBonds[a] = inc;
+  }
+  if (tid <= kFmcsMaxSeedDegree) {
+    AtomMask m;
+    m.clear();
+    for (int a = 0; a < tNA; ++a) {
+      const int d = S.tRow[a + 1] - S.tRow[a];
+      if (d >= tid)
+        m.set(a);
+    }
+    S.degreeAtLeast[tid] = m;
+  }
+  // Bond classes: query bonds with identical compatibility rows share a
+  // class, which is the "equal keys mean identical predicates" contract of
+  // the subgraph frontend.  One thread; qNB <= 128.
+  if (tid == 0) {
+    int nc = 0;
+    for (int b = 0; b < qNB; ++b) {
+      const BondMask row = S.bondRow[b];
+      int            c   = kFmcsMaxBondClasses;
+      for (int k = 0; k < nc; ++k)
+        if (maskEquals(S.classRep[k], row)) {
+          c = k;
+          break;
+        }
+      if (c == kFmcsMaxBondClasses && nc < kFmcsMaxBondClasses) {
+        S.classRep[nc] = row;
+        c              = nc;
+        ++nc;
+      }
+      S.bondClass[b] = static_cast<uint8_t>(c);
+    }
+    S.numClasses = nc;
+  }
+  __syncthreads();
+
+  // Per-class target adjacency, filled through the shared subgraph component.
+  nvMolKit::subgraph::fillClassAdjacency(S.classAdj, S.numClasses, tNA, tid, blockThreads, [&](int atom, int cls) {
+    AtomMask m;
+    m.clear();
+    const BondMask row = S.classRep[cls];
+    const int      b0 = S.tRow[atom], b1 = S.tRow[atom + 1];
+    for (int e = b0; e < b1; ++e)
+      if (row.test(S.tBnd[e]))
+        m.set(S.tCol[e]);
+    return m;
+  });
+  __syncthreads();
+}
+
+// ---------------------------------------------------------------------------
+// Phase-1 direct single-bond match.
+// ---------------------------------------------------------------------------
+
+/// Resolved (target bond, endpoint) assignment for a successful single-bond
+/// match.  @c targetAtomU is the target atom the query bond's u endpoint
+/// mapped to (likewise V).  Contents are unspecified on failure.
 struct SingleBondMatch {
   uint8_t targetAtomU;
   uint8_t targetAtomV;
+  uint8_t targetBond;
 };
 
-/// Scratch for the exact substructure fallback.  One instance per
-/// concurrently-searching group; all fields are written under the caller's
-/// scratch ownership rules (see matchSeedWithSubstructureFallbackCooperative).
-///
-/// The search itself keeps its stack in lane-local registers
-/// (nvMolKit::dfsFromRoots); this scratch only carries the per-seed search
-/// order, the found flag the lanes race on, and the winning atom mapping.
-template <int maxAtoms, int maxTargetAtoms> struct FmcsSubstructureScratch {
-  std::uint8_t seedAtomList[maxAtoms];        ///< Seed's query atoms in index order.
-  std::uint8_t seedAtoms[maxAtoms];           ///< Search order: order position -> query atom.
-  std::uint8_t seedDegree[maxAtoms];          ///< Per query atom, its degree within the seed.
-  std::uint8_t targetDegree[maxTargetAtoms];  ///< Per target atom, its full degree.
-  std::uint8_t orderedQueryAtom[maxAtoms];    ///< 1 if the atom has been placed in the order.
-  std::uint8_t queryOrderPos[maxAtoms];       ///< Inverse of seedAtoms; kUnmappedTargetIdx if not in seed.
-  std::uint8_t targetAtomForQuery[maxAtoms];  ///< The winning embedding, indexed by query atom.
-  int          found;                         ///< Lanes race on this via atomicCAS; also the abort signal.
-
-  /// degreeAtLeast[d] = target atoms whose degree is at least d.  Indexed by a
-  /// seed atom's degree (clamped), it turns "targets this atom could occupy"
-  /// into one mask intersection instead of a scan over every target atom.
-  FmcsTargetMask<maxTargetAtoms> degreeAtLeast[kFmcsMaxSeedDegree + 1];
-
-  /// Back-edge table and per-depth candidates for the shared frontend
-  /// (src/subgraph/candidate_tables.cuh).  One group per instance, hence a single
-  /// warp slot.  No adjacency tables: MCS keys edges on query bond index, so
-  /// keys are all distinct and the plan is always General.
-  nvMolKit::subgraph::WarpSharedState<kFmcsMaskAtoms<maxTargetAtoms>, maxAtoms, 1, false> tables;
-};
-
+/// Within-thread: find the first target bond that embeds query bond
+/// @p queryBondIdx in either orientation.  Whether a one-bond seed embeds
+/// depends only on its bond, so phase 1 tests every query bond with one call
+/// each, in parallel.
 template <int maxAtoms, int maxBonds>
-__device__ __forceinline__ bool seedContainsBondWithinThread(const Seed<maxAtoms, maxBonds>& seed,
-                                                             const int                       queryBondIdx) {
-  using SeedT                    = Seed<maxAtoms, maxBonds>;
-  using BondWord                 = typename SeedT::bond_word_type;
-  constexpr int kBondBitsPerWord = SeedT::kBondBitsPerWord;
-  if (queryBondIdx < 0 || queryBondIdx >= maxBonds)
-    return false;
-  const BondWord word = seed.bonds[queryBondIdx / kBondBitsPerWord];
-  return ((word >> (queryBondIdx % kBondBitsPerWord)) & 1) != 0;
-}
-
-/// Within-thread: per-lane single-(query bond, target bond, orientation)
-/// compatibility check used by Phase 1 initial-seed enumeration.  Writes
-/// resolved target atom indices for the two endpoints of @p queryBondIdx
-/// into @p outMatch and returns true on success; on false the caller
-/// should not read @p outMatch.
-///
-/// @p reversed selects the orientation: when false, the query bond's u
-/// endpoint maps to the target bond's u endpoint; when true, to the
-/// target bond's v endpoint.
-__device__ __forceinline__ bool matchSingleBondWithinThread(const int                    queryBondIdx,
-                                                            const int                    targetBondIdx,
-                                                            const bool                   reversed,
-                                                            const DeviceCsrView&         queryTopology,
-                                                            const DeviceCsrView&         targetTopology,
-                                                            const PairMatchTablesDevice& tables,
-                                                            SingleBondMatch&             outMatch) {
-  // Cheap bond-table check first; if the bond labels are incompatible
-  // we never need to touch the atom table or decode endpoints.
-  if (!tables.bonds.testBit(queryBondIdx, targetBondIdx))
-    return false;
-
-  // Decode the packed (u<<16 | v) endpoint encoding for both bonds.
-  const std::uint32_t queryEndpoints = queryTopology.bondEndpoints[queryBondIdx];
-  const int           queryEndpointU = static_cast<int>(queryEndpoints >> kBondEndpointShift);
-  const int           queryEndpointV = static_cast<int>(queryEndpoints & kBondEndpointMask);
-
-  const std::uint32_t targetEndpoints = targetTopology.bondEndpoints[targetBondIdx];
-  const int           targetEndpointU = static_cast<int>(targetEndpoints >> kBondEndpointShift);
-  const int           targetEndpointV = static_cast<int>(targetEndpoints & kBondEndpointMask);
-
-  // Pick which target endpoint the query's u maps to; v gets the other.
-  // reversed=false: queryU -> targetU, queryV -> targetV.
-  // reversed=true:  queryU -> targetV, queryV -> targetU.
-  const int targetForQueryU = reversed ? targetEndpointV : targetEndpointU;
-  const int targetForQueryV = reversed ? targetEndpointU : targetEndpointV;
-
-  // Both atom-pairings must be label-compatible; either failure rejects
-  // this orientation.
-  if (!tables.atoms.testBit(queryEndpointU, targetForQueryU))
-    return false;
-  if (!tables.atoms.testBit(queryEndpointV, targetForQueryV))
-    return false;
-
-  outMatch.targetAtomU = static_cast<uint8_t>(targetForQueryU);
-  outMatch.targetAtomV = static_cast<uint8_t>(targetForQueryV);
-  return true;
-}
-
-/// Cooperative greedy fast path: try to extend @p match by every query
-/// bond in @p seed.bonds whose @c match.targetBondIdx[q] is still
-/// @ref kUnmappedTargetIdx (i.e., unmapped by the parent's recorded
-/// embedding).  For each such bond:
-///   - Both endpoints already mapped -> ring-closing case.  The lanes
-///     of @p group scan target bonds in parallel for one whose endpoint
-///     pair exactly matches the mapped (queryU, queryV) target atoms
-///     and is unvisited, with the bond-match-table bit set.  First
-///     compatible target bond commits.
-///   - Exactly one endpoint mapped -> atom-adding case.  Lane-parallel
-///     scan for a target bond incident to the mapped target atom whose
-///     other end is unvisited, atom-table-compatible with the unmapped
-///     query atom, and bond-table-compatible.  The first compatible
-///     candidate commits both the new bond mapping and the new atom
-///     mapping, and marks both visited.  This path does not backtrack
-///     if that greedy choice prevents a later bond from matching.
-///   - Both endpoints unmapped -> defensive fail (shouldn't occur on
-///     well-formed seeds, where Phase 1 maps both initial atoms before
-///     pushing).
-/// A true return proves that @p match was extended successfully.  A false
-/// return is inconclusive: the greedy choices may have missed another valid
-/// embedding.  The caller must run the exact substructure fallback before
-/// rejecting the seed or marking a NewBond dead.  On false, @p match is left
-/// in an unspecified state and must not be reused as a valid embedding.
-///
-/// Most seeds fall through to the fallback, so the fallback dominates
-/// matcher time.  Future optimization: build the target's packed adjacency
-/// once per block into shared memory -- it is fixed for the pair and this
-/// kernel is block-per-pair -- so the fallback's candidate build reads shared
-/// memory instead of walking the global CSR on every descent.
-template <int maxAtoms, int maxBonds, int maxTA, int maxTB, class GroupT>
-__device__ __forceinline__ bool tryMatchIncrementalGreedyCooperative(
-  const GroupT&                                  group,
-  const Seed<maxAtoms, maxBonds>&                seed,
-  const DeviceCsrView&                           queryTopology,
-  const DeviceCsrView&                           targetTopology,
-  const PairMatchTablesDevice&                   tables,
-  MatchResult<maxAtoms, maxBonds, maxTA, maxTB>& match) {
-  using SeedT    = Seed<maxAtoms, maxBonds>;
-  using MatchT   = MatchResult<maxAtoms, maxBonds, maxTA, maxTB>;
-  using BondWord = typename SeedT::bond_word_type;
-
-  constexpr int kBondBitsPerWord       = SeedT::kBondBitsPerWord;
-  constexpr int kBondWords             = SeedT::kBondWords;
-  constexpr int kTargetAtomBitsPerWord = MatchT::kTargetAtomBitsPerWord;
-  constexpr int kTargetBondBitsPerWord = MatchT::kTargetBondBitsPerWord;
-  using TargetAtomWord                 = typename MatchT::target_atom_word;
-  using TargetBondWord                 = typename MatchT::target_bond_word;
-
-  const int laneRank  = static_cast<int>(group.thread_rank());
-  const int laneCount = static_cast<int>(group.num_threads());
-
-  // Outer loop walks set bits of seed.bonds via __ffs/__ffsll.  Each
-  // iteration handles one query bond q; if q is already mapped (parent
-  // saw it) we skip, otherwise we extend the match by one bond +
-  // possibly one atom.
-  for (int wordIdx = 0; wordIdx < kBondWords; ++wordIdx) {
-    BondWord remainingBondBits = seed.bonds[wordIdx];
-    while (remainingBondBits != 0) {
-      int bitPosInWord;
-      if constexpr (sizeof(BondWord) == 4) {
-        bitPosInWord = __ffs(static_cast<unsigned int>(remainingBondBits)) - 1;
-      } else {
-        bitPosInWord = __ffsll(static_cast<unsigned long long>(remainingBondBits)) - 1;
-      }
-      const int queryBondIdx = wordIdx * kBondBitsPerWord + bitPosInWord;
-      remainingBondBits &= remainingBondBits - 1;  // clear lowest set bit
-
-      // Keep this control decision uniform across the group; diverging before
-      // the later ballot/shuffle would make the winning lane undefined.
-      int mappedTargetBond = kUnmappedTargetIdx;
-      if (laneRank == 0)
-        mappedTargetBond = match.targetBondIdx[queryBondIdx];
-      mappedTargetBond = group.shfl(mappedTargetBond, 0);
-      if (mappedTargetBond != kUnmappedTargetIdx)
-        continue;
-
-      // Decode this bond's query endpoints from the packed (u<<16 | v).
-      const std::uint32_t queryEndpoints = queryTopology.bondEndpoints[queryBondIdx];
-      const int           queryEndpointU = static_cast<int>(queryEndpoints >> kBondEndpointShift);
-      const int           queryEndpointV = static_cast<int>(queryEndpoints & kBondEndpointMask);
-
-      // Look up the parent's atom mapping for both endpoints; either
-      // may already be mapped (from an earlier bond) or still unmapped
-      // (this bond is the one bringing it in).
-      int targetForQueryU = kUnmappedTargetIdx;
-      int targetForQueryV = kUnmappedTargetIdx;
-      if (laneRank == 0) {
-        targetForQueryU = match.targetAtomIdx[queryEndpointU];
-        targetForQueryV = match.targetAtomIdx[queryEndpointV];
-      }
-      targetForQueryU           = group.shfl(targetForQueryU, 0);
-      targetForQueryV           = group.shfl(targetForQueryV, 0);
-      const bool queryUIsMapped = targetForQueryU != kUnmappedTargetIdx;
-      const bool queryVIsMapped = targetForQueryV != kUnmappedTargetIdx;
-
-      // Both endpoints unmapped means the seed is missing an earlier
-      // bond that should have brought one of them in.  Phase 1 always
-      // anchors both initial atoms before pushing, so this never hits
-      // for well-formed seeds; defensive return false.
-      if (!queryUIsMapped && !queryVIsMapped)
-        return false;
-
-      // Each lane records its first compatible target bond, and (for
-      // the atom-adding case) the resulting new target atom.  After
-      // the per-lane scan, the warp ballots and the lowest-rank winner
-      // is broadcast as the committed extension.
-      int chosenTargetBond            = -1;
-      int chosenTargetAtomForUnmapped = -1;  // -1 means ring-closing.
-
-      if (queryUIsMapped && queryVIsMapped) {
-        // Ring-closing: the new bond connects two atoms that are both
-        // already in the seed's mapping.  Find a target bond whose
-        // endpoints are exactly the pair { targetForQueryU, targetForQueryV }.
-        const int srcTargetAtom = targetForQueryU;
-        const int dstTargetAtom = targetForQueryV;
-        if (srcTargetAtom >= 0 && srcTargetAtom < targetTopology.numAtoms) {
-          const int begin = static_cast<int>(targetTopology.rowOffsets[srcTargetAtom]);
-          const int end   = static_cast<int>(targetTopology.rowOffsets[srcTargetAtom + 1]);
-          for (int adjIdx = begin + laneRank; adjIdx < end && chosenTargetBond < 0; adjIdx += laneCount) {
-            const int otherTargetAtom = static_cast<int>(targetTopology.colIndices[adjIdx]);
-            if (otherTargetAtom != dstTargetAtom)
-              continue;
-            const int targetBondIdx = static_cast<int>(targetTopology.bondIndices[adjIdx]);
-            if (targetBondIdx < 0 || targetBondIdx >= targetTopology.numBonds || targetBondIdx >= maxTB) {
-              continue;
-            }
-            const TargetBondWord visitedBondsWord = match.visitedTargetBonds[targetBondIdx / kTargetBondBitsPerWord];
-            if ((visitedBondsWord >> (targetBondIdx % kTargetBondBitsPerWord)) & 1) {
-              continue;
-            }
-            if (!tables.bonds.testBit(queryBondIdx, targetBondIdx))
-              continue;
-            chosenTargetBond = targetBondIdx;
-          }
-        }
-      } else {
-        // Atom-adding: one query endpoint (`src`) is already mapped to
-        // a target atom; the other (`dst`) is what we're trying to
-        // place.  Scan target bonds incident to srcTargetAtom for one
-        // whose other endpoint is unvisited, atom-table-compatible
-        // with the unmapped query atom, and bond-table-compatible.
-        const int unmappedQueryAtom = queryUIsMapped ? queryEndpointV : queryEndpointU;
-        const int srcTargetAtom     = queryUIsMapped ? targetForQueryU : targetForQueryV;
-        if (srcTargetAtom >= 0 && srcTargetAtom < targetTopology.numAtoms) {
-          const int begin = static_cast<int>(targetTopology.rowOffsets[srcTargetAtom]);
-          const int end   = static_cast<int>(targetTopology.rowOffsets[srcTargetAtom + 1]);
-          for (int adjIdx = begin + laneRank; adjIdx < end && chosenTargetBond < 0; adjIdx += laneCount) {
-            const int targetBondIdx = static_cast<int>(targetTopology.bondIndices[adjIdx]);
-            if (targetBondIdx < 0 || targetBondIdx >= targetTopology.numBonds || targetBondIdx >= maxTB) {
-              continue;
-            }
-            const TargetBondWord visitedBondsWord = match.visitedTargetBonds[targetBondIdx / kTargetBondBitsPerWord];
-            if ((visitedBondsWord >> (targetBondIdx % kTargetBondBitsPerWord)) & 1) {
-              continue;
-            }
-            const int candidateTargetAtom = static_cast<int>(targetTopology.colIndices[adjIdx]);
-            if (candidateTargetAtom < 0 || candidateTargetAtom >= targetTopology.numAtoms ||
-                candidateTargetAtom >= maxTA) {
-              continue;
-            }
-            const TargetAtomWord visitedAtomsWord =
-              match.visitedTargetAtoms[candidateTargetAtom / kTargetAtomBitsPerWord];
-            if ((visitedAtomsWord >> (candidateTargetAtom % kTargetAtomBitsPerWord)) & 1) {
-              continue;
-            }
-            if (!tables.bonds.testBit(queryBondIdx, targetBondIdx))
-              continue;
-            if (!tables.atoms.testBit(unmappedQueryAtom, candidateTargetAtom))
-              continue;
-            chosenTargetBond            = targetBondIdx;
-            chosenTargetAtomForUnmapped = candidateTargetAtom;
-          }
-        }
-      }
-
-      // Warp-wide pick: ballot for any lane with a candidate, broadcast
-      // the lowest-rank winner's choice to all lanes.  No candidate
-      // anywhere -> this bond can't be extended -> abandon the seed.
-      const unsigned ballot = group.ballot(chosenTargetBond >= 0 ? 1u : 0u);
-      if (ballot == 0u)
-        return false;
-      const int firstWinningLane    = __ffs(ballot) - 1;
-      const int committedTargetBond = group.shfl(chosenTargetBond, firstWinningLane);
-      const int committedTargetAtom = group.shfl(chosenTargetAtomForUnmapped, firstWinningLane);
-      if (committedTargetBond < 0 || committedTargetBond >= targetTopology.numBonds || committedTargetBond >= maxTB)
-        return false;
-      if (committedTargetAtom < -1 || committedTargetAtom >= targetTopology.numAtoms || committedTargetAtom >= maxTA)
-        return false;
-
-      // Lane 0 commits the new mapping into the shared MatchResult.
-      // Subsequent bonds in this same call will read the updated
-      // visited bitsets after group.sync below.
-      if (laneRank == 0) {
-        match.targetBondIdx[queryBondIdx] = static_cast<std::uint8_t>(committedTargetBond);
-        match.visitedTargetBonds[committedTargetBond / kTargetBondBitsPerWord] |=
-          static_cast<TargetBondWord>(1) << (committedTargetBond % kTargetBondBitsPerWord);
-        match.matchedBondSize += 1;
-        match.empty = false;
-        if (committedTargetAtom >= 0) {
-          // Atom-adding case: also commit the new atom mapping.
-          const int unmappedQueryAtom            = queryUIsMapped ? queryEndpointV : queryEndpointU;
-          match.targetAtomIdx[unmappedQueryAtom] = static_cast<std::uint8_t>(committedTargetAtom);
-          match.visitedTargetAtoms[committedTargetAtom / kTargetAtomBitsPerWord] |=
-            static_cast<TargetAtomWord>(1) << (committedTargetAtom % kTargetAtomBitsPerWord);
-          match.matchedAtomSize += 1;
-        }
-      }
-      group.sync();
+__device__ __forceinline__ bool matchSingleBondWithinThread(const FmcsPairShared<maxAtoms, maxBonds>& S,
+                                                            const int                                 queryBondIdx,
+                                                            SingleBondMatch&                          outMatch) {
+  using BondMask = typename FmcsPairShared<maxAtoms, maxBonds>::BondMask;
+  const int u = S.qEpU[queryBondIdx], v = S.qEpV[queryBondIdx];
+  BondMask  row = S.bondRow[queryBondIdx];
+  while (!row.empty()) {
+    const int j = row.lowest();
+    row.clearLowest();
+    const int tu = S.tEpU[j], tv = S.tEpV[j];
+    if (S.atomRow[u].test(tu) && S.atomRow[v].test(tv)) {
+      outMatch.targetAtomU = static_cast<uint8_t>(tu);
+      outMatch.targetAtomV = static_cast<uint8_t>(tv);
+      outMatch.targetBond  = static_cast<uint8_t>(j);
+      return true;
     }
-  }
-  return true;
-}
-
-__device__ __forceinline__ bool findTargetBondBetweenAtomsWithinThread(const int                    targetAtomA,
-                                                                       const int                    targetAtomB,
-                                                                       const int                    queryBondIdx,
-                                                                       const DeviceCsrView&         targetTopology,
-                                                                       const PairMatchTablesDevice& tables,
-                                                                       int&                         outTargetBondIdx) {
-  if (targetAtomA < 0 || targetAtomA >= targetTopology.numAtoms) {
-    return false;
-  }
-  const int begin = static_cast<int>(targetTopology.rowOffsets[targetAtomA]);
-  const int end   = static_cast<int>(targetTopology.rowOffsets[targetAtomA + 1]);
-  for (int adjIdx = begin; adjIdx < end; ++adjIdx) {
-    const int otherTargetAtom = static_cast<int>(targetTopology.colIndices[adjIdx]);
-    if (otherTargetAtom != targetAtomB)
-      continue;
-    const int targetBondIdx = static_cast<int>(targetTopology.bondIndices[adjIdx]);
-    if (targetBondIdx < 0 || targetBondIdx >= targetTopology.numBonds) {
-      continue;
+    if (S.atomRow[u].test(tv) && S.atomRow[v].test(tu)) {
+      outMatch.targetAtomU = static_cast<uint8_t>(tv);
+      outMatch.targetAtomV = static_cast<uint8_t>(tu);
+      outMatch.targetBond  = static_cast<uint8_t>(j);
+      return true;
     }
-    if (!tables.bonds.testBit(queryBondIdx, targetBondIdx))
-      continue;
-    outTargetBondIdx = targetBondIdx;
-    return true;
   }
   return false;
 }
 
-template <int maxAtoms, int maxBonds, int maxTA, int maxTB>
-__device__ __forceinline__ bool rebuildMatchFromSubstructureMappingWithinThread(
-  const Seed<maxAtoms, maxBonds>&                seed,
-  const DeviceCsrView&                           queryTopology,
-  const DeviceCsrView&                           targetTopology,
-  const PairMatchTablesDevice&                   tables,
-  MatchResult<maxAtoms, maxBonds, maxTA, maxTB>& match,
-  FmcsSubstructureScratch<maxAtoms, maxTA>&      scratch) {
-  using SeedT          = Seed<maxAtoms, maxBonds>;
-  using MatchT         = MatchResult<maxAtoms, maxBonds, maxTA, maxTB>;
-  using BondWord       = typename SeedT::bond_word_type;
-  using TargetBondWord = typename MatchT::target_bond_word;
-  using TargetAtomWord = typename MatchT::target_atom_word;
+// ---------------------------------------------------------------------------
+// Remaining-size bound (RDKit canGrowBiggerThan support), warp-parallel BFS
+// over the shared query CSR.
+// ---------------------------------------------------------------------------
+template <int maxAtoms, int maxBonds, class GroupT>
+__device__ __forceinline__ void seedComputeRemainingSizeCooperative(const GroupT&                       group,
+                                                                    FmcsPairShared<maxAtoms, maxBonds>& S,
+                                                                    Seed<maxAtoms, maxBonds>&           seed) {
+  using AtomMask          = typename FmcsPairShared<maxAtoms, maxBonds>::AtomMask;
+  using BondMask          = typename FmcsPairShared<maxAtoms, maxBonds>::BondMask;
+  constexpr int kAtomRegs = FmcsPairShared<maxAtoms, maxBonds>::kAtomRegs;
 
-  constexpr int kBondBitsPerWord       = SeedT::kBondBitsPerWord;
-  constexpr int kBondWords             = SeedT::kBondWords;
-  constexpr int kTargetAtomBitsPerWord = MatchT::kTargetAtomBitsPerWord;
-  constexpr int kTargetBondBitsPerWord = MatchT::kTargetBondBitsPerWord;
+  const int lane  = static_cast<int>(group.thread_rank());
+  AtomMask  visA  = maskFromWords<kFmcsMaskAtoms<maxAtoms>>(seed.atoms);
+  BondMask  visB  = maskFromWords<kFmcsMaskAtoms<maxBonds>>(seed.excludedBonds);
+  AtomMask  front = maskFromWords<kFmcsMaskAtoms<maxAtoms>>(seed.lastAddedAtoms);
+  const int baseA = visA.popcount();
+  const int baseB = visB.popcount();
 
-  matchResultClearWithinThread(match);
-  for (int i = 0; i < seed.numAtoms; ++i) {
-    const int queryAtomIdx  = scratch.seedAtomList[i];
-    const int targetAtomIdx = scratch.targetAtomForQuery[queryAtomIdx];
-    if (targetAtomIdx == kUnmappedTargetIdx)
-      return false;
-    match.targetAtomIdx[queryAtomIdx] = static_cast<std::uint8_t>(targetAtomIdx);
-    match.visitedTargetAtoms[targetAtomIdx / kTargetAtomBitsPerWord] |= static_cast<TargetAtomWord>(1)
-                                                                     << (targetAtomIdx % kTargetAtomBitsPerWord);
-  }
-  match.matchedAtomSize = seed.numAtoms;
-
-  int matchedBondCount = 0;
-  for (int wordIdx = 0; wordIdx < kBondWords; ++wordIdx) {
-    BondWord remaining = seed.bonds[wordIdx];
-    while (remaining != 0) {
-      int bitPosInWord;
-      if constexpr (sizeof(BondWord) == 4) {
-        bitPosInWord = __ffs(static_cast<unsigned int>(remaining)) - 1;
-      } else {
-        bitPosInWord = __ffsll(static_cast<unsigned long long>(remaining)) - 1;
-      }
-      const int queryBondIdx = wordIdx * kBondBitsPerWord + bitPosInWord;
-      remaining &= remaining - 1;
-
-      const std::uint32_t queryEndpoints  = queryTopology.bondEndpoints[queryBondIdx];
-      const int           queryEndpointU  = static_cast<int>(queryEndpoints >> kBondEndpointShift);
-      const int           queryEndpointV  = static_cast<int>(queryEndpoints & kBondEndpointMask);
-      const int           targetEndpointU = match.targetAtomIdx[queryEndpointU];
-      const int           targetEndpointV = match.targetAtomIdx[queryEndpointV];
-      if (targetEndpointU == kUnmappedTargetIdx || targetEndpointV == kUnmappedTargetIdx) {
-        matchResultClearWithinThread(match);
-        return false;
-      }
-
-      int targetBondIdx = -1;
-      if (!findTargetBondBetweenAtomsWithinThread(targetEndpointU,
-                                                  targetEndpointV,
-                                                  queryBondIdx,
-                                                  targetTopology,
-                                                  tables,
-                                                  targetBondIdx)) {
-        matchResultClearWithinThread(match);
-        return false;
-      }
-      const TargetBondWord visitedWord = match.visitedTargetBonds[targetBondIdx / kTargetBondBitsPerWord];
-      if ((visitedWord >> (targetBondIdx % kTargetBondBitsPerWord)) & 1) {
-        matchResultClearWithinThread(match);
-        return false;
-      }
-      match.targetBondIdx[queryBondIdx] = static_cast<std::uint8_t>(targetBondIdx);
-      match.visitedTargetBonds[targetBondIdx / kTargetBondBitsPerWord] |= static_cast<TargetBondWord>(1)
-                                                                       << (targetBondIdx % kTargetBondBitsPerWord);
-      ++matchedBondCount;
-    }
-  }
-  match.matchedBondSize = static_cast<std::uint16_t>(matchedBondCount);
-  if (matchedBondCount != seed.numBonds) {
-    matchResultClearWithinThread(match);
-    return false;
-  }
-  match.empty = false;
-  return true;
-}
-
-/// Row @p queryAtomIdx of the atom match table as a target-atom bitset.
-/// Rows are 32-bit-word-packed LSB-first, exactly TargetMask's word layout,
-/// so this is straight word loads.  Bits at or above the table's column
-/// count are never set (rows are zero-initialised on the host).
-template <int maxTA>
-__device__ __forceinline__ FmcsTargetMask<maxTA> atomRowMask(const MatchTableDevice& table, const int queryAtomIdx) {
-  FmcsTargetMask<maxTA> mask;
-  mask.clear();
-  const std::uint32_t* rowWords = table.data + static_cast<size_t>(queryAtomIdx) * table.wordsPerRow;
+  while (!front.empty()) {
+    BondMask bondAcc;
+    AtomMask candAcc;
+    bondAcc.clear();
+    candAcc.clear();
 #pragma unroll
-  for (int wordIdx = 0; wordIdx < static_cast<int>(sizeof(FmcsTargetMask<maxTA>) / 4); ++wordIdx) {
-    if (wordIdx < table.wordsPerRow) {
-      mask.setWord32(wordIdx, rowWords[wordIdx]);
-    }
-  }
-  return mask;
-}
-
-template <int maxAtoms, int maxTA, class GroupT>
-__device__ __forceinline__ void initializeSeedSubstructureScratchCooperative(
-  const GroupT&                             group,
-  const DeviceCsrView&                      targetTopology,
-  FmcsSubstructureScratch<maxAtoms, maxTA>& scratch) {
-  const int laneRank  = static_cast<int>(group.thread_rank());
-  const int laneCount = static_cast<int>(group.num_threads());
-
-  for (int i = laneRank; i < maxAtoms; i += laneCount) {
-    scratch.seedDegree[i]         = 0;
-    scratch.orderedQueryAtom[i]   = 0;
-    scratch.queryOrderPos[i]      = kUnmappedTargetIdx;
-    scratch.targetAtomForQuery[i] = kUnmappedTargetIdx;
-  }
-
-  for (int targetAtomIdx = laneRank; targetAtomIdx < targetTopology.numAtoms; targetAtomIdx += laneCount) {
-    scratch.targetDegree[targetAtomIdx] = static_cast<std::uint8_t>(targetTopology.rowOffsets[targetAtomIdx + 1] -
-                                                                    targetTopology.rowOffsets[targetAtomIdx]);
-  }
-
-  group.sync();
-
-  // One lane per bucket, each scanning the target atoms once.  Cheaper than a
-  // masked reduction and it keeps every bucket's build independent.
-  if (laneRank <= kFmcsMaxSeedDegree) {
-    FmcsTargetMask<maxTA> bucket;
-    bucket.clear();
-    for (int targetAtomIdx = 0; targetAtomIdx < targetTopology.numAtoms && targetAtomIdx < maxTA; ++targetAtomIdx) {
-      if (scratch.targetDegree[targetAtomIdx] >= laneRank) {
-        bucket.set(targetAtomIdx);
-      }
-    }
-    scratch.degreeAtLeast[laneRank] = bucket;
-  }
-
-  if (laneRank == 0) {
-    scratch.found = 0;
-  }
-  group.sync();
-}
-
-template <int maxAtoms, int maxBonds, int maxTA>
-__device__ __forceinline__ bool prepareSeedSubstructureSearchWithinThread(
-  const Seed<maxAtoms, maxBonds>&           seed,
-  const DeviceCsrView&                      queryTopology,
-  const DeviceCsrView&                      targetTopology,
-  const PairMatchTablesDevice&              tables,
-  FmcsSubstructureScratch<maxAtoms, maxTA>& scratch,
-  int&                                      numSeedAtoms) {
-  using SeedT    = Seed<maxAtoms, maxBonds>;
-  using AtomWord = typename SeedT::atom_word_type;
-  using BondWord = typename SeedT::bond_word_type;
-
-  constexpr int kAtomBitsPerWord = SeedT::kAtomBitsPerWord;
-  constexpr int kAtomWords       = SeedT::kAtomWords;
-  constexpr int kBondBitsPerWord = SeedT::kBondBitsPerWord;
-  constexpr int kBondWords       = SeedT::kBondWords;
-
-  if (seed.numAtoms > targetTopology.numAtoms || seed.numBonds > targetTopology.numBonds) {
-    return false;
-  }
-
-  numSeedAtoms = 0;
-  for (int wordIdx = 0; wordIdx < kAtomWords; ++wordIdx) {
-    AtomWord remaining = seed.atoms[wordIdx];
-    while (remaining != 0) {
-      int bitPosInWord;
-      if constexpr (sizeof(AtomWord) == 4) {
-        bitPosInWord = __ffs(static_cast<unsigned int>(remaining)) - 1;
-      } else {
-        bitPosInWord = __ffsll(static_cast<unsigned long long>(remaining)) - 1;
-      }
-      const int queryAtomIdx = wordIdx * kAtomBitsPerWord + bitPosInWord;
-      remaining &= remaining - 1;
-      if (queryAtomIdx < queryTopology.numAtoms) {
-        scratch.seedAtomList[numSeedAtoms++] = static_cast<std::uint8_t>(queryAtomIdx);
-      }
-    }
-  }
-  if (numSeedAtoms != seed.numAtoms)
-    return false;
-
-  for (int wordIdx = 0; wordIdx < kBondWords; ++wordIdx) {
-    BondWord remaining = seed.bonds[wordIdx];
-    while (remaining != 0) {
-      int bitPosInWord;
-      if constexpr (sizeof(BondWord) == 4) {
-        bitPosInWord = __ffs(static_cast<unsigned int>(remaining)) - 1;
-      } else {
-        bitPosInWord = __ffsll(static_cast<unsigned long long>(remaining)) - 1;
-      }
-      const int queryBondIdx = wordIdx * kBondBitsPerWord + bitPosInWord;
-      remaining &= remaining - 1;
-
-      const std::uint32_t queryEndpoints = queryTopology.bondEndpoints[queryBondIdx];
-      const int           queryEndpointU = static_cast<int>(queryEndpoints >> kBondEndpointShift);
-      const int           queryEndpointV = static_cast<int>(queryEndpoints & kBondEndpointMask);
-      ++scratch.seedDegree[queryEndpointU];
-      ++scratch.seedDegree[queryEndpointV];
-    }
-  }
-
-  for (int orderPos = 0; orderPos < numSeedAtoms; ++orderPos) {
-    int bestAtom                = -1;
-    int bestMappedNeighborCount = -1;
-    int bestDegree              = -1;
-    int bestCandidateCount      = maxTA + 1;
-
-    for (int atomListIdx = 0; atomListIdx < numSeedAtoms; ++atomListIdx) {
-      const int queryAtomIdx = scratch.seedAtomList[atomListIdx];
-      if (scratch.orderedQueryAtom[queryAtomIdx])
-        continue;
-
-      int mappedNeighborCount = 0;
-      if (orderPos > 0) {
-        const int begin = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx]);
-        const int end   = static_cast<int>(queryTopology.rowOffsets[queryAtomIdx + 1]);
-        for (int adjIdx = begin; adjIdx < end; ++adjIdx) {
-          const int queryBondIdx = static_cast<int>(queryTopology.bondIndices[adjIdx]);
-          if (queryBondIdx >= queryTopology.numBonds ||
-              !seedContainsBondWithinThread<maxAtoms, maxBonds>(seed, queryBondIdx)) {
+    for (int r = 0; r < kAtomRegs; ++r) {
+      const int a = lane + r * 32;
+      if (a < maxAtoms && front.test(a)) {
+        const int b0 = S.qRow[a], b1 = S.qRow[a + 1];
+        for (int e = b0; e < b1; ++e) {
+          const int b = S.qBnd[e];
+          if (visB.test(b))
             continue;
-          }
-          const int otherQueryAtom = static_cast<int>(queryTopology.colIndices[adjIdx]);
-          if (otherQueryAtom >= 0 && otherQueryAtom < queryTopology.numAtoms &&
-              scratch.orderedQueryAtom[otherQueryAtom]) {
-            ++mappedNeighborCount;
-          }
-        }
-      }
-      if (orderPos > 0 && mappedNeighborCount == 0)
-        continue;
-
-      FmcsTargetMask<maxTA> candidates = atomRowMask<maxTA>(tables.atoms, queryAtomIdx);
-      candidates.andEq(
-        scratch.degreeAtLeast[min(static_cast<int>(scratch.seedDegree[queryAtomIdx]), kFmcsMaxSeedDegree)]);
-      const int candidateCount = candidates.popcount();
-      if (candidateCount == 0)
-        return false;
-
-      const int  degree = scratch.seedDegree[queryAtomIdx];
-      const bool better = bestAtom < 0 || mappedNeighborCount > bestMappedNeighborCount ||
-                          (mappedNeighborCount == bestMappedNeighborCount && degree > bestDegree) ||
-                          (mappedNeighborCount == bestMappedNeighborCount && degree == bestDegree &&
-                           candidateCount < bestCandidateCount) ||
-                          (mappedNeighborCount == bestMappedNeighborCount && degree == bestDegree &&
-                           candidateCount == bestCandidateCount && queryAtomIdx < bestAtom);
-      if (better) {
-        bestAtom                = queryAtomIdx;
-        bestMappedNeighborCount = mappedNeighborCount;
-        bestDegree              = degree;
-        bestCandidateCount      = candidateCount;
-      }
-    }
-
-    if (bestAtom < 0) {
-      for (int atomListIdx = 0; atomListIdx < numSeedAtoms; ++atomListIdx) {
-        const int queryAtomIdx = scratch.seedAtomList[atomListIdx];
-        if (!scratch.orderedQueryAtom[queryAtomIdx]) {
-          bestAtom = queryAtomIdx;
-          break;
+          bondAcc.set(b);
+          candAcc.set(S.qCol[e]);
         }
       }
     }
-    if (bestAtom < 0)
-      return false;
-    scratch.seedAtoms[orderPos]        = static_cast<std::uint8_t>(bestAtom);
-    scratch.orderedQueryAtom[bestAtom] = 1;
-    scratch.queryOrderPos[bestAtom]    = static_cast<std::uint8_t>(orderPos);
+    bondAcc = warpOrMask(group, bondAcc);
+    candAcc = warpOrMask(group, candAcc);
+    maskOrEq(visB, bondAcc);
+    AtomMask newFront = candAcc;
+    newFront.andNotEq(visA);
+    maskOrEq(visA, newFront);
+    front = newFront;
   }
-  return true;
+  if (lane == 0) {
+    seed.remainingBonds = static_cast<uint16_t>(visB.popcount() - baseB);
+    seed.remainingAtoms = static_cast<uint16_t>(visA.popcount() - baseA);
+  }
+  group.sync();
 }
 
-/// Presents a seed inside its query molecule to the shared subgraph frontend
-/// (src/subgraph/candidate_tables.cuh).
-///
-/// Depth is an order position in @c scratch.seedAtoms, the most-constrained-first
-/// permutation over the seed's atoms, so the frontend searches only the seed and
-/// in that order.  Query edges are the seed's bonds: a CSR slot whose bond is
-/// outside the seed, or whose far atom has no order position, reports
-/// @c kNoNeighborDepth and so constrains nothing.
-///
-/// The edge key is the query bond index, and @ref neighborsMatching resolves it
-/// through the (query bond, target bond) match table.  Because every bond index
-/// is distinct the plan is always General, which is why the scratch omits the
-/// adjacency tables.  Keying on the uint16 edge label instead would let
-/// Uniform/Dual precompute fire -- MCS queries carry few distinct labels -- but
-/// needs the labels uploaded to the device, which they are not today.
-///
-/// Precondition: no seed atom exceeds @c kMaxEdgeSlotsPerAtom CSR neighbours,
-/// which holds for molecular graphs (nvMolKit caps packed degree at 8).
-template <int maxAtoms, int maxBonds, int maxTA, int maxTB> struct McsSeedAdapter {
-  using Mask                              = FmcsTargetMask<maxTA>;
-  static constexpr bool kCachesTargetRows = false;
+// ---------------------------------------------------------------------------
+// Exact seed-in-target substructure check.
+// ---------------------------------------------------------------------------
 
-  const Seed<maxAtoms, maxBonds>*                 seed;
-  const DeviceCsrView*                            queryTopology;
-  const DeviceCsrView*                            targetTopology;
-  const PairMatchTablesDevice*                    tables;
-  const FmcsSubstructureScratch<maxAtoms, maxTA>* scratch;
+/// General-fallback candidate term for a query bond beyond the class-table
+/// capacity: target atoms reachable from @p targetAtom over a target bond
+/// the query bond's compatibility row accepts.  Reads only shared memory.
+template <int maxAtoms, int maxBonds>
+__device__ __forceinline__ typename FmcsPairShared<maxAtoms, maxBonds>::AtomMask
+           neighborsMatchingSlow(const FmcsPairShared<maxAtoms, maxBonds>& S, int targetAtom, int queryBond) {
+  using AtomMask = typename FmcsPairShared<maxAtoms, maxBonds>::AtomMask;
+  AtomMask m;
+  m.clear();
+  const auto& row = S.bondRow[queryBond];
+  const int   b0 = S.tRow[targetAtom], b1 = S.tRow[targetAtom + 1];
+  for (int e = b0; e < b1; ++e)
+    if (row.test(S.tBnd[e]))
+      m.set(S.tCol[e]);
+  return m;
+}
 
-  __device__ __forceinline__ int queryAtomAt(int depth) const { return scratch->seedAtoms[depth]; }
-
-  __device__ __forceinline__ int degreeAt(int depth) const {
-    const int queryAtomIdx = queryAtomAt(depth);
-    return static_cast<int>(queryTopology->rowOffsets[queryAtomIdx + 1]) -
-           static_cast<int>(queryTopology->rowOffsets[queryAtomIdx]);
+/// The label+degree candidate term for search depth @p d of group @p g.
+template <int maxAtoms, int maxBonds>
+__device__ __forceinline__ typename FmcsPairShared<maxAtoms, maxBonds>::AtomMask
+           depthCandidateTerm(const FmcsPairShared<maxAtoms, maxBonds>& S, int g, int d) {
+  using Config = FmcsKernelConfig<maxAtoms>;
+  if constexpr (Config::cacheDepthCandidates) {
+    return S.depthCandidates[g][d];
+  } else {
+    const int a  = S.order[g][d];
+    const int dg = S.seedDegree[g][a];
+    auto      c  = S.atomRow[a];
+    c.andEq(S.degreeAtLeast[dg > kFmcsMaxSeedDegree ? kFmcsMaxSeedDegree : dg]);
+    return c;
   }
+}
 
-  __device__ __forceinline__ int neighborDepthAt(int depth, int slot) const {
-    const int adjIdx       = static_cast<int>(queryTopology->rowOffsets[queryAtomAt(depth)]) + slot;
-    const int queryBondIdx = static_cast<int>(queryTopology->bondIndices[adjIdx]);
-    if (queryBondIdx >= queryTopology->numBonds ||
-        !seedContainsBondWithinThread<maxAtoms, maxBonds>(*seed, queryBondIdx)) {
-      return nvMolKit::subgraph::kNoNeighborDepth;
-    }
-    const int otherQueryAtom = static_cast<int>(queryTopology->colIndices[adjIdx]);
-    if (otherQueryAtom < 0 || otherQueryAtom >= queryTopology->numAtoms) {
-      return nvMolKit::subgraph::kNoNeighborDepth;
-    }
-    const int orderPos = scratch->queryOrderPos[otherQueryAtom];
-    return orderPos == kUnmappedTargetIdx ? nvMolKit::subgraph::kNoNeighborDepth : orderPos;
-  }
+/// Build the most-constrained-first search order and back-edge table for
+/// @p seed, warp-parallel.  Returns the number of seed atoms, or -1 if some
+/// seed atom provably has no degree-compatible target.
+template <int maxAtoms, int maxBonds, class GroupT>
+__device__ int prepareSeedSearchCooperative(const GroupT&                       group,
+                                            FmcsPairShared<maxAtoms, maxBonds>& S,
+                                            const Seed<maxAtoms, maxBonds>&     seed,
+                                            int                                 g) {
+  using Config            = FmcsKernelConfig<maxAtoms>;
+  using AtomMask          = typename FmcsPairShared<maxAtoms, maxBonds>::AtomMask;
+  using BondMask          = typename FmcsPairShared<maxAtoms, maxBonds>::BondMask;
+  constexpr int kAtomRegs = FmcsPairShared<maxAtoms, maxBonds>::kAtomRegs;
 
-  __device__ __forceinline__ std::uint32_t edgeKeyAt(int depth, int slot) const {
-    return queryTopology->bondIndices[static_cast<int>(queryTopology->rowOffsets[queryAtomAt(depth)]) + slot];
-  }
+  const int      lane      = static_cast<int>(group.thread_rank());
+  const int      qNA       = S.qNA;
+  const BondMask seedBonds = maskFromWords<kFmcsMaskAtoms<maxBonds>>(seed.bonds);
 
-  __device__ __forceinline__ Mask neighborsMatching(int targetAtom, std::uint32_t queryBondIdx) const {
-    Mask mask;
-    mask.clear();
-    const int begin = static_cast<int>(targetTopology->rowOffsets[targetAtom]);
-    const int end   = static_cast<int>(targetTopology->rowOffsets[targetAtom + 1]);
-    for (int adjIdx = begin; adjIdx < end; ++adjIdx) {
-      const int targetBondIdx = static_cast<int>(targetTopology->bondIndices[adjIdx]);
-      if (targetBondIdx < 0 || targetBondIdx >= targetTopology->numBonds || targetBondIdx >= maxTB) {
-        continue;
+  int      fail = 0;
+  AtomMask neighborReg[kAtomRegs];
+#pragma unroll
+  for (int r = 0; r < kAtomRegs; ++r) {
+    neighborReg[r].clear();
+    const int a = lane + r * 32;
+    if (a < qNA) {
+      const bool inSeed = wordsTest(seed.atoms, a);
+      S.orderPos[g][a]  = kUnmappedTargetIdx;
+      int      deg      = 0;
+      AtomMask ns;
+      ns.clear();
+      if (inSeed) {
+        BondMask incident = S.incidentBonds[a];
+        incident.andEq(seedBonds);
+        deg          = incident.popcount();
+        const int b0 = S.qRow[a], b1 = S.qRow[a + 1];
+        for (int e = b0; e < b1; ++e)
+          if (seedBonds.test(S.qBnd[e]))
+            ns.set(S.qCol[e]);
+        AtomMask cand = S.atomRow[a];
+        cand.andEq(S.degreeAtLeast[deg > kFmcsMaxSeedDegree ? kFmcsMaxSeedDegree : deg]);
+        if (cand.empty())
+          fail = 1;
       }
-      if (!tables->bonds.testBit(static_cast<int>(queryBondIdx), targetBondIdx)) {
-        continue;
-      }
-      const int neighborTargetAtom = static_cast<int>(targetTopology->colIndices[adjIdx]);
-      if (neighborTargetAtom >= 0 && neighborTargetAtom < targetTopology->numAtoms && neighborTargetAtom < maxTA) {
-        mask.set(neighborTargetAtom);
-      }
-    }
-    return mask;
-  }
-};
-
-/// Exact seed-in-target substructure check: a lane-parallel DFS
-/// (nvMolKit::dfsFromRoots) racing for one embedding.
-///
-/// Lane L searches the subtrees rooted at compatible target atoms L,
-/// L+laneCount, ... for the seed atom at order position 0; the search order
-/// over seed atoms is the most-constrained-first permutation computed by
-/// @ref prepareSeedSubstructureSearchWithinThread.  The candidate set is
-/// the canonical intersection (see src/subgraph/warp_dfs.cuh): the query
-/// atom's match-table row, minus used target atoms, intersected per seed
-/// back edge with the neighbours of the mapped target atom reachable over a
-/// bond whose (query bond, target bond) match-table bit is set.
-///
-/// The first lane to complete an embedding wins @c scratch.found by
-/// atomicCAS and records the atom mapping; every other lane stops at its
-/// next abort poll.  Lane 0 then rebuilds @p match (including the bond
-/// mapping) from the recorded atoms.  The search is exhaustive within
-/// bounded memory -- the stack is O(seed atoms) of lane-local registers, with
-/// no partial-mapping buffer to overflow -- so a false return proves the seed
-/// does not embed in the target.
-///
-/// Group-uniform: all lanes of @p group must call this together.  The
-/// caller must own @p scratch for the duration of the call.
-template <int maxAtoms, int maxBonds, int maxTA, int maxTB, class GroupT>
-__device__ __forceinline__ bool matchSeedSubstructureCooperative(const GroupT&                   group,
-                                                                 const Seed<maxAtoms, maxBonds>& seed,
-                                                                 const DeviceCsrView&            queryTopology,
-                                                                 const DeviceCsrView&            targetTopology,
-                                                                 const PairMatchTablesDevice&    tables,
-                                                                 MatchResult<maxAtoms, maxBonds, maxTA, maxTB>& match,
-                                                                 FmcsSubstructureScratch<maxAtoms, maxTA>& scratch) {
-  using Mask = FmcsTargetMask<maxTA>;
-
-  const int laneRank  = static_cast<int>(group.thread_rank());
-  const int laneCount = static_cast<int>(group.num_threads());
-
-  int numSeedAtoms = 0;
-  int prepared     = 0;
-  if (laneRank == 0) {
-    matchResultClearWithinThread(match);
-  }
-  if (seed.numAtoms != 0) {
-    initializeSeedSubstructureScratchCooperative(group, targetTopology, scratch);
-  }
-  if (laneRank == 0) {
-    if (seed.numAtoms == 0) {
-      prepared = (seed.numBonds == 0) ? 2 : -1;
-    } else {
-      prepared =
-        prepareSeedSubstructureSearchWithinThread(seed, queryTopology, targetTopology, tables, scratch, numSeedAtoms) ?
-          1 :
-          -1;
+      S.seedDegree[g][a] = static_cast<uint8_t>(deg);
+      neighborReg[r]     = ns;
     }
   }
   group.sync();
-  prepared     = group.shfl(prepared, 0);
-  numSeedAtoms = group.shfl(numSeedAtoms, 0);
-  if (prepared == 2)
-    return true;
-  if (prepared < 0) {
-    return false;
-  }
+  if (group.any(fail != 0))
+    return -1;
 
-  // Roots: target atoms compatible with the first seed atom in search order,
-  // degree-filtered, striped across the lanes.
-  const int firstQueryAtom = scratch.seedAtoms[0];
-  Mask      laneStripe;
+  // Greedy order: at each position pick the unordered seed atom maximising
+  // (mapped-neighbor count, seed degree, fewest candidates, lowest index),
+  // packed into one warp-max key.  Same heuristic as before, evaluated
+  // warp-parallel.
+  const int n         = seed.numAtoms;
+  AtomMask  unordered = maskFromWords<kFmcsMaskAtoms<maxAtoms>>(seed.atoms);
+  AtomMask  ordered;
+  ordered.clear();
+  for (int d = 0; d < n; ++d) {
+    unsigned bestKey = 0;
+#pragma unroll
+    for (int r = 0; r < kAtomRegs; ++r) {
+      const int a = lane + r * 32;
+      if (a < qNA && unordered.test(a)) {
+        AtomMask mapped = neighborReg[r];
+        mapped.andEq(ordered);
+        const int mappedNeighbors = mapped.popcount();
+        if (d == 0 || mappedNeighbors != 0) {
+          const int deg  = S.seedDegree[g][a];
+          AtomMask  cand = S.atomRow[a];
+          cand.andEq(S.degreeAtLeast[deg > kFmcsMaxSeedDegree ? kFmcsMaxSeedDegree : deg]);
+          const int      cc  = cand.popcount();
+          const unsigned key = (static_cast<unsigned>(mappedNeighbors) << 24) | (static_cast<unsigned>(deg) << 20) |
+                               (static_cast<unsigned>(128 - cc) << 8) | static_cast<unsigned>(127 - a) | 0x80u;
+          bestKey = max(bestKey, key);
+        }
+      }
+    }
+#pragma unroll
+    for (int off = 16; off > 0; off >>= 1)
+      bestKey = max(bestKey, group.shfl_xor(bestKey, off));
+    int pick;
+    if (bestKey == 0) {
+      pick = unordered.lowest();  // disconnected fallback (unreached for connected seeds)
+    } else {
+      pick = 127 - static_cast<int>(bestKey & 0x7Fu);
+    }
+    if (lane == 0)
+      S.order[g][d] = static_cast<uint8_t>(pick);
+    S.orderPos[g][pick] = static_cast<uint8_t>(d);
+    ordered.set(pick);
+    unordered.reset(pick);
+  }
+  group.sync();
+
+  // Per depth: candidate term (when cached) and deduplicated back edges.
+  for (int d = lane; d < n; d += kFmcsGroupSize) {
+    const int a = S.order[g][d];
+    if constexpr (Config::cacheDepthCandidates) {
+      const int dg   = S.seedDegree[g][a];
+      AtomMask  cand = S.atomRow[a];
+      cand.andEq(S.degreeAtLeast[dg > kFmcsMaxSeedDegree ? kFmcsMaxSeedDegree : dg]);
+      S.depthCandidates[g][d] = cand;
+    }
+    int       cnt = 0;
+    const int b0 = S.qRow[a], b1 = S.qRow[a + 1];
+    for (int e = b0; e < b1 && cnt < kFmcsMaxBackEdges; ++e) {
+      const int b = S.qBnd[e];
+      if (!seedBonds.test(b))
+        continue;
+      const int o  = S.qCol[e];
+      const int op = S.orderPos[g][o];
+      if (op == kUnmappedTargetIdx || op >= d)
+        continue;
+      // Dedup by earlier order position, scanning the few recorded slots
+      // (order positions exceed 63 at tier 128, so no bit-set shortcut).
+      bool dup = false;
+      for (int i = 0; i < cnt; ++i)
+        if ((S.backEdges[g][d][i] & 0xFFu) == static_cast<unsigned>(op))
+          dup = true;
+      if (dup)
+        continue;
+      S.backEdges[g][d][cnt] = static_cast<uint16_t>(op | (b << 8));
+      ++cnt;
+    }
+    S.backEdgeCount[g][d] = static_cast<uint8_t>(cnt);
+  }
+  group.sync();
+  return n;
+}
+
+/// Candidate set for search depth @p d given the committed @p mapping: the
+/// depth's label+degree term minus used targets, intersected per back edge
+/// with the class-adjacency mask of the mapped earlier atom.
+template <int maxAtoms, int maxBonds>
+__device__ __forceinline__ typename FmcsPairShared<maxAtoms, maxBonds>::AtomMask seedCandidatesAt(
+  const FmcsPairShared<maxAtoms, maxBonds>&                    S,
+  int                                                          g,
+  int                                                          d,
+  const unsigned char*                                         mapping,
+  const typename FmcsPairShared<maxAtoms, maxBonds>::AtomMask& used) {
+  auto c = depthCandidateTerm(S, g, d);
+  c.andNotEq(used);
+  const int k = S.backEdgeCount[g][d];
+  for (int i = 0; i < k && !c.empty(); ++i) {
+    const uint16_t be  = S.backEdges[g][d][i];
+    const int      m   = mapping[be & 0xFFu];
+    const int      b   = be >> 8;
+    const int      cls = S.bondClass[b];
+    if (cls < kFmcsMaxBondClasses) {
+      c.andEq(S.classAdj.neighbors[cls][m]);
+    } else {
+      c.andEq(neighborsMatchingSlow(S, m, b));
+    }
+  }
+  return c;
+}
+
+template <int maxAtoms, int maxBonds, int maxTA, int maxTB>
+__device__ __forceinline__ void matchResultClearCooperative(MatchResult<maxAtoms, maxBonds, maxTA, maxTB>& match,
+                                                            int                                            lane) {
+  for (int i = lane; i < maxAtoms; i += kFmcsGroupSize)
+    match.targetAtomIdx[i] = kUnmappedTargetIdx;
+  for (int i = lane; i < maxBonds; i += kFmcsGroupSize)
+    match.targetBondIdx[i] = kUnmappedTargetIdx;
+  if (lane == 0) {
+    for (int i = 0; i < MatchResult<maxAtoms, maxBonds, maxTA, maxTB>::kTargetAtomWords; ++i)
+      match.visitedTargetAtoms[i] = 0;
+    for (int i = 0; i < MatchResult<maxAtoms, maxBonds, maxTA, maxTB>::kTargetBondWords; ++i)
+      match.visitedTargetBonds[i] = 0;
+    match.matchedAtomSize = 0;
+    match.matchedBondSize = 0;
+    match.empty           = true;
+  }
+  __syncwarp();
+}
+
+/// Lane-parallel DFS racing for one embedding via the shared core.  Lane L
+/// owns roots L, L+32, ...; the first lane to complete an embedding wins
+/// S.found[g] and records targetForQuery.  Losing lanes notice through the
+/// per-root abort poll and a periodic poll inside the candidates callback.
+template <int maxAtoms, int maxBonds, class GroupT>
+__device__ void seedDfsSearchCooperative(const GroupT& group, FmcsPairShared<maxAtoms, maxBonds>& S, int g, int n) {
+  using AtomMask = typename FmcsPairShared<maxAtoms, maxBonds>::AtomMask;
+  const int lane = static_cast<int>(group.thread_rank());
+
+  AtomMask laneStripe;
   laneStripe.clear();
-  for (int targetAtomIdx = laneRank; targetAtomIdx < maxTA; targetAtomIdx += laneCount) {
-    laneStripe.set(targetAtomIdx);
-  }
-  Mask laneRoots = atomRowMask<maxTA>(tables.atoms, firstQueryAtom);
-  laneRoots.andEq(scratch.degreeAtLeast[min(static_cast<int>(scratch.seedDegree[firstQueryAtom]), kFmcsMaxSeedDegree)]);
-  laneRoots.andEq(laneStripe);
+  for (int a = lane; a < maxAtoms; a += kFmcsGroupSize)
+    laneStripe.set(a);
+  AtomMask roots = depthCandidateTerm(S, g, 0);
+  roots.andEq(laneStripe);
 
-  if (numSeedAtoms == 1) {
+  if (n == 1) {
     // No bonds to satisfy: the lowest compatible root is a complete
     // embedding.  Reduce lane-local lowest roots to the group minimum.
-    int lowestRoot = laneRoots.empty() ? maxTA : laneRoots.lowest();
-    for (int offset = laneCount / 2; offset > 0; offset >>= 1) {
-      lowestRoot = min(lowestRoot, group.shfl_xor(lowestRoot, offset));
-    }
-    if (lowestRoot >= maxTA)
-      return false;
-    if (laneRank == 0) {
-      scratch.targetAtomForQuery[firstQueryAtom] = static_cast<std::uint8_t>(lowestRoot);
-      prepared =
-        rebuildMatchFromSubstructureMappingWithinThread(seed, queryTopology, targetTopology, tables, match, scratch) ?
-          1 :
-          -1;
+    int low = roots.empty() ? maxAtoms : roots.lowest();
+#pragma unroll
+    for (int off = 16; off > 0; off >>= 1)
+      low = min(low, group.shfl_xor(low, off));
+    if (low >= maxAtoms)
+      return;
+    if (lane == 0) {
+      S.targetForQuery[g][S.order[g][0]] = static_cast<uint8_t>(low);
+      S.found[g]                         = 1;
     }
     group.sync();
-    prepared = group.shfl(prepared, 0);
-    return prepared == 1;
+    return;
   }
 
-  // Hand the seed to the shared frontend: fill the per-depth label term from
-  // the atom match table (already query-major, so no transpose), then build the
-  // back-edge table.  buildTargetAdjacency is a no-op for this adapter (always
-  // General, no row caching) but is called so the contract stays uniform.
-  const McsSeedAdapter<maxAtoms, maxBonds, maxTA, maxTB> adapter{&seed,
-                                                                 &queryTopology,
-                                                                 &targetTopology,
-                                                                 &tables,
-                                                                 &scratch};
-
-  for (int depth = laneRank; depth < numSeedAtoms; depth += laneCount) {
-    scratch.tables.depthCandidates[0][depth] = atomRowMask<maxTA>(tables.atoms, scratch.seedAtoms[depth]);
-  }
-  group.sync();
-
-  const nvMolKit::subgraph::QueryBondPlan plan =
-    nvMolKit::subgraph::analyzeQueryEdges(scratch.tables, 0, laneRank, adapter, numSeedAtoms);
-  nvMolKit::subgraph::buildTargetAdjacency(scratch.tables, 0, laneRank, adapter, targetTopology.numAtoms, plan);
-  group.sync();
-
-  auto candidatesAt = [&](int depth, const unsigned char* mapping, const Mask& used, int prevTargetAtom) -> Mask {
-    return nvMolKit::subgraph::buildCandidates(scratch.tables, 0, depth, mapping, used, adapter, plan, prevTargetAtom);
+  int  poll         = 0;
+  auto candidatesAt = [&](int depth, const unsigned char* mapping, const AtomMask& used, int /*prev*/) -> AtomMask {
+    if (((++poll) & 127) == 0 && *(volatile int*)&S.found[g] != 0) {
+      AtomMask empty;
+      empty.clear();
+      return empty;
+    }
+    return seedCandidatesAt(S, g, depth, mapping, used);
   };
 
-  // First complete embedding wins scratch.found; the winner alone records
-  // the atom mapping, translated from order positions back to query atoms.
-  auto onTerminal = [&](Mask terminals, const unsigned char* mapping) -> nvMolKit::DfsTerminalVerdict {
+  const int lastDepth  = n - 1;
+  auto      onTerminal = [&](AtomMask terminals, const unsigned char* mapping) -> nvMolKit::DfsTerminalVerdict {
     nvMolKit::DfsTerminalVerdict verdict{false, false};
     if (!terminals.empty()) {
-      if (atomicCAS(&scratch.found, 0, 1) == 0) {
-        for (int orderPos = 0; orderPos < numSeedAtoms - 1; ++orderPos) {
-          scratch.targetAtomForQuery[scratch.seedAtoms[orderPos]] = mapping[orderPos];
-        }
-        scratch.targetAtomForQuery[scratch.seedAtoms[numSeedAtoms - 1]] = static_cast<std::uint8_t>(terminals.lowest());
+      if (atomicCAS(&S.found[g], 0, 1) == 0) {
+        for (int p = 0; p < lastDepth; ++p)
+          S.targetForQuery[g][S.order[g][p]] = mapping[p];
+        S.targetForQuery[g][S.order[g][lastDepth]] = static_cast<uint8_t>(terminals.lowest());
       }
       verdict.laneDone = true;
     }
     return verdict;
   };
 
-  auto abortRequested = [&]() -> bool { return atomicAdd(&scratch.found, 0) != 0; };
+  auto abortRequested = [&]() -> bool { return *(volatile int*)&S.found[g] != 0; };
 
-  nvMolKit::dfsFromRoots<maxAtoms>(laneRoots, numSeedAtoms - 1, candidatesAt, onTerminal, abortRequested);
-  group.sync();
-
-  int found = scratch.found;
-  if (found != 0) {
-    if (laneRank == 0) {
-      found =
-        rebuildMatchFromSubstructureMappingWithinThread(seed, queryTopology, targetTopology, tables, match, scratch) ?
-          1 :
-          0;
-    }
-    group.sync();
-    found = group.shfl(found, 0);
-    return found != 0;
-  }
-
-  if (laneRank == 0) {
-    matchResultClearWithinThread(match);
-  }
-  group.sync();
-  return false;
+  nvMolKit::dfsFromRoots<maxAtoms>(roots, lastDepth, candidatesAt, onTerminal, abortRequested);
 }
 
-template <int maxAtoms, int maxBonds, int maxTA, int maxTB, class GroupT>
-__device__ __forceinline__ bool matchSeedWithSubstructureFallbackCooperative(
-  const GroupT&                                  group,
-  const Seed<maxAtoms, maxBonds>&                seed,
-  const DeviceCsrView&                           queryTopology,
-  const DeviceCsrView&                           targetTopology,
-  const PairMatchTablesDevice&                   tables,
-  MatchResult<maxAtoms, maxBonds, maxTA, maxTB>& match,
-  FmcsSubstructureScratch<maxAtoms, maxTA>&      scratch,
-  int*                                           scratchLock) {
-  if (tryMatchIncrementalGreedyCooperative(group, seed, queryTopology, targetTopology, tables, match)) {
-    return true;
-  }
-  if (group.thread_rank() == 0) {
-    while (atomicCAS(scratchLock, 0, 1) != 0) {
+/// Rebuild the full (atom + bond) witness from the embedding recorded in
+/// targetForQuery.
+template <int maxAtoms, int maxBonds, class GroupT>
+__device__ bool rebuildMatchCooperative(const GroupT&                                        group,
+                                        FmcsPairShared<maxAtoms, maxBonds>&                  S,
+                                        const Seed<maxAtoms, maxBonds>&                      seed,
+                                        MatchResult<maxAtoms, maxBonds, maxAtoms, maxBonds>& match,
+                                        int                                                  g) {
+  using AtomMask = typename FmcsPairShared<maxAtoms, maxBonds>::AtomMask;
+  using BondMask = typename FmcsPairShared<maxAtoms, maxBonds>::BondMask;
+  const int lane = static_cast<int>(group.thread_rank());
+  matchResultClearCooperative(match, lane);
+
+  AtomMask visA;
+  visA.clear();
+  int okA = 1;
+  for (int a = lane; a < maxAtoms; a += kFmcsGroupSize) {
+    if (wordsTest(seed.atoms, a)) {
+      const uint8_t t = S.targetForQuery[g][a];
+      if (t == kUnmappedTargetIdx)
+        okA = 0;
+      else {
+        match.targetAtomIdx[a] = t;
+        visA.set(t);
+      }
     }
   }
-  group.sync();
-  const bool ok = matchSeedSubstructureCooperative(group, seed, queryTopology, targetTopology, tables, match, scratch);
-  group.sync();
-  if (group.thread_rank() == 0) {
-    atomicExch(scratchLock, 0);
+  visA = warpOrMask(group, visA);
+  if (group.any(okA == 0) || visA.popcount() != seed.numAtoms) {
+    matchResultClearCooperative(match, lane);
+    return false;
+  }
+
+  BondMask visB;
+  visB.clear();
+  int okB = 1;
+  for (int b = lane; b < maxBonds; b += kFmcsGroupSize) {
+    if (wordsTest(seed.bonds, b)) {
+      const int tu = S.targetForQuery[g][S.qEpU[b]];
+      const int tv = S.targetForQuery[g][S.qEpV[b]];
+      int       tb = -1;
+      if (tu != kUnmappedTargetIdx && tv != kUnmappedTargetIdx) {
+        const auto& row = S.bondRow[b];
+        const int   e0 = S.tRow[tu], e1 = S.tRow[tu + 1];
+        for (int e = e0; e < e1; ++e)
+          if (S.tCol[e] == tv && row.test(S.tBnd[e])) {
+            tb = S.tBnd[e];
+            break;
+          }
+      }
+      if (tb < 0)
+        okB = 0;
+      else {
+        match.targetBondIdx[b] = static_cast<uint8_t>(tb);
+        visB.set(tb);
+      }
+    }
+  }
+  visB = warpOrMask(group, visB);
+  if (group.any(okB == 0) || visB.popcount() != seed.numBonds) {
+    matchResultClearCooperative(match, lane);
+    return false;
+  }
+  if (lane == 0) {
+    maskToWords(visA, match.visitedTargetAtoms);
+    maskToWords(visB, match.visitedTargetBonds);
+    match.matchedAtomSize = seed.numAtoms;
+    match.matchedBondSize = seed.numBonds;
+    match.empty           = false;
   }
   group.sync();
-  return ok;
+  return true;
+}
+
+/// Exact seed-in-target substructure check: a lane-parallel DFS racing for
+/// one embedding.  Exhaustive within bounded memory -- the stack is O(seed
+/// atoms) of lane-local state -- so a false return proves the seed does not
+/// embed in the target.  Group-uniform: all lanes of @p group call together.
+template <int maxAtoms, int maxBonds, class GroupT>
+__device__ __forceinline__ bool matchSeedSubstructureCooperative(
+  const GroupT&                                        group,
+  FmcsPairShared<maxAtoms, maxBonds>&                  S,
+  const Seed<maxAtoms, maxBonds>&                      seed,
+  MatchResult<maxAtoms, maxBonds, maxAtoms, maxBonds>& match,
+  int                                                  g) {
+  const int lane = static_cast<int>(group.thread_rank());
+  if (seed.numAtoms == 0) {
+    matchResultClearCooperative(match, lane);
+    return seed.numBonds == 0;
+  }
+  if (seed.numAtoms > S.tNA || seed.numBonds > S.tNB) {
+    matchResultClearCooperative(match, lane);
+    return false;
+  }
+  if (lane == 0)
+    S.found[g] = 0;
+  group.sync();
+  const int n = prepareSeedSearchCooperative(group, S, seed, g);
+  if (n < 0) {
+    matchResultClearCooperative(match, lane);
+    return false;
+  }
+  seedDfsSearchCooperative(group, S, g, n);
+  group.sync();
+  if (*(volatile int*)&S.found[g] == 0) {
+    matchResultClearCooperative(match, lane);
+    return false;
+  }
+  return rebuildMatchCooperative(group, S, seed, match, g);
+}
+
+/// Greedy incremental extension of the parent's recorded witness by every
+/// still-unmapped seed bond.  A true return proves the extension; false is
+/// inconclusive and @p match must not be reused (the caller runs the exact
+/// fallback).  Serial on lane 0: the whole walk is a handful of
+/// shared-memory reads per bond, so warp coordination would cost more than
+/// it saves.  Group-uniform.
+template <int maxAtoms, int maxBonds, class GroupT>
+__device__ bool tryMatchIncrementalGreedyCooperative(const GroupT&                                        group,
+                                                     const FmcsPairShared<maxAtoms, maxBonds>&            S,
+                                                     const Seed<maxAtoms, maxBonds>&                      seed,
+                                                     MatchResult<maxAtoms, maxBonds, maxAtoms, maxBonds>& match) {
+  using BondMask = typename FmcsPairShared<maxAtoms, maxBonds>::BondMask;
+  const int lane = static_cast<int>(group.thread_rank());
+  int       ok   = 1;
+  if (lane == 0) {
+    BondMask bits = maskFromWords<kFmcsMaskAtoms<maxBonds>>(seed.bonds);
+    while (!bits.empty()) {
+      const int b = bits.lowest();
+      bits.clearLowest();
+      if (match.targetBondIdx[b] != kUnmappedTargetIdx)
+        continue;
+      const int   u = S.qEpU[b], v = S.qEpV[b];
+      const int   tu = match.targetAtomIdx[u], tv = match.targetAtomIdx[v];
+      const auto& row     = S.bondRow[b];
+      int         chosenB = -1, chosenA = -1;
+      if (tu != kUnmappedTargetIdx && tv != kUnmappedTargetIdx) {
+        // Ring-closing: both endpoints mapped; find the connecting bond.
+        const int e0 = S.tRow[tu], e1 = S.tRow[tu + 1];
+        for (int e = e0; e < e1; ++e) {
+          if (S.tCol[e] != tv)
+            continue;
+          const int tb = S.tBnd[e];
+          if (wordsTest(match.visitedTargetBonds, tb))
+            continue;
+          if (!row.test(tb))
+            continue;
+          chosenB = tb;
+          break;
+        }
+      } else if (tu != kUnmappedTargetIdx || tv != kUnmappedTargetIdx) {
+        // Atom-adding: extend from the mapped endpoint to an unvisited,
+        // compatible neighbor.  No backtracking; a miss is inconclusive.
+        const int   src   = (tu != kUnmappedTargetIdx) ? tu : tv;
+        const int   qFree = (tu != kUnmappedTargetIdx) ? v : u;
+        const auto& arow  = S.atomRow[qFree];
+        const int   e0 = S.tRow[src], e1 = S.tRow[src + 1];
+        for (int e = e0; e < e1; ++e) {
+          const int tb = S.tBnd[e];
+          if (wordsTest(match.visitedTargetBonds, tb))
+            continue;
+          const int ta = S.tCol[e];
+          if (wordsTest(match.visitedTargetAtoms, ta))
+            continue;
+          if (!row.test(tb))
+            continue;
+          if (!arow.test(ta))
+            continue;
+          chosenB = tb;
+          chosenA = ta;
+          break;
+        }
+      } else {
+        // Both endpoints unmapped: malformed for well-formed seeds.
+        ok = 0;
+        break;
+      }
+      if (chosenB < 0) {
+        ok = 0;
+        break;
+      }
+      match.targetBondIdx[b] = static_cast<uint8_t>(chosenB);
+      wordsSet(match.visitedTargetBonds, chosenB);
+      match.matchedBondSize += 1;
+      match.empty = false;
+      if (chosenA >= 0) {
+        const int qFree            = (tu != kUnmappedTargetIdx) ? v : u;
+        match.targetAtomIdx[qFree] = static_cast<uint8_t>(chosenA);
+        wordsSet(match.visitedTargetAtoms, chosenA);
+        match.matchedAtomSize += 1;
+      }
+    }
+  }
+  ok = group.shfl(ok, 0);
+  return ok != 0;
+}
+
+/// RDKit checkIfMatchAndAppend analogue: greedy extension of a non-empty
+/// parent witness first, exact substructure fallback otherwise.
+template <int maxAtoms, int maxBonds, class GroupT>
+__device__ __forceinline__ bool checkSeedMatchAndAppendCooperative(
+  const GroupT&                                       group,
+  FmcsPairShared<maxAtoms, maxBonds>&                 S,
+  QueuedSeed<maxAtoms, maxBonds, maxAtoms, maxBonds>& candidate,
+  int                                                 g) {
+  if (!candidate.match.empty) {
+    if (tryMatchIncrementalGreedyCooperative(group, S, candidate.seed, candidate.match))
+      return true;
+  }
+  return matchSeedSubstructureCooperative(group, S, candidate.seed, candidate.match, g);
 }
 
 }  // namespace fmcs

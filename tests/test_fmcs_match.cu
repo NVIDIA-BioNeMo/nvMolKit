@@ -179,22 +179,29 @@ class TestGraph {
 
 // ---- matchSingleBondWithinThread ----
 
+using PairShared16 = mcs::fmcs::FmcsPairShared<16, 16>;
+
 struct SingleBondTestOut {
   bool            ok;
   SingleBondMatch match;
 };
 
+// One-warp driver: loads the pair into block-shared state, then runs the
+// phase-1 direct single-bond match for @p qBondIdx.  The match scans target
+// bonds in index order and tries both orientations, so tests steer it via
+// the compatibility tables.
 __global__ void matchSingleBondDriver(int                   qBondIdx,
-                                      int                   tBondIdx,
-                                      bool                  reversed,
                                       DeviceCsrView         qView,
                                       DeviceCsrView         tView,
                                       PairMatchTablesDevice tables,
                                       SingleBondTestOut*    out) {
+  __shared__ __align__(16) unsigned char sharedRaw[sizeof(PairShared16)];
+  PairShared16&                          S = *reinterpret_cast<PairShared16*>(sharedRaw);
+  mcs::fmcs::loadPairSharedCooperative(S, qView, tView, tables, static_cast<int>(threadIdx.x), blockDim.x);
   if (threadIdx.x != 0 || blockIdx.x != 0)
     return;
   SingleBondMatch sm{};
-  out->ok    = mcs::fmcs::matchSingleBondWithinThread(qBondIdx, tBondIdx, reversed, qView, tView, tables, sm);
+  out->ok    = mcs::fmcs::matchSingleBondWithinThread(S, qBondIdx, sm);
   out->match = sm;
 }
 
@@ -216,13 +223,7 @@ TEST(FMCSUnit, MatchSingleBondForwardOrientation) {
   tables.setAllBondBits();
 
   AsyncDevicePtr<SingleBondTestOut> d_out;
-  matchSingleBondDriver<<<1, 1>>>(0,
-                                  0,
-                                  /*reversed=*/false,
-                                  query.view(),
-                                  target.view(),
-                                  tables.device(),
-                                  d_out.data());
+  matchSingleBondDriver<<<1, 32>>>(0, query.view(), target.view(), tables.device(), d_out.data());
   ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
   SingleBondTestOut out{};
   d_out.get(out);
@@ -230,6 +231,7 @@ TEST(FMCSUnit, MatchSingleBondForwardOrientation) {
   EXPECT_TRUE(out.ok);
   EXPECT_EQ(out.match.targetAtomU, 0u);  // qU=0 -> tU=0
   EXPECT_EQ(out.match.targetAtomV, 1u);  // qV=1 -> tV=1
+  EXPECT_EQ(out.match.targetBond, 0u);
 }
 
 TEST(FMCSUnit, MatchSingleBondReverseOrientation) {
@@ -243,17 +245,14 @@ TEST(FMCSUnit, MatchSingleBondReverseOrientation) {
   });
   ManagedMatchTables tables;
   tables.allocate(2, 2, 1, 1);
-  tables.setAllAtomBits();
   tables.setAllBondBits();
+  // Atom compatibility only permits the reversed orientation: qU=0 may map
+  // to tV=1 and qV=1 to tU=0.
+  tables.setAtomBit(0, 1);
+  tables.setAtomBit(1, 0);
 
   AsyncDevicePtr<SingleBondTestOut> d_out;
-  matchSingleBondDriver<<<1, 1>>>(0,
-                                  0,
-                                  /*reversed=*/true,
-                                  query.view(),
-                                  target.view(),
-                                  tables.device(),
-                                  d_out.data());
+  matchSingleBondDriver<<<1, 32>>>(0, query.view(), target.view(), tables.device(), d_out.data());
   ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
   SingleBondTestOut out{};
   d_out.get(out);
@@ -261,6 +260,7 @@ TEST(FMCSUnit, MatchSingleBondReverseOrientation) {
   EXPECT_TRUE(out.ok);
   EXPECT_EQ(out.match.targetAtomU, 1u);  // qU=0 -> tV=1 (reversed)
   EXPECT_EQ(out.match.targetAtomV, 0u);  // qV=1 -> tU=0
+  EXPECT_EQ(out.match.targetBond, 0u);
 }
 
 TEST(FMCSUnit, MatchSingleBondBondTableRejection) {
@@ -278,13 +278,7 @@ TEST(FMCSUnit, MatchSingleBondBondTableRejection) {
   // Deliberately leave bondData all zero -> bond-table reject.
 
   AsyncDevicePtr<SingleBondTestOut> d_out;
-  matchSingleBondDriver<<<1, 1>>>(0,
-                                  0,
-                                  /*reversed=*/false,
-                                  query.view(),
-                                  target.view(),
-                                  tables.device(),
-                                  d_out.data());
+  matchSingleBondDriver<<<1, 32>>>(0, query.view(), target.view(), tables.device(), d_out.data());
   ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
   SingleBondTestOut out{};
   d_out.get(out);
@@ -304,21 +298,13 @@ TEST(FMCSUnit, MatchSingleBondAtomTableRejection) {
   ManagedMatchTables tables;
   tables.allocate(2, 2, 1, 1);
   tables.setAllBondBits();
-  // Atom 0 compatible with target atom 0, but atom 1 is incompatible
-  // with target atom 1 -> forward orientation rejects on second atom.
+  // Forward orientation needs (0->0, 1->1) and reverse needs (0->1, 1->0);
+  // permit only (0->0) and (1->0) so both orientations reject on an atom.
   tables.setAtomBit(0, 0);
-  tables.setAtomBit(0, 1);
   tables.setAtomBit(1, 0);
-  // Note: (1, 1) deliberately left unset.
 
   AsyncDevicePtr<SingleBondTestOut> d_out;
-  matchSingleBondDriver<<<1, 1>>>(0,
-                                  0,
-                                  /*reversed=*/false,
-                                  query.view(),
-                                  target.view(),
-                                  tables.device(),
-                                  d_out.data());
+  matchSingleBondDriver<<<1, 32>>>(0, query.view(), target.view(), tables.device(), d_out.data());
   ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
   SingleBondTestOut out{};
   d_out.get(out);
@@ -380,6 +366,9 @@ __global__ void matchIncrementalAtomAddingDriver(DeviceCsrView         qView,
                                                  PairMatchTablesDevice tables,
                                                  IncrementalTestOut*   out) {
   __shared__ QueuedT16 child;
+  __shared__ __align__(16) unsigned char sharedRaw[sizeof(mcs::fmcs::FmcsPairShared<16, 16>)];
+  auto&                                  S = *reinterpret_cast<mcs::fmcs::FmcsPairShared<16, 16>*>(sharedRaw);
+  mcs::fmcs::loadPairSharedCooperative(S, qView, tView, tables, static_cast<int>(threadIdx.x), blockDim.x);
   if (threadIdx.x == 0) {
     mcs::fmcs::seedClearWithinThread(child.seed);
     // Parent: bond (0,1) mapped 0->0, 1->1, bond 0->target bond 0.
@@ -401,7 +390,7 @@ __global__ void matchIncrementalAtomAddingDriver(DeviceCsrView         qView,
 
   auto block = cooperative_groups::this_thread_block();
   auto warp  = cooperative_groups::tiled_partition<32>(block);
-  bool ok    = mcs::fmcs::tryMatchIncrementalGreedyCooperative(warp, child.seed, qView, tView, tables, child.match);
+  bool ok    = mcs::fmcs::tryMatchIncrementalGreedyCooperative(warp, S, child.seed, child.match);
   __syncthreads();
 
   if (threadIdx.x == 0) {
@@ -415,6 +404,9 @@ __global__ void matchIncrementalRingClosingDriver(DeviceCsrView         qView,
                                                   PairMatchTablesDevice tables,
                                                   IncrementalTestOut*   out) {
   __shared__ QueuedT16 child;
+  __shared__ __align__(16) unsigned char sharedRaw[sizeof(mcs::fmcs::FmcsPairShared<16, 16>)];
+  auto&                                  S = *reinterpret_cast<mcs::fmcs::FmcsPairShared<16, 16>*>(sharedRaw);
+  mcs::fmcs::loadPairSharedCooperative(S, qView, tView, tables, static_cast<int>(threadIdx.x), blockDim.x);
   if (threadIdx.x == 0) {
     mcs::fmcs::seedClearWithinThread(child.seed);
     // 4-atom square query: bonds (0,1), (1,2), (2,3), (0,3).  Parent
@@ -434,7 +426,7 @@ __global__ void matchIncrementalRingClosingDriver(DeviceCsrView         qView,
 
   auto block = cooperative_groups::this_thread_block();
   auto warp  = cooperative_groups::tiled_partition<32>(block);
-  bool ok    = mcs::fmcs::tryMatchIncrementalGreedyCooperative(warp, child.seed, qView, tView, tables, child.match);
+  bool ok    = mcs::fmcs::tryMatchIncrementalGreedyCooperative(warp, S, child.seed, child.match);
   __syncthreads();
 
   if (threadIdx.x == 0) {
@@ -448,6 +440,9 @@ __global__ void matchIncrementalVisitedConflictDriver(DeviceCsrView         qVie
                                                       PairMatchTablesDevice tables,
                                                       IncrementalTestOut*   out) {
   __shared__ QueuedT16 child;
+  __shared__ __align__(16) unsigned char sharedRaw[sizeof(mcs::fmcs::FmcsPairShared<16, 16>)];
+  auto&                                  S = *reinterpret_cast<mcs::fmcs::FmcsPairShared<16, 16>*>(sharedRaw);
+  mcs::fmcs::loadPairSharedCooperative(S, qView, tView, tables, static_cast<int>(threadIdx.x), blockDim.x);
   if (threadIdx.x == 0) {
     mcs::fmcs::seedClearWithinThread(child.seed);
     // Query: atoms 0,1,2; bonds (0,1), (0,2).  Target: atoms 0,1; one
@@ -470,7 +465,7 @@ __global__ void matchIncrementalVisitedConflictDriver(DeviceCsrView         qVie
 
   auto block = cooperative_groups::this_thread_block();
   auto warp  = cooperative_groups::tiled_partition<32>(block);
-  bool ok    = mcs::fmcs::tryMatchIncrementalGreedyCooperative(warp, child.seed, qView, tView, tables, child.match);
+  bool ok    = mcs::fmcs::tryMatchIncrementalGreedyCooperative(warp, S, child.seed, child.match);
   __syncthreads();
 
   if (threadIdx.x == 0) {
@@ -484,6 +479,9 @@ __global__ void matchIncrementalTwoBondChainDriver(DeviceCsrView         qView,
                                                    PairMatchTablesDevice tables,
                                                    IncrementalTestOut*   out) {
   __shared__ QueuedT16 child;
+  __shared__ __align__(16) unsigned char sharedRaw[sizeof(mcs::fmcs::FmcsPairShared<16, 16>)];
+  auto&                                  S = *reinterpret_cast<mcs::fmcs::FmcsPairShared<16, 16>*>(sharedRaw);
+  mcs::fmcs::loadPairSharedCooperative(S, qView, tView, tables, static_cast<int>(threadIdx.x), blockDim.x);
   if (threadIdx.x == 0) {
     mcs::fmcs::seedClearWithinThread(child.seed);
     // 4-atom path 0-1-2-3.  Parent has only bond (0,1) mapped.  Child
@@ -506,7 +504,7 @@ __global__ void matchIncrementalTwoBondChainDriver(DeviceCsrView         qView,
 
   auto block = cooperative_groups::this_thread_block();
   auto warp  = cooperative_groups::tiled_partition<32>(block);
-  bool ok    = mcs::fmcs::tryMatchIncrementalGreedyCooperative(warp, child.seed, qView, tView, tables, child.match);
+  bool ok    = mcs::fmcs::tryMatchIncrementalGreedyCooperative(warp, S, child.seed, child.match);
   __syncthreads();
 
   if (threadIdx.x == 0) {

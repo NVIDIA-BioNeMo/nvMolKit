@@ -61,22 +61,25 @@ __device__ __forceinline__ void fillNewBondsRun(SeedSetup&&          setup,
   __shared__ SeedT   seed;
   __shared__ NewBond bonds[kMaxNewBonds];
   __shared__ int     count;
+  __shared__ std::uint8_t epU[16];
+  __shared__ std::uint8_t epV[16];
 
   if (threadIdx.x == 0) {
     mcs::fmcs::seedClearWithinThread(seed);
     setup(seed);
   }
+  // fillNewBondsCooperative reads byte-packed endpoints (block-shared in
+  // the kernel); unpack the test's (u << 16 | v) list the same way.
+  for (int i = static_cast<int>(threadIdx.x); i < qNumBonds; i += static_cast<int>(blockDim.x)) {
+    epU[i] = static_cast<std::uint8_t>(qBondEndpoints[i] >> 16);
+    epV[i] = static_cast<std::uint8_t>(qBondEndpoints[i] & 0xFFFFu);
+  }
+  (void)qNumAtoms;
   __syncthreads();
 
-  auto                     block = cooperative_groups::this_thread_block();
-  auto                     warp  = cooperative_groups::tiled_partition<32>(block);
-  // fillNewBondsCooperative reads only the bond-endpoint side of the
-  // topology, so the CSR arrays stay null here.
-  mcs::fmcs::DeviceCsrView qView{};
-  qView.bondEndpoints = qBondEndpoints;
-  qView.numAtoms      = qNumAtoms;
-  qView.numBonds      = qNumBonds;
-  bool ok             = mcs::fmcs::fillNewBondsCooperative(warp, seed, qView, bonds, &count, maxNewBonds);
+  auto block = cooperative_groups::this_thread_block();
+  auto warp  = cooperative_groups::tiled_partition<32>(block);
+  bool ok    = mcs::fmcs::fillNewBondsCooperative(warp, seed, epU, epV, qNumBonds, bonds, &count, maxNewBonds);
   __syncthreads();
 
   if (threadIdx.x == 0) {
