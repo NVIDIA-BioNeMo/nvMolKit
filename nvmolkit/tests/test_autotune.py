@@ -338,7 +338,7 @@ def test_default_mcs_search_space_covers_supported_execution_settings():
     assert space["blockSize"] == [64, 128, 256, 512]
     assert space["workerThreads"] == (1, 4)
     assert space["preprocessingThreads"] == (1, 16)
-    assert space["executorsPerRunner"] == (1, 8)
+    assert space["executorsPerRunner"] == (1, 4)
 
 
 class _RecordingTrial:
