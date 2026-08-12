@@ -395,9 +395,9 @@ void validateSupportedParameters(const MCSParameters& params) {
 }
 
 bool shouldFallbackToRDKit(const RDKit::ROMol& molA, const RDKit::ROMol& molB, std::string& reason) {
-  if (std::max(molA.getNumAtoms(), molB.getNumAtoms()) > 128 ||
-      std::max(molA.getNumBonds(), molB.getNumBonds()) > 128) {
-    reason = "molecule exceeds fMCS tier-128 limits";
+  if (std::max(molA.getNumAtoms(), molB.getNumAtoms()) >= 128 ||
+      std::max(molA.getNumBonds(), molB.getNumBonds()) >= 128) {
+    reason = "molecule exceeds fMCS limit of fewer than 128 atoms and bonds";
     return true;
   }
   for (const auto* atom : molA.atoms()) {

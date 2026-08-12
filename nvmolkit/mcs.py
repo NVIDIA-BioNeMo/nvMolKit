@@ -279,8 +279,8 @@ def findMCS(
     second_molecule_index)`` atom or bond index pairs.
 
     Fallback behavior:
-        Molecule pairs outside the native GPU limits (currently more than 128
-        atoms, more than 128 bonds, or atom degree greater than 8), and pairs
+        Molecule pairs outside the native GPU limits (currently 128 or more
+        atoms or bonds, or atom degree greater than 8), and pairs
         whose GPU search queue overflows, transparently use RDKit on the CPU.
         Set ``require_gpu=True`` to raise instead.  This fallback is
         pair-specific; unsupported search options listed below raise for the

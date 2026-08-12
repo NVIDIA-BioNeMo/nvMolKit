@@ -499,6 +499,15 @@ def test_rdkit_fallback_is_transparent_and_require_gpu_rejects_it():
         findMCS([hypervalent], mode="pairs", pairs=[(0, 0)], require_gpu=True)
 
 
+def test_require_gpu_rejects_size_128():
+    chain = Chem.MolFromSmiles("C" * 128)
+    assert chain.GetNumAtoms() == 128
+    assert chain.GetNumBonds() == 127
+
+    with pytest.raises(RuntimeError, match="GPU MCS path unavailable"):
+        findMCS([chain], mode="pairs", pairs=[(0, 0)], require_gpu=True)
+
+
 @pytest.mark.parametrize(
     "kwargs,error",
     [
