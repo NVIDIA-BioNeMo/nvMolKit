@@ -11,6 +11,7 @@
 #include "src/mcs/fmcs_cuda/fmcs_match_tables.cuh"
 #include "src/mcs/mcs_common/mcs_types.cuh"
 #include "src/utils/cuda_error_check.h"
+#include "src/utils/host_vector.h"
 
 namespace {
 
@@ -80,7 +81,9 @@ TEST(FMCSMatchTable, UploadsPairsIntoOneContiguousBuffer) {
   host[1].atoms.resize(1, 33);
   host[1].atoms.setBit(0, 32);
 
-  const auto  upload = mcs::fmcs::uploadPairMatchTables(host, nullptr);
+  nvMolKit::PinnedHostVector<std::uint32_t> staging(mcs::fmcs::computePairMatchTableWords(host));
+  const auto                                upload =
+    mcs::fmcs::uploadPairMatchTables(host, std::span<std::uint32_t>(staging.data(), staging.size()), nullptr);
   const auto& device = upload.tables;
 
   ASSERT_NE(upload.storage.data(), nullptr);
@@ -91,14 +94,17 @@ TEST(FMCSMatchTable, UploadsPairsIntoOneContiguousBuffer) {
   EXPECT_EQ(device[1].atoms.data, upload.storage.data() + 2);
   EXPECT_EQ(device[1].atoms.wordsPerRow, 2);
 
-  std::vector<std::uint32_t> copied(4);
-  upload.storage.copyToHost(copied);
+  nvMolKit::PinnedHostVector<std::uint32_t> copied(4);
+  upload.storage.copyToHost(copied.data(), copied.size());
   cudaCheckError(cudaStreamSynchronize(upload.storage.stream()));
-  EXPECT_EQ(copied, (std::vector<std::uint32_t>{2u, 1u, 0u, 1u}));
+  EXPECT_EQ(copied[0], 2u);
+  EXPECT_EQ(copied[1], 1u);
+  EXPECT_EQ(copied[2], 0u);
+  EXPECT_EQ(copied[3], 1u);
 }
 
 TEST(FMCSMatchTable, EmptyUploadReturnsNoAllocation) {
-  const auto upload = mcs::fmcs::uploadPairMatchTables({}, nullptr);
+  const auto upload = mcs::fmcs::uploadPairMatchTables({}, {}, nullptr);
 
   EXPECT_TRUE(upload.tables.empty());
   EXPECT_EQ(upload.storage.data(), nullptr);

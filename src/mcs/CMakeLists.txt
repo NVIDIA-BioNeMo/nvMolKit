@@ -21,7 +21,8 @@ target_link_libraries(mcs_fmcs_foundations PUBLIC device_vector)
 add_library(mcs_fmcs_core fmcs_cuda/fmcs.cu)
 target_include_directories(mcs_fmcs_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
                                                 ${CMAKE_SOURCE_DIR})
-target_link_libraries(mcs_fmcs_core PUBLIC mcs_fmcs_foundations device nvtx)
+target_link_libraries(mcs_fmcs_core PUBLIC mcs_fmcs_foundations device nvtx
+                                           pinned_host_allocator)
 target_compile_options(
   mcs_fmcs_core
   PRIVATE $<$<COMPILE_LANGUAGE:CUDA>:--ptxas-options=-v;--extended-lambda>)

@@ -20,6 +20,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 #include "src/mcs/mcs_common/mcs_types.cuh"
@@ -82,8 +83,13 @@ struct UploadedPairMatchTables {
 
 /// Upload a batch of per-pair host match tables into one contiguous device
 /// allocation.  The returned object owns that allocation and keeps the
-/// per-pair device views valid for its lifetime.
-UploadedPairMatchTables uploadPairMatchTables(const std::vector<PairMatchTablesHost>& host, cudaStream_t stream);
+/// per-pair device views valid for its lifetime. @p packedHost must refer to
+/// pinned host memory that remains valid until the copy on @p stream completes.
+size_t computePairMatchTableWords(const std::vector<PairMatchTablesHost>& host);
+
+UploadedPairMatchTables uploadPairMatchTables(const std::vector<PairMatchTablesHost>& host,
+                                              std::span<uint32_t>                     packedHost,
+                                              cudaStream_t                            stream);
 
 }  // namespace fmcs
 }  // namespace mcs
