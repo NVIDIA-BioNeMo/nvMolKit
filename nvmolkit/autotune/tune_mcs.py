@@ -43,7 +43,7 @@ def _default_mcs_search_space(num_gpus: int, cpus: int) -> dict:
         "blockSize": [64, 128, 256, 512, 1024, 2048, 4096],
         "workerThreads": (1, per_gpu_worker_max),
         "preprocessingThreads": (1, cpus),
-        "executorsPerRunner": (1, 2, 3, 4),
+        "executorsPerRunner": (1, 4),
     }
 
 
