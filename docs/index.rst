@@ -143,7 +143,7 @@ To install nvMolKit pinned to a particular RDKit:
 .. code-block:: bash
 
     RDKIT_VERSION=2025.9.6
-    NVMOLKIT_VERSION=0.5.0
+    NVMOLKIT_VERSION=0.6.0
     pip install nvmolkit==${NVMOLKIT_VERSION}+rdkit${RDKIT_VERSION} \
         --extra-index-url https://nvidia-bionemo.github.io/nvMolKit/wheels/rdkit${RDKIT_VERSION}/simple/
 
