@@ -7,10 +7,10 @@
 nvMolKit 0.6.0 adds two new GPU-accelerated capabilities: Maximum Common Substructure (MCS) search and a FIRE minimizer option for MMFF and UFF force field optimization. Fused Butina clustering has been rewritten on a pure CUDA backend, making it over 10x faster and removing the Triton dependency, and Butina clustering now supports `reordering=False` and matches RDKit output exactly. Substructure search is up to 2x faster end to end with a new DFS backend. This release also includes all fixes from the v0.5.1 patch release.
 
 ### Contributors
-- Kevin Boyd (@scal444)
-- Eva Xue (@evasnow1992)
-- Matthew Neba (@Matthew-Neba)
 - Clay Moore (@mooreneural)
+- Eva Xue (@evasnow1992)
+- Kevin Boyd (@scal444)
+- Matthew Neba (@Matthew-Neba)
 - Timur Rvachov (@trvachov)
 
 ### Features
