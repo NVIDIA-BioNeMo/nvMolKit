@@ -163,8 +163,8 @@ HostPairDescriptor buildPairDescriptor(const InputT& sideA, const InputT& sideB,
   return desc;
 }
 
-/// Owning device allocations for one tier sub-batch. Results, queue, and
-/// scratch element types depend on the selected tier, so their storage is
+/// Owning device allocations for one tier sub-batch. Result and queue
+/// element types depend on the selected tier, so their storage is
 /// type-erased as bytes. The queue storage is one contiguous global-memory slab of
 /// @c kFmcsQueueCapacity * numPairs QueuedSeed entries; per-block slices
 /// are taken inside the kernel via @c blockIdx.x.
@@ -173,7 +173,6 @@ struct BatchDeviceBuffers {
   nvMolKit::AsyncDeviceVector<DevicePerPairInput> pairInputs;
   nvMolKit::AsyncDeviceVector<std::byte>          resultsStorage;
   nvMolKit::AsyncDeviceVector<std::byte>          queueStorage;
-  nvMolKit::AsyncDeviceVector<std::byte>          scratchStorage;
 };
 
 constexpr int    kMaxFmcsExecutorsPerRunner = 8;
@@ -192,7 +191,6 @@ struct DeviceRequirements {
   size_t pairInputCount  = 0;
   size_t resultBytes     = 0;
   size_t queueBytes      = 0;
-  size_t scratchBytes    = 0;
 };
 
 struct FmcsPinnedHostBuffer {
@@ -264,7 +262,6 @@ struct FmcsExecutor {
       nvMolKit::AsyncDeviceVector<DevicePerPairInput>(deviceRequirements.pairInputCount, stream);
     deviceBuffers.resultsStorage = nvMolKit::AsyncDeviceVector<std::byte>(deviceRequirements.resultBytes, stream);
     deviceBuffers.queueStorage   = nvMolKit::AsyncDeviceVector<std::byte>(deviceRequirements.queueBytes, stream);
-    deviceBuffers.scratchStorage = nvMolKit::AsyncDeviceVector<std::byte>(deviceRequirements.scratchBytes, stream);
   }
 };
 
@@ -274,13 +271,6 @@ int validateRequestedExecutorCount(const Parameters& params) {
                                 std::to_string(kMaxFmcsExecutorsPerRunner));
   }
   return params.executorsPerRunner;
-}
-
-int validateRequestedBlockSize(const Parameters& params) {
-  if (params.blockSize == 64 || params.blockSize == 128 || params.blockSize == 256 || params.blockSize == 512) {
-    return params.blockSize;
-  }
-  throw std::invalid_argument("fMCS blockSize must be one of 64, 128, 256, or 512");
 }
 
 std::vector<PairMatchTablesDevice> uploadPairMatchTablesToStorage(const std::vector<PairMatchTablesHost>& host,
@@ -389,7 +379,7 @@ void uploadCsrAndAssemblePairInputs(const std::vector<HostPairDescriptor*>&   de
     "cudaMemcpyAsync (packed CSR)");
 }
 
-template <int blockThreads, int maxAtoms, int maxBonds, class Policy>
+template <int maxAtoms, int maxBonds>
 void launchTierAsync(std::span<const DevicePerPairInput> hostPairInputs,
                      const Parameters&                   params,
                      cudaStream_t                        stream,
@@ -421,17 +411,6 @@ void launchTierAsync(std::span<const DevicePerPairInput> hostPairInputs,
   }
   auto* dQueue = reinterpret_cast<QueuedT*>(bufs.queueStorage.data());
 
-  using ScratchT     = FmcsSubstructureScratch<maxAtoms, maxAtoms>;
-  ScratchT* dScratch = nullptr;
-  if constexpr (kUseGlobalSubstructureScratch<blockThreads, maxAtoms>) {
-    const size_t scratchBytes =
-      static_cast<size_t>(numPairs) * static_cast<size_t>(FmcsBlockConfig<blockThreads>::numGroups) * sizeof(ScratchT);
-    if (bufs.scratchStorage.size() < scratchBytes) {
-      throw std::out_of_range("Device scratch buffer is too small");
-    }
-    dScratch = reinterpret_cast<ScratchT*>(bufs.scratchStorage.data());
-  }
-
   unsigned long long timeoutClocks = 0;
   if (params.timeoutMs > 0.0f) {
     int device = 0;
@@ -443,18 +422,24 @@ void launchTierAsync(std::span<const DevicePerPairInput> hostPairInputs,
       std::max(1.0, static_cast<double>(params.timeoutMs) * static_cast<double>(clockRateKHz)));
   }
 
-  // Block size is selected from compile-time kernel specializations so the
-  // kernel's per-group state arrays stay statically sized.
+  // One block per pair; block size and shared-state footprint are fixed by
+  // the tier (FmcsKernelConfig).  The block state exceeds the default 48 KB
+  // static shared limit, so it lives in dynamic shared memory with the
+  // opt-in attribute; the tier-128 layout is sized to fit the 64 KB cap of
+  // the smallest supported architectures (see FmcsKernelConfig).
+  constexpr size_t kSharedBytes = sizeof(FmcsPairShared<maxAtoms, maxBonds>);
+  static_assert(kSharedBytes <= 64 * 1024, "fMCS block state must fit the 64 KB opt-in shared-memory limit");
   dim3 grid(static_cast<unsigned>(numPairs));
-  dim3 block(static_cast<unsigned>(blockThreads));
-  fmcsKernel<maxAtoms, maxBonds, blockThreads, Policy, kUseGlobalSubstructureScratch<blockThreads, maxAtoms>>
-    <<<grid, block, 0, stream>>>(bufs.pairInputs.data(),
-                                 dResults,
-                                 dQueue,
-                                 dScratch,
-                                 kFmcsQueueCapacity,
-                                 numPairs,
-                                 timeoutClocks);
+  dim3 block(static_cast<unsigned>(FmcsKernelConfig<maxAtoms>::blockThreads));
+  auto kernel = fmcsKernel<maxAtoms, maxBonds>;
+  checkCuda(cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(kSharedBytes)),
+            "cudaFuncSetAttribute (fmcsKernel)");
+  kernel<<<grid, block, kSharedBytes, stream>>>(bufs.pairInputs.data(),
+                                                dResults,
+                                                dQueue,
+                                                kFmcsQueueCapacity,
+                                                numPairs,
+                                                timeoutClocks);
   checkCuda(cudaGetLastError(), "fmcsKernel launch");
 }
 
@@ -532,7 +517,7 @@ std::unique_ptr<TierChunk<maxAtoms, maxBonds, Policy>> makeTierChunk(const std::
   return chunk;
 }
 
-template <int blockThreads, int maxAtoms, int maxBonds, class Policy>
+template <int maxAtoms, int maxBonds, class Policy>
 void enqueueTierChunks(const std::vector<HostPairDescriptor*>&              descs,
                        const std::vector<int>&                              indices,
                        size_t                                               chunkSize,
@@ -561,19 +546,12 @@ void enqueueTierChunks(const std::vector<HostPairDescriptor*>&              desc
     using QueuedT = QueuedSeed<maxAtoms, maxBonds, maxAtoms, maxBonds>;
     deviceRequirements.queueBytes =
       std::max(deviceRequirements.queueBytes, (end - begin) * kFmcsQueueCapacity * sizeof(QueuedT));
-    if constexpr (kUseGlobalSubstructureScratch<blockThreads, maxAtoms>) {
-      using ScratchT = FmcsSubstructureScratch<maxAtoms, maxAtoms>;
-      deviceRequirements.scratchBytes =
-        std::max(deviceRequirements.scratchBytes,
-                 (end - begin) * static_cast<size_t>(FmcsBlockConfig<blockThreads>::numGroups) * sizeof(ScratchT));
-    }
-
     TierChunkVariant<Policy> item = std::move(chunk);
     chunkQueue.push(std::move(item));
   }
 }
 
-template <int blockThreads, int maxAtoms, int maxBonds, class Policy>
+template <int maxAtoms, int maxBonds, class Policy>
 void launchTierChunk(FmcsExecutor&                                           executor,
                      std::unique_ptr<TierChunk<maxAtoms, maxBonds, Policy>>& chunk,
                      const Parameters&                                       params) {
@@ -593,7 +571,7 @@ void launchTierChunk(FmcsExecutor&                                           exe
                                  executorStream,
                                  executor.deviceBuffers.csrStorage);
 
-  launchTierAsync<blockThreads, maxAtoms, maxBonds, Policy>(
+  launchTierAsync<maxAtoms, maxBonds>(
     std::span<const DevicePerPairInput>(executor.pinnedHost.pairInputs.data(), numPairs),
     params,
     executorStream,
@@ -636,7 +614,7 @@ void drainTierChunk(FmcsExecutor&                                           exec
   }
 }
 
-template <int blockThreads, class Policy>
+template <class Policy>
 void runTierChunks(nvMolKit::ThreadSafeQueue<TierChunkVariant<Policy>>& chunkQueue,
                    size_t                                               numChunks,
                    const PinnedHostRequirements&                        pinnedRequirements,
@@ -669,7 +647,7 @@ void runTierChunks(nvMolKit::ThreadSafeQueue<TierChunkVariant<Policy>>& chunkQue
     std::visit(
       [&](auto& typedChunk) {
         if (typedChunk) {
-          launchTierChunk<blockThreads>(executor, typedChunk, params);
+          launchTierChunk(executor, typedChunk, params);
         }
       },
       chunk);
@@ -688,11 +666,11 @@ void runTierChunks(nvMolKit::ThreadSafeQueue<TierChunkVariant<Policy>>& chunkQue
   nvMolKit::runQueuedExecutorRing(executors, chunkQueue, launchChunk, drainChunk);
 }
 
-template <int blockThreads, class Policy, class InputT>
-std::vector<MCSResult> runBatchWithBlockSize(const std::vector<InputT>& a,
-                                             const std::vector<InputT>& b,
-                                             Parameters                 params,
-                                             cudaStream_t               stream) {
+template <class Policy, class InputT>
+std::vector<MCSResult> runBatch(const std::vector<InputT>& a,
+                                const std::vector<InputT>& b,
+                                Parameters                 params,
+                                cudaStream_t               stream) {
   if (a.size() != b.size()) {
     throw std::runtime_error("fMCS batch: graphsA and graphsB must have equal length");
   }
@@ -729,58 +707,34 @@ std::vector<MCSResult> runBatchWithBlockSize(const std::vector<InputT>& a,
   nvMolKit::ThreadSafeQueue<TierChunkVariant<Policy>> chunkQueue;
   PinnedHostRequirements                              pinnedRequirements;
   DeviceRequirements                                  deviceRequirements;
-  enqueueTierChunks<blockThreads, 16, 16, Policy>(descPtrs,
-                                                  tierIndices[0],
-                                                  chunkSize,
-                                                  chunkQueue,
-                                                  pinnedRequirements,
-                                                  deviceRequirements);
-  enqueueTierChunks<blockThreads, 32, 32, Policy>(descPtrs,
-                                                  tierIndices[1],
-                                                  chunkSize,
-                                                  chunkQueue,
-                                                  pinnedRequirements,
-                                                  deviceRequirements);
-  enqueueTierChunks<blockThreads, 64, 64, Policy>(descPtrs,
-                                                  tierIndices[2],
-                                                  chunkSize,
-                                                  chunkQueue,
-                                                  pinnedRequirements,
-                                                  deviceRequirements);
-  enqueueTierChunks<blockThreads, 128, 128, Policy>(descPtrs,
-                                                    tierIndices[3],
-                                                    chunkSize,
-                                                    chunkQueue,
-                                                    pinnedRequirements,
-                                                    deviceRequirements);
-  chunkQueue.close();
-  runTierChunks<blockThreads, Policy>(chunkQueue,
-                                      numChunks,
+  enqueueTierChunks<16, 16, Policy>(descPtrs,
+                                    tierIndices[0],
+                                    chunkSize,
+                                    chunkQueue,
+                                    pinnedRequirements,
+                                    deviceRequirements);
+  enqueueTierChunks<32, 32, Policy>(descPtrs,
+                                    tierIndices[1],
+                                    chunkSize,
+                                    chunkQueue,
+                                    pinnedRequirements,
+                                    deviceRequirements);
+  enqueueTierChunks<64, 64, Policy>(descPtrs,
+                                    tierIndices[2],
+                                    chunkSize,
+                                    chunkQueue,
+                                    pinnedRequirements,
+                                    deviceRequirements);
+  enqueueTierChunks<128, 128, Policy>(descPtrs,
+                                      tierIndices[3],
+                                      chunkSize,
+                                      chunkQueue,
                                       pinnedRequirements,
-                                      deviceRequirements,
-                                      params,
-                                      stream,
-                                      results);
+                                      deviceRequirements);
+  chunkQueue.close();
+  runTierChunks<Policy>(chunkQueue, numChunks, pinnedRequirements, deviceRequirements, params, stream, results);
 
   return results;
-}
-
-template <class Policy, class InputT>
-std::vector<MCSResult> runBatch(const std::vector<InputT>& a,
-                                const std::vector<InputT>& b,
-                                Parameters                 params,
-                                cudaStream_t               stream) {
-  switch (validateRequestedBlockSize(params)) {
-    case 64:
-      return runBatchWithBlockSize<64, Policy, InputT>(a, b, params, stream);
-    case 128:
-      return runBatchWithBlockSize<128, Policy, InputT>(a, b, params, stream);
-    case 256:
-      return runBatchWithBlockSize<256, Policy, InputT>(a, b, params, stream);
-    case 512:
-      return runBatchWithBlockSize<512, Policy, InputT>(a, b, params, stream);
-  }
-  throw std::logic_error("unreachable fMCS blockSize dispatch");
 }
 
 }  // namespace

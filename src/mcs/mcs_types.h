@@ -96,9 +96,6 @@ struct MCSParameters {
   /// Pairs per GPU chunk; values <= 0 use all pairs assigned to the runner.
   int batchSize = 0;
 
-  /// CUDA block size; valid values are 64, 128, 256, and 512.
-  int blockSize = 128;
-
   /// Runner threads; -1 selects automatically, otherwise clamped to at least 1.
   int workerThreads = -1;
 

@@ -35,9 +35,9 @@ using MCSPair = std::pair<std::size_t, std::size_t>;
 /// Find an exact, connected, bond-maximizing MCS for every requested pair.
 ///
 /// Each pair indexes into @p mols and results preserve pair order. With
-/// MCSParameters::requireGpu=false, only pair-specific GPU limits (more than
-/// 128 atoms/bonds, atom degree above 8, or GPU search overflow) cause that
-/// pair to be recomputed with RDKit. With requireGpu=true, those cases throw
+/// MCSParameters::requireGpu=false, only pair-specific GPU limits (128 or more
+/// atoms or bonds, atom degree above 8, or GPU search overflow) cause that pair
+/// to be recomputed with RDKit. With requireGpu=true, those cases throw
 /// std::runtime_error. Unsupported batch-wide parameters always throw
 /// std::invalid_argument. Timeouts return canceled partial results and never
 /// fall back.

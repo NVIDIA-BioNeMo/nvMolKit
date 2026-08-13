@@ -119,8 +119,6 @@ class MCSConfig:
     Args:
         batchSize: Optional GPU batch chunk size. ``0`` processes each
             nonempty size tier as one chunk.
-        blockSize: CUDA threads per fMCS pair block. Supported values are
-            ``64``, ``128``, ``256``, and ``512``.
         workerThreads: GPU runner threads per GPU. ``-1`` autoselects.
         preprocessingThreads: CPU threads for pair preprocessing. ``-1``
             autoselects.
@@ -133,7 +131,6 @@ class MCSConfig:
     def __init__(
         self,
         batchSize: int = 0,
-        blockSize: int = 128,
         workerThreads: int = -1,
         preprocessingThreads: int = -1,
         executorsPerRunner: int = -1,
@@ -141,7 +138,6 @@ class MCSConfig:
     ) -> None:
         """Initialize GPU execution settings."""
         self.batchSize = int(batchSize)
-        self.blockSize = int(blockSize)
         self.workerThreads = int(workerThreads)
         self.preprocessingThreads = int(preprocessingThreads)
         self.executorsPerRunner = int(executorsPerRunner)
@@ -151,7 +147,6 @@ class MCSConfig:
         """Return a JSON-serializable dictionary of this object's fields."""
         return {
             "batchSize": self.batchSize,
-            "blockSize": self.blockSize,
             "workerThreads": self.workerThreads,
             "preprocessingThreads": self.preprocessingThreads,
             "executorsPerRunner": self.executorsPerRunner,
@@ -162,7 +157,6 @@ class MCSConfig:
         """Return keyword arguments accepted by :func:`findMCS`."""
         return {
             "batch_size": self.batchSize,
-            "block_size": self.blockSize,
             "worker_threads": self.workerThreads,
             "preprocessing_threads": self.preprocessingThreads,
             "executors_per_runner": self.executorsPerRunner,
@@ -174,7 +168,6 @@ class MCSConfig:
         """Create an :class:`MCSConfig` from a dictionary produced by :meth:`to_dict`."""
         known = {
             "batchSize",
-            "blockSize",
             "workerThreads",
             "preprocessingThreads",
             "executorsPerRunner",
@@ -253,7 +246,6 @@ def findMCS(
     timeout_seconds: int = 0,
     config: MCSConfig | None = None,
     batch_size: int = 0,
-    block_size: int = 128,
     worker_threads: int = -1,
     preprocessing_threads: int = -1,
     executors_per_runner: int = -1,
@@ -287,8 +279,8 @@ def findMCS(
     second_molecule_index)`` atom or bond index pairs.
 
     Fallback behavior:
-        Molecule pairs outside the native GPU limits (currently more than 128
-        atoms, more than 128 bonds, or atom degree greater than 8), and pairs
+        Molecule pairs outside the native GPU limits (currently 128 or more
+        atoms or bonds, or atom degree greater than 8), and pairs
         whose GPU search queue overflows, transparently use RDKit on the CPU.
         Set ``require_gpu=True`` to raise instead.  This fallback is
         pair-specific; unsupported search options listed below raise for the
@@ -356,8 +348,6 @@ def findMCS(
             be combined with explicit GPU execution keyword options.
         batch_size: Optional GPU batch chunk size. ``0`` processes each
             nonempty size tier as one chunk.
-        block_size: CUDA threads per fMCS pair block. Supported values are
-            ``64``, ``128``, ``256``, and ``512``.
         worker_threads: GPU runner threads per GPU. ``-1`` autoselects.
         preprocessing_threads: CPU threads for pair preprocessing. ``-1``
             autoselects.
@@ -376,8 +366,6 @@ def findMCS(
         explicit_options = []
         if batch_size != 0:
             explicit_options.append("batch_size")
-        if block_size != 128:
-            explicit_options.append("block_size")
         if worker_threads != -1:
             explicit_options.append("worker_threads")
         if preprocessing_threads != -1:
@@ -390,7 +378,6 @@ def findMCS(
             joined = ", ".join(explicit_options)
             raise ValueError(f"config cannot be combined with explicit GPU execution options: {joined}")
         batch_size = config.batchSize
-        block_size = config.blockSize
         worker_threads = config.workerThreads
         preprocessing_threads = config.preprocessingThreads
         executors_per_runner = config.executorsPerRunner
@@ -446,7 +433,6 @@ def findMCS(
             "require_gpu": bool(require_gpu),
             "timeout_seconds": int(timeout_seconds),
             "batch_size": int(batch_size),
-            "block_size": int(block_size),
             "worker_threads": int(worker_threads),
             "preprocessing_threads": int(preprocessing_threads),
             "executors_per_runner": int(executors_per_runner),
