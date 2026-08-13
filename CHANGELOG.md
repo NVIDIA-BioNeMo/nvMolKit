@@ -21,7 +21,8 @@ nvMolKit 0.6.0 adds two new GPU-accelerated capabilities: Maximum Common Substru
 - Butina clustering results now match RDKit exactly, with deterministic tie-breaking and cluster ordering, by @Matthew-Neba ([#241](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/241))
 - New DFS-based substructure search backend, up to 2x faster end to end, with reduced host-device transfer overhead ([#244](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/244))
 - Conformer RMSD can now return a square distance matrix (`output_format="square"`) for direct use with downstream clustering APIs ([a26ae9c](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/a26ae9cb9600e69ea015abfa024fac0fd47397c0))
-- Performance improvements to conformer RMSD kernels, and reduced per-call launch overhead in similarity computations, by @mooreneural ([ea09e2d](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/ea09e2d8291c747b9ccdf4521f89637ebe2c3bb7))
+- Performance improvements to conformer RMSD kernels by @mooreneural ([ea09e2d](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/ea09e2d8291c747b9ccdf4521f89637ebe2c3bb7))
+- Reduced per-call launch overhead in similarity computations by @mooreneural ([ea09e2d](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/ea09e2d8291c747b9ccdf4521f89637ebe2c3bb7))
 
 ### Bug Fixes
 - All bug fixes from the [v0.5.1 patch release](https://github.com/NVIDIA-BioNeMo/nvMolKit/releases/tag/v0.5.1), covering ETKDG conformer generation, Morgan fingerprints, fused Butina clustering, TFD, SMARTS handling, MMFF/UFF convergence, and pip packaging
