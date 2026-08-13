@@ -21,7 +21,7 @@ nvMolKit 0.6.0 adds two new GPU-accelerated capabilities: Maximum Common Substru
 - Butina clustering results now match RDKit exactly, with deterministic tie-breaking and cluster ordering, by @Matthew-Neba ([#241](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/241))
 - New DFS-based substructure search backend, up to 2x faster end to end, with reduced host-device transfer overhead ([#244](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/244))
 - Conformer RMSD can now return a square distance matrix (`output_format="square"`) for direct use with downstream clustering APIs ([a26ae9c](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/a26ae9cb9600e69ea015abfa024fac0fd47397c0))
-- Performance improvements to conformer RMSD kernels by @mooreneural ([ea09e2d](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/ea09e2d8291c747b9ccdf4521f89637ebe2c3bb7))
+- Performance improvements to conformer RMSD kernels, and reduced per-call launch overhead in similarity computations, by @mooreneural ([ea09e2d](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/ea09e2d8291c747b9ccdf4521f89637ebe2c3bb7))
 
 ### Bug Fixes
 - All bug fixes from the [v0.5.1 patch release](https://github.com/NVIDIA-BioNeMo/nvMolKit/releases/tag/v0.5.1), covering ETKDG conformer generation, Morgan fingerprints, fused Butina clustering, TFD, SMARTS handling, MMFF/UFF convergence, and pip packaging
@@ -49,7 +49,7 @@ nvMolKit 0.5.1 is a bug fix and quality-of-life release.
 
 ### Bug Fixes
 - Fix pip wheels failing to import in minimal manylinux/CUDA containers ([#174](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/174)).
-- Fix incorrect TFD values for molecules with very large conformer sets and avoid invalid values for empty ring-torsion cases ([d265234](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/d265234ca47423a0635c3fe4949086738c10fb08)).
+- Fix incorrect TFD values for molecules with very large conformer sets and avoid invalid values for empty ring-torsion cases, by @mooreneural ([d265234](https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/d265234ca47423a0635c3fe4949086738c10fb08)).
 - Fix MMFF/UFF convergence parity with RDKit 2026.03+ for force fields with negative intermediate energies, by @mooreneural ([rdkit/rdkit#9298](https://github.com/rdkit/rdkit/issues/9298)).
 - Fix empty Morgan fingerprints when every molecule in a batch exceeded the GPU size buckets ([#195](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/195)).
 - Fix rare one-bit Morgan fingerprint mismatches in multi-round GPU batches ([#197](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/197)).
