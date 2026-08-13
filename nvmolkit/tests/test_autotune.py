@@ -332,10 +332,10 @@ def test_default_substruct_search_space_caps_per_pool():
 def test_default_mcs_search_space_covers_supported_execution_settings():
     space = _default_mcs_search_space(num_gpus=4, cpus=16)
 
-    assert space["batchSize"] == [0, 64, 128, 256, 512]
+    assert space["batchSize"] == [128, 256, 512, 1024, 2048, 4096]
     assert space["workerThreads"] == (1, 4)
     assert space["preprocessingThreads"] == (1, 16)
-    assert space["executorsPerRunner"] == (1, 8)
+    assert space["executorsPerRunner"] == (1, 4)
 
 
 class _RecordingTrial:
