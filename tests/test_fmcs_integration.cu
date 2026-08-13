@@ -951,6 +951,22 @@ TEST(FMCSFallback, DegreeAboveEightRejectedWhenGpuRequired) {
   EXPECT_THROW((void)nvMolKit::findMCSBatch(mols, pairs, nullptr, params), std::runtime_error);
 }
 
+TEST(FMCSFallback, Size128RejectedWhenGpuRequired) {
+  auto chain = std::unique_ptr<RDKit::ROMol>(RDKit::SmilesToMol(std::string(128, 'C')));
+  ASSERT_NE(chain, nullptr);
+  ASSERT_EQ(chain->getNumAtoms(), 128u);
+  ASSERT_EQ(chain->getNumBonds(), 127u);
+
+  const std::vector<const RDKit::ROMol*> mols{chain.get()};
+  const std::vector<MCSPair>             pairs{
+                {0, 0}
+  };
+  MCSParameters params;
+  params.requireGpu = true;
+
+  EXPECT_THROW((void)nvMolKit::findMCSBatch(mols, pairs, nullptr, params), std::runtime_error);
+}
+
 constexpr RingConfig kNoRing{false, false, "NoRing"};
 
 std::string integrationParamName(const ::testing::TestParamInfo<FmcsIntegrationParams>& info) {

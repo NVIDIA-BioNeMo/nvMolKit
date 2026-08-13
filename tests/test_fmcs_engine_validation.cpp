@@ -344,35 +344,40 @@ TEST(FMCSTiers, MaxSize64) {
   expectFullSelfPair(r, p);
 }
 
-TEST(FMCSTiers, MaxSize128) {
-  const auto p = path(128);
+TEST(FMCSTiers, MaxSize127) {
+  const auto p = path(127);
   auto       r = findSingleMCES(p, p);
   expectFullSelfPair(r, p);
 }
 
-TEST(FMCSBlockSize, SupportedSpecializationsMatchDefault) {
-  const auto p = path(32);
-  for (int blockSize : {64, 128, 256, 512}) {
-    Parameters params;
-    params.blockSize = blockSize;
-    auto r           = findSingleMCES(p, p, params);
-    expectFullSelfPair(r, p);
-  }
+TEST(FMCSOverflow, RejectsSize128) {
+  const auto atoms128   = path(128);
+  auto       atomResult = findSingleMCES(atoms128, atoms128);
+  EXPECT_TRUE(atomResult.overflowed);
+  EXPECT_EQ(atomResult.numCommonEdges, 0);
+  EXPECT_EQ(atomResult.numCommonVertices, 0);
+
+  std::vector<std::pair<std::size_t, std::size_t>> edges;
+  for (std::size_t atom = 0; atom + 1 < 127; ++atom)
+    edges.emplace_back(atom, atom + 1);
+  edges.emplace_back(0, 126);
+  edges.emplace_back(0, 2);
+  const auto bonds128   = mcs::buildGraphFromEdges(127, std::move(edges));
+  auto       bondResult = findSingleMCES(bonds128, bonds128);
+  EXPECT_TRUE(bondResult.overflowed);
+  EXPECT_EQ(bondResult.numCommonEdges, 0);
+  EXPECT_EQ(bondResult.numCommonVertices, 0);
 }
 
-TEST(FMCSBlockSize, Block512SupportsTier128WithGlobalScratch) {
-  const auto p = path(128);
+// A nonzero timeout routes tiers <= 64 to the production kernel instead of
+// the fast block-per-pair kernel; keep that path covered with a timeout far
+// too generous to actually fire.
+TEST(FMCSTiers, GenerousTimeoutMatchesFastKernelResult) {
+  const auto p = path(32);
   Parameters params;
-  params.blockSize = 512;
+  params.timeoutMs = 60000.0f;
   auto r           = findSingleMCES(p, p, params);
   expectFullSelfPair(r, p);
-}
-
-TEST(FMCSBlockSize, RejectsOneWarpBlockSize) {
-  const auto p = path(8);
-  Parameters params;
-  params.blockSize = 32;
-  EXPECT_THROW((void)mcs::fmcs::findMCESfMCSBatch({p}, {p}, params), std::invalid_argument);
 }
 
 TEST(FMCSInputValidation, RejectsDegreeAboveEight) {
@@ -582,7 +587,7 @@ TEST(FMCSBatch, OverflowPairDoesNotBlockNeighbors) {
 // ---------------------------------------------------------------------------
 
 TEST(FMCSOverflow, GraphTooLargeFlagSet) {
-  // Tier cap is 128 atoms / 128 bonds.  Build a path with 200 atoms
+  // Tier caps are fewer than 128 atoms and bonds. Build a path with 200 atoms
   // (199 bonds) -- exceeds tier 128 in atoms AND bonds.
   const auto p = path(200);
   auto       r = findSingleMCES(p, p);
@@ -601,7 +606,7 @@ TEST(FMCSOverflow, TargetTooLargeFlagSetEvenWhenQueryFits) {
 }
 
 TEST(FMCSTimeout, PartialResultReturned) {
-  const auto p = path(128);
+  const auto p = path(127);
   Parameters params;
   params.timeoutMs = 0.0001f;
 

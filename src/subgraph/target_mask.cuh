@@ -43,6 +43,7 @@ template <> struct TargetMask<32> {
 
   __device__ __forceinline__ void clear() { bits = 0; }
   __device__ __forceinline__ bool empty() const { return bits == 0; }
+  __device__ __forceinline__ bool test(int bit) const { return ((bits >> bit) & 1u) != 0; }
   __device__ __forceinline__ void set(int bit) { bits |= 1u << bit; }
   __device__ __forceinline__ void reset(int bit) { bits &= ~(1u << bit); }
   /// Branch-free conditional set: @p value must be 0 or 1.
@@ -61,6 +62,7 @@ template <> struct TargetMask<64> {
 
   __device__ __forceinline__ void clear() { lo = 0; }
   __device__ __forceinline__ bool empty() const { return lo == 0; }
+  __device__ __forceinline__ bool test(int bit) const { return ((lo >> bit) & 1ULL) != 0; }
   __device__ __forceinline__ void set(int bit) { lo |= 1ULL << bit; }
   __device__ __forceinline__ void reset(int bit) { lo &= ~(1ULL << bit); }
   /// Branch-free conditional set: @p value must be 0 or 1.
@@ -82,6 +84,7 @@ template <> struct TargetMask<128> {
 
   __device__ __forceinline__ void clear() { lo = hi = 0; }
   __device__ __forceinline__ bool empty() const { return (lo | hi) == 0; }
+  __device__ __forceinline__ bool test(int bit) const { return (((bit < 64 ? lo : hi) >> (bit & 63)) & 1ULL) != 0; }
   __device__ __forceinline__ void set(int bit) {
     if (bit < 64) {
       lo |= 1ULL << bit;

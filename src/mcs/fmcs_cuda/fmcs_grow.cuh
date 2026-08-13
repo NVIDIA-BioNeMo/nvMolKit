@@ -69,7 +69,9 @@ __device__ __forceinline__ void seedAddNewBondWithinThread(Seed<maxAtoms, maxBon
 template <int maxAtoms, int maxBonds, class GroupT>
 __device__ __forceinline__ bool fillNewBondsCooperative(const GroupT&                   group,
                                                         const Seed<maxAtoms, maxBonds>& seed,
-                                                        const DeviceCsrView&            queryTopology,
+                                                        const std::uint8_t*             bondEndpointsU,
+                                                        const std::uint8_t*             bondEndpointsV,
+                                                        int                             numQueryBonds,
                                                         NewBond*                        outBonds,
                                                         int*                            outCount,
                                                         int                             maxNewBonds) {
@@ -86,16 +88,15 @@ __device__ __forceinline__ bool fillNewBondsCooperative(const GroupT&           
     *outCount = 0;
   group.sync();
 
-  for (int q = laneRank; q < queryTopology.numBonds; q += laneCount) {
+  for (int q = laneRank; q < numQueryBonds; q += laneCount) {
     // Excluded check first (cheapest).
     const BondWord excludedBondsWord = seed.excludedBonds[q / kBondBitsPerWord];
     if ((excludedBondsWord >> (q % kBondBitsPerWord)) & 1)
       continue;
 
-    // Decode this query bond's endpoints.
-    const std::uint32_t queryEndpoints = queryTopology.bondEndpoints[q];
-    const int           queryEndpointU = static_cast<int>(queryEndpoints >> kBondEndpointShift);
-    const int           queryEndpointV = static_cast<int>(queryEndpoints & kBondEndpointMask);
+    // This query bond's endpoints (byte-packed, typically block-shared).
+    const int queryEndpointU = bondEndpointsU[q];
+    const int queryEndpointV = bondEndpointsV[q];
 
     // Bond is a "new boundary" candidate iff at least one endpoint
     // was added in the most recent grow step.

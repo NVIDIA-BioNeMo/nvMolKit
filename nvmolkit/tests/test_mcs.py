@@ -143,7 +143,6 @@ def test_pairs_mode_chunked_multi_executor_matches_rdkit():
         mode="pairs",
         pairs=pairs,
         batch_size=1,
-        block_size=64,
         executors_per_runner=2,
     )
 
@@ -160,7 +159,6 @@ def test_pairs_mode_threaded_gpu_options_match_rdkit():
         mode="pairs",
         pairs=pairs,
         batch_size=1,
-        block_size=256,
         worker_threads=2,
         preprocessing_threads=2,
         executors_per_runner=1,
@@ -176,7 +174,6 @@ def test_config_path_matches_rdkit_and_rejects_duplicate_execution_options():
     pairs = [(0, 1), (2, 3)]
     config = MCSConfig(
         batchSize=1,
-        blockSize=64,
         workerThreads=1,
         preprocessingThreads=1,
         executorsPerRunner=1,
@@ -188,7 +185,7 @@ def test_config_path_matches_rdkit_and_rejects_duplicate_execution_options():
     _assert_matches_rdkit(result, mols)
 
     with pytest.raises(ValueError, match="config cannot be combined"):
-        findMCS(mols, mode="pairs", pairs=pairs, config=config, block_size=256)
+        findMCS(mols, mode="pairs", pairs=pairs, config=config, batch_size=2)
 
 
 def test_all_pairs_default_is_upper_triangle_with_diagonal():
@@ -267,8 +264,6 @@ def test_invalid_mode_and_optional_arguments():
         findMCS(mols, mode="pairs", pairs=[(0, 1)], atom_compare="mass")
     with pytest.raises(ValueError, match="Unsupported bond_compare"):
         findMCS(mols, mode="pairs", pairs=[(0, 1)], bond_compare="shape")
-    with pytest.raises(ValueError, match="blockSize"):
-        findMCS(mols, mode="pairs", pairs=[(0, 1)], block_size=32)
 
 
 def test_out_of_range_pair_raises_from_native_layer():
@@ -420,23 +415,6 @@ def test_special_molecule_semantics_match_rdkit(smiles_a, smiles_b, kwargs, expe
     assert (result[0].num_atoms, result[0].num_bonds) == (expected_atoms, expected_bonds)
 
 
-@pytest.mark.parametrize("block_size", [64, 128, 256, 512])
-def test_supported_block_sizes_match_rdkit(block_size):
-    mols = _mols(["CCOC(=O)N", "CCNC(=O)O"])
-    result = findMCS(
-        mols,
-        mode="pairs",
-        pairs=[(0, 1)],
-        block_size=block_size,
-        worker_threads=1,
-        preprocessing_threads=1,
-        executors_per_runner=1,
-        require_gpu=True,
-    )
-
-    _assert_matches_rdkit(result, mols)
-
-
 def test_higher_dispatch_tiers_and_pair_orientation_match_rdkit():
     cases = [
         (
@@ -519,6 +497,15 @@ def test_rdkit_fallback_is_transparent_and_require_gpu_rejects_it():
 
     with pytest.raises(RuntimeError, match="GPU MCS path unavailable"):
         findMCS([hypervalent], mode="pairs", pairs=[(0, 0)], require_gpu=True)
+
+
+def test_require_gpu_rejects_size_128():
+    chain = Chem.MolFromSmiles("C" * 128)
+    assert chain.GetNumAtoms() == 128
+    assert chain.GetNumBonds() == 127
+
+    with pytest.raises(RuntimeError, match="GPU MCS path unavailable"):
+        findMCS([chain], mode="pairs", pairs=[(0, 0)], require_gpu=True)
 
 
 @pytest.mark.parametrize(

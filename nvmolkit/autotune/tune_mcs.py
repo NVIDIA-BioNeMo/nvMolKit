@@ -40,7 +40,6 @@ def _default_mcs_search_space(num_gpus: int, cpus: int) -> dict:
     per_gpu_worker_max = max(1, min(8, cpus // max(1, num_gpus)))
     return {
         "batchSize": [0, 64, 128, 256, 512],
-        "blockSize": [64, 128, 256, 512],
         "workerThreads": (1, per_gpu_worker_max),
         "preprocessingThreads": (1, cpus),
         "executorsPerRunner": (1, 8),
@@ -123,7 +122,6 @@ def tune_mcs(
     def make_config(values: dict[str, Any]) -> MCSConfig:
         return MCSConfig(
             batchSize=int(values.get("batchSize", 0)),
-            blockSize=int(values.get("blockSize", 128)),
             workerThreads=int(values.get("workerThreads", -1)),
             preprocessingThreads=int(values.get("preprocessingThreads", -1)),
             executorsPerRunner=int(values.get("executorsPerRunner", -1)),

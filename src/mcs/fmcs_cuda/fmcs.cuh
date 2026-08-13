@@ -54,10 +54,6 @@ inline constexpr int kMaxNeighborsPerAtom = 8;
 /// The objective (connected MCES, MaximizeBonds, Threshold=1) is baked
 /// into the algorithm itself and is not exposed as a knob.
 struct Parameters {
-  /// CUDA block size for the per-pair kernel. Supported: 64, 128, 256, 512.
-  /// Tier-128 searches at 512 threads place substructure scratch in global
-  /// memory; smaller tiers retain shared-memory scratch.
-  int   blockSize          = 128;
   /// Per-pair wall timeout in milliseconds.  0 = no timeout.
   float timeoutMs          = 0;
   /// Max pairs per kernel launch in the batch API.  0 = no explicit limit;

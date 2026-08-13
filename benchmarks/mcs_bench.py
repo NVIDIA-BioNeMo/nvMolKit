@@ -99,7 +99,6 @@ def _normalize_config_row(row: dict, args: argparse.Namespace) -> dict:
     config_row = {
         "num_pairs": int(_row_value(row, "num_pairs", args.num_pairs)),
         "batch_size": int(_row_value(row, "batch_size", args.batch_size)),
-        "block_size": int(_row_value(row, "block_size", args.block_size)),
         "workers": int(_row_value(row, "workers", args.workers)),
         "prep_threads": int(_row_value(row, "prep_threads", args.prep_threads)),
         "executors_per_runner": int(_row_value(row, "executors_per_runner", args.executors_per_runner)),
@@ -113,8 +112,6 @@ def _normalize_config_row(row: dict, args: argparse.Namespace) -> dict:
     }
     if config_row["num_pairs"] <= 0:
         raise ValueError("num_pairs must be positive")
-    if config_row["block_size"] not in {64, 128, 256, 512}:
-        raise ValueError("block_size must be one of 64, 128, 256, or 512")
     if config_row["executors_per_runner"] != -1 and not 1 <= config_row["executors_per_runner"] <= 8:
         raise ValueError("executors_per_runner must be -1 or between 1 and 8")
     if config_row["num_gpus"] <= 0:
@@ -302,7 +299,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--config",
         help=(
             "Path to config dataframe (.csv/.pkl/.pickle/.parquet) with optional columns: num_pairs, "
-            "batch_size, block_size, workers, prep_threads, executors_per_runner, num_gpus, atom_compare, "
+            "batch_size, workers, prep_threads, executors_per_runner, num_gpus, atom_compare, "
             "bond_compare, match_valences, match_formal_charge, ring_matches_ring_only, timeout_seconds"
         ),
     )
@@ -331,7 +328,6 @@ def _build_parser() -> argparse.ArgumentParser:
         extra_help="The RDKit MCS loop stops at the next completed molecule-pair boundary.",
     )
     parser.add_argument("--batch_size", "-b", type=int, default=0, help="nvMolKit batch size (default: all pairs)")
-    parser.add_argument("--block_size", type=int, choices=[64, 128, 256, 512], default=128)
     parser.add_argument("--workers", type=int, default=-1, help="nvMolKit GPU worker threads per GPU (-1 = auto)")
     parser.add_argument("--prep_threads", type=int, default=-1, help="nvMolKit preprocessing threads (-1 = auto)")
     parser.add_argument(
@@ -360,7 +356,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--autotune_load",
         default=None,
         help=(
-            "Path to a previously saved MCSConfig JSON. Overrides batch_size, block_size, workers, "
+            "Path to a previously saved MCSConfig JSON. Overrides batch_size, workers, "
             "prep_threads, executors_per_runner, and num_gpus. Single-config mode only."
         ),
     )
@@ -475,7 +471,6 @@ def main() -> None:
         config_source = "dataframe" if args.config else "cli"
         applied_config = MCSConfig(
             batchSize=config_row["batch_size"],
-            blockSize=config_row["block_size"],
             workerThreads=config_row["workers"],
             preprocessingThreads=config_row["prep_threads"],
             executorsPerRunner=config_row["executors_per_runner"],
@@ -634,7 +629,6 @@ def main() -> None:
                     "ring_matches_ring_only": config_row["ring_matches_ring_only"],
                     "timeout_seconds": config_row["timeout_seconds"],
                     "batch_size": applied_config.batchSize if is_nvmolkit else "N/A",
-                    "block_size": applied_config.blockSize if is_nvmolkit else "N/A",
                     "workers": applied_config.workerThreads if is_nvmolkit else "N/A",
                     "prep_threads": applied_config.preprocessingThreads if is_nvmolkit else "N/A",
                     "executors_per_runner": applied_config.executorsPerRunner if is_nvmolkit else "N/A",
