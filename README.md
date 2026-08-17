@@ -24,7 +24,7 @@ Conda is the recommended way to install nvMolKit, matching the recommended distr
 you have a variant of conda installed and activated, such as [Miniconda](https://docs.conda.io/en/latest/miniconda.html) 
 or [Miniforge](https://conda-forge.org/download/).
 
-nvMolKit v0.5.0 supports RDKit 2025.03.1 through 2026.03.1. To install:
+nvMolKit v0.6.0 supports RDKit 2025.09.1 through 2026.03.5. To install:
 
 ```bash
 conda install -c conda-forge nvmolkit
@@ -59,7 +59,7 @@ Replace `cu128` with another CUDA 12 backend from the PyTorch install page if th
 compatible with your driver.
 
 The wheel published to PyPI is built against a single RDKit release per
-nvMolKit version (RDKit 2026.03.1 for nvMolKit v0.5.0), due to versioning
+nvMolKit version (RDKit 2026.03.5 for nvMolKit v0.6.0), due to versioning
 limitations in PyPI's dependency management system.
 
 Use this path if you do not have a constraint on which RDKit version to use;
@@ -78,7 +78,7 @@ pip install nvmolkit==${NVMOLKIT_VERSION}+rdkit${RDKIT_VERSION} \
     --extra-index-url https://nvidia-bionemo.github.io/nvMolKit/wheels/rdkit${RDKIT_VERSION}/simple/
 ```
 
-Replace `2025.9.6` with the RDKit version you want. Variants published for nvMolKit v0.5.0 include every version between 2025.03.6 and 2026.03.1.
+Replace `2025.9.6` with the RDKit version you want. Variants published for nvMolKit v0.6.0 include every version between 2025.09.1 and 2026.03.5.
 
 
 ### Installation from Source
@@ -146,7 +146,7 @@ conda create --name nvmolkit_dev_py312 python=3.12.1
 conda activate nvmolkit_dev_py312
 
 # Install RDKit with development headers
-conda install -c conda-forge rdkit=2025.03.6 rdkit-dev=2025.03.6
+conda install -c conda-forge rdkit=2025.09.1 librdkit-dev=2025.09.1
 
 # Install Boost subpackages in case RDKit install did not include them transitively
 conda install -c conda-forge libboost libboost-python libboost-devel libboost-headers libboost-python-devel
@@ -244,8 +244,8 @@ docker build -f admin/container/manylinux_2_28_cuda12.Dockerfile \
   -t nvmolkit-manylinux-cuda12:test .
 pip install cibuildwheel
 CIBW_MANYLINUX_X86_64_IMAGE=nvmolkit-manylinux-cuda12:test \
-  RDKIT_VERSION=2026.3.1 \
-  bash admin/deploy/build_pip_wheels.sh 2026.3.1 wheelhouse
+  RDKIT_VERSION=2026.3.5 \
+  bash admin/deploy/build_pip_wheels.sh 2026.3.5 wheelhouse
 ```
 
 To narrow the matrix while iterating, set `CIBW_BUILD=cp312-manylinux_x86_64` (or whichever python tag you care about) before invoking the script. Wheels land in `wheelhouse/`.

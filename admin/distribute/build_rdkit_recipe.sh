@@ -33,7 +33,7 @@
 #   ./build_rdkit_recipe.sh <rdkit_pypi_tag> <python_version> <out_dir>
 #
 # Arguments:
-#   rdkit_pypi_tag : kuelumbus/rdkit-pypi git tag (e.g., "2026.03.01"). Look
+#   rdkit_pypi_tag : kuelumbus/rdkit-pypi git tag (e.g., "2026.03.5"). Look
 #                    up from admin/distribute/rdkit_build_matrix.yaml.
 #   python_version : CPython minor version, e.g., "3.12". Must be installed
 #                    and available as `python<version>`.
