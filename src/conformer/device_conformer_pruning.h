@@ -47,7 +47,7 @@ void conformerPruneMaskGpu(cuda::std::span<const double>                  coords
                            cuda::std::span<const ConformerPruningMolInfo> molInfos,
                            cuda::std::span<const int32_t>                 atomMaps,
                            cuda::std::span<uint8_t>                       conflicts,
-                           cuda::std::span<uint32_t>                      states,
+                           cuda::std::span<uint8_t>                       selected,
                            int                                            totalPairs,
                            double                                         threshold,
                            cudaStream_t                                   stream);

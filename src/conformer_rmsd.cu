@@ -370,15 +370,6 @@ namespace {
 
 using detail::ConformerPruningMolInfo;
 
-constexpr uint32_t kPruningUndecided = 0;
-constexpr uint32_t kPruningFrontier  = 1;
-constexpr uint32_t kPruningKept      = 2;
-constexpr uint32_t kPruningRejected  = 3;
-
-__device__ __forceinline__ uint32_t loadState(uint32_t* state) {
-  return atomicAdd(state, uint32_t{0});
-}
-
 __global__ void conformerConflictKernel(const double* __restrict__ coords,
                                         const int32_t* __restrict__ atomStarts,
                                         const int32_t* __restrict__ groupedConfIds,
@@ -438,74 +429,30 @@ __global__ void conformerConflictKernel(const double* __restrict__ coords,
 
 __global__ void selectOrderedConformersKernel(const ConformerPruningMolInfo* __restrict__ molInfos,
                                               const uint8_t* __restrict__ conflicts,
-                                              uint32_t* __restrict__ states) {
+                                              uint8_t* __restrict__ selected) {
   const int                     molIdx = blockIdx.x;
   const ConformerPruningMolInfo info   = molInfos[molIdx];
-  if (info.confCount == 0) {
-    return;
-  }
+  __shared__ int                hasConflict;
 
-  __shared__ int foundFrontier;
-  while (true) {
+  // Candidate order is sequential, but the block checks all earlier kept
+  // conformers in parallel.
+  for (int candidate = 0; candidate < info.confCount; ++candidate) {
     if (threadIdx.x == 0) {
-      foundFrontier = 0;
+      hasConflict = 0;
     }
     __syncthreads();
 
-    // A frontier contains every candidate that has no conflict with an
-    // earlier unresolved candidate. Its members can be accepted together.
-    for (int rank = threadIdx.x; rank < info.confCount; rank += blockDim.x) {
-      const int stateIdx = info.confBegin + rank;
-      if (loadState(&states[stateIdx]) != kPruningUndecided) {
-        continue;
-      }
-      bool hasEarlierLiveConflict = false;
-      for (int earlier = 0; earlier < rank; ++earlier) {
-        const uint32_t earlierState = loadState(&states[info.confBegin + earlier]);
-        if (earlierState != kPruningUndecided && earlierState != kPruningFrontier) {
-          continue;
-        }
-        const int pairIdx = info.pairBegin + rank * (rank - 1) / 2 + earlier;
-        if (conflicts[pairIdx] != 0) {
-          hasEarlierLiveConflict = true;
-          break;
-        }
-      }
-      if (!hasEarlierLiveConflict) {
-        atomicExch(&states[stateIdx], kPruningFrontier);
-        atomicExch(&foundFrontier, 1);
+    for (int earlier = threadIdx.x; earlier < candidate; earlier += blockDim.x) {
+      const int earlierIdx = info.confBegin + earlier;
+      const int pairIdx    = info.pairBegin + candidate * (candidate - 1) / 2 + earlier;
+      if (selected[earlierIdx] != 0 && conflicts[pairIdx] != 0) {
+        atomicExch(&hasConflict, 1);
       }
     }
     __syncthreads();
 
-    if (foundFrontier == 0) {
-      return;
-    }
-
-    // Reject unresolved candidates that conflict with this frontier.
-    for (int rank = threadIdx.x; rank < info.confCount; rank += blockDim.x) {
-      const int stateIdx = info.confBegin + rank;
-      if (loadState(&states[stateIdx]) != kPruningUndecided) {
-        continue;
-      }
-      for (int earlier = 0; earlier < rank; ++earlier) {
-        if (loadState(&states[info.confBegin + earlier]) != kPruningFrontier) {
-          continue;
-        }
-        const int pairIdx = info.pairBegin + rank * (rank - 1) / 2 + earlier;
-        if (conflicts[pairIdx] != 0) {
-          atomicExch(&states[stateIdx], kPruningRejected);
-          break;
-        }
-      }
-    }
-    __syncthreads();
-
-    // The frontier can now become part of the final ordered selection.
-    for (int rank = threadIdx.x; rank < info.confCount; rank += blockDim.x) {
-      if (loadState(&states[info.confBegin + rank]) == kPruningFrontier) {
-        atomicExch(&states[info.confBegin + rank], kPruningKept);
-      }
+    if (threadIdx.x == 0) {
+      selected[info.confBegin + candidate] = hasConflict == 0;
     }
     __syncthreads();
   }
@@ -568,7 +515,7 @@ void detail::conformerPruneMaskGpu(cuda::std::span<const double>                
                                    cuda::std::span<const ConformerPruningMolInfo> molInfos,
                                    cuda::std::span<const int32_t>                 atomMaps,
                                    cuda::std::span<uint8_t>                       conflicts,
-                                   cuda::std::span<uint32_t>                      states,
+                                   cuda::std::span<uint8_t>                       selected,
                                    const int                                      totalPairs,
                                    const double                                   threshold,
                                    cudaStream_t                                   stream) {
@@ -589,7 +536,7 @@ void detail::conformerPruneMaskGpu(cuda::std::span<const double>                
   constexpr int kSelectionBlockSize = 256;
   selectOrderedConformersKernel<<<static_cast<int>(molInfos.size()), kSelectionBlockSize, 0, stream>>>(molInfos.data(),
                                                                                                        conflicts.data(),
-                                                                                                       states.data());
+                                                                                                       selected.data());
   cudaCheckError(cudaGetLastError());
 }
 

@@ -31,8 +31,6 @@
 namespace nvMolKit {
 namespace detail {
 
-constexpr uint32_t kKeptState = 2;
-
 DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                           result,
                                         const std::vector<RDKit::ROMol*>&           mols,
                                         const RDKit::DGeomHelpers::EmbedParameters& params) {
@@ -106,12 +104,12 @@ DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                       
   AsyncDeviceVector<int32_t>                 groupedConfIdsDevice(groupedConfIds.size());
   AsyncDeviceVector<int32_t>                 atomMapsDevice(atomMaps.size());
   AsyncDeviceVector<uint8_t>                 conflicts(static_cast<size_t>(numPairs));
-  AsyncDeviceVector<uint32_t>                states(numConformers);
+  AsyncDeviceVector<uint8_t>                 selected(numConformers);
   molInfoDevice.copyFromHost(molInfo);
   groupedConfIdsDevice.copyFromHost(groupedConfIds);
   atomMapsDevice.copyFromHost(atomMaps);
   conflicts.zero();
-  states.zero();
+  selected.zero();
 
   conformerPruneMaskGpu(cuda::std::span<const double>(result.positions.data(), result.positions.size()),
                         cuda::std::span<const int32_t>(result.atomStarts.data(), result.atomStarts.size()),
@@ -119,18 +117,18 @@ DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                       
                         cuda::std::span<const ConformerPruningMolInfo>(molInfoDevice.data(), molInfoDevice.size()),
                         cuda::std::span<const int32_t>(atomMapsDevice.data(), atomMapsDevice.size()),
                         cuda::std::span<uint8_t>(conflicts.data(), conflicts.size()),
-                        cuda::std::span<uint32_t>(states.data(), states.size()),
+                        cuda::std::span<uint8_t>(selected.data(), selected.size()),
                         numPairs,
                         params.pruneRmsThresh,
                         nullptr);
 
-  std::vector<uint32_t> selected(states.size());
-  states.copyToHost(selected);
+  std::vector<uint8_t> selectedHost(selected.size());
+  selected.copyToHost(selectedHost);
   cudaCheckError(cudaStreamSynchronize(nullptr));
 
   std::vector<uint8_t> keep(numConformers, 0);
   for (size_t groupedIdx = 0; groupedIdx < groupedConfIds.size(); ++groupedIdx) {
-    keep[static_cast<size_t>(groupedConfIds[groupedIdx])] = selected[groupedIdx] == kKeptState;
+    keep[static_cast<size_t>(groupedConfIds[groupedIdx])] = selectedHost[groupedIdx];
   }
 
   size_t keptConformers = 0;
