@@ -18,6 +18,7 @@
 #include <cub/cub.cuh>
 #include <cuda/std/span>
 
+#include "src/conformer/device_conformer_pruning.h"
 #include "src/conformer_rmsd.h"
 #include "src/utils/cuda_error_check.h"
 
@@ -105,6 +106,8 @@ using RmsdWarpReduce = cub::WarpReduce<double>;
 
 __device__ __forceinline__ void computePairRmsd(const double* __restrict__ coordI,
                                                 const double* __restrict__ coordJ,
+                                                const int* __restrict__ atomMapI,
+                                                const int* __restrict__ atomMapJ,
                                                 const int  numAtoms,
                                                 const bool prealigned,
                                                 double*    outRmsd) {
@@ -127,9 +130,11 @@ __device__ __forceinline__ void computePairRmsd(const double* __restrict__ coord
     // ---- Simple RMSD without alignment (no centering, matches RDKit behavior) ----
     double sumSqDiff = 0.0;
     for (int a = tid; a < numAtoms; a += kRmsdBlockSize) {
-      const double dx = coordI[a * 3 + 0] - coordJ[a * 3 + 0];
-      const double dy = coordI[a * 3 + 1] - coordJ[a * 3 + 1];
-      const double dz = coordI[a * 3 + 2] - coordJ[a * 3 + 2];
+      const int    ai = atomMapI == nullptr ? a : atomMapI[a];
+      const int    aj = atomMapJ == nullptr ? a : atomMapJ[a];
+      const double dx = coordI[ai * 3 + 0] - coordJ[aj * 3 + 0];
+      const double dy = coordI[ai * 3 + 1] - coordJ[aj * 3 + 1];
+      const double dz = coordI[ai * 3 + 2] - coordJ[aj * 3 + 2];
       sumSqDiff += dx * dx + dy * dy + dz * dz;
     }
     sumSqDiff = RmsdWarpReduce(warpReduceTemp[warpId]).Sum(sumSqDiff);
@@ -151,12 +156,14 @@ __device__ __forceinline__ void computePairRmsd(const double* __restrict__ coord
   double sumIx = 0.0, sumIy = 0.0, sumIz = 0.0;
   double sumJx = 0.0, sumJy = 0.0, sumJz = 0.0;
   for (int a = tid; a < numAtoms; a += kRmsdBlockSize) {
-    sumIx += coordI[a * 3 + 0];
-    sumIy += coordI[a * 3 + 1];
-    sumIz += coordI[a * 3 + 2];
-    sumJx += coordJ[a * 3 + 0];
-    sumJy += coordJ[a * 3 + 1];
-    sumJz += coordJ[a * 3 + 2];
+    const int ai = atomMapI == nullptr ? a : atomMapI[a];
+    const int aj = atomMapJ == nullptr ? a : atomMapJ[a];
+    sumIx += coordI[ai * 3 + 0];
+    sumIy += coordI[ai * 3 + 1];
+    sumIz += coordI[ai * 3 + 2];
+    sumJx += coordJ[aj * 3 + 0];
+    sumJy += coordJ[aj * 3 + 1];
+    sumJz += coordJ[aj * 3 + 2];
   }
   sumIx = RmsdWarpReduce(warpReduceTemp[warpId]).Sum(sumIx);
   sumIy = RmsdWarpReduce(warpReduceTemp[warpId]).Sum(sumIy);
@@ -205,12 +212,14 @@ __device__ __forceinline__ void computePairRmsd(const double* __restrict__ coord
   double localH[9] = {0.0};
 
   for (int a = tid; a < numAtoms; a += kRmsdBlockSize) {
-    const double px = coordI[a * 3 + 0] - cIx;
-    const double py = coordI[a * 3 + 1] - cIy;
-    const double pz = coordI[a * 3 + 2] - cIz;
-    const double qx = coordJ[a * 3 + 0] - cJx;
-    const double qy = coordJ[a * 3 + 1] - cJy;
-    const double qz = coordJ[a * 3 + 2] - cJz;
+    const int    ai = atomMapI == nullptr ? a : atomMapI[a];
+    const int    aj = atomMapJ == nullptr ? a : atomMapJ[a];
+    const double px = coordI[ai * 3 + 0] - cIx;
+    const double py = coordI[ai * 3 + 1] - cIy;
+    const double pz = coordI[ai * 3 + 2] - cIz;
+    const double qx = coordJ[aj * 3 + 0] - cJx;
+    const double qy = coordJ[aj * 3 + 1] - cJy;
+    const double qz = coordJ[aj * 3 + 2] - cJz;
 
     localSp += px * px + py * py + pz * pz;
     localSq += qx * qx + qy * qy + qz * qz;
@@ -300,7 +309,7 @@ __global__ void conformerRmsdKernel(const double* __restrict__ coords,
   const double* coordI = coords + ci * stride;
   const double* coordJ = coords + cj * stride;
 
-  computePairRmsd(coordI, coordJ, numAtoms, prealigned, &rmsdOut[pairIdx]);
+  computePairRmsd(coordI, coordJ, nullptr, nullptr, numAtoms, prealigned, &rmsdOut[pairIdx]);
 }
 
 // ---------------------------------------------------------------------------
@@ -354,8 +363,155 @@ __global__ void conformerRmsdBatchKernel(const double* __restrict__ coords,
   const double* coordI = molCoords + ci * stride;
   const double* coordJ = molCoords + cj * stride;
 
-  computePairRmsd(coordI, coordJ, numAtoms, prealigned, &molRmsd[localPairIdx]);
+  computePairRmsd(coordI, coordJ, nullptr, nullptr, numAtoms, prealigned, &molRmsd[localPairIdx]);
 }
+
+namespace {
+
+using detail::ConformerPruningMolInfo;
+
+constexpr uint32_t kPruningUndecided = 0;
+constexpr uint32_t kPruningFrontier  = 1;
+constexpr uint32_t kPruningKept      = 2;
+constexpr uint32_t kPruningRejected  = 3;
+
+__device__ __forceinline__ uint32_t loadState(uint32_t* state) {
+  return atomicAdd(state, uint32_t{0});
+}
+
+__global__ void conformerConflictKernel(const double* __restrict__ coords,
+                                        const int32_t* __restrict__ atomStarts,
+                                        const int32_t* __restrict__ groupedConfIds,
+                                        const ConformerPruningMolInfo* __restrict__ molInfos,
+                                        const int32_t* __restrict__ atomMaps,
+                                        uint8_t* __restrict__ conflicts,
+                                        const int    numMols,
+                                        const double threshold) {
+  const int globalPairIdx = blockIdx.x;
+
+  // Pair ranges are contiguous by molecule, so a short binary search finds
+  // the molecule without storing one molecule id per pair.
+  int lo = 0;
+  int hi = numMols - 1;
+  while (lo < hi) {
+    const int mid = (lo + hi + 1) / 2;
+    if (globalPairIdx >= molInfos[mid].pairBegin) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  const ConformerPruningMolInfo info            = molInfos[lo];
+  const int                     localPairIdx    = globalPairIdx - info.pairBegin;
+  const int                     candidateRank   = static_cast<int>(floor((1.0 + sqrt(1.0 + 8.0 * localPairIdx)) / 2.0));
+  const int                     previousRank    = localPairIdx - candidateRank * (candidateRank - 1) / 2;
+  const int                     candidateConf   = groupedConfIds[info.confBegin + candidateRank];
+  const int                     previousConf    = groupedConfIds[info.confBegin + previousRank];
+  const double*                 candidateCoords = coords + static_cast<size_t>(atomStarts[candidateConf]) * 3;
+  const double*                 previousCoords  = coords + static_cast<size_t>(atomStarts[previousConf]) * 3;
+  const int*                    referenceMap    = atomMaps + info.atomMapBegin;
+
+  __shared__ double pairRmsd;
+  __shared__ int    isConflict;
+  if (threadIdx.x == 0) {
+    isConflict = 0;
+  }
+  __syncthreads();
+
+  for (int mapIdx = 0; mapIdx < info.atomMapCount; ++mapIdx) {
+    const int* probeMap = referenceMap + mapIdx * info.mappedAtomCount;
+    computePairRmsd(candidateCoords, previousCoords, referenceMap, probeMap, info.mappedAtomCount, false, &pairRmsd);
+    __syncthreads();
+    if (threadIdx.x == 0 && pairRmsd < threshold) {
+      isConflict = 1;
+    }
+    __syncthreads();
+    if (isConflict != 0) {
+      break;
+    }
+  }
+
+  if (threadIdx.x == 0 && isConflict != 0) {
+    conflicts[globalPairIdx] = 1;
+  }
+}
+
+__global__ void selectOrderedConformersKernel(const ConformerPruningMolInfo* __restrict__ molInfos,
+                                              const uint8_t* __restrict__ conflicts,
+                                              uint32_t* __restrict__ states) {
+  const int                     molIdx = blockIdx.x;
+  const ConformerPruningMolInfo info   = molInfos[molIdx];
+  if (info.confCount == 0) {
+    return;
+  }
+
+  __shared__ int foundFrontier;
+  while (true) {
+    if (threadIdx.x == 0) {
+      foundFrontier = 0;
+    }
+    __syncthreads();
+
+    // A frontier contains every candidate that has no conflict with an
+    // earlier unresolved candidate. Its members can be accepted together.
+    for (int rank = threadIdx.x; rank < info.confCount; rank += blockDim.x) {
+      const int stateIdx = info.confBegin + rank;
+      if (loadState(&states[stateIdx]) != kPruningUndecided) {
+        continue;
+      }
+      bool hasEarlierLiveConflict = false;
+      for (int earlier = 0; earlier < rank; ++earlier) {
+        const uint32_t earlierState = loadState(&states[info.confBegin + earlier]);
+        if (earlierState != kPruningUndecided && earlierState != kPruningFrontier) {
+          continue;
+        }
+        const int pairIdx = info.pairBegin + rank * (rank - 1) / 2 + earlier;
+        if (conflicts[pairIdx] != 0) {
+          hasEarlierLiveConflict = true;
+          break;
+        }
+      }
+      if (!hasEarlierLiveConflict) {
+        atomicExch(&states[stateIdx], kPruningFrontier);
+        atomicExch(&foundFrontier, 1);
+      }
+    }
+    __syncthreads();
+
+    if (foundFrontier == 0) {
+      return;
+    }
+
+    // Reject unresolved candidates that conflict with this frontier.
+    for (int rank = threadIdx.x; rank < info.confCount; rank += blockDim.x) {
+      const int stateIdx = info.confBegin + rank;
+      if (loadState(&states[stateIdx]) != kPruningUndecided) {
+        continue;
+      }
+      for (int earlier = 0; earlier < rank; ++earlier) {
+        if (loadState(&states[info.confBegin + earlier]) != kPruningFrontier) {
+          continue;
+        }
+        const int pairIdx = info.pairBegin + rank * (rank - 1) / 2 + earlier;
+        if (conflicts[pairIdx] != 0) {
+          atomicExch(&states[stateIdx], kPruningRejected);
+          break;
+        }
+      }
+    }
+    __syncthreads();
+
+    // The frontier can now become part of the final ordered selection.
+    for (int rank = threadIdx.x; rank < info.confCount; rank += blockDim.x) {
+      if (loadState(&states[info.confBegin + rank]) == kPruningFrontier) {
+        atomicExch(&states[info.confBegin + rank], kPruningKept);
+      }
+    }
+    __syncthreads();
+  }
+}
+
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Host entry points
@@ -403,6 +559,37 @@ void conformerRmsdBatchMatrixGpu(cuda::std::span<const double> coords,
                                                                       numAtomsPerMol.data(),
                                                                       numMols,
                                                                       prealigned);
+  cudaCheckError(cudaGetLastError());
+}
+
+void detail::conformerPruneMaskGpu(cuda::std::span<const double>                  coords,
+                                   cuda::std::span<const int32_t>                 atomStarts,
+                                   cuda::std::span<const int32_t>                 groupedConfIds,
+                                   cuda::std::span<const ConformerPruningMolInfo> molInfos,
+                                   cuda::std::span<const int32_t>                 atomMaps,
+                                   cuda::std::span<uint8_t>                       conflicts,
+                                   cuda::std::span<uint32_t>                      states,
+                                   const int                                      totalPairs,
+                                   const double                                   threshold,
+                                   cudaStream_t                                   stream) {
+  if (totalPairs <= 0 || molInfos.empty()) {
+    return;
+  }
+
+  conformerConflictKernel<<<totalPairs, kRmsdBlockSize, 0, stream>>>(coords.data(),
+                                                                     atomStarts.data(),
+                                                                     groupedConfIds.data(),
+                                                                     molInfos.data(),
+                                                                     atomMaps.data(),
+                                                                     conflicts.data(),
+                                                                     static_cast<int>(molInfos.size()),
+                                                                     threshold);
+  cudaCheckError(cudaGetLastError());
+
+  constexpr int kSelectionBlockSize = 256;
+  selectOrderedConformersKernel<<<static_cast<int>(molInfos.size()), kSelectionBlockSize, 0, stream>>>(molInfos.data(),
+                                                                                                       conflicts.data(),
+                                                                                                       states.data());
   cudaCheckError(cudaGetLastError());
 }
 

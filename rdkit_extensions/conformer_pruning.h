@@ -8,6 +8,9 @@ namespace RDKit {
 class ROMol;
 namespace DGeomHelpers {
 struct EmbedParameters;
+//! Atom orders used for symmetry-aware and heavy-atom conformer pruning.
+std::vector<std::vector<unsigned int>> getMolSelfMatches(
+    const ROMol &mol, const EmbedParameters &params);
 }
 class Conformer;
 } // namespace RDKit

@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include <GraphMol/DistGeomHelpers/Embedder.h>
+#include <GraphMol/MolOps.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
 
@@ -22,6 +23,7 @@
 #include <memory>
 #include <vector>
 
+#include "src/conformer/device_conformer_pruning.h"
 #include "src/conformer/device_coord_collector.h"
 #include "src/conformer/device_coord_result.h"
 #include "src/etkdg.h"
@@ -48,6 +50,32 @@ template <typename T> std::vector<T> downloadDeviceVector(const AsyncDeviceVecto
     cudaCheckError(cudaStreamSynchronize(vec.stream()));
   }
   return host;
+}
+
+DeviceCoordResult makeDeviceResult(const std::vector<double>&  positions,
+                                   const std::vector<int32_t>& molIndices,
+                                   const int                   nMols) {
+  const size_t         atomsPerConformer = positions.size() / (molIndices.size() * 3);
+  std::vector<int32_t> atomStarts(molIndices.size() + 1);
+  std::vector<int32_t> confIndices(molIndices.size(), 0);
+  for (size_t i = 0; i < atomStarts.size(); ++i) {
+    atomStarts[i] = static_cast<int32_t>(i * atomsPerConformer);
+  }
+
+  DeviceCoordResult result;
+  result.gpuId       = 0;
+  result.nMols       = nMols;
+  result.positions   = AsyncDeviceVector<double>(positions.size());
+  result.atomStarts  = AsyncDeviceVector<int32_t>(atomStarts.size());
+  result.molIndices  = AsyncDeviceVector<int32_t>(molIndices.size());
+  result.confIndices = AsyncDeviceVector<int32_t>(molIndices.size());
+
+  result.positions.copyFromHost(positions);
+  result.atomStarts.copyFromHost(atomStarts);
+  result.molIndices.copyFromHost(molIndices);
+  result.confIndices.copyFromHost(confIndices);
+  cudaCheckError(cudaStreamSynchronize(nullptr));
+  return result;
 }
 
 }  // namespace
@@ -178,25 +206,117 @@ TEST(EmbedMoleculesDeviceOutput, MultipleMoleculesProduceCorrectIndexing) {
   }
 }
 
-TEST(EmbedMoleculesDeviceOutput, RejectsPruningInDeviceMode) {
-  auto ethanol = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol("CCO"));
-  ASSERT_NE(ethanol, nullptr);
+TEST(EmbedMoleculesDeviceOutput, PrunesRigidMoleculeInDeviceMode) {
+  auto benzene = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol("c1ccccc1"));
+  ASSERT_NE(benzene, nullptr);
 
   RDKit::DGeomHelpers::EmbedParameters params = RDKit::DGeomHelpers::ETKDGv3;
   params.useRandomCoords                      = true;
+  params.randomSeed                           = 12345;
   params.pruneRmsThresh                       = 0.5;
 
-  std::vector<RDKit::ROMol*> mols = {ethanol.get()};
-  EXPECT_THROW(nvMolKit::embedMolecules(mols,
-                                        params,
-                                        1,
-                                        -1,
-                                        false,
-                                        nullptr,
-                                        singleThreadOptions(),
-                                        nvMolKit::BfgsBackend::PER_MOLECULE,
-                                        nvMolKit::CoordinateOutput::DEVICE),
-               std::invalid_argument);
+  std::vector<RDKit::ROMol*> mols   = {benzene.get()};
+  const auto                 result = nvMolKit::embedMolecules(mols,
+                                               params,
+                                               5,
+                                               -1,
+                                               false,
+                                               nullptr,
+                                               singleThreadOptions(),
+                                               nvMolKit::BfgsBackend::PER_MOLECULE,
+                                               nvMolKit::CoordinateOutput::DEVICE);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(benzene->getNumConformers(), 0u);
+  EXPECT_EQ(result->molIndices.size(), 1u);
+  EXPECT_EQ(result->positions.size(), static_cast<size_t>(benzene->getNumAtoms()) * 3);
+}
+
+TEST(DeviceConformerPruning, PreservesGreedyOrderAcrossInterleavedMolecules) {
+  auto mol0 = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol("CC"));
+  auto mol1 = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol("CC"));
+  ASSERT_NE(mol0, nullptr);
+  ASSERT_NE(mol1, nullptr);
+
+  // RMSD is half the bond-length difference here. At threshold 0.75,
+  // molecule 0 must keep lengths 1 and 3 even though length 2 conflicts
+  // with both. Molecule 1 keeps only length 1.
+  const std::vector<double> positions = {
+    0.0, 0.0, 0.0, 1.0, 0.0, 0.0,  // mol 0, conf 0
+    0.0, 0.0, 0.0, 1.0, 0.0, 0.0,  // mol 1, conf 0
+    0.0, 0.0, 0.0, 2.0, 0.0, 0.0,  // mol 0, conf 1
+    0.0, 0.0, 0.0, 1.5, 0.0, 0.0,  // mol 1, conf 1
+    0.0, 0.0, 0.0, 3.0, 0.0, 0.0,  // mol 0, conf 2
+  };
+  const std::vector<int32_t> molIndices = {0, 1, 0, 1, 0};
+
+  const WithDevice withDevice(0);
+  auto             input = makeDeviceResult(positions, molIndices, 2);
+
+  RDKit::DGeomHelpers::EmbedParameters params = RDKit::DGeomHelpers::ETKDGv3;
+  params.pruneRmsThresh                       = 0.75;
+  params.useSymmetryForPruning                = false;
+  params.onlyHeavyAtomsForRMS                 = false;
+  std::vector<RDKit::ROMol*> mols             = {mol0.get(), mol1.get()};
+
+  const auto result = detail::pruneDeviceConformers(std::move(input), mols, params);
+  EXPECT_EQ(
+    downloadDeviceVector(result.positions),
+    (std::vector<double>{0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0}));
+  EXPECT_EQ(downloadDeviceVector(result.atomStarts), (std::vector<int32_t>{0, 2, 4, 6}));
+  EXPECT_EQ(downloadDeviceVector(result.molIndices), (std::vector<int32_t>{0, 1, 0}));
+  EXPECT_EQ(downloadDeviceVector(result.confIndices), (std::vector<int32_t>{0, 0, 1}));
+}
+
+TEST(DeviceConformerPruning, UsesSymmetryAtomMappings) {
+  auto mol = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol("CC(C)C"));
+  ASSERT_NE(mol, nullptr);
+
+  RDKit::DGeomHelpers::EmbedParameters params = RDKit::DGeomHelpers::ETKDGv3;
+  params.pruneRmsThresh                       = 1e-4;
+  params.useSymmetryForPruning                = true;
+
+  // Atoms 0 and 2 are equivalent terminal carbons. Swapping their positions
+  // should therefore produce the same conformer when symmetry is enabled.
+  const std::vector<double> positions = {
+    0.0, 0.0, 0.0, 1.2, 0.1, 0.0, 0.1, 2.3, 0.2, 0.2, 0.4, 3.4,
+    0.1, 2.3, 0.2, 1.2, 0.1, 0.0, 0.0, 0.0, 0.0, 0.2, 0.4, 3.4,
+  };
+  const std::vector<int32_t> molIndices = {0, 0};
+
+  const WithDevice           withDevice(0);
+  auto                       input = makeDeviceResult(positions, molIndices, 1);
+  std::vector<RDKit::ROMol*> mols  = {mol.get()};
+
+  const auto result = detail::pruneDeviceConformers(std::move(input), mols, params);
+  EXPECT_EQ(result.molIndices.size(), 1u);
+}
+
+TEST(DeviceConformerPruning, HonorsHeavyAtomOnlyOption) {
+  auto mol = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol("C"));
+  ASSERT_NE(mol, nullptr);
+  RDKit::MolOps::addHs(*mol);
+  ASSERT_EQ(mol->getNumAtoms(), 5u);
+
+  const std::vector<double> positions = {
+    0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, -1.0, -1.0, -1.0,
+    0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 5.0, -6.0, -7.0, -8.0,
+  };
+  const std::vector<int32_t> molIndices = {0, 0};
+  std::vector<RDKit::ROMol*> mols       = {mol.get()};
+  const WithDevice           withDevice(0);
+
+  RDKit::DGeomHelpers::EmbedParameters params = RDKit::DGeomHelpers::ETKDGv3;
+  params.pruneRmsThresh                       = 0.1;
+  params.useSymmetryForPruning                = false;
+  params.onlyHeavyAtomsForRMS                 = true;
+  auto       heavyOnlyInput                   = makeDeviceResult(positions, molIndices, 1);
+  const auto heavyOnlyResult                  = detail::pruneDeviceConformers(std::move(heavyOnlyInput), mols, params);
+  EXPECT_EQ(heavyOnlyResult.molIndices.size(), 1u);
+
+  params.onlyHeavyAtomsForRMS = false;
+  auto       allAtomInput     = makeDeviceResult(positions, molIndices, 1);
+  const auto allAtomResult    = detail::pruneDeviceConformers(std::move(allAtomInput), mols, params);
+  EXPECT_EQ(allAtomResult.molIndices.size(), 2u);
 }
 
 TEST(EmbedMoleculesDeviceOutput, MultipleConformersMatchPerMolIndices) {

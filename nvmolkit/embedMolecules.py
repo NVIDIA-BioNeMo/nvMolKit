@@ -84,8 +84,8 @@ def EmbedMolecules(
         hardwareOptions: HardwareOptions with hardware settings. If None, uses defaults.
         output: ``RDKIT_CONFORMERS`` (default) writes generated conformers back into each input
             molecule in-place and returns ``None``. ``DEVICE`` retains conformer coordinates on
-            GPU and returns a :class:`Device3DResult`; RDKit conformers are NOT modified.
-            DEVICE mode is incompatible with ``params.pruneRmsThresh > 0``.
+            GPU and returns a :class:`Device3DResult`; RDKit conformers are NOT modified. When
+            ``params.pruneRmsThresh > 0``, conformers are pruned on the target GPU before return.
         targetGpu: In DEVICE mode, the GPU to consolidate the result onto. ``-1`` selects the
             first configured execution GPU.
 
