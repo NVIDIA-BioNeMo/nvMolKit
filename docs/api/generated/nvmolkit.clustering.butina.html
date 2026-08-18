@@ -33,7 +33,7 @@
 
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/nvidia-sphinx-theme.css?v=df3ac72c" />
-    <link rel="stylesheet" type="text/css" href="../../_static/jupyter-sphinx.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/jupyter-sphinx.css?v=572af1d6" />
     <link rel="stylesheet" type="text/css" href="../../_static/thebelab.css" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
   
@@ -43,7 +43,7 @@
   <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
 <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
 
-    <script src="../../_static/documentation_options.js?v=1dd76d02"></script>
+    <script src="../../_static/documentation_options.js?v=8fa8b3e9"></script>
     <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/thebelab-helper.js"></script>
@@ -55,12 +55,12 @@
     <link rel="icon" href="../../_static/favicon.png"/>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="hasSubstructMatch" href="nvmolkit.substructure.hasSubstructMatch.html" />
+    <link rel="next" title="fused_butina" href="nvmolkit.clustering.fused_butina.html" />
     <link rel="prev" title="UFFBatchElement" href="nvmolkit.batchedForcefield.UFFBatchElement.html" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.5.0" />
+  <meta name="docsearch:version" content="0.6.0" />
 
 
   </head>
@@ -256,6 +256,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../../similarity.html">Molecular similarity on GPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../forcefield.html">Force field optimization on GPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../fire_minimizer.html">FIRE minimizer</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../autotune.html">Hardware autotuning</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../agent_skill.html">Cursor / agent skill</a></li>
 </ul>
@@ -276,6 +277,11 @@
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.batchedForcefield.UFFBatchedForcefield.html">UFFBatchedForcefield</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.batchedForcefield.UFFBatchElement.html">UFFBatchElement</a></li>
 <li class="toctree-l2 current active"><a class="current reference internal" href="#">butina</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.clustering.fused_butina.html">fused_butina</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.mcs.findMCS.html">findMCS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.mcs.MCSConfig.html">MCSConfig</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.mcs.MCSBatchResult.html">MCSBatchResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.mcs.MCSResult.html">MCSResult</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.substructure.hasSubstructMatch.html">hasSubstructMatch</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.substructure.countSubstructMatches.html">countSubstructMatches</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.substructure.getSubstructMatches.html">getSubstructMatches</a></li>
@@ -286,6 +292,7 @@
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.tfd.GetTFDMatrix.html">GetTFDMatrix</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.tfd.GetTFDMatrices.html">GetTFDMatrices</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.types.AsyncGpuResult.html">AsyncGpuResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.types.FireOptions.html">FireOptions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.types.HardwareOptions.html">HardwareOptions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.is_available.html">is_available</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.tune_embed_molecules.html">tune_embed_molecules</a></li>
@@ -293,6 +300,7 @@
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.tune_uff_optimize.html">tune_uff_optimize</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.tune_batched_forcefield.html">tune_batched_forcefield</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.tune_substructure.html">tune_substructure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.tune_mcs.html">tune_mcs</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.save.html">save</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.load.html">load</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.TuneResult.html">TuneResult</a></li>
@@ -362,10 +370,11 @@
 <span class="sig-prename descclassname"><span class="pre">nvmolkit.clustering.</span></span><span class="sig-name descname"><span class="pre">butina</span></span><span class="sig-paren">(</span>
 
 <dl>
-<dd><em class="sig-param"><span class="n"><span class="pre">distance_matrix</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="nvmolkit.types.AsyncGpuResult.html#nvmolkit.types.AsyncGpuResult" title="nvmolkit.types.AsyncGpuResult"><span class="pre">AsyncGpuResult</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tensor</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">distance_matrix</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="nvmolkit.types.AsyncGpuResult.html#nvmolkit.types.AsyncGpuResult" title="nvmolkit.types.AsyncGpuResult"><span class="pre">AsyncGpuResult</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.5)"><span class="pre">ndarray</span></a></span></em>,</dd>
 <dd><em class="sig-param"><span class="n"><span class="pre">cutoff</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span></em>,</dd>
 <dd><em class="sig-param"><span class="n"><span class="pre">neighborlist_max_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">64</span></span></em>,</dd>
 <dd><em class="sig-param"><span class="n"><span class="pre">return_centroids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">reordering</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>,</dd>
 <dd><em class="sig-param"><span class="n"><span class="pre">stream</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Stream</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
 </dl>
 
@@ -381,21 +390,26 @@ on distance thresholds. It iteratively:
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>distance_matrix</strong> – Square distance matrix of shape (N, N) where N is the number
-of items. Can be an AsyncGpuResult or torch.Tensor on GPU.</p></li>
+of items. Can be an AsyncGpuResult, torch.Tensor, or numpy.ndarray.
+CPU tensors and NumPy arrays are copied to CUDA. Inputs
+must have dtype float64.</p></li>
 <li><p><strong>cutoff</strong> – Distance threshold for clustering. Items are neighbors if their
-distance is less than this cutoff.</p></li>
+distance is less than or equal to this cutoff.</p></li>
 <li><p><strong>neighborlist_max_size</strong> – Maximum size of the neighborlist used for small cluster
 optimization. Must be 8, 16, 24, 32, 64, or 128. Larger values
 allow parallel processing of larger clusters but use more
-shared memory.</p></li>
+shared memory. Ignored when reordering is False.</p></li>
 <li><p><strong>return_centroids</strong> – Whether to return centroid indices for each cluster.</p></li>
+<li><p><strong>reordering</strong> – Whether to update neighbor counts among unassigned items
+after each cluster is formed. Defaults to True, while
+RDKit’s <code class="docutils literal notranslate"><span class="pre">Butina.ClusterData</span></code> defaults to False.</p></li>
 <li><p><strong>stream</strong> – CUDA stream to use. If None, uses the current stream.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
 <dd class="field-even"><p>AsyncGpuResult of shape <code class="docutils literal notranslate"><span class="pre">(N,)</span></code> with cluster IDs (cluster 0 is the
-largest) when <code class="docutils literal notranslate"><span class="pre">return_centroids</span></code> is False.  When <code class="docutils literal notranslate"><span class="pre">return_centroids</span></code>
-is True, returns a tuple <code class="docutils literal notranslate"><span class="pre">(clusters,</span> <span class="pre">centroids)</span></code> where <em>centroids</em> is
+largest) when <code class="docutils literal notranslate"><span class="pre">return_centroids</span></code> is False. When <code class="docutils literal notranslate"><span class="pre">return_centroids</span></code>
+is True, returns a tuple <code class="docutils literal notranslate"><span class="pre">(cluster_ids,</span> <span class="pre">centroids)</span></code> where <em>centroids</em> is
 an AsyncGpuResult of shape <code class="docutils literal notranslate"><span class="pre">(num_clusters,)</span></code> containing the centroid
 index for each cluster ID.</p>
 </dd>
@@ -428,11 +442,11 @@ index for each cluster ID.</p>
       </div>
     </a>
     <a class="right-next"
-       href="nvmolkit.substructure.hasSubstructMatch.html"
+       href="nvmolkit.clustering.fused_butina.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">hasSubstructMatch</p>
+        <p class="prev-next-title">fused_butina</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>

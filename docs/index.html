@@ -33,7 +33,7 @@
 
     <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="_static/styles/nvidia-sphinx-theme.css?v=df3ac72c" />
-    <link rel="stylesheet" type="text/css" href="_static/jupyter-sphinx.css" />
+    <link rel="stylesheet" type="text/css" href="_static/jupyter-sphinx.css?v=572af1d6" />
     <link rel="stylesheet" type="text/css" href="_static/thebelab.css" />
     <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
   
@@ -43,7 +43,7 @@
   <link rel="preload" as="script" href="_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
 <link rel="preload" as="script" href="_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
 
-    <script src="_static/documentation_options.js?v=1dd76d02"></script>
+    <script src="_static/documentation_options.js?v=8fa8b3e9"></script>
     <script src="_static/doctools.js?v=9bcbadda"></script>
     <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="_static/thebelab-helper.js"></script>
@@ -59,7 +59,7 @@
 
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.5.0" />
+  <meta name="docsearch:version" content="0.6.0" />
 
 
   </head>
@@ -255,6 +255,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="similarity.html">Molecular similarity on GPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="forcefield.html">Force field optimization on GPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="fire_minimizer.html">FIRE minimizer</a></li>
 <li class="toctree-l1"><a class="reference internal" href="autotune.html">Hardware autotuning</a></li>
 <li class="toctree-l1"><a class="reference internal" href="agent_skill.html">Cursor / agent skill</a></li>
 </ul>
@@ -275,6 +276,11 @@
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.batchedForcefield.UFFBatchedForcefield.html">UFFBatchedForcefield</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.batchedForcefield.UFFBatchElement.html">UFFBatchElement</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.butina.html">butina</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.fused_butina.html">fused_butina</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.findMCS.html">findMCS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.MCSConfig.html">MCSConfig</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.MCSBatchResult.html">MCSBatchResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.MCSResult.html">MCSResult</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.hasSubstructMatch.html">hasSubstructMatch</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.countSubstructMatches.html">countSubstructMatches</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.getSubstructMatches.html">getSubstructMatches</a></li>
@@ -285,6 +291,7 @@
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.tfd.GetTFDMatrix.html">GetTFDMatrix</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.tfd.GetTFDMatrices.html">GetTFDMatrices</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.types.AsyncGpuResult.html">AsyncGpuResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.types.FireOptions.html">FireOptions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.types.HardwareOptions.html">HardwareOptions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.is_available.html">is_available</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.tune_embed_molecules.html">tune_embed_molecules</a></li>
@@ -292,6 +299,7 @@
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.tune_uff_optimize.html">tune_uff_optimize</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.tune_batched_forcefield.html">tune_batched_forcefield</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.tune_substructure.html">tune_substructure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.tune_mcs.html">tune_mcs</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.save.html">save</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.load.html">load</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.TuneResult.html">TuneResult</a></li>
@@ -389,23 +397,49 @@
 <p>nvMolKit requires an NVIDIA GPU with compute capability 7.0 (V100) or higher. You can check your GPU’s compute capability at the <a class="reference external" href="https://developer.nvidia.com/cuda-gpus">NVIDIA CUDA GPUs page</a>.
 A CUDA Driver compatible with CUDA 12.6 or later is also required (driver version &gt;=560.28). Some degree of backward compatibility may be available; for details, see the <a class="reference external" href="https://docs.nvidia.com/deploy/cuda-compatibility/index.html">CUDA compatibility guide</a>.</p>
 </div>
+<p>nvMolKit uses PyTorch for CUDA tensors, so the installed PyTorch CUDA backend
+must also be compatible with your driver. Package managers may otherwise select
+a CUDA backend that is newer than your host driver supports.</p>
+<ul class="simple">
+<li><p><strong>Conda</strong>: install the conda-forge <code class="docutils literal notranslate"><span class="pre">pytorch-gpu</span></code> metapackage and pin
+<code class="docutils literal notranslate"><span class="pre">cuda-version</span></code> when needed.</p></li>
+<li><p><strong>pip</strong>: choose the CUDA backend from the <a class="reference external" href="https://pytorch.org/get-started/locally/">PyTorch local install selector</a> or the <a class="reference external" href="https://pytorch.org/get-started/previous-versions/">previous versions page</a>, install that
+<code class="docutils literal notranslate"><span class="pre">torch</span></code> wheel first, then install nvMolKit.</p></li>
+<li><p><strong>uv</strong>: pass <code class="docutils literal notranslate"><span class="pre">--torch-backend</span></code> during install, for example
+<code class="docutils literal notranslate"><span class="pre">uv</span> <span class="pre">pip</span> <span class="pre">install</span> <span class="pre">--torch-backend=cu128</span> <span class="pre">nvmolkit</span></code>.</p></li>
+</ul>
 <section id="conda-forge">
 <h3>Conda Forge<a class="headerlink" href="#conda-forge" title="Link to this heading">#</a></h3>
 <p>Conda is the recommended way to install nvMolKit, in line with RDKit’s recommended installation practice. First, ensure
 you have a conda-based environment manager installed and activated, such as <a class="reference external" href="https://docs.conda.io/en/latest/miniconda.html">Miniconda</a> or <a class="reference external" href="https://conda-forge.org/download/">Miniforge</a>.</p>
-<p>nvMolKit v0.5.0 supports RDKit 2025.03.1 through 2026.03.1.</p>
+<p>nvMolKit v0.6.0 supports RDKit 2025.09.1 through 2026.03.5.</p>
 <p>To install with conda, run:</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">conda</span> <span class="n">install</span> <span class="o">-</span><span class="n">c</span> <span class="n">conda</span><span class="o">-</span><span class="n">forge</span> <span class="n">nvmolkit</span>
 </pre></div>
 </div>
+<p>If your system’s CUDA driver does not support CUDA 13, pin a CUDA 12 backend and
+include conda-forge’s <code class="docutils literal notranslate"><span class="pre">pytorch-gpu</span></code> metapackage:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">conda</span> <span class="n">install</span> <span class="o">-</span><span class="n">c</span> <span class="n">conda</span><span class="o">-</span><span class="n">forge</span> <span class="n">nvmolkit</span> <span class="n">pytorch</span><span class="o">-</span><span class="n">gpu</span> <span class="n">cuda</span><span class="o">-</span><span class="n">version</span><span class="o">=</span><span class="mf">12.6</span>
+</pre></div>
+</div>
+<p>Choose a <code class="docutils literal notranslate"><span class="pre">cuda-version</span></code> that is less than or equal to the CUDA version
+reported by <code class="docutils literal notranslate"><span class="pre">nvidia-smi</span></code> and that has a matching PyTorch build on conda-forge.</p>
 </section>
 <section id="pip-installation">
 <h3>Pip Installation<a class="headerlink" href="#pip-installation" title="Link to this heading">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>nvmolkit
+<p>Published binary wheels are available for CPython 3.11-3.14. The nvMolKit pip
+wheels are built with CUDA Toolkit 12.9 and depend on CUDA 12 runtime packages.
+For pip environments, install a PyTorch CUDA 12 wheel supported by your driver
+before installing nvMolKit. For example, with PyTorch’s CUDA 12.8 backend:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>torch<span class="w"> </span>--index-url<span class="w"> </span>https://download.pytorch.org/whl/cu128
+python<span class="w"> </span>-m<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>nvmolkit
+python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())&quot;</span>
 </pre></div>
 </div>
+<p>Replace <code class="docutils literal notranslate"><span class="pre">cu128</span></code> with another CUDA 12 backend from the PyTorch install page if
+that is compatible with your driver.</p>
 <p>The wheel published to PyPI is built against a single RDKit release per
-nvMolKit version (RDKit 2026.03.1 for nvMolKit v0.5.0), due to versioning
+nvMolKit version (RDKit 2026.03.5 for nvMolKit v0.6.0), due to versioning
 limitations in PyPI’s dependency management system.</p>
 <p>Use this path if you do not have a constraint on which RDKit version to use;
 pip will pull a compatible RDKit from PyPI alongside nvMolKit.</p>
@@ -415,13 +449,13 @@ pip will pull a compatible RDKit from PyPI alongside nvMolKit.</p>
 hosted on github.</p>
 <p>To install nvMolKit pinned to a particular RDKit:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">RDKIT_VERSION</span><span class="o">=</span><span class="m">2025</span>.9.6
-<span class="nv">NVMOLKIT_VERSION</span><span class="o">=</span><span class="m">0</span>.5.0
+<span class="nv">NVMOLKIT_VERSION</span><span class="o">=</span><span class="m">0</span>.6.0
 pip<span class="w"> </span>install<span class="w"> </span><span class="nv">nvmolkit</span><span class="o">==</span><span class="si">${</span><span class="nv">NVMOLKIT_VERSION</span><span class="si">}</span>+rdkit<span class="si">${</span><span class="nv">RDKIT_VERSION</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--extra-index-url<span class="w"> </span>https://nvidia-bionemo.github.io/nvMolKit/wheels/rdkit<span class="si">${</span><span class="nv">RDKIT_VERSION</span><span class="si">}</span>/simple/
 </pre></div>
 </div>
 <p>Replace <code class="docutils literal notranslate"><span class="pre">2025.9.6</span></code> with the RDKit version you want. Variants published for
-nvMolKit v0.5.0 include every version between 2025.03.6 and 2026.03.1.</p>
+nvMolKit v0.6.0 include every version between 2025.09.1 and 2026.03.5.</p>
 </section>
 </section>
 <section id="from-source">
@@ -550,6 +584,7 @@ controlling tunable performance parameters. The <code class="docutils literal no
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="similarity.html">Molecular similarity on GPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="forcefield.html">Force field optimization on GPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="fire_minimizer.html">FIRE minimizer</a></li>
 <li class="toctree-l1"><a class="reference internal" href="autotune.html">Hardware autotuning</a></li>
 <li class="toctree-l1"><a class="reference internal" href="agent_skill.html">Cursor / agent skill</a></li>
 </ul>

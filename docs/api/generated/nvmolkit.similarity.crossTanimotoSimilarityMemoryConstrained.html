@@ -33,7 +33,7 @@
 
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/nvidia-sphinx-theme.css?v=df3ac72c" />
-    <link rel="stylesheet" type="text/css" href="../../_static/jupyter-sphinx.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/jupyter-sphinx.css?v=572af1d6" />
     <link rel="stylesheet" type="text/css" href="../../_static/thebelab.css" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
   
@@ -43,7 +43,7 @@
   <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
 <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
 
-    <script src="../../_static/documentation_options.js?v=1dd76d02"></script>
+    <script src="../../_static/documentation_options.js?v=8fa8b3e9"></script>
     <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/thebelab-helper.js"></script>
@@ -60,7 +60,7 @@
 
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.5.0" />
+  <meta name="docsearch:version" content="0.6.0" />
 
 
   </head>
@@ -256,6 +256,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../../similarity.html">Molecular similarity on GPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../forcefield.html">Force field optimization on GPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../fire_minimizer.html">FIRE minimizer</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../autotune.html">Hardware autotuning</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../agent_skill.html">Cursor / agent skill</a></li>
 </ul>
@@ -276,6 +277,11 @@
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.batchedForcefield.UFFBatchedForcefield.html">UFFBatchedForcefield</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.batchedForcefield.UFFBatchElement.html">UFFBatchElement</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.clustering.butina.html">butina</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.clustering.fused_butina.html">fused_butina</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.mcs.findMCS.html">findMCS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.mcs.MCSConfig.html">MCSConfig</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.mcs.MCSBatchResult.html">MCSBatchResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.mcs.MCSResult.html">MCSResult</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.substructure.hasSubstructMatch.html">hasSubstructMatch</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.substructure.countSubstructMatches.html">countSubstructMatches</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.substructure.getSubstructMatches.html">getSubstructMatches</a></li>
@@ -286,6 +292,7 @@
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.tfd.GetTFDMatrix.html">GetTFDMatrix</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.tfd.GetTFDMatrices.html">GetTFDMatrices</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.types.AsyncGpuResult.html">AsyncGpuResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.types.FireOptions.html">FireOptions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.types.HardwareOptions.html">HardwareOptions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.is_available.html">is_available</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.tune_embed_molecules.html">tune_embed_molecules</a></li>
@@ -293,6 +300,7 @@
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.tune_uff_optimize.html">tune_uff_optimize</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.tune_batched_forcefield.html">tune_batched_forcefield</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.tune_substructure.html">tune_substructure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.tune_mcs.html">tune_mcs</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.save.html">save</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.load.html">load</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.TuneResult.html">TuneResult</a></li>
@@ -362,28 +370,28 @@
 <span class="sig-prename descclassname"><span class="pre">nvmolkit.similarity.</span></span><span class="sig-name descname"><span class="pre">crossTanimotoSimilarityMemoryConstrained</span></span><span class="sig-paren">(</span>
 
 <dl>
-<dd><em class="sig-param"><span class="n"><span class="pre">fingerprint_group_one</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>,</dd>
-<dd><em class="sig-param"><span class="n"><span class="pre">fingerprint_group_two</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">fingerprint_group_one</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="nvmolkit.types.AsyncGpuResult.html#nvmolkit.types.AsyncGpuResult" title="nvmolkit.types.AsyncGpuResult"><span class="pre">AsyncGpuResult</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.5)"><span class="pre">ndarray</span></a></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">fingerprint_group_two</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="nvmolkit.types.AsyncGpuResult.html#nvmolkit.types.AsyncGpuResult" title="nvmolkit.types.AsyncGpuResult"><span class="pre">AsyncGpuResult</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.5)"><span class="pre">ndarray</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
 </dl>
 
-<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.4)"><span class="pre">ndarray</span></a></span></span><a class="headerlink" href="#nvmolkit.similarity.crossTanimotoSimilarityMemoryConstrained" title="Link to this definition">#</a></dt>
+<span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference external" href="https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html#numpy.ndarray" title="(in NumPy v2.5)"><span class="pre">ndarray</span></a></span></span><a class="headerlink" href="#nvmolkit.similarity.crossTanimotoSimilarityMemoryConstrained" title="Link to this definition">#</a></dt>
 <dd><p>Returns the Tanimoto similarity within a set of fingerprints or between two sets of fingerprints.</p>
 <p>Computes results on the GPU, but returns a numpy array on the CPU. Will perform computation in chunks if necessary to avoid running out of memory on the GPU. Will still
 fail if the resulting matrix is too large to fit on the CPU.</p>
-<p>Expects fingerprints generated by nvMolKit or as a torch tensor located on device 0, with the leading dimension corresponding to
+<p>Expects fingerprints generated by nvMolKit, a torch tensor, or a numpy array, with the leading dimension corresponding to
 the number of fingerprints, and the second dimension representing the packed fingerprint
-bitfield.</p>
+bitfield. CPU tensors and NumPy arrays are copied to CUDA.</p>
 <p>The special case of fingerprint_group_1 as a 1 x n_bits tensor is equivalent to RDKit’s BulkTanimotoSimilarity.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>fingerprint_group_one</strong> – A torch Tensor or AsyncGpuResult computed from nvMolKit fingerprints</p></li>
-<li><p><strong>fingerprint_group_two</strong> – A torch Tensor or AsyncGpuResult computed from nvMolKit fingerprints,
+<li><p><strong>fingerprint_group_one</strong> – A torch Tensor, numpy.ndarray, or AsyncGpuResult computed from nvMolKit fingerprints</p></li>
+<li><p><strong>fingerprint_group_two</strong> – A torch Tensor, numpy.ndarray, or AsyncGpuResult computed from nvMolKit fingerprints,
 or None for all-to-all similarity within fingerprint_group_one.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>A numpy array of Tanimoto similarities, with index [i, j] corresponding to the similarity between</p>
+<dd class="field-even"><p>A NumPy array where element [i, j] is the similarity between fingerprints i and j.</p>
 </dd>
 </dl>
 </dd></dl>

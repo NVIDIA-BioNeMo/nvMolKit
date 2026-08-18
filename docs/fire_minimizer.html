@@ -1,0 +1,620 @@
+
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="./" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>FIRE minimizer &#8212; nvMolKit</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="_static/styles/nvidia-sphinx-theme.css?v=df3ac72c" />
+    <link rel="stylesheet" type="text/css" href="_static/jupyter-sphinx.css?v=572af1d6" />
+    <link rel="stylesheet" type="text/css" href="_static/thebelab.css" />
+    <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="_static/documentation_options.js?v=8fa8b3e9"></script>
+    <script src="_static/doctools.js?v=9bcbadda"></script>
+    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="_static/thebelab-helper.js"></script>
+    <script src="_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="_static/copybutton.js?v=f281be69"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
+    <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'fire_minimizer';</script>
+    <link rel="icon" href="_static/favicon.png"/>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Hardware autotuning" href="autotune.html" />
+    <link rel="prev" title="Force field optimization on GPU" href="forcefield.html" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="0.6.0" />
+
+
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search the docs ..."
+         aria-label="Search the docs ..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+<div class="bd-header__inner bd-page-width">
+  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+    <span class="fa-solid fa-bars"></span>
+  </button>
+  
+  
+  <div class="col-lg-3 navbar-header-items__start">
+    
+      <div class="navbar-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="_static/nvidia-logo-horiz-rgb-blk-for-screen.svg" class="logo__image only-light" alt="nvMolKit - Home"/>
+    <img src="_static/nvidia-logo-horiz-rgb-wht-for-screen.svg" class="logo__image only-dark pst-js-only" alt="nvMolKit - Home"/>
+  
+  
+    <p class="title logo__title">nvMolKit</p>
+  
+</a></div>
+    
+  </div>
+  
+  <div class="col-lg-9 navbar-header-items">
+    
+    
+    <div class="navbar-header-items__end">
+      
+        <div class="navbar-item navbar-persistent--container">
+          
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+        </div>
+      
+      
+        <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+      
+    </div>
+    
+  </div>
+  
+  
+    <div class="navbar-persistent--mobile">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button>
+    </div>
+  
+
+  
+    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+      <span class="fa-solid fa-outdent"></span>
+    </button>
+  
+</div>
+
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="_static/nvidia-logo-horiz-rgb-blk-for-screen.svg" class="logo__image only-light" alt="nvMolKit - Home"/>
+    <img src="_static/nvidia-logo-horiz-rgb-wht-for-screen.svg" class="logo__image only-dark pst-js-only" alt="nvMolKit - Home"/>
+  
+  
+    <p class="title logo__title">nvMolKit</p>
+  
+</a>
+
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+      <div class="sidebar-header-items__end">
+        
+          <div class="navbar-item">
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button></div>
+        
+      </div>
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+
+
+<nav class="bd-docs-nav bd-links"
+     aria-label="Table of Contents">
+  <p class="bd-links__title" role="heading" aria-level="1">Table of Contents</p>
+  <div class="bd-toc-item navbar-nav"><ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="index.html">Overview</a></li>
+</ul>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="similarity.html">Molecular similarity on GPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="forcefield.html">Force field optimization on GPU</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">FIRE minimizer</a></li>
+<li class="toctree-l1"><a class="reference internal" href="autotune.html">Hardware autotuning</a></li>
+<li class="toctree-l1"><a class="reference internal" href="agent_skill.html">Cursor / agent skill</a></li>
+</ul>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1 has-children"><a class="reference internal" href="api/nvmolkit.html">nvMolKit APIs</a><details><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.fingerprints.MorganFingerprintGenerator.html">MorganFingerprintGenerator</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.fingerprints.pack_fingerprint.html">pack_fingerprint</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.fingerprints.unpack_fingerprint.html">unpack_fingerprint</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.crossTanimotoSimilarity.html">crossTanimotoSimilarity</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.crossTanimotoSimilarityMemoryConstrained.html">crossTanimotoSimilarityMemoryConstrained</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.crossCosineSimilarity.html">crossCosineSimilarity</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.crossCosineSimilarityMemoryConstrained.html">crossCosineSimilarityMemoryConstrained</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.embedMolecules.EmbedMolecules.html">EmbedMolecules</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mmffOptimization.MMFFOptimizeMoleculesConfs.html">MMFFOptimizeMoleculesConfs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.batchedForcefield.MMFFBatchedForcefield.html">MMFFBatchedForcefield</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.batchedForcefield.MMFFBatchElement.html">MMFFBatchElement</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.uffOptimization.UFFOptimizeMoleculesConfs.html">UFFOptimizeMoleculesConfs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.batchedForcefield.UFFBatchedForcefield.html">UFFBatchedForcefield</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.batchedForcefield.UFFBatchElement.html">UFFBatchElement</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.butina.html">butina</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.fused_butina.html">fused_butina</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.findMCS.html">findMCS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.MCSConfig.html">MCSConfig</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.MCSBatchResult.html">MCSBatchResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.MCSResult.html">MCSResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.hasSubstructMatch.html">hasSubstructMatch</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.countSubstructMatches.html">countSubstructMatches</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.getSubstructMatches.html">getSubstructMatches</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.SubstructSearchConfig.html">SubstructSearchConfig</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.SubstructMatchResults.html">SubstructMatchResults</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.conformerRmsd.GetConformerRMSMatrix.html">GetConformerRMSMatrix</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.conformerRmsd.GetConformerRMSMatrixBatch.html">GetConformerRMSMatrixBatch</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.tfd.GetTFDMatrix.html">GetTFDMatrix</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.tfd.GetTFDMatrices.html">GetTFDMatrices</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.types.AsyncGpuResult.html">AsyncGpuResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.types.FireOptions.html">FireOptions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.types.HardwareOptions.html">HardwareOptions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.is_available.html">is_available</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.tune_embed_molecules.html">tune_embed_molecules</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.tune_mmff_optimize.html">tune_mmff_optimize</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.tune_uff_optimize.html">tune_uff_optimize</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.tune_batched_forcefield.html">tune_batched_forcefield</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.tune_substructure.html">tune_substructure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.tune_mcs.html">tune_mcs</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.save.html">save</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.load.html">load</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.autotune.TuneResult.html">TuneResult</a></li>
+</ul>
+</details></li>
+</ul>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="changelog.html">Changelog</a></li>
+</ul>
+</div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+  </div>
+
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item">
+
+<nav aria-label="Breadcrumb" class="d-print-none">
+  <ul class="bd-breadcrumbs">
+    
+    <li class="breadcrumb-item breadcrumb-home">
+      <a href="index.html" class="nav-link" aria-label="Home">
+        <i class="fa-solid fa-home"></i>
+      </a>
+    </li>
+    <li class="breadcrumb-item active" aria-current="page"><span class="ellipsis">FIRE minimizer</span></li>
+  </ul>
+</nav>
+</div>
+      
+    </div>
+  
+  
+</div>
+</div>
+              
+              
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section id="fire-minimizer">
+<h1>FIRE minimizer<a class="headerlink" href="#fire-minimizer" title="Link to this heading">#</a></h1>
+<p>nvMolKit provides the Fast Inertial Relaxation Engine (FIRE) as an
+alternative to BFGS for MMFF94 and UFF geometry optimization.</p>
+<p>The implementation follows the FIRE 2.0 update scheme. See the original
+<a class="reference external" href="https://doi.org/10.1103/PhysRevLett.97.170201">FIRE paper</a>, and the
+<a class="reference external" href="https://doi.org/10.1016/j.commatsci.2020.109584">FIRE 2.0 paper</a></p>
+<section id="using-fire">
+<h2>Using FIRE<a class="headerlink" href="#using-fire" title="Link to this heading">#</a></h2>
+<p>Select FIRE with <code class="docutils literal notranslate"><span class="pre">minimizerKind=&quot;FIRE&quot;</span></code>. BFGS remains the default.
+The return value and in-place coordinate updates are the same for both
+minimizers.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">rdkit</span><span class="w"> </span><span class="kn">import</span> <span class="n">Chem</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">rdkit.Chem.rdDistGeom</span><span class="w"> </span><span class="kn">import</span> <span class="n">ETKDGv3</span>
+
+<span class="kn">from</span><span class="w"> </span><span class="nn">nvmolkit.embedMolecules</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmbedMolecules</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">nvmolkit.mmffOptimization</span><span class="w"> </span><span class="kn">import</span> <span class="n">MMFFOptimizeMoleculesConfs</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">nvmolkit.types</span><span class="w"> </span><span class="kn">import</span> <span class="n">FireOptions</span>
+
+<span class="n">smiles</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;CCO&quot;</span><span class="p">,</span> <span class="s2">&quot;c1ccccc1O&quot;</span><span class="p">,</span> <span class="s2">&quot;CC(=O)NC1=CC=C(C=C1)O&quot;</span><span class="p">]</span>
+<span class="n">mols</span> <span class="o">=</span> <span class="p">[</span><span class="n">Chem</span><span class="o">.</span><span class="n">AddHs</span><span class="p">(</span><span class="n">Chem</span><span class="o">.</span><span class="n">MolFromSmiles</span><span class="p">(</span><span class="n">smiles</span><span class="p">))</span> <span class="k">for</span> <span class="n">smiles</span> <span class="ow">in</span> <span class="n">smiles</span><span class="p">]</span>
+
+<span class="n">params</span> <span class="o">=</span> <span class="n">ETKDGv3</span><span class="p">()</span>
+<span class="n">params</span><span class="o">.</span><span class="n">useRandomCoords</span> <span class="o">=</span> <span class="kc">True</span>
+<span class="n">EmbedMolecules</span><span class="p">(</span><span class="n">mols</span><span class="p">,</span> <span class="n">params</span><span class="p">,</span> <span class="n">confsPerMolecule</span><span class="o">=</span><span class="mi">10</span><span class="p">)</span>
+
+<span class="n">options</span> <span class="o">=</span> <span class="n">FireOptions</span><span class="p">()</span>
+<span class="n">options</span><span class="o">.</span><span class="n">gradTol</span> <span class="o">=</span> <span class="mf">1e-4</span>
+
+<span class="n">energies</span> <span class="o">=</span> <span class="n">MMFFOptimizeMoleculesConfs</span><span class="p">(</span>
+    <span class="n">mols</span><span class="p">,</span>
+    <span class="n">maxIters</span><span class="o">=</span><span class="mi">200</span><span class="p">,</span>
+    <span class="n">minimizerKind</span><span class="o">=</span><span class="s2">&quot;FIRE&quot;</span><span class="p">,</span>
+    <span class="n">fireOptions</span><span class="o">=</span><span class="n">options</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="c1"># energies[i][j] is the final energy of conformer j of molecule i.</span>
+</pre></div>
+</div>
+<p>UFF uses the same FIRE options:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">nvmolkit.uffOptimization</span><span class="w"> </span><span class="kn">import</span> <span class="n">UFFOptimizeMoleculesConfs</span>
+
+<span class="n">energies</span> <span class="o">=</span> <span class="n">UFFOptimizeMoleculesConfs</span><span class="p">(</span>
+    <span class="n">mols</span><span class="p">,</span>
+    <span class="n">maxIters</span><span class="o">=</span><span class="mi">400</span><span class="p">,</span>
+    <span class="n">minimizerKind</span><span class="o">=</span><span class="s2">&quot;FIRE&quot;</span><span class="p">,</span>
+    <span class="n">fireOptions</span><span class="o">=</span><span class="n">options</span><span class="p">,</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>The batched-forcefield interfaces also accept <code class="docutils literal notranslate"><span class="pre">minimizerKind=&quot;FIRE&quot;</span></code> and
+<code class="docutils literal notranslate"><span class="pre">fireOptions=options</span></code> in their <code class="docutils literal notranslate"><span class="pre">minimize</span></code> methods.</p>
+<p>A conformer is converged when the 2-norm of its full gradient is no greater
+than <code class="docutils literal notranslate"><span class="pre">gradTol</span></code>. Independent conformers are batched on the GPU; the adaptive
+state and the convergence decision remain per conformer.</p>
+</section>
+<section id="performance">
+<h2>Performance<a class="headerlink" href="#performance" title="Link to this heading">#</a></h2>
+<p>At an equal iteration count, FIRE is roughly 2x faster than BFGS on all tested hardware.</p>
+</section>
+<section id="parameters-and-tuning">
+<h2>Parameters and tuning<a class="headerlink" href="#parameters-and-tuning" title="Link to this heading">#</a></h2>
+<p>The default values in <a class="reference internal" href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions" title="nvmolkit.types.FireOptions"><code class="xref py py-class docutils literal notranslate"><span class="pre">nvmolkit.types.FireOptions</span></code></a> were selected with
+an <a class="reference external" href="https://optuna.org/">Optuna</a> study at a fixed budget of 200 iterations.</p>
+<p>Defaults were tuned on MMFF94, but were independently verified to be valid
+for UFF optimization and distance-geometry embedding.</p>
+</section>
+<section id="validation">
+<span id="fire-validation"></span><h2>Validation<a class="headerlink" href="#validation" title="Link to this heading">#</a></h2>
+<p>We validated FIRE on 10,000 noise-perturbed MMFF94 conformers sampled from the
+Enamine REAL 10M collection. RDKit MMFF94, nvMolKit BFGS, and nvMolKit FIRE all
+started from the same coordinates and ran for 200 steps. Every final geometry
+was re-scored with RDKit MMFF94 so all energy comparisons use one
+implementation.</p>
+<p>Comparing FIRE against BFGS from identical starting conformers, nearly all
+pairs sit on the parity line. Most of the conformers that fall off the diagonal
+are in FIRE’s favor: they lie below the parity line, meaning FIRE found the
+lower-energy minimum from that starting geometry.</p>
+<figure class="align-default" id="id1">
+<a class="reference internal image-reference" href="_images/fire_validation_bfgs_fire_scatter.png"><img alt="Pairwise scatter plot comparing final BFGS and FIRE MMFF energies at 200 steps." src="_images/fire_validation_bfgs_fire_scatter.png" style="width: 100%;" />
+</a>
+<figcaption>
+<p><span class="caption-text">Pairwise BFGS/FIRE final energies from identical starting conformers. Points
+below the diagonal are conformers where FIRE reached the lower energy.</span><a class="headerlink" href="#id1" title="Link to this image">#</a></p>
+</figcaption>
+</figure>
+<p>Against RDKit as the reference, 93% of FIRE conformers finish within
+<span class="math notranslate nohighlight">\(10^{-4}\)</span> kcal/mol/atom of the RDKit energy, compared with 96% for BFGS.
+Within that bulk, FIRE sits slightly farther from RDKit: its median offset is
+<span class="math notranslate nohighlight">\(+1.7\times10^{-5}\)</span> kcal/mol/atom against
+<span class="math notranslate nohighlight">\(+3.0\times10^{-6}\)</span> for BFGS.</p>
+<figure class="align-default" id="id2">
+<a class="reference internal image-reference" href="_images/fire_validation_energy_distributions.png"><img alt="Histograms of final energy differences for BFGS and FIRE at 200 steps." src="_images/fire_validation_energy_distributions.png" style="width: 100%;" />
+</a>
+<figcaption>
+<p><span class="caption-text">Final-energy difference distributions at 200 steps, shown over
+<span class="math notranslate nohighlight">\(\pm 10^{-4}\)</span> kcal/mol/atom.</span><a class="headerlink" href="#id2" title="Link to this image">#</a></p>
+</figcaption>
+</figure>
+<p>Taken together, at an equal iteration budget, FIRE’s bulk distribution is
+slightly looser than BFGS’s, while FIRE reaches the lower minimum on most of
+the conformers where the two minimizers end up in different basins.</p>
+</section>
+</section>
+
+
+                </article>
+              
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="forcefield.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Force field optimization on GPU</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="autotune.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Hardware autotuning</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+
+
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+<div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> On this page
+  </div>
+  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#using-fire">Using FIRE</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#performance">Performance</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#parameters-and-tuning">Parameters and tuning</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#validation">Validation</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+
+          </div>
+          <footer class="bd-footer-content">
+            
+          </footer>
+        
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+  <footer class="bd-footer">
+<div class="bd-footer__inner bd-page-width">
+  
+    <div class="footer-items__start">
+      
+        <div class="footer-item">
+<a class="footer-brand logo" href="https://www.nvidia.com">
+  <img src="_static/nvidia-logo-horiz-rgb-1c-blk-for-screen.svg" class="logo__image only-light" alt="NVIDIA"/>
+  <img src="_static/nvidia-logo-horiz-rgb-1c-wht-for-screen.svg" class="logo__image only-dark" alt="NVIDIA"/>
+</a></div>
+      
+        <div class="footer-item">
+
+<div class="footer-links">
+  
+  
+  <a class="external" href="https://www.nvidia.com/en-us/about-nvidia/privacy-policy/">Privacy Policy</a>
+   | 
+  
+  
+  
+  <a class="external" href="https://www.nvidia.com/en-us/about-nvidia/privacy-center/">Manage My Privacy</a>
+   | 
+  
+  
+  
+  <a class="external" href="https://www.nvidia.com/en-us/preferences/start/">Do Not Sell or Share My Data</a>
+   | 
+  
+  
+  
+  <a class="external" href="https://www.nvidia.com/en-us/about-nvidia/terms-of-service/">Terms of Service</a>
+   | 
+  
+  
+  
+  <a class="external" href="https://www.nvidia.com/en-us/about-nvidia/accessibility/">Accessibility</a>
+   | 
+  
+  
+  
+  <a class="external" href="https://www.nvidia.com/en-us/about-nvidia/company-policies/">Corporate Policies</a>
+   | 
+  
+  
+  
+  <a class="external" href="https://www.nvidia.com/en-us/product-security/">Product Security</a>
+   | 
+  
+  
+  
+  <a class="external" href="https://www.nvidia.com/en-us/contact/">Contact</a>
+  
+  
+  
+</div>
+</div>
+      
+        <div class="footer-item">
+
+
+
+
+  <p class="copyright">
+    
+      Copyright © 2025-2026, NVIDIA Corporation &amp; Affiliates.
+      <br/>
+    
+  </p>
+</div>
+      
+    </div>
+  
+  
+  
+</div>
+
+  </footer>
+  </body>
+</html>

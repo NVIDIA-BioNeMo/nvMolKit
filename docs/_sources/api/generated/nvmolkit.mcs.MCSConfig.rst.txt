@@ -1,0 +1,10 @@
+﻿.. SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+MCSConfig
+=========
+
+.. currentmodule:: nvmolkit.mcs
+
+.. autoclass:: MCSConfig
+   :members:
+   :inherited-members:

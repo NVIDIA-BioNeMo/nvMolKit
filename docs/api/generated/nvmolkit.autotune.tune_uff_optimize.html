@@ -33,7 +33,7 @@
 
     <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../../_static/styles/nvidia-sphinx-theme.css?v=df3ac72c" />
-    <link rel="stylesheet" type="text/css" href="../../_static/jupyter-sphinx.css" />
+    <link rel="stylesheet" type="text/css" href="../../_static/jupyter-sphinx.css?v=572af1d6" />
     <link rel="stylesheet" type="text/css" href="../../_static/thebelab.css" />
     <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
   
@@ -43,7 +43,7 @@
   <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
 <link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
 
-    <script src="../../_static/documentation_options.js?v=1dd76d02"></script>
+    <script src="../../_static/documentation_options.js?v=8fa8b3e9"></script>
     <script src="../../_static/doctools.js?v=9bcbadda"></script>
     <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../../_static/thebelab-helper.js"></script>
@@ -60,7 +60,7 @@
 
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.5.0" />
+  <meta name="docsearch:version" content="0.6.0" />
 
 
   </head>
@@ -256,6 +256,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../../similarity.html">Molecular similarity on GPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../forcefield.html">Force field optimization on GPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../fire_minimizer.html">FIRE minimizer</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../autotune.html">Hardware autotuning</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../agent_skill.html">Cursor / agent skill</a></li>
 </ul>
@@ -276,6 +277,11 @@
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.batchedForcefield.UFFBatchedForcefield.html">UFFBatchedForcefield</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.batchedForcefield.UFFBatchElement.html">UFFBatchElement</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.clustering.butina.html">butina</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.clustering.fused_butina.html">fused_butina</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.mcs.findMCS.html">findMCS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.mcs.MCSConfig.html">MCSConfig</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.mcs.MCSBatchResult.html">MCSBatchResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.mcs.MCSResult.html">MCSResult</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.substructure.hasSubstructMatch.html">hasSubstructMatch</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.substructure.countSubstructMatches.html">countSubstructMatches</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.substructure.getSubstructMatches.html">getSubstructMatches</a></li>
@@ -286,6 +292,7 @@
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.tfd.GetTFDMatrix.html">GetTFDMatrix</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.tfd.GetTFDMatrices.html">GetTFDMatrices</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.types.AsyncGpuResult.html">AsyncGpuResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.types.FireOptions.html">FireOptions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.types.HardwareOptions.html">HardwareOptions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.is_available.html">is_available</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.tune_embed_molecules.html">tune_embed_molecules</a></li>
@@ -293,6 +300,7 @@
 <li class="toctree-l2 current active"><a class="current reference internal" href="#">tune_uff_optimize</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.tune_batched_forcefield.html">tune_batched_forcefield</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.tune_substructure.html">tune_substructure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.tune_mcs.html">tune_mcs</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.save.html">save</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.load.html">load</a></li>
 <li class="toctree-l2"><a class="reference internal" href="nvmolkit.autotune.TuneResult.html">TuneResult</a></li>
@@ -367,6 +375,8 @@
 <dd><em class="sig-param"><span class="n"><span class="pre">maxIters</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1000</span></span></em>,</dd>
 <dd><em class="sig-param"><span class="n"><span class="pre">vdwThreshold</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/collections.abc.html#collections.abc.Sequence" title="(in Python v3.14)"><span class="pre">Sequence</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">10.0</span></span></em>,</dd>
 <dd><em class="sig-param"><span class="n"><span class="pre">ignoreInterfragInteractions</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/collections.abc.html#collections.abc.Sequence" title="(in Python v3.14)"><span class="pre">Sequence</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/functions.html#bool" title="(in Python v3.14)"><span class="pre">bool</span></a><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">minimizerKind</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/stdtypes.html#str" title="(in Python v3.14)"><span class="pre">str</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'BFGS'</span></span></em>,</dd>
+<dd><em class="sig-param"><span class="n"><span class="pre">fireOptions</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions" title="nvmolkit._types.FireOptions"><span class="pre">FireOptions</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
 <dd><em class="sig-param"><span class="n"><span class="pre">gpuIds</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Iterable" title="(in Python v3.14)"><span class="pre">Iterable</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
 <dd><em class="sig-param"><span class="n"><span class="pre">calibration_set</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/typing.html#typing.Iterable" title="(in Python v3.14)"><span class="pre">Iterable</span></a><span class="p"><span class="pre">[</span></span><a class="reference external" href="https://docs.python.org/3/library/functions.html#int" title="(in Python v3.14)"><span class="pre">int</span></a><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><a class="reference external" href="https://docs.python.org/3/library/constants.html#None" title="(in Python v3.14)"><span class="pre">None</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>,</dd>
 <dd><em class="sig-param"><span class="n"><span class="pre">calibration_fraction</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference external" href="https://docs.python.org/3/library/functions.html#float" title="(in Python v3.14)"><span class="pre">float</span></a></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.1</span></span></em>,</dd>
@@ -391,6 +401,9 @@ and runs UFF optimization with the trial-suggested hardware options.</p>
 <li><p><strong>maxIters</strong> – <code class="docutils literal notranslate"><span class="pre">maxIters</span></code> argument forwarded to each trial.</p></li>
 <li><p><strong>vdwThreshold</strong> – <code class="docutils literal notranslate"><span class="pre">vdwThreshold</span></code> forwarded to each trial.</p></li>
 <li><p><strong>ignoreInterfragInteractions</strong> – <code class="docutils literal notranslate"><span class="pre">ignoreInterfragInteractions</span></code> flag.</p></li>
+<li><p><strong>minimizerKind</strong> – <code class="docutils literal notranslate"><span class="pre">&quot;BFGS&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">&quot;FIRE&quot;</span></code>, forwarded to each trial.</p></li>
+<li><p><strong>fireOptions</strong> – FIRE algorithm options forwarded to each trial when
+<code class="docutils literal notranslate"><span class="pre">minimizerKind=&quot;FIRE&quot;</span></code>.</p></li>
 <li><p><strong>gpuIds</strong> – GPU device IDs to use. Fixed across the study.</p></li>
 <li><p><strong>calibration_set</strong> – Optional explicit indices into <code class="docutils literal notranslate"><span class="pre">molecules</span></code>.</p></li>
 <li><p><strong>calibration_fraction</strong> – Fraction of the workload to auto-sample.</p></li>

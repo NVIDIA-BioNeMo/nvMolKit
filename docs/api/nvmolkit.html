@@ -33,7 +33,7 @@
 
     <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
     <link rel="stylesheet" type="text/css" href="../_static/styles/nvidia-sphinx-theme.css?v=df3ac72c" />
-    <link rel="stylesheet" type="text/css" href="../_static/jupyter-sphinx.css" />
+    <link rel="stylesheet" type="text/css" href="../_static/jupyter-sphinx.css?v=572af1d6" />
     <link rel="stylesheet" type="text/css" href="../_static/thebelab.css" />
     <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
   
@@ -43,7 +43,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
 
-    <script src="../_static/documentation_options.js?v=1dd76d02"></script>
+    <script src="../_static/documentation_options.js?v=8fa8b3e9"></script>
     <script src="../_static/doctools.js?v=9bcbadda"></script>
     <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/thebelab-helper.js"></script>
@@ -60,7 +60,7 @@
 
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.5.0" />
+  <meta name="docsearch:version" content="0.6.0" />
 
 
   </head>
@@ -256,6 +256,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../similarity.html">Molecular similarity on GPU</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../forcefield.html">Force field optimization on GPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../fire_minimizer.html">FIRE minimizer</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../autotune.html">Hardware autotuning</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../agent_skill.html">Cursor / agent skill</a></li>
 </ul>
@@ -276,6 +277,11 @@
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.batchedForcefield.UFFBatchedForcefield.html">UFFBatchedForcefield</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.batchedForcefield.UFFBatchElement.html">UFFBatchElement</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.clustering.butina.html">butina</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.clustering.fused_butina.html">fused_butina</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.mcs.findMCS.html">findMCS</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.mcs.MCSConfig.html">MCSConfig</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.mcs.MCSBatchResult.html">MCSBatchResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.mcs.MCSResult.html">MCSResult</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.substructure.hasSubstructMatch.html">hasSubstructMatch</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.substructure.countSubstructMatches.html">countSubstructMatches</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.substructure.getSubstructMatches.html">getSubstructMatches</a></li>
@@ -286,6 +292,7 @@
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.tfd.GetTFDMatrix.html">GetTFDMatrix</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.tfd.GetTFDMatrices.html">GetTFDMatrices</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.types.AsyncGpuResult.html">AsyncGpuResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.types.FireOptions.html">FireOptions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.types.HardwareOptions.html">HardwareOptions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.autotune.is_available.html">is_available</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.autotune.tune_embed_molecules.html">tune_embed_molecules</a></li>
@@ -293,6 +300,7 @@
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.autotune.tune_uff_optimize.html">tune_uff_optimize</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.autotune.tune_batched_forcefield.html">tune_batched_forcefield</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.autotune.tune_substructure.html">tune_substructure</a></li>
+<li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.autotune.tune_mcs.html">tune_mcs</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.autotune.save.html">save</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.autotune.load.html">load</a></li>
 <li class="toctree-l2"><a class="reference internal" href="generated/nvmolkit.autotune.TuneResult.html">TuneResult</a></li>
@@ -407,7 +415,7 @@
 <div class="pst-scrollable-table-container"><table class="autosummary longtable table">
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/nvmolkit.mmffOptimization.MMFFOptimizeMoleculesConfs.html#nvmolkit.mmffOptimization.MMFFOptimizeMoleculesConfs" title="nvmolkit.mmffOptimization.MMFFOptimizeMoleculesConfs"><code class="xref py py-obj docutils literal notranslate"><span class="pre">mmffOptimization.MMFFOptimizeMoleculesConfs</span></code></a>()</p></td>
-<td><p>Optimize conformers for multiple molecules using MMFF force field with BFGS minimization.</p></td>
+<td><p>Optimize conformers for multiple molecules using MMFF force field.</p></td>
 </tr>
 </tbody>
 </table>
@@ -452,6 +460,34 @@
 <tbody>
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/nvmolkit.clustering.butina.html#nvmolkit.clustering.butina" title="nvmolkit.clustering.butina"><code class="xref py py-obj docutils literal notranslate"><span class="pre">clustering.butina</span></code></a>(distance_matrix, cutoff[, ...])</p></td>
 <td><p>Perform Butina clustering on a distance matrix.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/nvmolkit.clustering.fused_butina.html#nvmolkit.clustering.fused_butina" title="nvmolkit.clustering.fused_butina"><code class="xref py py-obj docutils literal notranslate"><span class="pre">clustering.fused_butina</span></code></a>(x, cutoff[, ...])</p></td>
+<td><p>Perform fused Butina clustering on a set of fingerprints.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="maximum-common-substructure-mcs">
+<h2>Maximum Common Substructure (MCS)<a class="headerlink" href="#maximum-common-substructure-mcs" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/nvmolkit.mcs.findMCS.html#nvmolkit.mcs.findMCS" title="nvmolkit.mcs.findMCS"><code class="xref py py-obj docutils literal notranslate"><span class="pre">mcs.findMCS</span></code></a>(mols, *[, mode, pairs, mols_b, ...])</p></td>
+<td><p>Find maximum common substructures for a batch of molecule pairs.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="pst-scrollable-table-container"><table class="autosummary longtable table">
+<tbody>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/nvmolkit.mcs.MCSConfig.html#nvmolkit.mcs.MCSConfig" title="nvmolkit.mcs.MCSConfig"><code class="xref py py-obj docutils literal notranslate"><span class="pre">mcs.MCSConfig</span></code></a>([batchSize, workerThreads, ...])</p></td>
+<td><p>Configuration for GPU MCS execution.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/nvmolkit.mcs.MCSBatchResult.html#nvmolkit.mcs.MCSBatchResult" title="nvmolkit.mcs.MCSBatchResult"><code class="xref py py-obj docutils literal notranslate"><span class="pre">mcs.MCSBatchResult</span></code></a>(pairs, mode, num_atoms, ...)</p></td>
+<td><p>Flat batch of MCS results in generated-pair order.</p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/nvmolkit.mcs.MCSResult.html#nvmolkit.mcs.MCSResult" title="nvmolkit.mcs.MCSResult"><code class="xref py py-obj docutils literal notranslate"><span class="pre">mcs.MCSResult</span></code></a>(pair, num_atoms, num_bonds, ...)</p></td>
+<td><p>Result for one molecule pair.</p></td>
 </tr>
 </tbody>
 </table>
@@ -520,7 +556,10 @@
 <tr class="row-odd"><td><p><a class="reference internal" href="generated/nvmolkit.types.AsyncGpuResult.html#nvmolkit.types.AsyncGpuResult" title="nvmolkit.types.AsyncGpuResult"><code class="xref py py-obj docutils literal notranslate"><span class="pre">types.AsyncGpuResult</span></code></a>(obj[, gpu_id])</p></td>
 <td><p>Handle to a GPU result.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/nvmolkit.types.HardwareOptions.html#nvmolkit.types.HardwareOptions" title="nvmolkit.types.HardwareOptions"><code class="xref py py-obj docutils literal notranslate"><span class="pre">types.HardwareOptions</span></code></a>([...])</p></td>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions" title="nvmolkit.types.FireOptions"><code class="xref py py-obj docutils literal notranslate"><span class="pre">types.FireOptions</span></code></a></p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/nvmolkit.types.HardwareOptions.html#nvmolkit.types.HardwareOptions" title="nvmolkit.types.HardwareOptions"><code class="xref py py-obj docutils literal notranslate"><span class="pre">types.HardwareOptions</span></code></a>([...])</p></td>
 <td><p>Configures GPU hardware settings for batch operations.</p></td>
 </tr>
 </tbody>
@@ -549,10 +588,13 @@
 <tr class="row-even"><td><p><a class="reference internal" href="generated/nvmolkit.autotune.tune_substructure.html#nvmolkit.autotune.tune_substructure" title="nvmolkit.autotune.tune_substructure"><code class="xref py py-obj docutils literal notranslate"><span class="pre">autotune.tune_substructure</span></code></a>(targets, queries, *)</p></td>
 <td><p>Tune <code class="xref py py-class docutils literal notranslate"><span class="pre">SubstructSearchConfig</span></code> for a substructure-search workflow.</p></td>
 </tr>
-<tr class="row-odd"><td><p><a class="reference internal" href="generated/nvmolkit.autotune.save.html#nvmolkit.autotune.save" title="nvmolkit.autotune.save"><code class="xref py py-obj docutils literal notranslate"><span class="pre">autotune.save</span></code></a>(config, path)</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/nvmolkit.autotune.tune_mcs.html#nvmolkit.autotune.tune_mcs" title="nvmolkit.autotune.tune_mcs"><code class="xref py py-obj docutils literal notranslate"><span class="pre">autotune.tune_mcs</span></code></a>(mols, pairs, *[, ...])</p></td>
+<td><p>Tune <code class="xref py py-class docutils literal notranslate"><span class="pre">MCSConfig</span></code> for an explicit-pair, GPU-required MCS workload.</p></td>
+</tr>
+<tr class="row-even"><td><p><a class="reference internal" href="generated/nvmolkit.autotune.save.html#nvmolkit.autotune.save" title="nvmolkit.autotune.save"><code class="xref py py-obj docutils literal notranslate"><span class="pre">autotune.save</span></code></a>(config, path)</p></td>
 <td><p>Persist <code class="docutils literal notranslate"><span class="pre">config</span></code> to a JSON file at <code class="docutils literal notranslate"><span class="pre">path</span></code>.</p></td>
 </tr>
-<tr class="row-even"><td><p><a class="reference internal" href="generated/nvmolkit.autotune.load.html#nvmolkit.autotune.load" title="nvmolkit.autotune.load"><code class="xref py py-obj docutils literal notranslate"><span class="pre">autotune.load</span></code></a>(path)</p></td>
+<tr class="row-odd"><td><p><a class="reference internal" href="generated/nvmolkit.autotune.load.html#nvmolkit.autotune.load" title="nvmolkit.autotune.load"><code class="xref py py-obj docutils literal notranslate"><span class="pre">autotune.load</span></code></a>(path)</p></td>
 <td><p>Load a configuration object previously saved with <code class="xref py py-func docutils literal notranslate"><span class="pre">save()</span></code>.</p></td>
 </tr>
 </tbody>
@@ -628,6 +670,9 @@
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#butina-clustering">Butina Clustering</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#maximum-common-substructure-mcs">Maximum Common Substructure (MCS)</a><ul class="nav section-nav flex-column">
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#substructure-search">Substructure Search</a><ul class="nav section-nav flex-column">
 </ul>
 </li>

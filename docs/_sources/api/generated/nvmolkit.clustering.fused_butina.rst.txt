@@ -1,0 +1,8 @@
+﻿.. SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+fused\_butina
+=============
+
+.. currentmodule:: nvmolkit.clustering
+
+.. autofunction:: fused_butina

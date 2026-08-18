@@ -80,6 +80,24 @@ Butina Clustering
    :template: function_template.rst
 
    clustering.butina
+   clustering.fused_butina
+
+Maximum Common Substructure (MCS)
+---------------------------------
+
+.. autosummary::
+   :toctree: generated/
+   :template: function_template.rst
+
+   mcs.findMCS
+
+.. autosummary::
+   :toctree: generated/
+   :template: class_template.rst
+
+   mcs.MCSConfig
+   mcs.MCSBatchResult
+   mcs.MCSResult
 
 Substructure Search
 -------------------
@@ -127,6 +145,7 @@ Types
    :template: class_template.rst
 
    types.AsyncGpuResult
+   types.FireOptions
    types.HardwareOptions
 
 Hardware Autotuning (optional ``optuna`` extra)
@@ -142,6 +161,7 @@ Hardware Autotuning (optional ``optuna`` extra)
    autotune.tune_uff_optimize
    autotune.tune_batched_forcefield
    autotune.tune_substructure
+   autotune.tune_mcs
    autotune.save
    autotune.load
 
