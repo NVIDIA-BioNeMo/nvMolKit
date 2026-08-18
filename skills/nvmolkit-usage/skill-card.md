@@ -1,5 +1,5 @@
 ## Description: <br>
-Guides an agent to write correct code against the installed nvMolKit Python API for GPU-accelerated, batched RDKit-style cheminformatics — Morgan fingerprints, Tanimoto/cosine similarity, ETKDG conformer embedding, MMFF/UFF optimization, TFD, conformer RMSD, Butina clustering, and substructure search. <br>
+Guides an agent to write correct code against the installed nvMolKit Python API for GPU-accelerated, batched RDKit-style cheminformatics — Morgan fingerprints, Tanimoto/cosine similarity, ETKDG conformer embedding, MMFF/UFF optimization with BFGS or FIRE, TFD, conformer RMSD, Butina clustering, substructure search, and maximum common substructure (MCS) search. <br>
 
 This skill is ready for commercial/non-commercial use. <br>
 
@@ -33,7 +33,7 @@ Risk: nvMolKit and RDKit can differ numerically for the same nominal operation (
 Mitigation: The skill covers where nvMolKit is and is not an appropriate substitute for RDKit, so users choose the backend deliberately rather than assuming equivalence. <br>
 
 Risk: Batched GPU operations on large molecule libraries can exhaust GPU memory mid-run. <br>
-Mitigation: The skill documents `HardwareOptions` configuration for batch and device control. <br>
+Mitigation: The skill documents `HardwareOptions`, `SubstructSearchConfig`, and `MCSConfig` for batch and device control. <br>
 
 Risk: Asynchronous result handles can be read before completion if the execution model is misunderstood, yielding empty or partial data. <br>
 Mitigation: The skill's result-type documentation is explicit about when a result must be awaited or materialized. <br>
@@ -41,7 +41,7 @@ Mitigation: The skill's result-type documentation is explicit about when a resul
 ## Reference(s): <br>
 - [nvMolKit repository](https://github.com/NVIDIA-BioNeMo/nvMolKit) <br>
 - [RDKit documentation](https://www.rdkit.org/docs/) — the API surface nvMolKit mirrors <br>
-- `SKILL.md` in this skill directory — result types, `HardwareOptions` / `SubstructSearchConfig`, and worked recipes <br>
+- `SKILL.md` in this skill directory — result types, execution configuration, and worked recipes including MCS <br>
 
 ## Skill Output: <br>
 **Output Type(s):** [Code, Analysis] <br>
@@ -53,7 +53,7 @@ Mitigation: The skill's result-type documentation is explicit about when a resul
 Target agents: `claude-code`, `codex`. NVSkills-Eval has not yet been run against this skill — see Evaluation Results. <br>
 
 ## Evaluation Tasks: <br>
-11 functional evaluation tasks in `evals/evals.json` covering fingerprinting, similarity, conformer generation, optimization, clustering, and substructure search, plus 3 trigger-activation cases and 2 non-trigger cases in `evals/trigger_evals.json`. <br>
+12 functional evaluation tasks in `evals/evals.json` covering fingerprinting, similarity, conformer generation, optimization, clustering, substructure search, and MCS, plus 4 trigger-activation cases and 2 non-trigger cases in `evals/trigger_evals.json`. <br>
 
 ## Evaluation Metrics Used: <br>
 Planned NVSkills-Eval dimensions: Security, Correctness, Discoverability, Effectiveness, Efficiency. <br>
