@@ -187,6 +187,8 @@ nvMolKit currently supports the following features:
     * Supports SMILES and recursive SMARTS-based query molecules via RDKit
     * Does not yet support chirality-aware matching, enhanced stereochemistry, or other advanced RDKit ``SubstructMatchParameters`` options
 
+* **Maximum Common Substructure (MCS)**: GPU-accelerated MCS search across batches of molecule pairs
+
 * **Conformer RMSD**: GPU-accelerated pairwise RMSD matrix computation for conformer ensembles
 
 * **Torsion Fingerprint Deviation (TFD)**: GPU-accelerated TFD computation for comparing conformer geometry
