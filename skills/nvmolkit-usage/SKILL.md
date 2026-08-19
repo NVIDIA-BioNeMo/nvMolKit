@@ -38,10 +38,7 @@ Plain RDKit is usually the better choice for single-molecule one-offs or workflo
 - A CUDA driver compatible with CUDA 12.6+.
 - A working `torch` install with CUDA support (nvMolKit returns GPU tensors via `torch`'s CUDA array interface).
 
-If CUDA is unavailable, nvMolKit calls generally raise. MCS is the exception:
-individual pairs outside its native GPU limits transparently fall back to
-RDKit unless `require_gpu=True`. If the user needs a general CPU-only path, use
-RDKit directly.
+If CUDA is unavailable, nvMolKit calls raise. There is no CPU fallback - if the user needs one, use RDKit directly for that path.
 
 When helping with installation, make the user choose a PyTorch CUDA backend that the host driver supports before installing nvMolKit. nvMolKit's PyPI wheels are built with CUDA Toolkit 12.9 and depend on CUDA 12 runtime packages, but pip/uv can still select a CUDA 13 PyTorch wheel unless the install command says otherwise.
 
@@ -152,9 +149,15 @@ The default mode (`CoordinateOutput.RDKIT_CONFORMERS`) still writes optimized co
 ### `MCSBatchResult`
 
 `findMCS` is synchronous and returns an `MCSBatchResult` backed by CPU NumPy
-arrays. `result.pairs` defines the flat result order; `result[k]` materializes
-an `MCSResult` with `num_atoms`, `num_bonds`, `canceled`, and `(left, right)`
-atom/bond mapping arrays. Do not treat the result index as a molecule index.
+arrays. Results are always flat: `result[k]` (or `result.get_result(k)`)
+materializes the result at pair position `k`, not generally the result for
+molecule `k`. Use `result.pairs[k]` to identify that pair. In `all_pairs` mode
+these are the generated pairs over `mols`; in `pairs` mode they exactly preserve
+the supplied pair sequence; in `paired_lists` mode item `k` compares `mols[k]`
+with `mols_b[k]`, while `result.pairs[k]` uses the combined-table indices
+`(k, len(mols) + k)`. Each `MCSResult` has `pair`, `num_atoms`, `num_bonds`,
+`canceled`, `atom_mapping`, and `bond_mapping`; the two columns of each mapping
+index the first and second molecule of that result pair, respectively.
 
 ## Configuration
 
@@ -321,8 +324,7 @@ The default `mode="all_pairs"` generates the upper triangle including the
 diagonal. `mode="pairs"` preserves an explicit pair list exactly, including
 duplicates and reversed pairs. `mode="paired_lists"` zips `mols` with an
 equally sized `mols_b`. Timeouts are per pair; inspect `item.canceled` because a
-timed-out result can contain the best partial MCS found. Oversized pairs and
-GPU queue overflows fall back to RDKit on CPU unless `require_gpu=True`.
+timed-out result can contain the best partial MCS found.
 
 Matching options include `atom_compare`, `bond_compare`, valence/formal-charge
 matching, and atom/bond ring-only matching. Unsupported RDKit fMCS options

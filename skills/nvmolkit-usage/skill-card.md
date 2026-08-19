@@ -41,7 +41,7 @@ Mitigation: The skill's result-type documentation is explicit about when a resul
 ## Reference(s): <br>
 - [nvMolKit repository](https://github.com/NVIDIA-BioNeMo/nvMolKit) <br>
 - [RDKit documentation](https://www.rdkit.org/docs/) — the API surface nvMolKit mirrors <br>
-- `SKILL.md` in this skill directory — result types, execution configuration, and worked recipes including MCS <br>
+- `SKILL.md` in this skill directory — result types, execution configuration, and worked recipes <br>
 
 ## Skill Output: <br>
 **Output Type(s):** [Code, Analysis] <br>
