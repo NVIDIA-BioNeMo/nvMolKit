@@ -85,6 +85,34 @@ __device__ __forceinline__ double det3x3(const double* H) {
   return H[0] * (H[4] * H[8] - H[5] * H[7]) - H[1] * (H[3] * H[8] - H[5] * H[6]) + H[2] * (H[3] * H[7] - H[4] * H[6]);
 }
 
+__device__ __forceinline__ double alignedRmsd(const double Sp, const double Sq, const double* H, const double invN) {
+  // Finish the Kabsch calculation from the centered sums and covariance matrix.
+  // G = H^T H  (3x3 symmetric positive semi-definite)
+  const double g00 = H[0] * H[0] + H[3] * H[3] + H[6] * H[6];
+  const double g01 = H[0] * H[1] + H[3] * H[4] + H[6] * H[7];
+  const double g02 = H[0] * H[2] + H[3] * H[5] + H[6] * H[8];
+  const double g11 = H[1] * H[1] + H[4] * H[4] + H[7] * H[7];
+  const double g12 = H[1] * H[2] + H[4] * H[5] + H[7] * H[8];
+  const double g22 = H[2] * H[2] + H[5] * H[5] + H[8] * H[8];
+
+  // Eigenvalues of G = squared singular values of H
+  double ev0, ev1, ev2;
+  symmetricEigenvalues3x3(g00, g01, g02, g11, g12, g22, ev0, ev1, ev2);
+
+  // Singular values (clamp negatives from numerical noise)
+  const double s0 = sqrt(fmax(ev0, 0.0));
+  const double s1 = sqrt(fmax(ev1, 0.0));
+  double       s2 = sqrt(fmax(ev2, 0.0));
+
+  // Handle reflection: if det(H) < 0, negate the smallest singular value
+  if (det3x3(H) < 0.0) {
+    s2 = -s2;
+  }
+
+  // RMSD^2 = (Sp + Sq - 2*(s0 + s1 + s2)) / N
+  return sqrt(fmax((Sp + Sq - 2.0 * (s0 + s1 + s2)) * invN, 0.0));
+}
+
 // ---------------------------------------------------------------------------
 // Per-pair RMSD helper
 //
@@ -106,8 +134,6 @@ using RmsdWarpReduce = cub::WarpReduce<double>;
 
 __device__ __forceinline__ void computePairRmsd(const double* __restrict__ coordI,
                                                 const double* __restrict__ coordJ,
-                                                const int* __restrict__ atomMapI,
-                                                const int* __restrict__ atomMapJ,
                                                 const int  numAtoms,
                                                 const bool prealigned,
                                                 double*    outRmsd) {
@@ -130,11 +156,9 @@ __device__ __forceinline__ void computePairRmsd(const double* __restrict__ coord
     // ---- Simple RMSD without alignment (no centering, matches RDKit behavior) ----
     double sumSqDiff = 0.0;
     for (int a = tid; a < numAtoms; a += kRmsdBlockSize) {
-      const int    ai = atomMapI == nullptr ? a : atomMapI[a];
-      const int    aj = atomMapJ == nullptr ? a : atomMapJ[a];
-      const double dx = coordI[ai * 3 + 0] - coordJ[aj * 3 + 0];
-      const double dy = coordI[ai * 3 + 1] - coordJ[aj * 3 + 1];
-      const double dz = coordI[ai * 3 + 2] - coordJ[aj * 3 + 2];
+      const double dx = coordI[a * 3 + 0] - coordJ[a * 3 + 0];
+      const double dy = coordI[a * 3 + 1] - coordJ[a * 3 + 1];
+      const double dz = coordI[a * 3 + 2] - coordJ[a * 3 + 2];
       sumSqDiff += dx * dx + dy * dy + dz * dz;
     }
     sumSqDiff = RmsdWarpReduce(warpReduceTemp[warpId]).Sum(sumSqDiff);
@@ -156,14 +180,12 @@ __device__ __forceinline__ void computePairRmsd(const double* __restrict__ coord
   double sumIx = 0.0, sumIy = 0.0, sumIz = 0.0;
   double sumJx = 0.0, sumJy = 0.0, sumJz = 0.0;
   for (int a = tid; a < numAtoms; a += kRmsdBlockSize) {
-    const int ai = atomMapI == nullptr ? a : atomMapI[a];
-    const int aj = atomMapJ == nullptr ? a : atomMapJ[a];
-    sumIx += coordI[ai * 3 + 0];
-    sumIy += coordI[ai * 3 + 1];
-    sumIz += coordI[ai * 3 + 2];
-    sumJx += coordJ[aj * 3 + 0];
-    sumJy += coordJ[aj * 3 + 1];
-    sumJz += coordJ[aj * 3 + 2];
+    sumIx += coordI[a * 3 + 0];
+    sumIy += coordI[a * 3 + 1];
+    sumIz += coordI[a * 3 + 2];
+    sumJx += coordJ[a * 3 + 0];
+    sumJy += coordJ[a * 3 + 1];
+    sumJz += coordJ[a * 3 + 2];
   }
   sumIx = RmsdWarpReduce(warpReduceTemp[warpId]).Sum(sumIx);
   sumIy = RmsdWarpReduce(warpReduceTemp[warpId]).Sum(sumIy);
@@ -212,14 +234,12 @@ __device__ __forceinline__ void computePairRmsd(const double* __restrict__ coord
   double localH[9] = {0.0};
 
   for (int a = tid; a < numAtoms; a += kRmsdBlockSize) {
-    const int    ai = atomMapI == nullptr ? a : atomMapI[a];
-    const int    aj = atomMapJ == nullptr ? a : atomMapJ[a];
-    const double px = coordI[ai * 3 + 0] - cIx;
-    const double py = coordI[ai * 3 + 1] - cIy;
-    const double pz = coordI[ai * 3 + 2] - cIz;
-    const double qx = coordJ[aj * 3 + 0] - cJx;
-    const double qy = coordJ[aj * 3 + 1] - cJy;
-    const double qz = coordJ[aj * 3 + 2] - cJz;
+    const double px = coordI[a * 3 + 0] - cIx;
+    const double py = coordI[a * 3 + 1] - cIy;
+    const double pz = coordI[a * 3 + 2] - cIz;
+    const double qx = coordJ[a * 3 + 0] - cJx;
+    const double qy = coordJ[a * 3 + 1] - cJy;
+    const double qz = coordJ[a * 3 + 2] - cJz;
 
     localSp += px * px + py * py + pz * pz;
     localSq += qx * qx + qy * qy + qz * qz;
@@ -257,30 +277,7 @@ __device__ __forceinline__ void computePairRmsd(const double* __restrict__ coord
         H[i] += warpBuf[w][2 + i];
     }
 
-    // G = H^T H  (3x3 symmetric positive semi-definite)
-    const double g00 = H[0] * H[0] + H[3] * H[3] + H[6] * H[6];
-    const double g01 = H[0] * H[1] + H[3] * H[4] + H[6] * H[7];
-    const double g02 = H[0] * H[2] + H[3] * H[5] + H[6] * H[8];
-    const double g11 = H[1] * H[1] + H[4] * H[4] + H[7] * H[7];
-    const double g12 = H[1] * H[2] + H[4] * H[5] + H[7] * H[8];
-    const double g22 = H[2] * H[2] + H[5] * H[5] + H[8] * H[8];
-
-    // Eigenvalues of G = squared singular values of H
-    double ev0, ev1, ev2;
-    symmetricEigenvalues3x3(g00, g01, g02, g11, g12, g22, ev0, ev1, ev2);
-
-    // Singular values (clamp negatives from numerical noise)
-    const double s0 = sqrt(fmax(ev0, 0.0));
-    const double s1 = sqrt(fmax(ev1, 0.0));
-    double       s2 = sqrt(fmax(ev2, 0.0));
-
-    // Handle reflection: if det(H) < 0, negate the smallest singular value
-    if (det3x3(H) < 0.0)
-      s2 = -s2;
-
-    // RMSD^2 = (Sp + Sq - 2*(s0 + s1 + s2)) / N
-    const double rmsdSq = fmax((Sp + Sq - 2.0 * (s0 + s1 + s2)) * invN, 0.0);
-    *outRmsd            = sqrt(rmsdSq);
+    *outRmsd = alignedRmsd(Sp, Sq, H, invN);
   }
 }
 
@@ -309,7 +306,7 @@ __global__ void conformerRmsdKernel(const double* __restrict__ coords,
   const double* coordI = coords + ci * stride;
   const double* coordJ = coords + cj * stride;
 
-  computePairRmsd(coordI, coordJ, nullptr, nullptr, numAtoms, prealigned, &rmsdOut[pairIdx]);
+  computePairRmsd(coordI, coordJ, numAtoms, prealigned, &rmsdOut[pairIdx]);
 }
 
 // ---------------------------------------------------------------------------
@@ -363,98 +360,168 @@ __global__ void conformerRmsdBatchKernel(const double* __restrict__ coords,
   const double* coordI = molCoords + ci * stride;
   const double* coordJ = molCoords + cj * stride;
 
-  computePairRmsd(coordI, coordJ, nullptr, nullptr, numAtoms, prealigned, &molRmsd[localPairIdx]);
+  computePairRmsd(coordI, coordJ, numAtoms, prealigned, &molRmsd[localPairIdx]);
 }
 
 namespace {
 
 using detail::ConformerPruningMolInfo;
 
-__global__ void conformerConflictKernel(const double* __restrict__ coords,
-                                        const int32_t* __restrict__ atomStarts,
-                                        const int32_t* __restrict__ groupedConfIds,
-                                        const ConformerPruningMolInfo* __restrict__ molInfos,
-                                        const int32_t* __restrict__ atomMaps,
-                                        uint8_t* __restrict__ conflicts,
-                                        const int    numMols,
-                                        const double threshold) {
-  const int globalPairIdx = blockIdx.x;
+constexpr unsigned int kFullWarpMask = 0xffffffffU;
 
-  // Pair ranges are contiguous by molecule, so a short binary search finds
-  // the molecule without storing one molecule id per pair.
-  int lo = 0;
-  int hi = numMols - 1;
-  while (lo < hi) {
-    const int mid = (lo + hi + 1) / 2;
-    if (globalPairIdx >= molInfos[mid].pairBegin) {
-      lo = mid;
-    } else {
-      hi = mid - 1;
+__device__ __forceinline__ double warpSum(double value) {
+  // Add one value from every lane, then broadcast the total to the whole warp.
+  for (int offset = 16; offset > 0; offset /= 2) {
+    value += __shfl_down_sync(kFullWarpMask, value, offset);
+  }
+  return __shfl_sync(kFullWarpMask, value, 0);
+}
+
+__device__ __forceinline__ double computePairRmsdWarp(const double* __restrict__ coordI,
+                                                      const double* __restrict__ coordJ,
+                                                      const int* __restrict__ atomMapI,
+                                                      const int* __restrict__ atomMapJ,
+                                                      const int numAtoms) {
+  const int lane = threadIdx.x % 32;
+
+  // Each lane handles every 32nd mapped atom. The warp sums those partial
+  // values to find both conformer centroids without shared memory.
+  double sumIx = 0.0, sumIy = 0.0, sumIz = 0.0;
+  double sumJx = 0.0, sumJy = 0.0, sumJz = 0.0;
+  for (int atom = lane; atom < numAtoms; atom += 32) {
+    const int offsetI = atomMapI[atom] * 3;
+    const int offsetJ = atomMapJ[atom] * 3;
+    sumIx += coordI[offsetI + 0];
+    sumIy += coordI[offsetI + 1];
+    sumIz += coordI[offsetI + 2];
+    sumJx += coordJ[offsetJ + 0];
+    sumJy += coordJ[offsetJ + 1];
+    sumJz += coordJ[offsetJ + 2];
+  }
+
+  const double invN = 1.0 / static_cast<double>(numAtoms);
+  const double cIx  = warpSum(sumIx) * invN;
+  const double cIy  = warpSum(sumIy) * invN;
+  const double cIz  = warpSum(sumIz) * invN;
+  const double cJx  = warpSum(sumJx) * invN;
+  const double cJy  = warpSum(sumJy) * invN;
+  const double cJz  = warpSum(sumJz) * invN;
+
+  // Center the mapped coordinates and build the values needed by Kabsch.
+  double localSp = 0.0, localSq = 0.0;
+  double localH[9] = {0.0};
+  for (int atom = lane; atom < numAtoms; atom += 32) {
+    const int    offsetI = atomMapI[atom] * 3;
+    const int    offsetJ = atomMapJ[atom] * 3;
+    const double px      = coordI[offsetI + 0] - cIx;
+    const double py      = coordI[offsetI + 1] - cIy;
+    const double pz      = coordI[offsetI + 2] - cIz;
+    const double qx      = coordJ[offsetJ + 0] - cJx;
+    const double qy      = coordJ[offsetJ + 1] - cJy;
+    const double qz      = coordJ[offsetJ + 2] - cJz;
+
+    localSp += px * px + py * py + pz * pz;
+    localSq += qx * qx + qy * qy + qz * qz;
+    localH[0] += px * qx;
+    localH[1] += px * qy;
+    localH[2] += px * qz;
+    localH[3] += py * qx;
+    localH[4] += py * qy;
+    localH[5] += py * qz;
+    localH[6] += pz * qx;
+    localH[7] += pz * qy;
+    localH[8] += pz * qz;
+  }
+
+  const double Sp = warpSum(localSp);
+  const double Sq = warpSum(localSq);
+  double       H[9];
+  for (int i = 0; i < 9; ++i) {
+    H[i] = warpSum(localH[i]);
+  }
+
+  // Lane 0 finishes the small matrix calculation and shares the RMSD with
+  // the other lanes so they all make the same pruning decision.
+  double rmsd = 0.0;
+  if (lane == 0) {
+    rmsd = alignedRmsd(Sp, Sq, H, invN);
+  }
+  return __shfl_sync(kFullWarpMask, rmsd, 0);
+}
+
+__global__ void selectOrderedConformersGreedyKernel(const double* __restrict__ coords,
+                                                    const int32_t* __restrict__ atomStarts,
+                                                    const int32_t* __restrict__ groupedConfIds,
+                                                    const ConformerPruningMolInfo* __restrict__ molInfos,
+                                                    const int32_t* __restrict__ atomMaps,
+                                                    uint8_t* __restrict__ selected,
+                                                    const double threshold) {
+  const ConformerPruningMolInfo info          = molInfos[blockIdx.x];
+  const int*                    referenceMap  = info.atomMapCount == 0 ? nullptr : atomMaps + info.atomMapBegin;
+  const int                     warp          = threadIdx.x / 32;
+  const int                     lane          = threadIdx.x % 32;
+  const int                     warpsPerBlock = blockDim.x / 32;
+  __shared__ int                isConflict;
+
+  // Greedy pruning is order-dependent: a candidate is kept only when it does
+  // not match an earlier kept conformer. One block owns one molecule so it can
+  // process candidates in order while its warps compare earlier conformers in parallel.
+  for (int candidateRank = 0; candidateRank < info.confCount; ++candidateRank) {
+    if (threadIdx.x == 0) {
+      isConflict = 0;
     }
-  }
-  const ConformerPruningMolInfo info            = molInfos[lo];
-  const int                     localPairIdx    = globalPairIdx - info.pairBegin;
-  const int                     candidateRank   = static_cast<int>(floor((1.0 + sqrt(1.0 + 8.0 * localPairIdx)) / 2.0));
-  const int                     previousRank    = localPairIdx - candidateRank * (candidateRank - 1) / 2;
-  const int                     candidateConf   = groupedConfIds[info.confBegin + candidateRank];
-  const int                     previousConf    = groupedConfIds[info.confBegin + previousRank];
-  const double*                 candidateCoords = coords + static_cast<size_t>(atomStarts[candidateConf]) * 3;
-  const double*                 previousCoords  = coords + static_cast<size_t>(atomStarts[previousConf]) * 3;
-  const int*                    referenceMap    = atomMaps + info.atomMapBegin;
-
-  __shared__ double pairRmsd;
-  __shared__ int    isConflict;
-  if (threadIdx.x == 0) {
-    isConflict = 0;
-  }
-  __syncthreads();
-
-  for (int mapIdx = 0; mapIdx < info.atomMapCount; ++mapIdx) {
-    const int* probeMap = referenceMap + mapIdx * info.mappedAtomCount;
-    computePairRmsd(candidateCoords, previousCoords, referenceMap, probeMap, info.mappedAtomCount, false, &pairRmsd);
     __syncthreads();
-    if (threadIdx.x == 0 && pairRmsd < threshold) {
-      isConflict = 1;
+
+    const int     candidateConf   = groupedConfIds[info.confBegin + candidateRank];
+    const double* candidateCoords = coords + static_cast<size_t>(atomStarts[candidateConf]) * 3;
+    for (int previousBase = 0; previousBase < candidateRank; previousBase += warpsPerBlock) {
+      // Each warp checks one earlier conformer. Any warp can mark the shared
+      // conflict flag, and the block stops as soon as one match is found.
+      const int previousRank = previousBase + warp;
+      bool      warpConflict = false;
+      if (previousRank < candidateRank && selected[info.confBegin + previousRank] != 0) {
+        const int     previousConf   = groupedConfIds[info.confBegin + previousRank];
+        const double* previousCoords = coords + static_cast<size_t>(atomStarts[previousConf]) * 3;
+        for (int mapIdx = 0; mapIdx < info.atomMapCount; ++mapIdx) {
+          // Compare the reference atom order with every allowed symmetry map.
+          const int*   probeMap = referenceMap + mapIdx * info.mappedAtomCount;
+          const double rmsd =
+            computePairRmsdWarp(candidateCoords, previousCoords, referenceMap, probeMap, info.mappedAtomCount);
+          if (rmsd < threshold) {
+            warpConflict = true;
+            break;
+          }
+        }
+      }
+      if (lane == 0 && warpConflict) {
+        atomicExch(&isConflict, 1);
+      }
+      __syncthreads();
+      if (isConflict != 0) {
+        break;
+      }
+    }
+
+    if (threadIdx.x == 0) {
+      selected[info.confBegin + candidateRank] = isConflict == 0;
     }
     __syncthreads();
-    if (isConflict != 0) {
-      break;
-    }
-  }
-
-  if (threadIdx.x == 0 && isConflict != 0) {
-    conflicts[globalPairIdx] = 1;
   }
 }
 
-__global__ void selectOrderedConformersKernel(const ConformerPruningMolInfo* __restrict__ molInfos,
-                                              const uint8_t* __restrict__ conflicts,
-                                              uint8_t* __restrict__ selected) {
-  const int                     molIdx = blockIdx.x;
-  const ConformerPruningMolInfo info   = molInfos[molIdx];
-  __shared__ int                hasConflict;
+__global__ void compactConformerPositionsKernel(const double* __restrict__ positions,
+                                                const int32_t* __restrict__ atomStarts,
+                                                const int32_t* __restrict__ sourceConformerIds,
+                                                const int32_t* __restrict__ compactedAtomStarts,
+                                                double* __restrict__ compactedPositions) {
+  // One block copies one retained conformer into its new contiguous range.
+  const int    sourceConformer = sourceConformerIds[blockIdx.x];
+  const size_t sourceBegin     = static_cast<size_t>(atomStarts[sourceConformer]) * 3;
+  const size_t valueCount      = static_cast<size_t>(atomStarts[sourceConformer + 1] - atomStarts[sourceConformer]) * 3;
+  const size_t destinationBegin = static_cast<size_t>(compactedAtomStarts[blockIdx.x]) * 3;
 
-  // Candidate order is sequential, but the block checks all earlier kept
-  // conformers in parallel.
-  for (int candidate = 0; candidate < info.confCount; ++candidate) {
-    if (threadIdx.x == 0) {
-      hasConflict = 0;
-    }
-    __syncthreads();
-
-    for (int earlier = threadIdx.x; earlier < candidate; earlier += blockDim.x) {
-      const int earlierIdx = info.confBegin + earlier;
-      const int pairIdx    = info.pairBegin + candidate * (candidate - 1) / 2 + earlier;
-      if (selected[earlierIdx] != 0 && conflicts[pairIdx] != 0) {
-        atomicExch(&hasConflict, 1);
-      }
-    }
-    __syncthreads();
-
-    if (threadIdx.x == 0) {
-      selected[info.confBegin + candidate] = hasConflict == 0;
-    }
-    __syncthreads();
+  for (size_t value = threadIdx.x; value < valueCount; value += blockDim.x) {
+    compactedPositions[destinationBegin + value] = positions[sourceBegin + value];
   }
 }
 
@@ -514,29 +581,42 @@ void detail::conformerPruneMaskGpu(cuda::std::span<const double>                
                                    cuda::std::span<const int32_t>                 groupedConfIds,
                                    cuda::std::span<const ConformerPruningMolInfo> molInfos,
                                    cuda::std::span<const int32_t>                 atomMaps,
-                                   cuda::std::span<uint8_t>                       conflicts,
                                    cuda::std::span<uint8_t>                       selected,
-                                   const int                                      totalPairs,
                                    const double                                   threshold,
                                    cudaStream_t                                   stream) {
-  if (totalPairs <= 0 || molInfos.empty()) {
+  if (molInfos.empty()) {
     return;
   }
 
-  conformerConflictKernel<<<totalPairs, kRmsdBlockSize, 0, stream>>>(coords.data(),
-                                                                     atomStarts.data(),
-                                                                     groupedConfIds.data(),
-                                                                     molInfos.data(),
-                                                                     atomMaps.data(),
-                                                                     conflicts.data(),
-                                                                     static_cast<int>(molInfos.size()),
-                                                                     threshold);
+  constexpr int kGreedyBlockSize = 64;
+  selectOrderedConformersGreedyKernel<<<static_cast<int>(molInfos.size()), kGreedyBlockSize, 0, stream>>>(
+    coords.data(),
+    atomStarts.data(),
+    groupedConfIds.data(),
+    molInfos.data(),
+    atomMaps.data(),
+    selected.data(),
+    threshold);
   cudaCheckError(cudaGetLastError());
+}
 
-  constexpr int kSelectionBlockSize = 256;
-  selectOrderedConformersKernel<<<static_cast<int>(molInfos.size()), kSelectionBlockSize, 0, stream>>>(molInfos.data(),
-                                                                                                       conflicts.data(),
-                                                                                                       selected.data());
+void detail::compactConformerPositionsGpu(cuda::std::span<const double>  positions,
+                                          cuda::std::span<const int32_t> atomStarts,
+                                          cuda::std::span<const int32_t> sourceConformerIds,
+                                          cuda::std::span<const int32_t> compactedAtomStarts,
+                                          cuda::std::span<double>        compactedPositions,
+                                          cudaStream_t                   stream) {
+  if (sourceConformerIds.empty()) {
+    return;
+  }
+
+  constexpr int kCompactionBlockSize = 128;
+  compactConformerPositionsKernel<<<static_cast<int>(sourceConformerIds.size()), kCompactionBlockSize, 0, stream>>>(
+    positions.data(),
+    atomStarts.data(),
+    sourceConformerIds.data(),
+    compactedAtomStarts.data(),
+    compactedPositions.data());
   cudaCheckError(cudaGetLastError());
 }
 

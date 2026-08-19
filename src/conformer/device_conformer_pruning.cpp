@@ -19,8 +19,6 @@
 #include <GraphMol/DistGeomHelpers/Embedder.h>
 
 #include <cstdint>
-#include <limits>
-#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -39,6 +37,7 @@ DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                       
     return result;
   }
 
+  // Only the small index arrays come back to the CPU. Coordinates stay on the GPU.
   const WithDevice     withDevice(result.gpuId);
   std::vector<int32_t> atomStarts(result.atomStarts.size());
   std::vector<int32_t> molIndices(numConformers);
@@ -46,48 +45,36 @@ DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                       
   result.molIndices.copyToHost(molIndices);
   cudaCheckError(cudaStreamSynchronize(nullptr));
 
-  // Group conformer ids by molecule because collectors may return them interleaved.
-  std::vector<ConformerPruningMolInfo> molInfo(mols.size());
+  std::vector<ConformerPruningMolInfo> molInfos(mols.size());
   for (const int32_t molIdx : molIndices) {
-    ++molInfo[static_cast<size_t>(molIdx)].confCount;
+    ++molInfos[static_cast<size_t>(molIdx)].confCount;
   }
-
-  int64_t totalPairs = 0;
-  for (const auto& info : molInfo) {
-    totalPairs += static_cast<int64_t>(info.confCount) * (info.confCount - 1) / 2;
-  }
-  if (totalPairs == 0) {
-    return result;
-  }
-  if (totalPairs > std::numeric_limits<int>::max()) {
-    throw std::overflow_error("Too many conformer pairs to prune in one CUDA launch");
-  }
-  const int numPairs = static_cast<int>(totalPairs);
 
   int confBegin = 0;
-  int pairBegin = 0;
-  for (auto& info : molInfo) {
+
+  // Record where each molecule's group begins.
+  for (auto& info : molInfos) {
     info.confBegin = confBegin;
-    info.pairBegin = pairBegin;
     confBegin += info.confCount;
-    pairBegin += static_cast<int>(static_cast<int64_t>(info.confCount) * (info.confCount - 1) / 2);
   }
 
+  // Conformers from different molecules may be interleaved, so group their IDs
+  // while preserving each molecule's input order.
   std::vector<int32_t> groupedConfIds(numConformers);
-  std::vector<int>     nextConf;
-  nextConf.reserve(molInfo.size());
-  for (const auto& info : molInfo) {
-    nextConf.push_back(info.confBegin);
+  std::vector<int>     nextConf(molInfos.size());
+  for (size_t molIdx = 0; molIdx < molInfos.size(); ++molIdx) {
+    nextConf[molIdx] = molInfos[molIdx].confBegin;
   }
   for (size_t confIdx = 0; confIdx < numConformers; ++confIdx) {
     const int molIdx                   = molIndices[confIdx];
     groupedConfIds[nextConf[molIdx]++] = static_cast<int32_t>(confIdx);
   }
 
-  // RDKit supplies the atom orders needed for heavy-atom and symmetry-aware RMSD.
+  // Store RDKit's heavy-atom and symmetry mappings back-to-back so each
+  // molecule can find its mappings from molInfos.
   std::vector<int32_t> atomMaps;
   for (size_t molIdx = 0; molIdx < mols.size(); ++molIdx) {
-    auto& info = molInfo[molIdx];
+    auto& info = molInfos[molIdx];
     if (info.confCount < 2) {
       continue;
     }
@@ -100,28 +87,25 @@ DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                       
     }
   }
 
-  AsyncDeviceVector<ConformerPruningMolInfo> molInfoDevice(molInfo.size());
+  AsyncDeviceVector<ConformerPruningMolInfo> molInfosDevice(molInfos.size());
   AsyncDeviceVector<int32_t>                 groupedConfIdsDevice(groupedConfIds.size());
   AsyncDeviceVector<int32_t>                 atomMapsDevice(atomMaps.size());
-  AsyncDeviceVector<uint8_t>                 conflicts(static_cast<size_t>(numPairs));
   AsyncDeviceVector<uint8_t>                 selected(numConformers);
-  molInfoDevice.copyFromHost(molInfo);
+  molInfosDevice.copyFromHost(molInfos);
   groupedConfIdsDevice.copyFromHost(groupedConfIds);
   atomMapsDevice.copyFromHost(atomMaps);
-  conflicts.zero();
-  selected.zero();
 
   conformerPruneMaskGpu(cuda::std::span<const double>(result.positions.data(), result.positions.size()),
                         cuda::std::span<const int32_t>(result.atomStarts.data(), result.atomStarts.size()),
                         cuda::std::span<const int32_t>(groupedConfIdsDevice.data(), groupedConfIdsDevice.size()),
-                        cuda::std::span<const ConformerPruningMolInfo>(molInfoDevice.data(), molInfoDevice.size()),
+                        cuda::std::span<const ConformerPruningMolInfo>(molInfosDevice.data(), molInfosDevice.size()),
                         cuda::std::span<const int32_t>(atomMapsDevice.data(), atomMapsDevice.size()),
-                        cuda::std::span<uint8_t>(conflicts.data(), conflicts.size()),
                         cuda::std::span<uint8_t>(selected.data(), selected.size()),
-                        numPairs,
                         params.pruneRmsThresh,
                         nullptr);
 
+  // Bring back the keep decisions so we can size and build the compacted result.
+  // The GPU groups them by molecule, so restore their input order first.
   std::vector<uint8_t> selectedHost(selected.size());
   selected.copyToHost(selectedHost);
   cudaCheckError(cudaStreamSynchronize(nullptr));
@@ -131,6 +115,7 @@ DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                       
     keep[static_cast<size_t>(groupedConfIds[groupedIdx])] = selectedHost[groupedIdx];
   }
 
+  // Count how much space is needed for the conformers that survived pruning.
   size_t keptConformers = 0;
   size_t keptAtoms      = 0;
   for (size_t confIdx = 0; confIdx < numConformers; ++confIdx) {
@@ -138,6 +123,18 @@ DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                       
       ++keptConformers;
       keptAtoms += static_cast<size_t>(atomStarts[confIdx + 1] - atomStarts[confIdx]);
     }
+  }
+  if (keptConformers == numConformers) {
+    // If every conformer survives, keep the coordinates and only renumber the
+    // conformers within each molecule because the input may be interleaved.
+    std::vector<int32_t> renumberedConfIndices(numConformers);
+    std::vector<int32_t> nextConfIndex(mols.size(), 0);
+    for (size_t confIdx = 0; confIdx < numConformers; ++confIdx) {
+      renumberedConfIndices[confIdx] = nextConfIndex[static_cast<size_t>(molIndices[confIdx])]++;
+    }
+    result.confIndices.copyFromHost(renumberedConfIndices);
+    cudaCheckError(cudaStreamSynchronize(nullptr));
+    return result;
   }
 
   DeviceCoordResult compacted;
@@ -149,34 +146,43 @@ DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                       
   compacted.confIndices = AsyncDeviceVector<int32_t>(keptConformers);
 
   std::vector<int32_t> compactedAtomStarts(keptConformers + 1, 0);
-  std::vector<int32_t> compactedMolIndices;
-  std::vector<int32_t> compactedConfIndices;
+  std::vector<int32_t> compactedMolIndices(keptConformers);
+  std::vector<int32_t> compactedConfIndices(keptConformers);
+  std::vector<int32_t> sourceConformerIds(keptConformers);
   std::vector<int32_t> nextConfIndex(mols.size(), 0);
-  compactedMolIndices.reserve(keptConformers);
-  compactedConfIndices.reserve(keptConformers);
 
+  // Build the compact result metadata on the CPU.
   size_t dstAtom = 0;
+  size_t dstConf = 0;
   for (size_t srcConf = 0; srcConf < numConformers; ++srcConf) {
     if (keep[srcConf] == 0) {
       continue;
     }
     const size_t atomCount = static_cast<size_t>(atomStarts[srcConf + 1] - atomStarts[srcConf]);
-    cudaCheckError(cudaMemcpyAsync(compacted.positions.data() + dstAtom * 3,
-                                   result.positions.data() + static_cast<size_t>(atomStarts[srcConf]) * 3,
-                                   atomCount * 3 * sizeof(double),
-                                   cudaMemcpyDeviceToDevice,
-                                   nullptr));
-
     dstAtom += atomCount;
-    compactedAtomStarts[compactedMolIndices.size() + 1] = static_cast<int32_t>(dstAtom);
-    const int32_t molIdx                                = molIndices[srcConf];
-    compactedMolIndices.push_back(molIdx);
-    compactedConfIndices.push_back(nextConfIndex[static_cast<size_t>(molIdx)]++);
+    compactedAtomStarts[dstConf + 1] = static_cast<int32_t>(dstAtom);
+    const int32_t molIdx             = molIndices[srcConf];
+    compactedMolIndices[dstConf]     = molIdx;
+    compactedConfIndices[dstConf]    = nextConfIndex[static_cast<size_t>(molIdx)]++;
+    sourceConformerIds[dstConf]      = static_cast<int32_t>(srcConf);
+    ++dstConf;
   }
 
+  AsyncDeviceVector<int32_t> sourceConformerIdsDevice(sourceConformerIds.size());
+  sourceConformerIdsDevice.copyFromHost(sourceConformerIds);
   compacted.atomStarts.copyFromHost(compactedAtomStarts);
   compacted.molIndices.copyFromHost(compactedMolIndices);
   compacted.confIndices.copyFromHost(compactedConfIndices);
+
+  // Copy all retained coordinates in one GPU launch instead of issuing a copy
+  // for every conformer.
+  compactConformerPositionsGpu(
+    cuda::std::span<const double>(result.positions.data(), result.positions.size()),
+    cuda::std::span<const int32_t>(result.atomStarts.data(), result.atomStarts.size()),
+    cuda::std::span<const int32_t>(sourceConformerIdsDevice.data(), sourceConformerIdsDevice.size()),
+    cuda::std::span<const int32_t>(compacted.atomStarts.data(), compacted.atomStarts.size()),
+    cuda::std::span<double>(compacted.positions.data(), compacted.positions.size()),
+    nullptr);
   cudaCheckError(cudaStreamSynchronize(nullptr));
   return compacted;
 }

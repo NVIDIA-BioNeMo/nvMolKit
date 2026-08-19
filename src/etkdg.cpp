@@ -459,6 +459,7 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
   }
 
   if (deviceOutput) {
+    // Gather the results on one GPU before pruning.
     auto result = detail::finalizeOnTarget(collectorsPerThread, targetGpu, static_cast<int>(mols.size()));
     return detail::pruneDeviceConformers(std::move(result), mols, params);
   }

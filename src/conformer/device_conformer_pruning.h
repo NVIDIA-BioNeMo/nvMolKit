@@ -31,28 +31,71 @@ struct EmbedParameters;
 namespace nvMolKit {
 namespace detail {
 
+/**
+ * @brief Locations of one molecule's conformers and atom maps.
+ */
 struct ConformerPruningMolInfo {
-  int confBegin       = 0;
-  int confCount       = 0;
-  int atomMapBegin    = 0;
-  int atomMapCount    = 0;
-  int mappedAtomCount = 0;
-  int pairBegin       = 0;
+  int confBegin       = 0;  // Where this molecule begins in the grouped conformer IDs.
+  int confCount       = 0;  // Number of conformers for this molecule.
+  int atomMapBegin    = 0;  // Where this molecule begins in the atom maps.
+  int atomMapCount    = 0;  // Number of atom maps for this molecule.
+  int mappedAtomCount = 0;  // Number of atoms in each map.
 };
 
-//! Find RMSD conflicts and select conformers with RDKit's ordered greedy rule.
+/**
+ * @brief Select conformers on the GPU using RDKit's ordered greedy RMSD rule.
+ *
+ * One CUDA block handles each molecule. It considers conformers in input order and
+ * compares each one with earlier retained conformers in parallel.
+ *
+ * @param coords         Coordinates for every input conformer, stored on the GPU.
+ * @param atomStarts     Where each conformer's atoms begin in @p coords.
+ * @param groupedConfIds Input conformer IDs grouped by molecule.
+ * @param molInfos       Locations of each molecule's conformers and atom maps.
+ * @param atomMaps       Atom orders RDKit uses for heavy-atom and symmetry comparisons.
+ * @param selected       One result per grouped conformer; 1 means keep it and 0 means discard it.
+ * @param threshold      RMSD values below this threshold are considered duplicates.
+ * @param stream         CUDA stream used for the pruning work.
+ */
 void conformerPruneMaskGpu(cuda::std::span<const double>                  coords,
                            cuda::std::span<const int32_t>                 atomStarts,
                            cuda::std::span<const int32_t>                 groupedConfIds,
                            cuda::std::span<const ConformerPruningMolInfo> molInfos,
                            cuda::std::span<const int32_t>                 atomMaps,
-                           cuda::std::span<uint8_t>                       conflicts,
                            cuda::std::span<uint8_t>                       selected,
-                           int                                            totalPairs,
                            double                                         threshold,
                            cudaStream_t                                   stream);
 
-//! Prune a finalized ETKDG result without copying coordinates to the host.
+/**
+ * @brief Copy retained conformers into a contiguous device buffer.
+ *
+ * @param positions           Coordinates before pruning, stored on the GPU.
+ * @param atomStarts          Where each source conformer's atoms begin in @p positions.
+ * @param sourceConformerIds  Original ID of each retained conformer.
+ * @param compactedAtomStarts Where each retained conformer's atoms begin in @p compactedPositions.
+ * @param compactedPositions  Output coordinates containing only retained conformers.
+ * @param stream              CUDA stream used for the copy.
+ */
+void compactConformerPositionsGpu(cuda::std::span<const double>  positions,
+                                  cuda::std::span<const int32_t> atomStarts,
+                                  cuda::std::span<const int32_t> sourceConformerIds,
+                                  cuda::std::span<const int32_t> compactedAtomStarts,
+                                  cuda::std::span<double>        compactedPositions,
+                                  cudaStream_t                   stream);
+
+/**
+ * @brief Prune a finalized ETKDG device result using RDKit-compatible RMSD comparisons.
+ *
+ * Coordinates remain on the GPU identified by @c result.gpuId. Small index arrays and pruning
+ * decisions are copied to the CPU to group conformers and allocate the output.
+ *
+ * @param result Coordinates and molecule IDs produced by ETKDG.
+ * @param mols   Input molecules in the same order used for embedding.
+ * @param params RDKit settings for the RMSD threshold, heavy atoms, and symmetry.
+ * @return Retained conformers in input order, renumbered within each molecule.
+ *
+ * @note This function synchronizes the default stream before returning.
+ */
 DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                           result,
                                         const std::vector<RDKit::ROMol*>&           mols,
                                         const RDKit::DGeomHelpers::EmbedParameters& params);
