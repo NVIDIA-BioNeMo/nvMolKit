@@ -111,6 +111,15 @@ if [ -f "${RDKIT_INSTALL}/include/rdkit/RDGeneral/export.h" ] \
 fi
 
 WORK_DIR="${OUT_DIR}/work"
+# A failed rdkit-pypi build can leave nested source clones under build/temp.
+# Its setup.py assumes those destinations do not exist, so reusing a partial
+# work tree makes every retry fail at the clone step. Preserve only complete
+# recipe caches; restart incomplete recipes while retaining the separate pip
+# and Conan download caches mounted by build_pip_wheels.sh.
+if [ -e "${WORK_DIR}" ] || [ -e "${INSTALL_DIR}" ]; then
+    echo "Incomplete rdkit recipe cache at ${OUT_DIR}; rebuilding it"
+    rm -rf -- "${WORK_DIR}" "${INSTALL_DIR}"
+fi
 mkdir -p "${WORK_DIR}"
 RDKIT_PYPI_DIR="${WORK_DIR}/rdkit-pypi"
 
