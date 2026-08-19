@@ -1,5 +1,5 @@
 ## Description: <br>
-Guides an agent to write correct code against the installed nvMolKit Python API for GPU-accelerated, batched RDKit-style cheminformatics — Morgan fingerprints, Tanimoto/cosine similarity, ETKDG conformer embedding, MMFF/UFF optimization with BFGS or FIRE, TFD, conformer RMSD, Butina clustering, substructure search, and maximum common substructure (MCS) search. <br>
+Guides an agent to write correct code against the installed nvMolKit Python API for GPU-accelerated, batched RDKit-style cheminformatics — Morgan fingerprints, Tanimoto/cosine similarity, ETKDG conformer embedding, MMFF/UFF optimization, TFD, conformer RMSD, Butina clustering, substructure search, and maximum common substructure (MCS) search. <br>
 
 This skill is ready for commercial/non-commercial use. <br>
 
@@ -33,7 +33,7 @@ Risk: nvMolKit and RDKit can differ numerically for the same nominal operation (
 Mitigation: The skill covers where nvMolKit is and is not an appropriate substitute for RDKit, so users choose the backend deliberately rather than assuming equivalence. <br>
 
 Risk: Batched GPU operations on large molecule libraries can exhaust GPU memory mid-run. <br>
-Mitigation: The skill documents `HardwareOptions`, `SubstructSearchConfig`, and `MCSConfig` for batch and device control. <br>
+Mitigation: The skill documents the available execution controls for batch sizing and device selection. <br>
 
 Risk: Asynchronous result handles can be read before completion if the execution model is misunderstood, yielding empty or partial data. <br>
 Mitigation: The skill's result-type documentation is explicit about when a result must be awaited or materialized. <br>

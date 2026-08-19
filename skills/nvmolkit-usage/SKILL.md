@@ -78,8 +78,8 @@ If this fails, point the user at the install guide on the docs site rather than 
 | Morgan fingerprints | `nvmolkit.fingerprints` | `MorganFingerprintGenerator(radius, fpSize).GetFingerprints(mols)` |
 | Bulk Tanimoto / cosine similarity | `nvmolkit.similarity` | `crossTanimotoSimilarity(...)`, `crossCosineSimilarity(...)`, plus `*MemoryConstrained` variants for results too large to fit in GPU memory |
 | ETKDG conformer embedding | `nvmolkit.embedMolecules` | `EmbedMolecules(molecules, params, confsPerMolecule, ...)` |
-| MMFF94 optimization (one-shot) | `nvmolkit.mmffOptimization` | `MMFFOptimizeMoleculesConfs(molecules, ..., minimizerKind="BFGS" | "FIRE")` |
-| UFF optimization (one-shot) | `nvmolkit.uffOptimization` | `UFFOptimizeMoleculesConfs(molecules, ..., minimizerKind="BFGS" | "FIRE")` |
+| MMFF94 optimization (one-shot) | `nvmolkit.mmffOptimization` | `MMFFOptimizeMoleculesConfs(molecules, ..., minimizerKind=..., fireOptions=...)` |
+| UFF optimization (one-shot) | `nvmolkit.uffOptimization` | `UFFOptimizeMoleculesConfs(molecules, ..., minimizerKind=..., fireOptions=...)` |
 | Forcefield with custom options + constraints | `nvmolkit.batchedForcefield` | `MMFFBatchedForcefield(mols, properties=..., nonBondedThreshold=..., ignoreInterfragInteractions=..., hardwareOptions=...)`, `UFFBatchedForcefield(mols, vdwThreshold=..., ...)`. Per-molecule view `ff[i]` exposes `add_distance_constraint`, `add_position_constraint`, `add_angle_constraint`, `add_torsion_constraint`. Methods: `.compute_energy()`, `.compute_gradients()`, `.minimize(maxIters, forceTol, minimizerKind=..., fireOptions=...)` |
 | Pairwise conformer RMSD | `nvmolkit.conformerRmsd` | `GetConformerRMSMatrix(mol)`, `GetConformerRMSMatrixBatch(mols)` |
 | Torsion Fingerprint Deviation (TFD) | `nvmolkit.tfd` | `GetTFDMatrix(mol)`, `GetTFDMatrices(mols)` |
@@ -161,7 +161,7 @@ index the first and second molecule of that result pair, respectively.
 
 ## Configuration
 
-Three configuration objects expose the GPU/CPU knobs.
+Configuration objects expose operation-specific GPU and CPU execution controls.
 
 ### `HardwareOptions` (ETKDG, MMFF, UFF)
 
@@ -263,8 +263,8 @@ for mol, mol_energies in zip(mols, energies):
 
 Inputs are `list[Mol]` with conformers already populated (typically by ETKDG, RDKit's `EmbedMultipleConfs`, or a prior nvMolKit call). Coordinates are updated in place; the return is `list[list[float]]` of optimized energies aligned with the input molecule order and conformer index. UFF is identical in shape: swap in `from nvmolkit.uffOptimization import UFFOptimizeMoleculesConfs`.
 
-BFGS is the default minimizer. For the v0.6 FIRE path, pass
-`minimizerKind="FIRE"`; optionally customize it with a
+BFGS is the default minimizer. To use FIRE, pass `minimizerKind="FIRE"`;
+optionally customize it with a
 `nvmolkit.types.FireOptions` instance through `fireOptions=`. The one-shot MMFF
 and UFF functions and both batched-forcefield `.minimize()` methods accept the
 same selector.
@@ -300,11 +300,6 @@ for mol_clusters in clusters:
 ```
 
 `GetConformerRMSMatrix(mol)` and `GetConformerRMSMatrixBatch(mols)` default to `output_format="condensed"`, returning `AsyncGpuResult` objects that wrap RDKit-style flat vectors of length `N * (N - 1) // 2`. Use `output_format="square"` when chaining into `butina()` or any other API that expects an `N x N` distance matrix. Both forms live on the GPU; call `.numpy()` on condensed results or synchronize before moving square tensors to the CPU.
-
-`butina(..., reordering=False)` matches RDKit's default clustering mode.
-nvMolKit defaults to `reordering=True`. Use `fused_butina(fingerprints,
-cutoff)` to avoid materializing the O(N²) distance matrix for large fingerprint
-collections.
 
 ### Maximum common substructure search
 
