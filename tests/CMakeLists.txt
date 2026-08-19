@@ -396,7 +396,8 @@ target_link_libraries(
                                            test_utils molData ${RDKit_LIBS})
 
 add_executable(test_tfd_cpu test_tfd_cpu.cpp)
-target_link_libraries(test_tfd_cpu PRIVATE ${RDKit_LIBS} tfd_cpu test_utils)
+target_link_libraries(test_tfd_cpu PRIVATE ${RDKit_LIBS} tfd_cpu test_utils
+                                           nvmolkit_versions)
 
 add_executable(test_tfd_kernels test_tfd_kernels.cu)
 target_link_libraries(
