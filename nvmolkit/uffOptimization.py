@@ -148,7 +148,7 @@ def UFFOptimizeMoleculesConfs(
             hardwareOptions._as_native(),
             int(targetGpu),
             minimizer_kind,
-            fireOptions,
+            fireOptions._as_native(),
         )
     return _uffOptimization.UFFOptimizeMoleculesConfs(
         molecules,
@@ -157,5 +157,5 @@ def UFFOptimizeMoleculesConfs(
         interfrag_flags,
         hardwareOptions._as_native(),
         minimizer_kind,
-        fireOptions,
+        fireOptions._as_native(),
     )

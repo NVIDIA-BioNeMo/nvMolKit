@@ -23,7 +23,176 @@ import torch
 
 from nvmolkit import _arrayHelpers  # noqa: F401
 from nvmolkit import _embedMolecules  # type: ignore
-from nvmolkit._types import FireOptions  # noqa: F401
+from nvmolkit import _types
+
+
+class FireOptions:
+    """Configures the FIRE minimizer.
+
+    The native defaults are tuned for nvMolKit GPU workloads. Kernel units are
+    kcal/mol for energy, Angstrom for position, amu for mass, and ps for time.
+    """
+
+    def __init__(self) -> None:
+        """Create FIRE options initialized to the native nvMolKit defaults."""
+        self._native = _types.FireOptions()
+
+    @property
+    def dtInit(self) -> float:
+        """Initial time step in picoseconds."""
+        return self._native.dtInit
+
+    @dtInit.setter
+    def dtInit(self, value: float) -> None:
+        self._native.dtInit = float(value)
+
+    @property
+    def dtMinFactor(self) -> float:
+        """Lower time-step bound as a fraction of :attr:`dtInit`."""
+        return self._native.dtMinFactor
+
+    @dtMinFactor.setter
+    def dtMinFactor(self, value: float) -> None:
+        self._native.dtMinFactor = float(value)
+
+    @property
+    def dtMaxFactor(self) -> float:
+        """Upper time-step bound as a fraction of :attr:`dtInit`."""
+        return self._native.dtMaxFactor
+
+    @dtMaxFactor.setter
+    def dtMaxFactor(self, value: float) -> None:
+        self._native.dtMaxFactor = float(value)
+
+    @property
+    def dMax(self) -> float:
+        """Maximum per-step displacement-vector norm in Angstrom."""
+        return self._native.dMax
+
+    @dMax.setter
+    def dMax(self, value: float) -> None:
+        self._native.dMax = float(value)
+
+    @property
+    def timeStepIncrement(self) -> float:
+        """Time-step multiplier after sustained positive power."""
+        return self._native.timeStepIncrement
+
+    @timeStepIncrement.setter
+    def timeStepIncrement(self, value: float) -> None:
+        self._native.timeStepIncrement = float(value)
+
+    @property
+    def timeStepDecrement(self) -> float:
+        """Time-step multiplier when power becomes negative."""
+        return self._native.timeStepDecrement
+
+    @timeStepDecrement.setter
+    def timeStepDecrement(self, value: float) -> None:
+        self._native.timeStepDecrement = float(value)
+
+    @property
+    def nMinForIncrease(self) -> int:
+        """Positive-power steps required before increasing the time step."""
+        return self._native.nMinForIncrease
+
+    @nMinForIncrease.setter
+    def nMinForIncrease(self, value: int) -> None:
+        self._native.nMinForIncrease = int(value)
+
+    @property
+    def alphaInit(self) -> float:
+        """Initial force-velocity mixing coefficient."""
+        return self._native.alphaInit
+
+    @alphaInit.setter
+    def alphaInit(self, value: float) -> None:
+        self._native.alphaInit = float(value)
+
+    @property
+    def alphaDecrement(self) -> float:
+        """Mixing-coefficient decay while power remains positive."""
+        return self._native.alphaDecrement
+
+    @alphaDecrement.setter
+    def alphaDecrement(self, value: float) -> None:
+        self._native.alphaDecrement = float(value)
+
+    @property
+    def useMass(self) -> bool:
+        """Whether force kicks are weighted by per-atom masses."""
+        return self._native.useMass
+
+    @useMass.setter
+    def useMass(self, value: bool) -> None:
+        self._native.useMass = bool(value)
+
+    @property
+    def gradTol(self) -> float:
+        """Convergence threshold on ``sqrt(sum(grad**2))`` per system."""
+        return self._native.gradTol
+
+    @gradTol.setter
+    def gradTol(self, value: float) -> None:
+        self._native.gradTol = float(value)
+
+    @property
+    def takeHalfStepBack(self) -> bool:
+        """Whether to take an ASE FIRE2 half-step back after negative power."""
+        return self._native.takeHalfStepBack
+
+    @takeHalfStepBack.setter
+    def takeHalfStepBack(self, value: bool) -> None:
+        self._native.takeHalfStepBack = bool(value)
+
+    @property
+    def abcCorrection(self) -> bool:
+        """Whether to apply the Accelerated Bias-Correction multiplier."""
+        return self._native.abcCorrection
+
+    @abcCorrection.setter
+    def abcCorrection(self, value: bool) -> None:
+        self._native.abcCorrection = bool(value)
+
+    @property
+    def stuckDetectionEnabled(self) -> bool:
+        """Whether an energy plateau can declare a system converged."""
+        return self._native.stuckDetectionEnabled
+
+    @stuckDetectionEnabled.setter
+    def stuckDetectionEnabled(self, value: bool) -> None:
+        self._native.stuckDetectionEnabled = bool(value)
+
+    @property
+    def stuckEnergyRelTol(self) -> float:
+        """Relative energy tolerance used for plateau detection."""
+        return self._native.stuckEnergyRelTol
+
+    @stuckEnergyRelTol.setter
+    def stuckEnergyRelTol(self, value: float) -> None:
+        self._native.stuckEnergyRelTol = float(value)
+
+    @property
+    def stuckStreakLength(self) -> int:
+        """Consecutive plateau polls required to declare a system stuck."""
+        return self._native.stuckStreakLength
+
+    @stuckStreakLength.setter
+    def stuckStreakLength(self, value: int) -> None:
+        self._native.stuckStreakLength = int(value)
+
+    @property
+    def stuckEvalEveryNPolls(self) -> int:
+        """Number of convergence polls between plateau-energy samples."""
+        return self._native.stuckEvalEveryNPolls
+
+    @stuckEvalEveryNPolls.setter
+    def stuckEvalEveryNPolls(self, value: int) -> None:
+        self._native.stuckEvalEveryNPolls = int(value)
+
+    def _as_native(self):
+        """Internal: return the underlying native FireOptions object."""
+        return self._native
 
 
 class HardwareOptions:

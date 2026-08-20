@@ -449,9 +449,9 @@ class _BatchedForcefieldBase:
                 forceTol,
                 -1 if target_gpu is None else int(target_gpu),
                 minimizer_kind,
-                fireOptions,
+                fireOptions._as_native(),
             )
-        energies, converged = self._native_ff.minimize(maxIters, forceTol, minimizer_kind, fireOptions)
+        energies, converged = self._native_ff.minimize(maxIters, forceTol, minimizer_kind, fireOptions._as_native())
         return energies, converged
 
 
