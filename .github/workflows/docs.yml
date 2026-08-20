@@ -21,11 +21,13 @@ on:
       - main
     paths:
       - "docs/**"
+      - "nvmolkit/**"
       - "VERSION"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "docs/**"
+      - "nvmolkit/**"
       - "VERSION"
       - ".github/workflows/docs.yml"
   workflow_dispatch:
