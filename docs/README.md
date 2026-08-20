@@ -17,10 +17,11 @@ This will install Sphinx and other dependencies required for building the docume
 ### Step 2: Build the documentation
 
 ```bash
-sphinx-build -b html . public
+python -m sphinx -W --keep-going -b html . public
 ```
 
-This will build the documentation in the public directory.
+This will build the documentation in the public directory. Warnings are
+treated as errors, while `--keep-going` reports all warnings in one run.
 
 ### Step 3: Host the documentation locally
 

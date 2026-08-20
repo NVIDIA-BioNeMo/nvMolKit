@@ -8,6 +8,8 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 import datetime
+import sys
+from types import ModuleType
 
 import nvidia_sphinx_theme  # noqa
 
@@ -65,3 +67,39 @@ napoleon_include_init_with_doc = True
 
 autodoc_member_order = "bysource"
 autodoc_typehints_format = "short"
+
+
+class _NativeExtensionStub(ModuleType):
+    """Provide importable placeholders for unavailable compiled bindings."""
+
+    class Placeholder:
+        pass
+
+    def __init__(self, name):
+        super().__init__(name)
+        self.__file__ = f"<{name}>"
+        self.__all__ = []
+
+    def __getattr__(self, name):
+        return self.Placeholder
+
+
+# API docs inspect the Python wrappers but do not execute GPU operations. Stub
+# the compiled modules so the docs can be built on a hosted CPU runner.
+for _module_name in (
+    "_arrayHelpers",
+    "_batchedForcefield",
+    "_clustering",
+    "_conformerRmsd",
+    "_DataStructs",
+    "_embedMolecules",
+    "_Fingerprints",
+    "_mcs",
+    "_mmffOptimization",
+    "_substructure",
+    "_TFD",
+    "_types",
+    "_uffOptimization",
+):
+    _qualified_name = f"nvmolkit.{_module_name}"
+    sys.modules[_qualified_name] = _NativeExtensionStub(_qualified_name)
