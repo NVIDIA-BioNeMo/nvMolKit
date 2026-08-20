@@ -2,11 +2,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Test a wheel matrix serially, creating CPython Conda envs as needed.
+# Test requested wheel-matrix pairs serially, creating CPython Conda envs as needed.
 #
 # Usage:
-#   bash admin/test/test_all_wheels.sh <wheelhouse_dir> <smoke|full|both> [pairs_file]
-# smoke tests every wheel; full uses full_test_subset.txt; both does both.
+#   bash admin/test/test_wheel_matrix.sh <wheelhouse_dir> <smoke|full|both> [pairs_file]
+# smoke tests every discovered wheel; full uses selected pairs from
+# full_test_subset.txt unless a pairs file is supplied; both does both.
 
 set -uo pipefail
 
@@ -147,7 +148,7 @@ drive_one_mode() {
 
     local start end wall
     start=$(date +%s)
-    local fail_count=0 ok_count=0 skip_count=0
+    local fail_count=0 ok_count=0
     declare -a failed_pairs=()
 
     while IFS= read -r line; do
@@ -165,12 +166,7 @@ drive_one_mode() {
 
         case $rc in
             0)
-                local wheelDir=$WHEELHOUSE/rdkit${rdkit}/py${py}
-                if compgen -G "$wheelDir/nvmolkit-*.whl" > /dev/null; then
-                    ok_count=$((ok_count + 1))
-                else
-                    skip_count=$((skip_count + 1))
-                fi
+                ok_count=$((ok_count + 1))
                 ;;
             *)
                 fail_count=$((fail_count + 1))
@@ -185,7 +181,7 @@ drive_one_mode() {
 
     echo
     echo "Mode '$mode' finished. Wall time: ${wall}s ($(printf '%dh%02dm%02ds' $((wall/3600)) $(((wall%3600)/60)) $((wall%60))))"
-    echo "Results: ok=$ok_count fail=$fail_count skip=$skip_count total=$numPairs"
+    echo "Results: ok=$ok_count fail=$fail_count total=$numPairs"
     if [ ${#failed_pairs[@]} -gt 0 ]; then
         echo "Failed:"
         local f

@@ -1,5 +1,5 @@
 # (rdkit_version, python_version) pairs for the full pytest sweep run by
-# admin/test/test_all_wheels.sh full. One pair per python interpreter spanning
+# admin/test/test_wheel_matrix.sh full. One pair per python interpreter spanning
 # the rdkit range from oldest buildable (2025.3.6) to newest (2026.3.1).
 # Format: "<rdkit> <python>" per line. Lines starting with '#' are ignored.
 2025.3.6 3.11

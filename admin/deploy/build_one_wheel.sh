@@ -28,6 +28,12 @@ pyTag=${py//./}
 outDir=$WHEELHOUSE/rdkit${rdkit}/py${py}
 logFile=$LOG_DIR/rdkit${rdkit}_py${py}.log
 wt=$WORKTREE_ROOT/wt_rdkit${rdkit}_py${py}
+commitFile=$outDir/.nvmolkit-build-commit
+
+if ! resolvedBuildCommit=$(git -C "$REPO" rev-parse --verify "${BUILD_COMMIT}^{commit}"); then
+    echo "Error: BUILD_COMMIT does not resolve to a commit: $BUILD_COMMIT" >&2
+    exit 2
+fi
 
 cleanup_worktree() {
     # Limit recursive cleanup to this worker's path shape.
@@ -54,11 +60,26 @@ format_hms() {
     printf '%dh%02dm%02ds' $((secs / 3600)) $(((secs % 3600) / 60)) $((secs % 60))
 }
 
-if compgen -G "$outDir/*.whl" > /dev/null; then
+shopt -s nullglob
+existingWheels=("$outDir"/*.whl)
+matchingWheels=("$outDir"/nvmolkit-*-cp${pyTag}-cp${pyTag}-*.whl)
+shopt -u nullglob
+recordedBuildCommit=
+if [ -f "$commitFile" ]; then
+    read -r recordedBuildCommit < "$commitFile"
+fi
+
+if [ ${#existingWheels[@]} -eq 1 ] && [ ${#matchingWheels[@]} -eq 1 ] && \
+        [ "$recordedBuildCommit" = "$resolvedBuildCommit" ]; then
     echo "[skip] rdkit=$rdkit py=$py (wheel already at $outDir)"
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$rdkit" "$py" "skip" "$startedAt" "$startedAt" 0 >> "$TIMINGS_TSV"
     exit 0
+fi
+
+if [ ${#existingWheels[@]} -gt 0 ] || [ -e "$commitFile" ]; then
+    echo "[rebuild] rdkit=$rdkit py=$py (existing output is not verified for $resolvedBuildCommit)"
+    rm -f -- "${existingWheels[@]}" "$commitFile"
 fi
 
 echo "[start $startedAt] rdkit=$rdkit py=$py worktree=$wt"
@@ -67,12 +88,12 @@ cleanup_worktree
 trap cleanup_worktree EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-git -C "$REPO" worktree add --detach "$wt" "$BUILD_COMMIT" > "$logFile" 2>&1
+git -C "$REPO" worktree add --detach "$wt" "$resolvedBuildCommit" > "$logFile" 2>&1
 
 {
     echo "=== nvmolkit wheel build ==="
     echo "    rdkit=$rdkit py=$py"
-    echo "    commit=$BUILD_COMMIT"
+    echo "    commit=$resolvedBuildCommit"
     echo "    started_at=$startedAt"
     echo "    worktree=$wt"
     echo "============================"
@@ -88,6 +109,24 @@ git -C "$REPO" worktree add --detach "$wt" "$BUILD_COMMIT" > "$logFile" 2>&1
     bash admin/deploy/build_pip_wheels.sh "$rdkit" "$outDir"
 ) >> "$logFile" 2>&1
 rc=$?
+
+if [ "$rc" -eq 0 ]; then
+    shopt -s nullglob
+    builtWheels=("$outDir"/nvmolkit-*-cp${pyTag}-cp${pyTag}-*.whl)
+    shopt -u nullglob
+    if [ ${#builtWheels[@]} -ne 1 ]; then
+        echo "Error: expected one cp${pyTag} wheel in $outDir, found ${#builtWheels[@]}" >> "$logFile"
+        rc=1
+    else
+        commitFileTmp=$commitFile.tmp.$$
+        if ! printf '%s\n' "$resolvedBuildCommit" > "$commitFileTmp" || \
+                ! mv -f -- "$commitFileTmp" "$commitFile"; then
+            echo "Error: failed to record build commit in $commitFile" >> "$logFile"
+            rm -f -- "$commitFileTmp"
+            rc=1
+        fi
+    fi
+fi
 
 endEpoch=$(date +%s)
 endedAt=$(date '+%Y-%m-%d %H:%M:%S')

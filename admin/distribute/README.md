@@ -45,7 +45,8 @@ export CIBW_MANYLINUX_X86_64_IMAGE=nvmolkit-manylinux-cuda12:local
 ## 1. Build
 
 Commit or stash tracked changes before building. Reruns skip completed wheels
-and rebuild incomplete RDKit recipe caches.
+verified for the same source commit and rebuild stale wheel outputs or incomplete
+RDKit recipe caches.
 
 ```bash
 WHEELHOUSE="$WHEELHOUSE" \
@@ -59,13 +60,14 @@ Wheels, logs, and timings are under `$WHEELHOUSE`.
 
 ## 2. Test
 
-`both` runs smoke tests for every wheel, followed by the full-test subset.
+`both` runs smoke tests for every discovered wheel, followed by full tests for
+the selected pairs in `admin/test/full_test_subset.txt`.
 
 ```bash
-bash admin/test/test_all_wheels.sh "$WHEELHOUSE" both
+bash admin/test/test_wheel_matrix.sh "$WHEELHOUSE" both
 
 # Optional: full tests for every matrix pair.
-bash admin/test/test_all_wheels.sh \
+bash admin/test/test_wheel_matrix.sh \
     "$WHEELHOUSE" full "$WHEELHOUSE/jobs/pairs.txt"
 ```
 

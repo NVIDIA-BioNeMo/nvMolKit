@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Test one wheel for test_all_wheels.sh.
+# Test one wheel for test_wheel_matrix.sh.
 # Usage: test_one_wheel.sh <rdkit_version> <python_version> <mode>
 #   mode = smoke    -> import + tiny GPU op (admin/test/smoke_check.py)
 #          full     -> smoke + full pytest from repo's nvmolkit/tests
@@ -44,8 +44,8 @@ shopt -s nullglob
 wheelMatches=("$wheelDir"/nvmolkit-*-cp${py//./}-cp${py//./}-*.whl)
 shopt -u nullglob
 if [ ${#wheelMatches[@]} -eq 0 ]; then
-    echo "[skip] rdkit=$rdkit py=$py mode=$mode (no wheel at $wheelDir)"
-    exit 0
+    echo "Error: no matching wheel for requested pair rdkit=$rdkit py=$py at $wheelDir" >&2
+    exit 1
 fi
 if [ ${#wheelMatches[@]} -gt 1 ]; then
     echo "Error: multiple wheels in $wheelDir (${wheelMatches[*]})" >&2
