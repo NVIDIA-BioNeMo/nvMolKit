@@ -324,8 +324,9 @@ timed-out result can contain the best partial MCS found.
 Matching options include `atom_compare`, `bond_compare`, valence/formal-charge
 matching, and atom/bond ring-only matching. Unsupported RDKit fMCS options
 raise instead of silently changing semantics. For repeated representative
-explicit-pair workloads, `nvmolkit.autotune.tune_mcs` returns a tuned
-`MCSConfig` for `findMCS(..., config=result.best_config)`.
+explicit-pair workloads, `nvmolkit.autotune.tune_mcs` returns a `TuneResult`.
+Its `best_config` is the tuned `MCSConfig` to pass to
+`findMCS(..., config=result.best_config)`.
 
 ### Custom forcefield options + constraints (`BatchedForcefield`)
 
