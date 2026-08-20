@@ -7,7 +7,7 @@ dependencies:
   - python=3.10.6
   - python_abi=3.10
   - pytz=2022.6
-  - rdkit=2022.09.1
-  - rdkit-dev=2022.09.1
+  - rdkit=2025.09.1
+  - librdkit-dev=2025.09.1
   - pip:
       - cmakelang==0.6.13

@@ -94,7 +94,7 @@ Conda Forge
 Conda is the recommended way to install nvMolKit, in line with RDKit's recommended installation practice. First, ensure
 you have a conda-based environment manager installed and activated, such as `Miniconda <https://docs.conda.io/en/latest/miniconda.html>`_ or `Miniforge <https://conda-forge.org/download/>`_.
 
-nvMolKit v0.5.0 supports RDKit 2025.03.1 through 2026.03.1.
+nvMolKit v0.6.0 supports RDKit 2025.09.1 through 2026.03.5.
 
 To install with conda, run::
 
@@ -126,7 +126,7 @@ Replace ``cu128`` with another CUDA 12 backend from the PyTorch install page if
 that is compatible with your driver.
 
 The wheel published to PyPI is built against a single RDKit release per
-nvMolKit version (RDKit 2026.03.1 for nvMolKit v0.5.0), due to versioning
+nvMolKit version (RDKit 2026.03.5 for nvMolKit v0.6.0), due to versioning
 limitations in PyPI's dependency management system.
 
 Use this path if you do not have a constraint on which RDKit version to use;
@@ -143,12 +143,12 @@ To install nvMolKit pinned to a particular RDKit:
 .. code-block:: bash
 
     RDKIT_VERSION=2025.9.6
-    NVMOLKIT_VERSION=0.5.0
+    NVMOLKIT_VERSION=0.6.0
     pip install nvmolkit==${NVMOLKIT_VERSION}+rdkit${RDKIT_VERSION} \
         --extra-index-url https://nvidia-bionemo.github.io/nvMolKit/wheels/rdkit${RDKIT_VERSION}/simple/
 
 Replace ``2025.9.6`` with the RDKit version you want. Variants published for
-nvMolKit v0.5.0 include every version between 2025.03.6 and 2026.03.1.
+nvMolKit v0.6.0 include every version between 2025.09.1 and 2026.03.5.
 
 
 From Source

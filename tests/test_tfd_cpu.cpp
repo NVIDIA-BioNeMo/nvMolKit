@@ -25,10 +25,13 @@
 
 #include "src/tfd/tfd_common.h"
 #include "src/tfd/tfd_cpu.h"
+#include "versions.h"
 
 namespace {
 
-constexpr double kTolerance = 1e-4;
+constexpr double kTolerance           = 1e-4;
+constexpr bool   kRdkitHasBetaTypoFix = RDKIT_VERSION_MAJOR > 2026 ||
+                                      (RDKIT_VERSION_MAJOR == 2026 && RDKIT_VERSION_MINOR >= 3);
 
 //! Generate conformers for a molecule using RDKit
 void generateConformers(RDKit::ROMol& mol, int numConformers, int seed = 42) {
@@ -653,8 +656,13 @@ TEST_F(TFDCpuTest, CompareWithRDKitReference) {
     int                 numConfs;
     int                 seed;
     std::vector<double> reference;
+    std::vector<double> referenceBeforeBetaFix{};
   };
 
+  // RDKit 2026.03 fixed _calculateBeta() checking the second bond atom twice.
+  // nvMolKit preserves both behaviors across its supported RDKit range, so the
+  // affected asymmetric molecules need references from both sides of the fix.
+  // https://github.com/rdkit/rdkit/pull/9202
   // clang-format off
   std::vector<TestCase> cases = {
     {"CCCC", 4, 42, {              // n-butane, 1 torsion
@@ -684,10 +692,16 @@ TEST_F(TFDCpuTest, CompareWithRDKitReference) {
     {"CC(=O)[C@H]1CCCC[C@@H]1CN", 5, 44, {  // cyclohexane + ketone/amine substituents
       0.3538817018, 0.5908750389, 0.2992543709, 0.5450659700, 0.6307899400,
       0.3315705683, 0.5590067080, 0.3311160076, 0.2999948940, 0.5678678322
+    }, {
+      0.3538817018, 0.5924305446, 0.2977012405, 0.5450659700, 0.6307899400,
+      0.3331152938, 0.5590067080, 0.3311160076, 0.3015480245, 0.5678678322
     }},
     {"C[C@@H](CN(C)C(=O)C#CCN)C1CC1", 5, 45, {  // cyclopropane + triple bond
       0.6173216954, 0.2578548043, 0.8622476874, 0.4208182281, 0.7014846040,
       0.1738311915, 0.1683341272, 0.4489912639, 0.4239728997, 0.2524937077
+    }, {
+      0.6173250123, 0.2578501411, 0.8622535690, 0.4331903310, 0.7154140061,
+      0.1978909084, 0.1683354525, 0.4489992971, 0.4239704017, 0.2760081465
     }},
   };
   // clang-format on
@@ -707,10 +721,12 @@ TEST_F(TFDCpuTest, CompareWithRDKitReference) {
     generateConformers(*mol, tc.numConfs, tc.seed);
     auto tfdMatrix = generator_.GetTFDMatrix(*mol, options);
 
-    ASSERT_EQ(tfdMatrix.size(), tc.reference.size());
+    const auto& reference =
+      !kRdkitHasBetaTypoFix && !tc.referenceBeforeBetaFix.empty() ? tc.referenceBeforeBetaFix : tc.reference;
+    ASSERT_EQ(tfdMatrix.size(), reference.size());
     constexpr double kRDKitTolerance = 5e-4;
     for (size_t i = 0; i < tfdMatrix.size(); ++i) {
-      EXPECT_NEAR(tfdMatrix[i], tc.reference[i], kRDKitTolerance) << "TFD[" << i << "] mismatch with RDKit reference";
+      EXPECT_NEAR(tfdMatrix[i], reference[i], kRDKitTolerance) << "TFD[" << i << "] mismatch with RDKit reference";
     }
   }
 }
