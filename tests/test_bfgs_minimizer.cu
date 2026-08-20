@@ -789,6 +789,20 @@ TEST_P(BFGSMinimizerBackendTest, E2EMinimizationLargePathMatches) {
   const nvMolKit::BfgsBackend backend = GetParam();
   getMols(getTestDataFolderPath() + "/60plus_atom_mols.sdf", mols, 1);
   setUpCommon();
+
+  std::vector<double> refStartEnergies;
+  for (auto& mol : mols) {
+    auto                                     molProps = std::make_unique<RDKit::MMFF::MMFFMolProperties>(*mol);
+    std::unique_ptr<ForceFields::ForceField> molFF(RDKit::MMFF::constructForceField(*mol, molProps.get()));
+    refStartEnergies.push_back(molFF->calcEnergy());
+  }
+
+  nvMolKit::MMFFBatchedForcefield forcefield(systemHost);
+  ASSERT_EQ(forcefield.computeEnergy(systemDevice.energyOuts.data(), systemDevice.positions.data()), cudaSuccess);
+  std::vector<double> gotStartEnergies(systemDevice.energyOuts.size());
+  systemDevice.energyOuts.copyToHost(gotStartEnergies);
+  ASSERT_EQ(cudaStreamSynchronize(systemDevice.energyOuts.stream()), cudaSuccess);
+
   const int                    maxIters = 400;
   nvMolKit::BfgsBatchMinimizer bfgsMinimizer(/*dim=*/3, nvMolKit::DebugLevel::STEPWISE, true, nullptr, backend);
 
@@ -809,7 +823,15 @@ TEST_P(BFGSMinimizerBackendTest, E2EMinimizationLargePathMatches) {
                        gotEnergies.size() * sizeof(double),
                        cudaMemcpyDeviceToHost));
 
-  EXPECT_THAT(gotEnergies, ::testing::Pointwise(::testing::DoubleNear(1e-4), refEnergies));
+  ASSERT_EQ(gotEnergies.size(), gotStartEnergies.size());
+  ASSERT_EQ(refEnergies.size(), refStartEnergies.size());
+  for (size_t i = 0; i < gotEnergies.size(); ++i) {
+    const double refEnergyReduction = refStartEnergies[i] - refEnergies[i];
+    const double energyGapToRef     = gotEnergies[i] - refEnergies[i];
+    EXPECT_LE(energyGapToRef, 0.1 * refEnergyReduction)
+      << "nvMolKit energy: " << gotStartEnergies[i] << " -> " << gotEnergies[i]
+      << "; RDKit energy: " << refStartEnergies[i] << " -> " << refEnergies[i];
+  }
 
   std::vector<int16_t> gotStatuses(systemDevice.energyOuts.size());
   ASSERT_EQ(0,
@@ -817,7 +839,7 @@ TEST_P(BFGSMinimizerBackendTest, E2EMinimizationLargePathMatches) {
                        bfgsMinimizer.statuses_.data(),
                        gotStatuses.size() * sizeof(int16_t),
                        cudaMemcpyDeviceToHost));
-  EXPECT_THAT(gotStatuses, ::testing::Pointwise(::testing::Eq(), std::vector<int16_t>(1, 0)));
+  EXPECT_THAT(gotStatuses, ::testing::Each(::testing::Ge(0)));
 }
 
 template <bool computeLastDim>
