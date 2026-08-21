@@ -228,7 +228,7 @@ def MMFFOptimizeMoleculesConfs(
             targetGpu,
             backend_name,
             minimizer_kind,
-            fireOptions,
+            fireOptions._as_native(),
         )
     return _mmffOptimization.MMFFOptimizeMoleculesConfs(
         molecules,
@@ -237,5 +237,5 @@ def MMFFOptimizeMoleculesConfs(
         native_options,
         backend_name,
         minimizer_kind,
-        fireOptions,
+        fireOptions._as_native(),
     )
