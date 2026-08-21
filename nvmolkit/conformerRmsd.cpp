@@ -37,7 +37,8 @@ boost::python::object toOwnedPyArray(nvMolKit::PyArray* array) {
 BOOST_PYTHON_MODULE(_conformerRmsd) {
   boost::python::def(
     "GetConformerRMSMatrixBatch",
-    +[](boost::python::list& mols, const bool prealigned, std::uintptr_t streamPtr) -> boost::python::object {
+    +[](boost::python::list& mols, const bool prealigned, const bool alignToFirstConformer, std::uintptr_t streamPtr)
+      -> boost::python::object {
       auto streamOpt = nvMolKit::acquireExternalStream(streamPtr);
       if (!streamOpt) {
         throw std::invalid_argument("Invalid CUDA stream");
@@ -56,7 +57,7 @@ BOOST_PYTHON_MODULE(_conformerRmsd) {
         }
       }
 
-      auto buffers = nvMolKit::conformerRmsdBatchMatrixMol(molsVec, prealigned, *streamOpt);
+      auto buffers = nvMolKit::conformerRmsdBatchMatrixMol(molsVec, prealigned, *streamOpt, alignToFirstConformer);
 
       boost::python::list results;
       for (int m = 0; m < numMols; ++m) {
@@ -66,11 +67,15 @@ BOOST_PYTHON_MODULE(_conformerRmsd) {
       }
       return results;
     },
-    (boost::python::arg("mols"), boost::python::arg("prealigned") = false, boost::python::arg("stream") = 0));
+    (boost::python::arg("mols"),
+     boost::python::arg("prealigned")            = false,
+     boost::python::arg("alignToFirstConformer") = false,
+     boost::python::arg("stream")                = 0));
 
   boost::python::def(
     "GetConformerRMSMatrix",
-    +[](RDKit::ROMol& mol, const bool prealigned, std::uintptr_t streamPtr) -> boost::python::object {
+    +[](RDKit::ROMol& mol, const bool prealigned, const bool alignToFirstConformer, std::uintptr_t streamPtr)
+      -> boost::python::object {
       auto streamOpt = nvMolKit::acquireExternalStream(streamPtr);
       if (!streamOpt) {
         throw std::invalid_argument("Invalid CUDA stream");
@@ -78,8 +83,11 @@ BOOST_PYTHON_MODULE(_conformerRmsd) {
 
       const int     numConfs = mol.getNumConformers();
       const int64_t numPairs = numConfs >= 2 ? static_cast<int64_t>(numConfs) * (numConfs - 1) / 2 : 0;
-      auto          buffer   = nvMolKit::conformerRmsdMatrixMol(mol, prealigned, *streamOpt);
+      auto          buffer   = nvMolKit::conformerRmsdMatrixMol(mol, prealigned, *streamOpt, alignToFirstConformer);
       return toOwnedPyArray(nvMolKit::makePyArray(buffer, boost::python::make_tuple(numPairs)));
     },
-    (boost::python::arg("mol"), boost::python::arg("prealigned") = false, boost::python::arg("stream") = 0));
+    (boost::python::arg("mol"),
+     boost::python::arg("prealigned")            = false,
+     boost::python::arg("alignToFirstConformer") = false,
+     boost::python::arg("stream")                = 0));
 }

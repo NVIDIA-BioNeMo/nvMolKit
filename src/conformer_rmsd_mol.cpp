@@ -26,7 +26,10 @@
 
 namespace nvMolKit {
 
-AsyncDeviceVector<double> conformerRmsdMatrixMol(const RDKit::ROMol& mol, const bool prealigned, cudaStream_t stream) {
+AsyncDeviceVector<double> conformerRmsdMatrixMol(const RDKit::ROMol& mol,
+                                                 const bool          prealigned,
+                                                 cudaStream_t        stream,
+                                                 const bool          alignToFirstConformer) {
   const int numConfs = mol.getNumConformers();
   if (numConfs <= 1) {
     return AsyncDeviceVector<double>(0);
@@ -69,16 +72,24 @@ AsyncDeviceVector<double> conformerRmsdMatrixMol(const RDKit::ROMol& mol, const 
   }
 
   hostCoords.copyToDevice(devCoords, stream);
-  conformerRmsdMatrixGpu(toSpan(devCoords), toSpan(devRmsd), numConfs, numAtoms, prealigned, stream);
+  if (!prealigned && alignToFirstConformer) {
+    AsyncDeviceVector<double> devAlignedCoords(numCoords, stream);
+    alignConformersToFirstGpu(toSpan(devCoords), toSpan(devAlignedCoords), numConfs, numAtoms, stream);
+    conformerRmsdMatrixGpu(toSpan(devAlignedCoords), toSpan(devRmsd), numConfs, numAtoms, true, stream);
+  } else {
+    conformerRmsdMatrixGpu(toSpan(devCoords), toSpan(devRmsd), numConfs, numAtoms, prealigned, stream);
+  }
   return devRmsd;
 }
 
 std::vector<AsyncDeviceVector<double>> conformerRmsdBatchMatrixMol(const std::vector<const RDKit::ROMol*>& mols,
                                                                    const bool                              prealigned,
-                                                                   cudaStream_t                            stream) {
+                                                                   cudaStream_t                            stream,
+                                                                   const bool alignToFirstConformer) {
   const int numMols = static_cast<int>(mols.size());
   if (numMols == 0)
     return {};
+  const bool needsFirstConformerAlignment = !prealigned && alignToFirstConformer;
 
   // --- Validate inputs and compute per-molecule metadata ---
   // pairOffsets and totalPairs are intentionally 32-bit: the kernel launches one
@@ -88,9 +99,12 @@ std::vector<AsyncDeviceVector<double>> conformerRmsdBatchMatrixMol(const std::ve
   // to the wrong molecule or write out of bounds.
   std::vector<int>    numConfsVec(numMols), numAtomsVec(numMols);
   std::vector<int>    pairOffsetsVec(numMols + 1);
+  std::vector<int>    conformerOffsetsVec(needsFirstConformerAlignment ? numMols + 1 : 0);
   std::vector<size_t> coordOffsetsVec(numMols);
 
-  pairOffsetsVec[0]  = 0;
+  pairOffsetsVec[0] = 0;
+  if (needsFirstConformerAlignment)
+    conformerOffsetsVec[0] = 0;
   size_t totalCoords = 0;
   for (int m = 0; m < numMols; ++m) {
     if (!mols[m]) {
@@ -112,15 +126,27 @@ std::vector<AsyncDeviceVector<double>> conformerRmsdBatchMatrixMol(const std::ve
       throw std::overflow_error("Cumulative conformer pairs exceed int range by molecule index " + std::to_string(m));
     }
     pairOffsetsVec[m + 1] = static_cast<int>(newOffset);
+    if (needsFirstConformerAlignment) {
+      const int64_t newConformerOffset = static_cast<int64_t>(conformerOffsetsVec[m]) + nc;
+      if (newConformerOffset > static_cast<int64_t>(std::numeric_limits<int>::max())) {
+        throw std::overflow_error("Cumulative conformer count exceeds int range by molecule index " +
+                                  std::to_string(m));
+      }
+      conformerOffsetsVec[m + 1] = static_cast<int>(newConformerOffset);
+    }
   }
-  const int totalPairs = pairOffsetsVec[numMols];
+  const int totalPairs      = pairOffsetsVec[numMols];
+  const int totalConformers = needsFirstConformerAlignment ? conformerOffsetsVec[numMols] : 0;
 
   // --- Allocate device buffers first so GPU allocation overlaps CPU work below ---
   AsyncDeviceVector<double> devCoords(totalCoords > 0 ? totalCoords : 1, stream);
   AsyncDeviceVector<int>    devNumConfs(numMols, stream);
   AsyncDeviceVector<int>    devNumAtoms(numMols, stream);
   AsyncDeviceVector<int>    devPairOffsets(numMols + 1, stream);
+  AsyncDeviceVector<int>    devConformerOffsets;
   AsyncDeviceVector<size_t> devCoordOffsets(numMols, stream);
+  if (needsFirstConformerAlignment)
+    devConformerOffsets = AsyncDeviceVector<int>(numMols + 1, stream);
 
   // Per-molecule output buffers.  Always allocate at least 1 element so that
   // devRmsdPtrs never contains a null — zero-pair molecules dispatch 0 blocks
@@ -138,13 +164,16 @@ std::vector<AsyncDeviceVector<double>> conformerRmsdBatchMatrixMol(const std::ve
   PinnedHostVector<int>     numConfsArr(numMols);
   PinnedHostVector<int>     numAtomsArr(numMols);
   PinnedHostVector<int>     pairOffsetsArr(numMols + 1);
+  PinnedHostVector<int>     conformerOffsetsArr(needsFirstConformerAlignment ? numMols + 1 : 0);
   PinnedHostVector<size_t>  coordOffsetsArr(numMols);
   PinnedHostVector<double*> hostRmsdPtrs(numMols);
 
   for (int m = 0; m < numMols; ++m) {
-    numConfsArr[m]     = numConfsVec[m];
-    numAtomsArr[m]     = numAtomsVec[m];
-    pairOffsetsArr[m]  = pairOffsetsVec[m];
+    numConfsArr[m]    = numConfsVec[m];
+    numAtomsArr[m]    = numAtomsVec[m];
+    pairOffsetsArr[m] = pairOffsetsVec[m];
+    if (needsFirstConformerAlignment)
+      conformerOffsetsArr[m] = conformerOffsetsVec[m];
     coordOffsetsArr[m] = coordOffsetsVec[m];
     hostRmsdPtrs[m]    = devRmsdVecs[m].data();
 
@@ -162,6 +191,8 @@ std::vector<AsyncDeviceVector<double>> conformerRmsdBatchMatrixMol(const std::ve
     }
   }
   pairOffsetsArr[numMols] = pairOffsetsVec[numMols];
+  if (needsFirstConformerAlignment)
+    conformerOffsetsArr[numMols] = conformerOffsetsVec[numMols];
 
   // --- Transfer to device and launch ---
   if (totalCoords > 0)
@@ -169,11 +200,28 @@ std::vector<AsyncDeviceVector<double>> conformerRmsdBatchMatrixMol(const std::ve
   numConfsArr.copyToDevice(devNumConfs, stream);
   numAtomsArr.copyToDevice(devNumAtoms, stream);
   pairOffsetsArr.copyToDevice(devPairOffsets, stream);
+  if (needsFirstConformerAlignment)
+    conformerOffsetsArr.copyToDevice(devConformerOffsets, stream);
   coordOffsetsArr.copyToDevice(devCoordOffsets, stream);
   hostRmsdPtrs.copyToDevice(devRmsdPtrs, stream);
 
   if (totalPairs > 0) {
-    conformerRmsdBatchMatrixGpu(toSpan(devCoords),
+    AsyncDeviceVector<double>     devAlignedCoords;
+    cuda::std::span<const double> rmsdCoords = toSpan(devCoords);
+    if (needsFirstConformerAlignment) {
+      devAlignedCoords = AsyncDeviceVector<double>(totalCoords, stream);
+      alignConformersToFirstBatchGpu(toSpan(devCoords),
+                                     toSpan(devAlignedCoords),
+                                     toSpan(devConformerOffsets),
+                                     toSpan(devCoordOffsets),
+                                     toSpan(devNumConfs),
+                                     toSpan(devNumAtoms),
+                                     numMols,
+                                     totalConformers,
+                                     stream);
+      rmsdCoords = toSpan(devAlignedCoords);
+    }
+    conformerRmsdBatchMatrixGpu(rmsdCoords,
                                 toSpan(devRmsdPtrs),
                                 toSpan(devPairOffsets),
                                 toSpan(devCoordOffsets),
@@ -181,7 +229,7 @@ std::vector<AsyncDeviceVector<double>> conformerRmsdBatchMatrixMol(const std::ve
                                 toSpan(devNumAtoms),
                                 numMols,
                                 totalPairs,
-                                prealigned,
+                                prealigned || alignToFirstConformer,
                                 stream);
   }
 

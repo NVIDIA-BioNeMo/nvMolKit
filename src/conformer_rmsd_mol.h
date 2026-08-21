@@ -35,14 +35,17 @@ namespace nvMolKit {
  * @param mol       RDKit molecule with two or more conformers.
  * @param prealigned If true, skip Kabsch alignment.
  * @param stream    CUDA stream.
+ * @param alignToFirstConformer If true and prealigned is false, align every
+ *                              conformer to conformer 0 before computing RMSDs.
  * @return Device buffer of N*(N-1)/2 doubles in lower-triangle condensed order.
  *         Returns an empty (size 0) buffer if mol has fewer than 2 conformers.
  * @throws std::invalid_argument if the molecule has conformers but no atoms.
  * @throws std::overflow_error   if the number of pairs exceeds INT_MAX.
  */
 AsyncDeviceVector<double> conformerRmsdMatrixMol(const RDKit::ROMol& mol,
-                                                 bool                prealigned = false,
-                                                 cudaStream_t        stream     = nullptr);
+                                                 bool                prealigned            = false,
+                                                 cudaStream_t        stream                = nullptr,
+                                                 bool                alignToFirstConformer = false);
 
 /**
  * @brief Compute pairwise RMSD matrices for a batch of molecules on GPU.
@@ -54,6 +57,8 @@ AsyncDeviceVector<double> conformerRmsdMatrixMol(const RDKit::ROMol& mol,
  * @param mols      Non-null RDKit molecule pointers.
  * @param prealigned If true, skip Kabsch alignment.
  * @param stream    CUDA stream.
+ * @param alignToFirstConformer If true and prealigned is false, align each
+ *                              molecule's conformers to its conformer 0.
  * @return Per-molecule device buffers in the same order as mols.
  *         Buffer m holds N_m*(N_m-1)/2 doubles; size 0 if mol m has < 2 conformers.
  * @throws std::invalid_argument if any pointer is null or any molecule has conformers
@@ -61,8 +66,9 @@ AsyncDeviceVector<double> conformerRmsdMatrixMol(const RDKit::ROMol& mol,
  * @throws std::overflow_error   if cumulative pair count exceeds INT_MAX.
  */
 std::vector<AsyncDeviceVector<double>> conformerRmsdBatchMatrixMol(const std::vector<const RDKit::ROMol*>& mols,
-                                                                   bool         prealigned = false,
-                                                                   cudaStream_t stream     = nullptr);
+                                                                   bool         prealigned            = false,
+                                                                   cudaStream_t stream                = nullptr,
+                                                                   bool         alignToFirstConformer = false);
 
 }  // namespace nvMolKit
 
