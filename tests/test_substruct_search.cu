@@ -835,6 +835,31 @@ TEST_P(SubstructureSearchTest, IsotopeDeuteriumQuery) {
     << "GPU should match RDKit for [2H] in CH4 using " << algorithmName(algorithm());
 }
 
+TEST_P(SubstructureSearchTest, HCountIncludesExplicitHydrogenNeighbors) {
+  std::vector<std::unique_ptr<RDKit::ROMol>> targetMols;
+  std::vector<std::unique_ptr<RDKit::ROMol>> queryMols;
+
+  // Explicit deuterium neighbors count toward SMARTS H queries just like
+  // ordinary hydrogens. The final three targets exercise the corresponding
+  // implicit-H cases.
+  parseMolecules({"[2H]C([2H])([2H])N", "[2H]C([2H])(N)N", "[2H]c1ccccc1", "CN", "NCN", "c1ccccc1"},
+                 {"[CH3]", "[CH2]", "[cH]"},
+                 targetMols,
+                 queryMols);
+
+  SubstructSearchResults results;
+  getSubstructMatches(getRawPtrs(targetMols), getRawPtrs(queryMols), results, algorithm(), stream_.stream());
+
+  for (size_t targetIdx = 0; targetIdx < targetMols.size(); ++targetIdx) {
+    for (size_t queryIdx = 0; queryIdx < queryMols.size(); ++queryIdx) {
+      const auto rdkitMatches = getRDKitSubstructMatches(*targetMols[targetIdx], *queryMols[queryIdx], false);
+      EXPECT_EQ(results.matchCount(targetIdx, queryIdx), static_cast<int>(rdkitMatches.size()))
+        << "GPU should match RDKit hydrogen-count semantics for target " << targetIdx << ", query " << queryIdx
+        << " using " << algorithmName(algorithm());
+    }
+  }
+}
+
 TEST_P(SubstructureSearchTest, IsotopeNitrogen15Query) {
   std::vector<std::unique_ptr<RDKit::ROMol>> targetMols;
   std::vector<std::unique_ptr<RDKit::ROMol>> queryMols;

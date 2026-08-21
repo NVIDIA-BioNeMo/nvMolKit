@@ -15,7 +15,6 @@
 
 """Tests for GPU-accelerated substructure search."""
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,7 +27,6 @@ from nvmolkit.substructure import (
     getSubstructMatches,
     hasSubstructMatch,
 )
-
 
 TEST_DATA_DIR = Path(__file__).parent.parent.parent / "tests" / "test_data"
 MAX_ATOMS = 128
@@ -128,6 +126,25 @@ class TestBasicSubstructureSearch:
             for q_idx, query in enumerate(queries):
                 rdkit_matches = get_rdkit_matches(target, query)
                 assert len(results[t_idx][q_idx]) == len(rdkit_matches), f"Mismatch at target {t_idx}, query {q_idx}"
+
+    def test_h_count_includes_explicit_hydrogen_neighbors(self):
+        """SMARTS H counts include explicit hydrogen isotopes and implicit Hs."""
+        targets = [
+            Chem.MolFromSmiles("[2H]C([2H])([2H])N"),
+            Chem.MolFromSmiles("[2H]C([2H])(N)N"),
+            Chem.MolFromSmiles("[2H]c1ccccc1"),
+            Chem.MolFromSmiles("CN"),
+            Chem.MolFromSmiles("NCN"),
+            Chem.MolFromSmiles("c1ccccc1"),
+        ]
+        queries = [Chem.MolFromSmarts("[CH3]"), Chem.MolFromSmarts("[CH2]"), Chem.MolFromSmarts("[cH]")]
+
+        results = getSubstructMatches(targets, queries)
+
+        for target_idx, target in enumerate(targets):
+            for query_idx, query in enumerate(queries):
+                rdkit_matches = get_rdkit_matches(target, query)
+                assert matches_equal(results[target_idx][query_idx], rdkit_matches)
 
 
 # =============================================================================

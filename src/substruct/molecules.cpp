@@ -57,7 +57,9 @@ namespace {
 void populateAtomScalars(const RDKit::Atom* atom, AtomDataPacked& packed, const RDKit::RingInfo* ringInfo) {
   packed.setAtomicNum(atom->getAtomicNum());
   packed.setChiralTag(atom->getChiralTag());
-  packed.setNumExplicitHs(atom->getTotalNumHs());
+  // SMARTS AtomHCount includes both implicit hydrogens and explicit hydrogen
+  // neighbors (including isotopes such as deuterium).
+  packed.setNumExplicitHs(atom->getTotalNumHs(true));
   packed.setExplicitValence(compat::getExplicitValence(atom));
   packed.setImplicitValence(compat::getImplicitValence(atom));
   packed.setTotalValence(atom->getTotalValence());
