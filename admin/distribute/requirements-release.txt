@@ -1,0 +1,7 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Host-side Python tools used by the pip release runbook. Native compilation
+# happens inside the pinned manylinux image.
+cibuildwheel==3.4.1
+twine==6.2.0
