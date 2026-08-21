@@ -1088,7 +1088,20 @@ void countSubstructMatches(const std::vector<const RDKit::ROMol*>& targets,
   SubstructSearchConfig  countConfig = config;
   countConfig.maxMatches             = 0;
 
-  getSubstructMatchesImpl(targets, queries, matchResults, algorithm, stream, countConfig, nullptr, &counts);
+  if (countConfig.uniquify) {
+    // Uniquification requires the atom mappings: the counts-only GPU path only
+    // retains the number of embeddings and cannot identify equivalent matches.
+    getSubstructMatchesImpl(targets, queries, matchResults, algorithm, stream, countConfig, nullptr, nullptr);
+
+    for (int targetIdx = 0; targetIdx < numTargets; ++targetIdx) {
+      for (int queryIdx = 0; queryIdx < numQueries; ++queryIdx) {
+        const size_t pairIdx = static_cast<size_t>(targetIdx) * numQueries + queryIdx;
+        counts[pairIdx]      = matchResults.matchCount(targetIdx, queryIdx);
+      }
+    }
+  } else {
+    getSubstructMatchesImpl(targets, queries, matchResults, algorithm, stream, countConfig, nullptr, &counts);
+  }
 }
 
 void hasSubstructMatch(const std::vector<const RDKit::ROMol*>& targets,

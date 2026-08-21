@@ -1752,6 +1752,32 @@ TEST_P(SubstructureSearchTest, CountSubstructMatchesBasic) {
   EXPECT_EQ(counts[idx(1, 2)], 4);
 }
 
+TEST_P(SubstructureSearchTest, CountSubstructMatchesUniquifySymmetricQueries) {
+  std::vector<std::unique_ptr<RDKit::ROMol>> targetMols;
+  std::vector<std::unique_ptr<RDKit::ROMol>> queryMols;
+
+  parseMolecules({"C1CCCCC1", "CCOCC"}, {"CCC", "COC"}, targetMols, queryMols);
+
+  SubstructSearchConfig config;
+  config.uniquify = true;
+
+  std::vector<int> counts;
+  countSubstructMatches(getRawPtrs(targetMols), getRawPtrs(queryMols), counts, algorithm(), stream_.stream(), config);
+
+  const int numQueries = static_cast<int>(queryMols.size());
+  for (int targetIdx = 0; targetIdx < static_cast<int>(targetMols.size()); ++targetIdx) {
+    for (int queryIdx = 0; queryIdx < numQueries; ++queryIdx) {
+      const auto rdkitMatches = getRDKitSubstructMatches(*targetMols[targetIdx], *queryMols[queryIdx], true);
+      const auto pairIdx      = static_cast<size_t>(targetIdx) * numQueries + queryIdx;
+      EXPECT_EQ(counts[pairIdx], static_cast<int>(rdkitMatches.size()))
+        << "Mismatch at target " << targetIdx << ", query " << queryIdx;
+    }
+  }
+
+  EXPECT_EQ(counts[0], 6) << "CCC on cyclohexane should count unique atom sets";
+  EXPECT_EQ(counts[3], 1) << "COC on diethyl ether should count unique atom sets";
+}
+
 // =============================================================================
 // Uniquify Tests
 // =============================================================================
