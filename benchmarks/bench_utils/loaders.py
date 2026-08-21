@@ -25,28 +25,26 @@ import random
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
 from math import ceil
-from typing import Callable, Iterator, TypeVar, cast
+from typing import Any, Callable, Iterator
 
 from rdkit import Chem, RDLogger
 from tqdm.auto import tqdm
 
-_InputT = TypeVar("_InputT")
-_OutputT = TypeVar("_OutputT")
 _PROCESS_BATCH_SIZE = 1000
 
 
-def _apply_batch(function: Callable[[_InputT], _OutputT], batch: list[_InputT]) -> list[_OutputT]:
+def _apply_batch(function: Callable[[Any], Any], batch: list[Any]) -> list[Any]:
     """Apply ``function`` to one process-pool batch."""
     return [function(item) for item in batch]
 
 
 def _process_map_batches(
-    function: Callable[[_InputT], _OutputT],
-    values: list[_InputT],
+    function: Callable[[Any], Any],
+    values: list[Any],
     *,
     desc: str,
     batch_size: int = _PROCESS_BATCH_SIZE,
-) -> list[_OutputT]:
+) -> list[Any]:
     """Process values in batches while reporting batches as they complete.
 
     ``tqdm.contrib.concurrent.process_map`` yields batches in submission order,
@@ -60,7 +58,7 @@ def _process_map_batches(
     if not values:
         return []
 
-    results: list[_OutputT | None] = [None] * len(values)
+    results: list[Any] = [None] * len(values)
     with ProcessPoolExecutor() as executor, tqdm(total=len(values), desc=desc) as progress:
         futures = {}
         for start in range(0, len(values), batch_size):
@@ -73,7 +71,7 @@ def _process_map_batches(
             results[start:end] = future.result()
             progress.update(end - start)
 
-    return cast(list[_OutputT], results)
+    return results
 
 
 def _mol_from_binary(binary_mol: bytes) -> Chem.Mol:
