@@ -42,8 +42,7 @@ namespace nvMolKit {
  * In @c CoordinateOutput::DEVICE mode, coordinates remain on the GPU and are returned as a
  * @c DeviceCoordResult collected onto @p targetGpu (defaults to the first id in
  * @c hardwareOptions.gpuIds, or device 0 when no ids are specified). RDKit conformer lists
- * are left untouched in this mode. ETKDG conformer pruning (@c params.pruneRmsThresh) is
- * performed directly on the collected device coordinates.
+ * are left untouched in this mode.
  */
 std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>&           mols,
                                                 const RDKit::DGeomHelpers::EmbedParameters& params,

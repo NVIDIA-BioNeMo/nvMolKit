@@ -97,7 +97,7 @@ DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                       
 
   conformerPruneMaskGpu(cuda::std::span<const double>(result.positions.data(), result.positions.size()),
                         cuda::std::span<const int32_t>(result.atomStarts.data(), result.atomStarts.size()),
-                        cuda::std::span<const int32_t>(groupedConfIdsDevice.data(), groupedConfIdsDevice.size()),
+                        cuda::std::span<int32_t>(groupedConfIdsDevice.data(), groupedConfIdsDevice.size()),
                         cuda::std::span<const ConformerPruningMolInfo>(molInfosDevice.data(), molInfosDevice.size()),
                         cuda::std::span<const int32_t>(atomMapsDevice.data(), atomMapsDevice.size()),
                         cuda::std::span<uint8_t>(selected.data(), selected.size()),
@@ -140,7 +140,7 @@ DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                       
   DeviceCoordResult compacted;
   compacted.gpuId       = result.gpuId;
   compacted.nMols       = result.nMols;
-  compacted.positions   = AsyncDeviceVector<double>(keptAtoms * 3);
+  compacted.positions   = AsyncDeviceVector<double>(keptAtoms * kNumCoordinateDimensions);
   compacted.atomStarts  = AsyncDeviceVector<int32_t>(keptConformers + 1);
   compacted.molIndices  = AsyncDeviceVector<int32_t>(keptConformers);
   compacted.confIndices = AsyncDeviceVector<int32_t>(keptConformers);

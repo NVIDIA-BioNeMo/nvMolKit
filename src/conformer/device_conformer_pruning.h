@@ -31,6 +31,8 @@ struct EmbedParameters;
 namespace nvMolKit {
 namespace detail {
 
+inline constexpr int kNumCoordinateDimensions = 3;
+
 /**
  * @brief Locations of one molecule's conformers and atom maps.
  */
@@ -50,7 +52,7 @@ struct ConformerPruningMolInfo {
  *
  * @param coords         Coordinates for every input conformer, stored on the GPU.
  * @param atomStarts     Where each conformer's atoms begin in @p coords.
- * @param groupedConfIds Input conformer IDs grouped by molecule.
+ * @param groupedConfIds Conformer IDs grouped by molecule; compacted in place as pruning scratch space.
  * @param molInfos       Locations of each molecule's conformers and atom maps.
  * @param atomMaps       Atom orders RDKit uses for heavy-atom and symmetry comparisons.
  * @param selected       One result per grouped conformer; 1 means keep it and 0 means discard it.
@@ -59,7 +61,7 @@ struct ConformerPruningMolInfo {
  */
 void conformerPruneMaskGpu(cuda::std::span<const double>                  coords,
                            cuda::std::span<const int32_t>                 atomStarts,
-                           cuda::std::span<const int32_t>                 groupedConfIds,
+                           cuda::std::span<int32_t>                       groupedConfIds,
                            cuda::std::span<const ConformerPruningMolInfo> molInfos,
                            cuda::std::span<const int32_t>                 atomMaps,
                            cuda::std::span<uint8_t>                       selected,

@@ -85,6 +85,8 @@ __device__ __forceinline__ double det3x3(const double* H) {
   return H[0] * (H[4] * H[8] - H[5] * H[7]) - H[1] * (H[3] * H[8] - H[5] * H[6]) + H[2] * (H[3] * H[7] - H[4] * H[6]);
 }
 
+// This can be extended later to support arbitrary dimensions, but currently supports only 3D due to its specialized
+// linear algebra functions.
 __device__ __forceinline__ double alignedRmsd(const double Sp, const double Sq, const double* H, const double invN) {
   // Finish the Kabsch calculation from the centered sums and covariance matrix.
   // G = H^T H  (3x3 symmetric positive semi-definite)
@@ -366,15 +368,18 @@ __global__ void conformerRmsdBatchKernel(const double* __restrict__ coords,
 namespace {
 
 using detail::ConformerPruningMolInfo;
+using detail::kNumCoordinateDimensions;
 
-constexpr unsigned int kFullWarpMask = 0xffffffffU;
+constexpr unsigned int kFullWarpMask    = 0xffffffffU;
+constexpr int          kGreedyBlockSize = 64;
 
 __device__ __forceinline__ double warpSum(double value) {
-  // Add one value from every lane, then broadcast the total to the whole warp.
-  for (int offset = 16; offset > 0; offset /= 2) {
-    value += __shfl_down_sync(kFullWarpMask, value, offset);
-  }
-  return __shfl_sync(kFullWarpMask, value, 0);
+  __shared__ cub::WarpReduce<double>::TempStorage tempStorage[kGreedyBlockSize / 32];
+  const int                                       warp = threadIdx.x / warpSize;
+  const double                                    sum  = cub::WarpReduce<double>(tempStorage[warp]).Sum(value);
+
+  // CUB returns the reduced value in lane 0, broadcast it to the rest of the warp
+  return __shfl_sync(kFullWarpMask, sum, 0);
 }
 
 __device__ __forceinline__ double computePairRmsdWarp(const double* __restrict__ coordI,
@@ -382,15 +387,15 @@ __device__ __forceinline__ double computePairRmsdWarp(const double* __restrict__
                                                       const int* __restrict__ atomMapI,
                                                       const int* __restrict__ atomMapJ,
                                                       const int numAtoms) {
-  const int lane = threadIdx.x % 32;
+  const int lane = threadIdx.x % warpSize;
 
-  // Each lane handles every 32nd mapped atom. The warp sums those partial
-  // values to find both conformer centroids without shared memory.
+  // Each lane handles every warp-stride mapped atom. Warp-wide reductions combine
+  // the partial values to find both conformer centroids.
   double sumIx = 0.0, sumIy = 0.0, sumIz = 0.0;
   double sumJx = 0.0, sumJy = 0.0, sumJz = 0.0;
-  for (int atom = lane; atom < numAtoms; atom += 32) {
-    const int offsetI = atomMapI[atom] * 3;
-    const int offsetJ = atomMapJ[atom] * 3;
+  for (int atom = lane; atom < numAtoms; atom += warpSize) {
+    const int offsetI = atomMapI[atom] * kNumCoordinateDimensions;
+    const int offsetJ = atomMapJ[atom] * kNumCoordinateDimensions;
     sumIx += coordI[offsetI + 0];
     sumIy += coordI[offsetI + 1];
     sumIz += coordI[offsetI + 2];
@@ -410,9 +415,9 @@ __device__ __forceinline__ double computePairRmsdWarp(const double* __restrict__
   // Center the mapped coordinates and build the values needed by Kabsch.
   double localSp = 0.0, localSq = 0.0;
   double localH[9] = {0.0};
-  for (int atom = lane; atom < numAtoms; atom += 32) {
-    const int    offsetI = atomMapI[atom] * 3;
-    const int    offsetJ = atomMapJ[atom] * 3;
+  for (int atom = lane; atom < numAtoms; atom += warpSize) {
+    const int    offsetI = atomMapI[atom] * kNumCoordinateDimensions;
+    const int    offsetJ = atomMapJ[atom] * kNumCoordinateDimensions;
     const double px      = coordI[offsetI + 0] - cIx;
     const double py      = coordI[offsetI + 1] - cIy;
     const double pz      = coordI[offsetI + 2] - cIz;
@@ -451,37 +456,39 @@ __device__ __forceinline__ double computePairRmsdWarp(const double* __restrict__
 
 __global__ void selectOrderedConformersGreedyKernel(const double* __restrict__ coords,
                                                     const int32_t* __restrict__ atomStarts,
-                                                    const int32_t* __restrict__ groupedConfIds,
+                                                    int32_t* __restrict__ groupedConfIds,
                                                     const ConformerPruningMolInfo* __restrict__ molInfos,
                                                     const int32_t* __restrict__ atomMaps,
                                                     uint8_t* __restrict__ selected,
                                                     const double threshold) {
-  const ConformerPruningMolInfo info          = molInfos[blockIdx.x];
-  const int*                    referenceMap  = info.atomMapCount == 0 ? nullptr : atomMaps + info.atomMapBegin;
-  const int                     warp          = threadIdx.x / 32;
-  const int                     lane          = threadIdx.x % 32;
-  const int                     warpsPerBlock = blockDim.x / 32;
+  const ConformerPruningMolInfo info         = molInfos[blockIdx.x];
+  const int*                    referenceMap = info.atomMapCount == 0 ? nullptr : atomMaps + info.atomMapBegin;
+  const int                     warp         = threadIdx.x / warpSize;
+  const int                     lane         = threadIdx.x % warpSize;
   __shared__ int                isConflict;
+  __shared__ int                retainedCount;
+
+  if (threadIdx.x == 0) {
+    retainedCount = 0;
+    isConflict    = 0;
+  }
+  __syncthreads();
 
   // Greedy pruning is order-dependent: a candidate is kept only when it does
   // not match an earlier kept conformer. One block owns one molecule so it can
   // process candidates in order while its warps compare earlier conformers in parallel.
   for (int candidateRank = 0; candidateRank < info.confCount; ++candidateRank) {
-    if (threadIdx.x == 0) {
-      isConflict = 0;
-    }
-    __syncthreads();
-
     const int     candidateConf   = groupedConfIds[info.confBegin + candidateRank];
-    const double* candidateCoords = coords + static_cast<size_t>(atomStarts[candidateConf]) * 3;
-    for (int previousBase = 0; previousBase < candidateRank; previousBase += warpsPerBlock) {
-      // Each warp checks one earlier conformer. Any warp can mark the shared
+    const double* candidateCoords = coords + static_cast<size_t>(atomStarts[candidateConf]) * kNumCoordinateDimensions;
+    for (int previousBase = 0; previousBase < retainedCount; previousBase += blockDim.x / warpSize) {
+      // Each warp checks one earlier retained conformer. Any warp can mark the shared
       // conflict flag, and the block stops as soon as one match is found.
-      const int previousRank = previousBase + warp;
+      const int retainedIdx  = previousBase + warp;
       bool      warpConflict = false;
-      if (previousRank < candidateRank && selected[info.confBegin + previousRank] != 0) {
-        const int     previousConf   = groupedConfIds[info.confBegin + previousRank];
-        const double* previousCoords = coords + static_cast<size_t>(atomStarts[previousConf]) * 3;
+      if (retainedIdx < retainedCount) {
+        const int     previousConf = groupedConfIds[info.confBegin + retainedIdx];
+        const double* previousCoords =
+          coords + static_cast<size_t>(atomStarts[previousConf]) * kNumCoordinateDimensions;
         for (int mapIdx = 0; mapIdx < info.atomMapCount; ++mapIdx) {
           // Compare the reference atom order with every allowed symmetry map.
           const int*   probeMap = referenceMap + mapIdx * info.mappedAtomCount;
@@ -497,13 +504,20 @@ __global__ void selectOrderedConformersGreedyKernel(const double* __restrict__ c
         atomicExch(&isConflict, 1);
       }
       __syncthreads();
-      if (isConflict != 0) {
+      if (isConflict) {
         break;
       }
     }
 
     if (threadIdx.x == 0) {
-      selected[info.confBegin + candidateRank] = isConflict == 0;
+      const bool retainCandidate               = !isConflict;
+      selected[info.confBegin + candidateRank] = retainCandidate;
+      if (retainCandidate) {
+        // Store retained IDs over entries we've already processed.
+        groupedConfIds[info.confBegin + retainedCount] = candidateConf;
+        ++retainedCount;
+      }
+      isConflict = 0;
     }
     __syncthreads();
   }
@@ -516,9 +530,10 @@ __global__ void compactConformerPositionsKernel(const double* __restrict__ posit
                                                 double* __restrict__ compactedPositions) {
   // One block copies one retained conformer into its new contiguous range.
   const int    sourceConformer = sourceConformerIds[blockIdx.x];
-  const size_t sourceBegin     = static_cast<size_t>(atomStarts[sourceConformer]) * 3;
-  const size_t valueCount      = static_cast<size_t>(atomStarts[sourceConformer + 1] - atomStarts[sourceConformer]) * 3;
-  const size_t destinationBegin = static_cast<size_t>(compactedAtomStarts[blockIdx.x]) * 3;
+  const size_t sourceBegin     = static_cast<size_t>(atomStarts[sourceConformer]) * kNumCoordinateDimensions;
+  const size_t valueCount =
+    static_cast<size_t>(atomStarts[sourceConformer + 1] - atomStarts[sourceConformer]) * kNumCoordinateDimensions;
+  const size_t destinationBegin = static_cast<size_t>(compactedAtomStarts[blockIdx.x]) * kNumCoordinateDimensions;
 
   for (size_t value = threadIdx.x; value < valueCount; value += blockDim.x) {
     compactedPositions[destinationBegin + value] = positions[sourceBegin + value];
@@ -578,7 +593,7 @@ void conformerRmsdBatchMatrixGpu(cuda::std::span<const double> coords,
 
 void detail::conformerPruneMaskGpu(cuda::std::span<const double>                  coords,
                                    cuda::std::span<const int32_t>                 atomStarts,
-                                   cuda::std::span<const int32_t>                 groupedConfIds,
+                                   cuda::std::span<int32_t>                       groupedConfIds,
                                    cuda::std::span<const ConformerPruningMolInfo> molInfos,
                                    cuda::std::span<const int32_t>                 atomMaps,
                                    cuda::std::span<uint8_t>                       selected,
@@ -588,7 +603,6 @@ void detail::conformerPruneMaskGpu(cuda::std::span<const double>                
     return;
   }
 
-  constexpr int kGreedyBlockSize = 64;
   selectOrderedConformersGreedyKernel<<<static_cast<int>(molInfos.size()), kGreedyBlockSize, 0, stream>>>(
     coords.data(),
     atomStarts.data(),
