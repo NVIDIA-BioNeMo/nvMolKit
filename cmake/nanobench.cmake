@@ -16,8 +16,8 @@
 include(FetchContent)
 FetchContent_Declare(
   nanobench
-  GIT_REPOSITORY https://github.com/martinus/nanobench.git
-  GIT_TAG v4.1.0
-  GIT_SHALLOW TRUE)
+  URL https://github.com/martinus/nanobench/archive/refs/tags/v4.1.0.tar.gz
+  URL_HASH
+    SHA256=5a2836797cfdfa729eefc60505f9e1603da44bd6965425fc89decae3b6dddfeb)
 
 FetchContent_MakeAvailable(nanobench)
