@@ -96,9 +96,12 @@ find "${WORK}/nvmolkit" -maxdepth 1 -name '_*.so' -type f | while read -r so; do
     patchelf --force-rpath --set-rpath "${NEW_RPATH}" "${so}"
 done
 
-# Repack the wheel (preserves original filename).
+# Repack via `wheel pack` so RECORD is recomputed from the post-patchelf file
+# contents. A raw `zip -qr` here would preserve the stale RECORD that auditwheel
+# wrote before patchelf modified the .so files, producing wheels whose RECORD
+# hashes and sizes disagree with the actual archive contents.
 WHEEL_BASENAME=$(basename "${REPAIRED_WHEEL}")
 rm -f "${REPAIRED_WHEEL}"
-(cd "${WORK}" && zip -qr "${DEST_DIR}/${WHEEL_BASENAME}" .)
+python -m wheel pack "${WORK}" --dest-dir "${DEST_DIR}"
 
 echo "repair_wheel.sh: ${DEST_DIR}/${WHEEL_BASENAME}"

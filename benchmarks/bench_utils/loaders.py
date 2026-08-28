@@ -22,12 +22,56 @@ source contains more entries than requested.
 
 import pickle
 import random
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
 from math import ceil
-from typing import Iterator
+from typing import Any, Callable, Iterator
 
 from rdkit import Chem, RDLogger
-from tqdm.contrib.concurrent import process_map
+from tqdm.auto import tqdm
+
+_PROCESS_BATCH_SIZE = 1000
+
+
+def _apply_batch(function: Callable[[Any], Any], batch: list[Any]) -> list[Any]:
+    """Apply ``function`` to one process-pool batch."""
+    return [function(item) for item in batch]
+
+
+def _process_map_batches(
+    function: Callable[[Any], Any],
+    values: list[Any],
+    *,
+    desc: str,
+    batch_size: int = _PROCESS_BATCH_SIZE,
+) -> list[Any]:
+    """Process values in batches while reporting batches as they complete.
+
+    ``tqdm.contrib.concurrent.process_map`` yields batches in submission order,
+    then exposes their items one at a time. For fast per-item work this makes
+    tqdm calculate its first rate from one item even though an entire batch has
+    completed. Tracking futures directly lets the bar advance by the actual
+    number of completed items without sacrificing batching efficiency.
+    """
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be positive, got {batch_size}")
+    if not values:
+        return []
+
+    results: list[Any] = [None] * len(values)
+    with ProcessPoolExecutor() as executor, tqdm(total=len(values), desc=desc) as progress:
+        futures = {}
+        for start in range(0, len(values), batch_size):
+            end = min(start + batch_size, len(values))
+            future = executor.submit(_apply_batch, function, values[start:end])
+            futures[future] = (start, end)
+
+        for future in as_completed(futures):
+            start, end = futures[future]
+            results[start:end] = future.result()
+            progress.update(end - start)
+
+    return results
 
 
 def _mol_from_binary(binary_mol: bytes) -> Chem.Mol:
@@ -69,11 +113,10 @@ def load_pickle(
     else:
         binary_mols = list(binary_mols)
         rng.shuffle(binary_mols)
-    mols = process_map(
+    mols = _process_map_batches(
         _mol_from_binary,
         binary_mols,
         desc="Unpickling molecules",
-        chunksize=1000,
     )
     print(f"  Loaded {len(mols)} molecules from {filepath}")
     return mols
@@ -146,7 +189,7 @@ def load_smiles(
     mols: list[Chem.Mol] = []
     if smiles_list:
         parse_func = partial(_parse_smiles, sanitize=sanitize)
-        parsed = process_map(parse_func, smiles_list, desc="Parsing molecules", chunksize=1000)
+        parsed = _process_map_batches(parse_func, smiles_list, desc="Parsing molecules")
         parse_failures = 0
         for mol in parsed:
             if mol is None:

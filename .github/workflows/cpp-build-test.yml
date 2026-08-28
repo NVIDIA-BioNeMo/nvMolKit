@@ -47,10 +47,12 @@ jobs:
 
       - name: Check out source tree
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Install dependencies
         shell: bash
-        run: bash admin/ci/setup_dependencies.sh 3.12 2025.03.6
+        run: bash admin/ci/setup_dependencies.sh 3.12 2025.09.1
 
       - name: Configure
         shell: bash

@@ -105,6 +105,7 @@ def test_coordinate_output_enum_values():
 
 def test_fire_options_exposes_native_defaults_and_mutators():
     options = FireOptions()
+    native = options._as_native()
     assert math.isclose(options.gradTol, 1e-4)
     assert options.stuckDetectionEnabled is False
 
@@ -112,6 +113,8 @@ def test_fire_options_exposes_native_defaults_and_mutators():
     options.useMass = True
     assert math.isclose(options.gradTol, 1e-3)
     assert options.useMass is True
+    assert math.isclose(native.gradTol, 1e-3)
+    assert native.useMass is True
 
 
 def test_device_3d_result_num_conformers_matches_atom_starts():

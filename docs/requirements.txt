@@ -4,3 +4,6 @@ autodocsumm
 myst-parser
 jupyter-sphinx
 sphinx-copybutton
+numpy>=1.23
+rdkit
+torch>=2.1

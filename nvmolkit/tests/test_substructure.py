@@ -15,10 +15,10 @@
 
 """Tests for GPU-accelerated substructure search."""
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pytest
 from rdkit import Chem
 
@@ -28,7 +28,6 @@ from nvmolkit.substructure import (
     getSubstructMatches,
     hasSubstructMatch,
 )
-
 
 TEST_DATA_DIR = Path(__file__).parent.parent.parent / "tests" / "test_data"
 MAX_ATOMS = 128
@@ -128,6 +127,25 @@ class TestBasicSubstructureSearch:
             for q_idx, query in enumerate(queries):
                 rdkit_matches = get_rdkit_matches(target, query)
                 assert len(results[t_idx][q_idx]) == len(rdkit_matches), f"Mismatch at target {t_idx}, query {q_idx}"
+
+    def test_h_count_includes_explicit_hydrogen_neighbors(self):
+        """SMARTS H counts include explicit hydrogen isotopes and implicit Hs."""
+        targets = [
+            Chem.MolFromSmiles("[2H]C([2H])([2H])N"),
+            Chem.MolFromSmiles("[2H]C([2H])(N)N"),
+            Chem.MolFromSmiles("[2H]c1ccccc1"),
+            Chem.MolFromSmiles("CN"),
+            Chem.MolFromSmiles("NCN"),
+            Chem.MolFromSmiles("c1ccccc1"),
+        ]
+        queries = [Chem.MolFromSmarts("[CH3]"), Chem.MolFromSmarts("[CH2]"), Chem.MolFromSmarts("[cH]")]
+
+        results = getSubstructMatches(targets, queries)
+
+        for target_idx, target in enumerate(targets):
+            for query_idx, query in enumerate(queries):
+                rdkit_matches = get_rdkit_matches(target, query)
+                assert matches_equal(results[target_idx][query_idx], rdkit_matches)
 
 
 # =============================================================================
@@ -769,6 +787,46 @@ class TestCountSubstructMatch:
 
         assert rdkit_count == 12
         assert results[0, 0] == rdkit_count
+
+    def test_count_uniquify_symmetric_queries(self):
+        """Test unique count API results against RDKit for symmetric queries."""
+        targets = [
+            Chem.MolFromSmiles("C1CCCCC1"),
+            Chem.MolFromSmiles("CCOCC"),
+        ]
+        queries = [
+            Chem.MolFromSmarts("CCC"),
+            Chem.MolFromSmarts("COC"),
+        ]
+        config = SubstructSearchConfig(uniquify=True, preprocessingThreads=1, workerThreads=1)
+
+        results = countSubstructMatches(targets, queries, config)
+
+        expected = np.array(
+            [[len(target.GetSubstructMatches(query, uniquify=True)) for query in queries] for target in targets],
+            dtype=results.dtype,
+        )
+        np.testing.assert_array_equal(results, expected)
+        assert results[0, 0] == 6
+        assert results[1, 1] == 1
+
+    def test_count_uniquify_matches_get_lengths(self):
+        """Test that unique count results equal unique get-result lengths."""
+        targets = [Chem.MolFromSmiles("C1CCCCC1"), Chem.MolFromSmiles("CCOCC")]
+        queries = [Chem.MolFromSmarts("CC"), Chem.MolFromSmarts("CCC"), Chem.MolFromSmarts("COC")]
+        config = SubstructSearchConfig(uniquify=True, preprocessingThreads=1, workerThreads=1)
+
+        counts = countSubstructMatches(targets, queries, config)
+        matches = getSubstructMatches(targets, queries, config)
+
+        expected = np.array(
+            [
+                [len(matches[target_idx][query_idx]) for query_idx in range(matches.shape[1])]
+                for target_idx in range(matches.shape[0])
+            ],
+            dtype=counts.dtype,
+        )
+        np.testing.assert_array_equal(counts, expected)
 
     def test_count_batch(self):
         """Test countSubstructMatches with batch of molecules."""
