@@ -144,6 +144,31 @@ def test_rmsd_explicit_condensed_output_matches_default():
     assert torch.allclose(condensed_result.torch(), default_result.torch(), atol=1e-10)
 
 
+@pytest.mark.parametrize("smiles", ["CCCCCC", "c1ccccc1", "CC(=O)Oc1ccccc1C(=O)O"])
+def test_rmsd_first_conformer_alignment_matches_rdkit_without_mutating_input(smiles):
+    """First-conformer alignment matches RDKit's conformer-0 behavior."""
+    mol = Chem.RemoveHs(_embed_mol(smiles, num_confs=10))
+    original_coords = [np.array(conf.GetPositions()) for conf in mol.GetConformers()]
+    rdkit_mol = Chem.Mol(mol)
+    rdkit_rms = _rdkit_rmsd_matrix(rdkit_mol)
+
+    gpu_rms = GetConformerRMSMatrix(mol, alignment_mode="first-conformer").numpy()
+
+    np.testing.assert_allclose(gpu_rms, rdkit_rms, atol=0.01)
+    for conf, expected in zip(mol.GetConformers(), original_coords):
+        np.testing.assert_array_equal(conf.GetPositions(), expected)
+
+
+def test_rmsd_first_conformer_and_pairwise_alignment_are_distinct():
+    """First-conformer alignment does not independently minimize every pair."""
+    mol = Chem.RemoveHs(_embed_mol("CCCCCC", num_confs=10))
+
+    pairwise = GetConformerRMSMatrix(mol, alignment_mode="pairwise").numpy()
+    first_conformer = GetConformerRMSMatrix(mol, alignment_mode="first-conformer").numpy()
+
+    assert np.any(first_conformer > pairwise + 0.01)
+
+
 def test_rmsd_square_output_matches_condensed():
     """Square output expands the default RDKit-style condensed vector."""
     mol = _embed_mol("CCCCCC", num_confs=10)
@@ -209,6 +234,18 @@ def test_rmsd_explicit_stream():
         assert abs(g - r) < 0.01
 
 
+def test_rmsd_first_conformer_explicit_stream():
+    """First-conformer alignment and RMSD execute on the explicit stream."""
+    mol = Chem.RemoveHs(_embed_mol("CCCCCC", num_confs=10))
+    rdkit_rms = _rdkit_rmsd_matrix(Chem.Mol(mol))
+
+    stream = torch.cuda.Stream()
+    gpu_result = GetConformerRMSMatrix(mol, alignment_mode="first-conformer", stream=stream)
+    stream.synchronize()
+
+    np.testing.assert_allclose(gpu_result.numpy(), rdkit_rms, atol=0.01)
+
+
 def test_rmsd_square_output_explicit_stream():
     """Square conversion is enqueued on the caller-provided stream."""
     mol = _embed_mol("CCCCCC", num_confs=10)
@@ -255,6 +292,13 @@ def test_rmsd_invalid_output_format():
     no_h = Chem.RemoveHs(mol)
     with pytest.raises(ValueError, match="output_format must be one of"):
         GetConformerRMSMatrix(no_h, output_format="matrix")
+
+
+def test_rmsd_invalid_alignment_mode():
+    """Unknown alignment_mode should fail before dispatch."""
+    mol = Chem.RemoveHs(_embed_mol("CCCC", num_confs=2))
+    with pytest.raises(ValueError, match="alignment_mode must be one of"):
+        GetConformerRMSMatrix(mol, alignment_mode="first")
 
 
 def test_rmsd_output_format_is_keyword_only():
@@ -315,6 +359,37 @@ def test_batch_explicit_condensed_output_matches_default():
     for default_result, condensed_result in zip(default_results, condensed_results):
         assert isinstance(condensed_result, AsyncGpuResult)
         assert torch.allclose(condensed_result.torch(), default_result.torch(), atol=1e-10)
+
+
+def test_batch_first_conformer_alignment_matches_single_and_rdkit():
+    """Batch first-conformer alignment matches single dispatch and RDKit."""
+    mols = [Chem.RemoveHs(_embed_mol(s, num_confs=6)) for s in ["CCCC", "CCCCCC"]]
+
+    batch_results = GetConformerRMSMatrixBatch(mols, alignment_mode="first-conformer")
+
+    for mol, batch_result in zip(mols, batch_results):
+        single_result = GetConformerRMSMatrix(mol, alignment_mode="first-conformer")
+        rdkit_rms = _rdkit_rmsd_matrix(Chem.Mol(mol))
+        np.testing.assert_allclose(batch_result.numpy(), single_result.numpy(), atol=1e-10)
+        np.testing.assert_allclose(batch_result.numpy(), rdkit_rms, atol=0.01)
+
+
+def test_batch_first_conformer_alignment_with_mixed_conformer_counts():
+    """First-conformer batch routing handles duplicate conformer offsets."""
+    mols = [
+        Chem.MolFromSmiles("CCO"),
+        Chem.RemoveHs(_embed_mol("CCCCCC", num_confs=6)),
+        Chem.RemoveHs(_embed_mol("CCO", num_confs=1)),
+        Chem.RemoveHs(_embed_mol("CCCC", num_confs=4)),
+    ]
+
+    results = GetConformerRMSMatrixBatch(mols, alignment_mode="first-conformer")
+
+    assert results[0].numpy().size == 0
+    assert results[2].numpy().size == 0
+    for index in [1, 3]:
+        rdkit_rms = _rdkit_rmsd_matrix(Chem.Mol(mols[index]))
+        np.testing.assert_allclose(results[index].numpy(), rdkit_rms, atol=0.01)
 
 
 def test_batch_square_output():
@@ -381,6 +456,13 @@ def test_batch_invalid_output_format():
         GetConformerRMSMatrixBatch([mol], output_format="matrix")
 
 
+def test_batch_invalid_alignment_mode():
+    """Unknown batch alignment_mode should fail before dispatch."""
+    mol = Chem.RemoveHs(_embed_mol("CCCC", num_confs=2))
+    with pytest.raises(ValueError, match="alignment_mode must be one of"):
+        GetConformerRMSMatrixBatch([mol], alignment_mode="first")
+
+
 def test_batch_output_format_is_keyword_only():
     """Batch output_format is keyword-only to avoid ambiguous positional calls."""
     mol = Chem.RemoveHs(_embed_mol("CCCC", num_confs=2))
@@ -403,6 +485,19 @@ def test_batch_explicit_stream():
             assert abs(g - r) < 0.01
 
 
+def test_batch_first_conformer_explicit_stream():
+    """Batch first-conformer alignment executes on the explicit stream."""
+    mols = [Chem.RemoveHs(_embed_mol(s, num_confs=5)) for s in ["CCCC", "CCCCCC"]]
+    references = [_rdkit_rmsd_matrix(Chem.Mol(mol)) for mol in mols]
+
+    stream = torch.cuda.Stream()
+    results = GetConformerRMSMatrixBatch(mols, alignment_mode="first-conformer", stream=stream)
+    stream.synchronize()
+
+    for result, reference in zip(results, references):
+        np.testing.assert_allclose(result.numpy(), reference, atol=0.01)
+
+
 def test_batch_square_output_explicit_stream():
     """Batch square conversion is enqueued on the caller-provided stream."""
     mols = [Chem.RemoveHs(_embed_mol(s, num_confs=5)) for s in ["CCCC", "CCCCC"]]
@@ -422,7 +517,8 @@ def test_batch_square_output_explicit_stream():
         assert torch.allclose(square, expected, atol=0.01)
 
 
-def test_rmsd_zero_atoms():
+@pytest.mark.parametrize("alignment_mode", ["pairwise", "first-conformer"])
+def test_rmsd_zero_atoms(alignment_mode):
     """0-atom molecule with multiple conformers raises ValueError.
 
     nvMolKit intentionally diverges from RDKit here: RDKit returns [nan] for
@@ -434,4 +530,4 @@ def test_rmsd_zero_atoms():
     mol.AddConformer(Chem.Conformer(0), assignId=True)
     mol.AddConformer(Chem.Conformer(0), assignId=True)
     with pytest.raises(ValueError):
-        GetConformerRMSMatrix(mol.GetMol())
+        GetConformerRMSMatrix(mol.GetMol(), alignment_mode=alignment_mode)

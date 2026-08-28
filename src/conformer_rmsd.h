@@ -21,6 +21,48 @@
 namespace nvMolKit {
 
 /**
+ * @brief Align every conformer to conformer 0 on the GPU.
+ *
+ * Computes one optimal rigid-body transform per conformer and writes the
+ * transformed coordinates to a separate device buffer.  Conformer 0 is copied
+ * unchanged.
+ *
+ * @param coords Input coordinates in conformer-major layout.
+ * @param alignedCoords Output buffer with the same shape as coords.
+ * @param numConformers Number of conformers.
+ * @param numAtoms Number of atoms per conformer.
+ * @param stream CUDA stream to execute operations on.
+ */
+void alignConformersToFirstGpu(cuda::std::span<const double> coords,
+                               cuda::std::span<double>       alignedCoords,
+                               int                           numConformers,
+                               int                           numAtoms,
+                               cudaStream_t                  stream = nullptr);
+
+/**
+ * @brief Align every conformer in a molecule batch to its conformer 0.
+ *
+ * @param coords Input coordinates for all molecules.
+ * @param alignedCoords Output buffer with the same shape as coords.
+ * @param conformerOffsets Prefix-sum of conformer counts, size numMols+1.
+ * @param coordOffsets Start of each molecule's coordinates, in doubles.
+ * @param numConfsPerMol Number of conformers per molecule.
+ * @param numAtomsPerMol Number of atoms per molecule.
+ * @param numMols Number of molecules.
+ * @param totalConformers Total number of conformers across the batch.
+ * @param stream CUDA stream to execute operations on.
+ */
+void alignConformersToFirstBatchGpu(cuda::std::span<const double> coords,
+                                    cuda::std::span<double>       alignedCoords,
+                                    cuda::std::span<const int>    conformerOffsets,
+                                    cuda::std::span<const size_t> coordOffsets,
+                                    cuda::std::span<const int>    numConfsPerMol,
+                                    cuda::std::span<const int>    numAtomsPerMol,
+                                    int                           numMols,
+                                    int                           totalConformers,
+                                    cudaStream_t                  stream);
+
+/**
  * @brief Compute pairwise RMSD between all conformers, returning a condensed lower-triangle matrix.
  *
  * For N conformers with M atoms each, computes N*(N-1)/2 pairwise RMSD values.
