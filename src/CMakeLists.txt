@@ -100,12 +100,13 @@ target_link_libraries(
           nvmolkit_versions
           etkdg)
 
-add_library(etkdg etkdg.cpp)
+add_library(etkdg etkdg.cpp conformer/device_conformer_pruning.cpp)
 target_link_libraries(
   etkdg
   PUBLIC bfgs conformer_types
   PRIVATE ${RDKit_LIBS}
           conformer_pruning
+          conformer_rmsd
           device
           device_coord_collector
           device_vector
