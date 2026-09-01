@@ -25,7 +25,7 @@ from rdkit.Chem import AllChem
 from rdkit.DataStructs import BulkTanimotoSimilarity
 from rdkit.ML.Cluster.Butina import ClusterData
 
-from nvmolkit.clustering import ButinaOutput, fused_butina
+from nvmolkit.clustering import ButinaOutputMode, fused_butina
 from nvmolkit.clustering import butina as butina_nvmol
 from nvmolkit.fingerprints import MorganFingerprintGenerator as nvmolMorganGen
 from nvmolkit.similarity import crossTanimotoSimilarity
@@ -277,7 +277,7 @@ if __name__ == "__main__":
                             fps_mat,
                             cutoff=cutoff,
                             metric="tanimoto",
-                            output=ButinaOutput.DEVICE,
+                            output=ButinaOutputMode.DEVICE,
                         ),
                         gpu_sync=True,
                         runs=n_runs,

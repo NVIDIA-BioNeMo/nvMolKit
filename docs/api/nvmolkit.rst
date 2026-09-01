@@ -86,7 +86,7 @@ Butina Clustering
    :toctree: generated/
    :template: class_template.rst
 
-   clustering.ButinaOutput
+   clustering.ButinaOutputMode
    clustering.ButinaDeviceResult
 
 Maximum Common Substructure (MCS)

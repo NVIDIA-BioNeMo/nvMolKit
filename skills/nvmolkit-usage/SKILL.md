@@ -301,8 +301,8 @@ for mol_clusters in clusters:
 
 For new code, select an output mode explicitly:
 
-- `output=ButinaOutput.RDKIT` returns RDKit clusters on the host.
-- `output=ButinaOutput.DEVICE` returns GPU-resident cluster IDs, centroids, and sizes.
+- `output=ButinaOutputMode.RDKIT` returns RDKit clusters on the host.
+- `output=ButinaOutputMode.DEVICE` returns GPU-resident cluster IDs, centroids, and sizes.
 
 Calls without `output` retain the older, function-specific return types.
 

@@ -44,7 +44,7 @@ _VALID_NEIGHBORLIST_SIZES = (8, 16, 24, 32, 64, 128)
 _RDKitClusters = tuple[tuple[int, ...], ...]
 
 
-class ButinaOutput(Enum):
+class ButinaOutputMode(Enum):
     """Output format for :func:`butina` and :func:`fused_butina`.
 
     ``RDKIT`` returns the same tuple of clusters as RDKit's
@@ -102,15 +102,15 @@ def _to_rdkit_clusters(cluster_ids: AsyncGpuResult, centroids: AsyncGpuResult) -
     return tuple(clusters)
 
 
-def _resolve_output(result, output: ButinaOutput) -> _RDKitClusters | ButinaDeviceResult:
-    if output is ButinaOutput.DEVICE:
+def _resolve_output(result, output: ButinaOutputMode) -> _RDKitClusters | ButinaDeviceResult:
+    if output is ButinaOutputMode.DEVICE:
         return _wrap_device_result(result)
     return _to_rdkit_clusters(*_wrap_cluster_arrays(result))
 
 
-def _validate_output(output: ButinaOutput | None, return_centroids: bool) -> None:
-    if output is not None and not isinstance(output, ButinaOutput):
-        raise TypeError(f"output must be a ButinaOutput or None, got {type(output).__name__}")
+def _validate_output(output: ButinaOutputMode | None, return_centroids: bool) -> None:
+    if output is not None and not isinstance(output, ButinaOutputMode):
+        raise TypeError(f"output must be a ButinaOutputMode or None, got {type(output).__name__}")
     if output is not None and return_centroids:
         raise ValueError("return_centroids cannot be used with output; explicit output modes have fixed return types")
 
@@ -145,7 +145,7 @@ def butina(
     reordering: bool = True,
     stream: torch.cuda.Stream | None = None,
     *,
-    output: Literal[ButinaOutput.RDKIT],
+    output: Literal[ButinaOutputMode.RDKIT],
 ) -> _RDKitClusters: ...
 
 
@@ -158,7 +158,7 @@ def butina(
     reordering: bool = True,
     stream: torch.cuda.Stream | None = None,
     *,
-    output: Literal[ButinaOutput.DEVICE],
+    output: Literal[ButinaOutputMode.DEVICE],
 ) -> ButinaDeviceResult: ...
 
 
@@ -170,7 +170,7 @@ def butina(
     reordering: bool = True,
     stream: torch.cuda.Stream | None = None,
     *,
-    output: ButinaOutput | None = None,
+    output: ButinaOutputMode | None = None,
 ) -> AsyncGpuResult | tuple[AsyncGpuResult, AsyncGpuResult] | _RDKitClusters | ButinaDeviceResult:
     """Perform Butina clustering on a distance matrix.
 
@@ -201,9 +201,9 @@ def butina(
         output: Output format. None selects the compatibility return described below.
 
     Returns:
-        ``ButinaOutput.RDKIT`` returns RDKit clusters as
+        ``ButinaOutputMode.RDKIT`` returns RDKit clusters as
         ``tuple[tuple[int, ...], ...]``, with the centroid first in each cluster.
-        ``ButinaOutput.DEVICE`` returns :class:`ButinaDeviceResult`. When
+        ``ButinaOutputMode.DEVICE`` returns :class:`ButinaDeviceResult`. When
         ``output`` is None, returns cluster IDs as :class:`AsyncGpuResult`, or
         ``(cluster_ids, centroids)`` when ``return_centroids=True``.
 
@@ -253,7 +253,7 @@ def fused_butina(
     metric: str = "tanimoto",
     stream: torch.cuda.Stream | None = None,
     *,
-    output: Literal[ButinaOutput.RDKIT],
+    output: Literal[ButinaOutputMode.RDKIT],
 ) -> _RDKitClusters: ...
 
 
@@ -265,7 +265,7 @@ def fused_butina(
     metric: str = "tanimoto",
     stream: torch.cuda.Stream | None = None,
     *,
-    output: Literal[ButinaOutput.DEVICE],
+    output: Literal[ButinaOutputMode.DEVICE],
 ) -> ButinaDeviceResult: ...
 
 
@@ -276,7 +276,7 @@ def fused_butina(
     metric: str = "tanimoto",
     stream: torch.cuda.Stream | None = None,
     *,
-    output: ButinaOutput | None = None,
+    output: ButinaOutputMode | None = None,
 ) -> (
     tuple[list[tuple[int, ...]], list[int]]
     | tuple[list[tuple[int, ...]], list[int], list[int]]
@@ -303,9 +303,9 @@ def fused_butina(
         output: Output format. None selects the compatibility return described below.
 
     Returns:
-        ``ButinaOutput.RDKIT`` returns RDKit clusters as
+        ``ButinaOutputMode.RDKIT`` returns RDKit clusters as
         ``tuple[tuple[int, ...], ...]``, with the centroid first in each cluster.
-        ``ButinaOutput.DEVICE`` returns :class:`ButinaDeviceResult`. When
+        ``ButinaOutputMode.DEVICE`` returns :class:`ButinaDeviceResult`. When
         ``output`` is None, returns ``(clusters, cumulative_offsets)``, or
         ``(clusters, cumulative_offsets, centroids)`` when
         ``return_centroids=True``.
