@@ -108,7 +108,7 @@ def test_butina_clustering(size, neighborlist_max_size):
     dists = np.random.default_rng(42).random((n, n))
     dists = np.abs(dists - dists.T)
     torch_dists = torch.tensor(dists).to("cuda")
-    nvmol_res = butina(torch_dists, cutoff, neighborlist_max_size=neighborlist_max_size).torch()
+    nvmol_res = butina(torch_dists, cutoff, neighborlist_max_size=neighborlist_max_size).cluster_ids.torch()
     nvmol_clusts = [tuple(torch.argwhere(nvmol_res == i).flatten().tolist()) for i in range(nvmol_res.max() + 1)]
 
     check_butina_correctness(torch_dists <= cutoff, nvmol_clusts)
@@ -119,7 +119,7 @@ def test_butina_edge_one_cluster(neighborlist_max_size):
     n = 10
     cutoff = 100.0
     torch_dists = torch.zeros((n, n), dtype=torch.float64, device="cuda")
-    nvmol_res = butina(torch_dists, cutoff, neighborlist_max_size=neighborlist_max_size).torch()
+    nvmol_res = butina(torch_dists, cutoff, neighborlist_max_size=neighborlist_max_size).cluster_ids.torch()
     assert torch.all(nvmol_res == 0)
 
 
@@ -129,7 +129,7 @@ def test_butina_edge_n_clusters(neighborlist_max_size):
     cutoff = 1e-8
     torch_dists = torch.ones((n, n), dtype=torch.float64, device="cuda")
     torch_dists.fill_diagonal_(0)
-    nvmol_res = butina(torch_dists, cutoff, neighborlist_max_size=neighborlist_max_size).torch()
+    nvmol_res = butina(torch_dists, cutoff, neighborlist_max_size=neighborlist_max_size).cluster_ids.torch()
     assert torch.all(nvmol_res.sort()[0] == torch.arange(10).to("cuda"))
 
 
@@ -139,9 +139,9 @@ def test_butina_returns_centroids():
     dists = np.random.default_rng(123).random((n, n))
     dists = np.abs(dists - dists.T)
     torch_dists = torch.tensor(dists).to("cuda")
-    cluster_ids, centroids = butina(torch_dists, cutoff, return_centroids=True)
-    cluster_ids_tensor = cluster_ids.torch()
-    centroids_tensor = centroids.torch()
+    result = butina(torch_dists, cutoff)
+    cluster_ids_tensor = result.cluster_ids.torch()
+    centroids_tensor = result.centroids.torch()
 
     num_clusters = int(cluster_ids_tensor.max().item()) + 1
     assert centroids_tensor.numel() == num_clusters
@@ -173,11 +173,19 @@ def test_butina_rdkit_output_matches_rdkit(reordering):
         reordering=reordering,
         output=ButinaOutputMode.RDKIT,
     )
+    device_result = butina(
+        distance_matrix,
+        0.2,
+        reordering=reordering,
+        output=ButinaOutputMode.DEVICE,
+    )
 
     assert got == _rdkit_butina_clusters(distance_matrix, 0.2, reordering=reordering)
+    assert [cluster[0] for cluster in got] == device_result.centroids.numpy().tolist()
 
 
-def test_butina_device_output_has_fixed_result_type():
+@pytest.mark.parametrize("explicit_output", [False, True])
+def test_butina_device_output_has_fixed_result_type(explicit_output):
     dists = torch.tensor(
         [
             [0.0, 0.1, 1.0, 1.0],
@@ -189,7 +197,8 @@ def test_butina_device_output_has_fixed_result_type():
         device="cuda",
     )
 
-    result = butina(dists, 0.2, output=ButinaOutputMode.DEVICE)
+    output_args = {"output": ButinaOutputMode.DEVICE} if explicit_output else {}
+    result = butina(dists, 0.2, **output_args)
 
     assert isinstance(result, ButinaDeviceResult)
     torch.testing.assert_close(result.cluster_sizes.torch(), torch.tensor([2, 2], device="cuda"))
@@ -204,7 +213,7 @@ def test_butina_accepts_array_input_types(input_kind):
     dists = np.random.default_rng(456).random((n, n))
     dists = np.abs(dists - dists.T)
     torch_dists = torch.tensor(dists, device="cuda", dtype=torch.float64)
-    expected = butina(torch_dists, cutoff).torch().cpu()
+    expected = butina(torch_dists, cutoff).cluster_ids.torch().cpu()
 
     if input_kind == "async":
         inp = AsyncGpuResult(torch_dists)
@@ -213,7 +222,7 @@ def test_butina_accepts_array_input_types(input_kind):
     else:
         inp = dists
 
-    got = butina(inp, cutoff).torch().cpu()
+    got = butina(inp, cutoff).cluster_ids.torch().cpu()
     torch.testing.assert_close(got, expected)
 
 
@@ -225,7 +234,7 @@ def test_butina_on_explicit_stream():
     torch_dists = torch.tensor(dists).to("cuda")
 
     s = torch.cuda.Stream()
-    result = butina(torch_dists, cutoff, stream=s).torch()
+    result = butina(torch_dists, cutoff, stream=s).cluster_ids.torch()
     s.synchronize()
 
     nvmol_clusts = [tuple(torch.argwhere(result == i).flatten().tolist()) for i in range(result.max() + 1)]
@@ -254,15 +263,9 @@ def test_butina_invalid_neighborlist_max_size(invalid_size):
         butina(dists, 0.1, neighborlist_max_size=invalid_size)
 
 
-def test_butina_rejects_return_centroids_with_explicit_output():
-    dists = torch.zeros(2, 2, dtype=torch.float64)
-    with pytest.raises(ValueError, match="return_centroids cannot be used with output"):
-        butina(dists, 0.1, return_centroids=True, output=ButinaOutputMode.DEVICE)
-
-
 def test_butina_rejects_invalid_output():
     dists = torch.zeros(2, 2, dtype=torch.float64)
-    with pytest.raises(TypeError, match="output must be a ButinaOutputMode or None"):
+    with pytest.raises(TypeError, match="output must be a ButinaOutputMode"):
         butina(dists, 0.1, output="device")
 
 
@@ -496,21 +499,16 @@ def test_fused_butina_invalid_stream_type():
         fused_butina(x, cutoff=0.5, stream=42)
 
 
-def test_fused_butina_restores_v05_return_contract():
+def test_fused_butina_defaults_to_device_output():
     x = generate_clustered_fingerprints(50, num_words=32, num_clusters=10)
 
-    clusters_without_centroids, offsets_without_centroids = fused_butina(x, cutoff=0.4)
-    clusters, offsets, centroids = fused_butina(x, cutoff=0.4, return_centroids=True)
+    default_result = fused_butina(x, cutoff=0.4)
+    explicit_result = fused_butina(x, cutoff=0.4, output=ButinaOutputMode.DEVICE)
 
-    assert clusters_without_centroids == clusters
-    assert offsets_without_centroids == offsets
-    assert isinstance(clusters, list)
-    assert isinstance(offsets, list)
-    assert isinstance(centroids, list)
-    assert offsets[0] == 0
-    assert offsets[-1] == x.shape[0]
-    assert [offsets[i + 1] - offsets[i] for i in range(len(clusters))] == [len(cluster) for cluster in clusters]
-    assert centroids == [cluster[0] for cluster in clusters]
+    assert isinstance(default_result, ButinaDeviceResult)
+    torch.testing.assert_close(default_result.cluster_ids.torch(), explicit_result.cluster_ids.torch())
+    torch.testing.assert_close(default_result.centroids.torch(), explicit_result.centroids.torch())
+    torch.testing.assert_close(default_result.cluster_sizes.torch(), explicit_result.cluster_sizes.torch())
 
 
 def test_fused_butina_rdkit_and_device_outputs_agree():
@@ -522,4 +520,5 @@ def test_fused_butina_rdkit_and_device_outputs_agree():
     assert isinstance(rdkit_result, tuple)
     assert isinstance(device_result, ButinaDeviceResult)
     assert rdkit_result == fused_butina_clusters(x, cutoff=0.4)
+    assert [cluster[0] for cluster in rdkit_result] == device_result.centroids.numpy().tolist()
     assert device_result.cluster_sizes.torch().tolist() == [len(cluster) for cluster in rdkit_result]
