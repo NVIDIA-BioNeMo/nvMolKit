@@ -201,11 +201,31 @@ def butina(
         output: Output format. None selects the compatibility return described below.
 
     Returns:
-        ``ButinaOutputMode.RDKIT`` returns RDKit clusters as
-        ``tuple[tuple[int, ...], ...]``, with the centroid first in each cluster.
-        ``ButinaOutputMode.DEVICE`` returns :class:`ButinaDeviceResult`. When
-        ``output`` is None, returns cluster IDs as :class:`AsyncGpuResult`, or
-        ``(cluster_ids, centroids)`` when ``return_centroids=True``.
+        The representation selected by ``output``.
+
+        ``ButinaOutputMode.RDKIT`` returns a tuple containing one tuple per
+        cluster. Each cluster tuple contains input indices, with the centroid
+        first. Constructing this representation synchronizes the CUDA work and
+        copies the clustering result to the host.
+
+        ``ButinaOutputMode.DEVICE`` returns a :class:`ButinaDeviceResult`
+        containing three :class:`AsyncGpuResult` objects on the active CUDA
+        device. ``cluster_ids`` is int32 with shape ``(N,)`` and maps each input
+        index to a cluster ID. Cluster IDs are contiguous from zero through
+        ``num_clusters - 1``. ``centroids`` is int32 with shape
+        ``(num_clusters,)``; element ``k`` is an input index whose cluster ID is
+        ``k``. ``cluster_sizes`` is int64 with shape ``(num_clusters,)``;
+        element ``k`` equals the number of entries in ``cluster_ids`` that are
+        equal to ``k``, and the sizes sum to ``N``. The return is
+        asynchronous: each field's ``.torch()`` method exposes its CUDA tensor
+        without a host copy, while ``.numpy()`` synchronizes and copies that
+        field to the host.
+
+        When ``output`` is None, the function preserves its original return
+        type. It returns ``cluster_ids`` as an :class:`AsyncGpuResult` of shape
+        ``(N,)``. If ``return_centroids=True``, it instead returns
+        ``(cluster_ids, centroids)``, where ``centroids`` is an
+        :class:`AsyncGpuResult` of shape ``(num_clusters,)``.
 
     Note:
         The distance matrix should be symmetric and have zeros on the diagonal.
@@ -303,12 +323,36 @@ def fused_butina(
         output: Output format. None selects the compatibility return described below.
 
     Returns:
-        ``ButinaOutputMode.RDKIT`` returns RDKit clusters as
-        ``tuple[tuple[int, ...], ...]``, with the centroid first in each cluster.
-        ``ButinaOutputMode.DEVICE`` returns :class:`ButinaDeviceResult`. When
-        ``output`` is None, returns ``(clusters, cumulative_offsets)``, or
-        ``(clusters, cumulative_offsets, centroids)`` when
-        ``return_centroids=True``.
+        The representation selected by ``output``.
+
+        ``ButinaOutputMode.RDKIT`` returns a tuple containing one tuple per
+        cluster. Each cluster tuple contains input indices, with the centroid
+        first. Constructing this representation synchronizes the CUDA work and
+        copies the clustering result to the host.
+
+        ``ButinaOutputMode.DEVICE`` returns a :class:`ButinaDeviceResult`
+        containing three :class:`AsyncGpuResult` objects on the active CUDA
+        device. ``cluster_ids`` is int32 with shape ``(N,)`` and maps each input
+        index to a cluster ID. Cluster IDs are contiguous from zero through
+        ``num_clusters - 1``. ``centroids`` is int32 with shape
+        ``(num_clusters,)``; element ``k`` is an input index whose cluster ID is
+        ``k``. ``cluster_sizes`` is int64 with shape ``(num_clusters,)``;
+        element ``k`` equals the number of entries in ``cluster_ids`` that are
+        equal to ``k``, and the sizes sum to ``N``. The return is
+        asynchronous: each field's ``.torch()`` method exposes its CUDA tensor
+        without a host copy, while ``.numpy()`` synchronizes and copies that
+        field to the host.
+
+        When ``output`` is None, the function preserves the nvMolKit 0.5
+        return type. ``clusters`` is a list of cluster tuples in the same form
+        described for RDKit output. ``cumulative_offsets`` has length
+        ``len(clusters) + 1``, starts at zero, ends at the number of input
+        fingerprints, and satisfies
+        ``cumulative_offsets[k + 1] - cumulative_offsets[k] == len(clusters[k])``.
+        The function returns ``(clusters, cumulative_offsets)`` by default. If
+        ``return_centroids=True``, it returns
+        ``(clusters, cumulative_offsets, centroids)``, where
+        ``centroids[k] == clusters[k][0]``.
     """
     _validate_output(output, return_centroids)
     if metric not in ("tanimoto", "cosine"):
