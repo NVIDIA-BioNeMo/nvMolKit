@@ -45,12 +45,10 @@ _RDKitClusters = tuple[tuple[int, ...], ...]
 
 
 class ButinaOutput(Enum):
-    """Selects how Butina clustering results are returned.
+    """Output format for :func:`butina` and :func:`fused_butina`.
 
-    - ``RDKIT`` returns the same tuple-of-tuples representation as RDKit's
-      ``Butina.ClusterData``. The centroid is the first item in each cluster.
-    - ``DEVICE`` keeps the result on the GPU and returns a
-      :class:`ButinaDeviceResult`.
+    ``RDKIT`` returns the same tuple of clusters as RDKit's
+    ``Butina.ClusterData``. ``DEVICE`` returns a :class:`ButinaDeviceResult`.
     """
 
     RDKIT = "rdkit"
@@ -59,14 +57,12 @@ class ButinaOutput(Enum):
 
 @dataclass(frozen=True)
 class ButinaDeviceResult:
-    """GPU-resident result shared by ``butina`` and ``fused_butina``.
+    """GPU-resident Butina clustering result.
 
-    ``cluster_ids`` is int32 with shape ``(N,)`` and has one cluster ID per
-    input item. ``centroids`` is int32 with shape ``(num_clusters,)``.
-    ``cluster_sizes`` is int64 with shape ``(num_clusters,)``. Both latter
-    fields are indexed by cluster ID, and ``cluster_sizes`` contains per-cluster
-    counts, not the cumulative offsets returned by nvMolKit 0.5's legacy
-    ``fused_butina`` API.
+    Attributes:
+        cluster_ids: One int32 cluster ID per input item, shape ``(N,)``.
+        centroids: Centroid indices by cluster ID, int32 and shape ``(num_clusters,)``.
+        cluster_sizes: Member counts by cluster ID, int64 and shape ``(num_clusters,)``.
     """
 
     cluster_ids: AsyncGpuResult
@@ -196,24 +192,20 @@ def butina(
                               optimization. Must be 8, 16, 24, 32, 64, or 128. Larger values
                               allow parallel processing of larger clusters but use more
                               shared memory. Ignored when reordering is False.
-        return_centroids: Whether the historical omitted-output path also returns
-                          centroid indices. Cannot be combined with ``output``.
+        return_centroids: When ``output`` is None, return centroids alongside
+                          the cluster IDs. Cannot be combined with ``output``.
         reordering: Whether to update neighbor counts among unassigned items
                     after each cluster is formed. Defaults to True, while
                     RDKit's ``Butina.ClusterData`` defaults to False.
         stream: CUDA stream to use. If None, uses the current stream.
-        output: Explicit result representation. ``ButinaOutput.RDKIT`` returns
-                RDKit-style host clusters; ``ButinaOutput.DEVICE`` returns a
-                :class:`ButinaDeviceResult`. If omitted, preserves the original
-                non-fused nvMolKit return behavior controlled by
-                ``return_centroids``.
+        output: Output format. None selects the compatibility return described below.
 
     Returns:
-        With ``output=ButinaOutput.RDKIT``, the RDKit tuple-of-tuples cluster
-        representation. With ``output=ButinaOutput.DEVICE``, a
-        :class:`ButinaDeviceResult`. If ``output`` is omitted, an
-        ``AsyncGpuResult`` of cluster IDs, or ``(cluster_ids, centroids)`` when
-        ``return_centroids=True``, preserving the historical non-fused API.
+        ``ButinaOutput.RDKIT`` returns RDKit clusters as
+        ``tuple[tuple[int, ...], ...]``, with the centroid first in each cluster.
+        ``ButinaOutput.DEVICE`` returns :class:`ButinaDeviceResult`. When
+        ``output`` is None, returns cluster IDs as :class:`AsyncGpuResult`, or
+        ``(cluster_ids, centroids)`` when ``return_centroids=True``.
 
     Note:
         The distance matrix should be symmetric and have zeros on the diagonal.
@@ -303,22 +295,20 @@ def fused_butina(
            CPU tensors and NumPy arrays are copied to CUDA.
         cutoff: Distance threshold for clustering. Items are neighbors if their
                 distance is at most this cutoff (i.e. similarity >= 1 - cutoff).
-        return_centroids: Whether the historical omitted-output path includes
-                          the centroid list. Cannot be combined with ``output``.
+        return_centroids: When ``output`` is None, include centroids in the
+                          return tuple. Cannot be combined with ``output``.
         metric: Metric to use for similarity computation. Currently only "tanimoto"
                 and "cosine" are supported.
         stream: CUDA stream to use. If None, uses the current stream.
-        output: Explicit result representation. ``ButinaOutput.RDKIT`` returns
-                RDKit-style host clusters; ``ButinaOutput.DEVICE`` returns a
-                :class:`ButinaDeviceResult`. If omitted, reproduces the nvMolKit
-                0.5 fused return contract controlled by ``return_centroids``.
+        output: Output format. None selects the compatibility return described below.
 
     Returns:
-        With ``output=ButinaOutput.RDKIT``, the RDKit tuple-of-tuples cluster
-        representation. With ``output=ButinaOutput.DEVICE``, a
-        :class:`ButinaDeviceResult`. If ``output`` is omitted, returns the
-        nvMolKit 0.5 ``(clusters, cumulative_offsets)`` tuple, plus a centroid
-        list when ``return_centroids=True``.
+        ``ButinaOutput.RDKIT`` returns RDKit clusters as
+        ``tuple[tuple[int, ...], ...]``, with the centroid first in each cluster.
+        ``ButinaOutput.DEVICE`` returns :class:`ButinaDeviceResult`. When
+        ``output`` is None, returns ``(clusters, cumulative_offsets)``, or
+        ``(clusters, cumulative_offsets, centroids)`` when
+        ``return_centroids=True``.
     """
     _validate_output(output, return_centroids)
     if metric not in ("tanimoto", "cosine"):

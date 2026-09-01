@@ -299,12 +299,12 @@ for mol_clusters in clusters:
     print(mol_clusters.cpu().tolist())
 ```
 
-Both clustering functions accept the same explicit output modes. Use
-`output=ButinaOutput.RDKIT` for RDKit's tuple-of-tuples cluster representation,
-or `output=ButinaOutput.DEVICE` for a `ButinaDeviceResult` containing GPU-resident
-`cluster_ids`, `centroids`, and per-cluster `cluster_sizes`. The omitted-output
-behavior is retained for compatibility and differs between the historical
-non-fused and fused APIs, so new code should select a mode explicitly.
+For new code, select an output mode explicitly:
+
+- `output=ButinaOutput.RDKIT` returns RDKit clusters on the host.
+- `output=ButinaOutput.DEVICE` returns GPU-resident cluster IDs, centroids, and sizes.
+
+Calls without `output` retain the older, function-specific return types.
 
 `GetConformerRMSMatrix(mol)` and `GetConformerRMSMatrixBatch(mols)` default to `output_format="condensed"`, returning `AsyncGpuResult` objects that wrap RDKit-style flat vectors of length `N * (N - 1) // 2`. Use `output_format="square"` when chaining into `butina()` or any other API that expects an `N x N` distance matrix. Both forms live on the GPU; call `.numpy()` on condensed results or synchronize before moving square tensors to the CPU.
 
