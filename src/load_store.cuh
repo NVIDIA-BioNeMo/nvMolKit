@@ -263,13 +263,13 @@ __forceinline__ __device__ void st_m16n8k256_x4(unsigned regs_and[4],
       col = threadID_in_group * 2 + c + 8 * load_x;
 
       if constexpr (Metric == FingerprintSimilarityMetric::Tanimoto) {
-        smem_ptr[row * (TILE_Y + 1) + col] = detail::fingerprintSimilarityFromDenominator<Metric>(
+        smem_ptr[row * (TILE_X + 1) + col] = detail::fingerprintSimilarityFromDenominator<Metric>(
           static_cast<int>(regs_and[2 * r + c]),
           static_cast<float>(regs_and[2 * r + c] + regs_xor[2 * r + c]));
       } else {
         const int popcB = regs_and[2 * r + c] + regs_and_not[2 * r + c];
         const int popcA = regs_and[2 * r + c] + regs_xor[2 * r + c] - regs_and_not[2 * r + c];
-        smem_ptr[row * (TILE_Y + 1) + col] =
+        smem_ptr[row * (TILE_X + 1) + col] =
           detail::fingerprintSimilarity<Metric, float>(static_cast<int>(regs_and[2 * r + c]), popcA, popcB);
       }
     }

@@ -156,6 +156,53 @@ def test_nxm_cross_tanimoto_similarity_from_packing(nxmdims):
     torch.testing.assert_close(nvmolkit_sims, ref_sims)
 
 
+@pytest.mark.parametrize(
+    "m,n,words",
+    (
+        (1, 1, 1),
+        (1, 129, 8),
+        (2, 65, 31),
+        (7, 128, 32),
+        (8, 127, 33),
+        (9, 129, 64),
+        (16, 17, 8),
+        (17, 65, 32),
+        (32, 33, 64),
+        (33, 65, 32),
+        (64, 129, 8),
+    ),
+)
+def test_cross_tanimoto_similarity_skinny_tile_boundaries(m, n, words):
+    generator = torch.Generator(device="cuda")
+    generator.manual_seed(20260819 + m * 1000 + n * 10 + words)
+    bits_one = torch.randint(-(2**31), 2**31 - 1, (m, words), dtype=torch.int32, device="cuda", generator=generator)
+    bits_two = torch.randint(-(2**31), 2**31 - 1, (n, words), dtype=torch.int32, device="cuda", generator=generator)
+
+    words_one = bits_one.cpu().numpy().view(np.uint32)
+    words_two = bits_two.cpu().numpy().view(np.uint32)
+    intersection = np.unpackbits(
+        np.bitwise_and(words_one[:, None, :], words_two[None, :, :]).view(np.uint8), axis=-1
+    ).sum(axis=-1)
+    union = np.unpackbits(np.bitwise_or(words_one[:, None, :], words_two[None, :, :]).view(np.uint8), axis=-1).sum(
+        axis=-1
+    )
+    expected = np.ones(union.shape, dtype=np.float64)
+    np.divide(intersection, union, out=expected, where=union != 0)
+
+    actual = crossTanimotoSimilarity(bits_one, bits_two).torch().cpu()
+
+    torch.testing.assert_close(actual, torch.from_numpy(expected), rtol=1e-6, atol=1e-7)
+
+
+def test_cross_tanimoto_similarity_skinny_zero_fingerprints():
+    bits_one = torch.zeros((3, 8), dtype=torch.int32, device="cuda")
+    bits_two = torch.zeros((5, 8), dtype=torch.int32, device="cuda")
+
+    actual = crossTanimotoSimilarity(bits_one, bits_two).torch()
+
+    torch.testing.assert_close(actual, torch.ones_like(actual))
+
+
 @pytest.mark.parametrize("similarity", (crossTanimotoSimilarity, crossCosineSimilarity))
 @pytest.mark.parametrize("input_kind", ("async", "cpu_tensor", "numpy"))
 def test_cross_similarity_accepts_array_input_types(similarity, input_kind):

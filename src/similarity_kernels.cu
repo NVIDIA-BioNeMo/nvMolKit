@@ -120,7 +120,8 @@ template <FingerprintSimilarityMetric similarityType,
           size_t BLOCK_TILE_SIZE_Y,
           size_t BLOCK_TILE_SIZE_K,
           size_t NUM_WARP_X,
-          size_t NUM_WARP_Y>
+          size_t NUM_WARP_Y,
+          bool   TRANSPOSE_OUTPUT = false>
 __device__ void crossSimilarityKernelTensorOp(const cuda::std::span<const kThreadReductionType> bitsOne,
                                               const cuda::std::span<const kThreadReductionType> bitsTwo,
                                               const size_t                                      elementsPerMolecule,
@@ -252,7 +253,12 @@ __device__ void crossSimilarityKernelTensorOp(const cuda::std::span<const kThrea
     const int gmem_col   = smem_col + BLOCK_TILE_SIZE_X * blockIdx.x;
 
     if (gmem_row < m && gmem_col < n) {
-      similarities[gmem_row * n + gmem_col] = (C_smem[smem_row * (BLOCK_TILE_SIZE_X + 1) + smem_col]);
+      const T_out value = C_smem[smem_row * (BLOCK_TILE_SIZE_X + 1) + smem_col];
+      if constexpr (TRANSPOSE_OUTPUT) {
+        similarities[gmem_col * m + gmem_row] = value;
+      } else {
+        similarities[gmem_row * n + gmem_col] = value;
+      }
     }
   }
 }
@@ -385,7 +391,8 @@ template <typename kThreadReductionType,
           size_t BLOCK_TILE_SIZE_Y,
           size_t BLOCK_TILE_SIZE_K,
           size_t THREAD_TILE_X_OR_NUM_WARP_X,
-          size_t THREAD_TILE_Y_OR_NUM_WARP_Y>
+          size_t THREAD_TILE_Y_OR_NUM_WARP_Y,
+          bool   TRANSPOSE_OUTPUT = false>
 __global__ void tanimotoCrossSimilarityKernel(const cuda::std::span<const kThreadReductionType> bitsOne,
                                               const cuda::std::span<const kThreadReductionType> bitsTwo,
                                               const size_t                                      elementsPerMolecule,
@@ -399,11 +406,8 @@ __global__ void tanimotoCrossSimilarityKernel(const cuda::std::span<const kThrea
                                 BLOCK_TILE_SIZE_Y,
                                 BLOCK_TILE_SIZE_K,
                                 THREAD_TILE_X_OR_NUM_WARP_X,
-                                THREAD_TILE_Y_OR_NUM_WARP_Y>(bitsOne,
-                                                             bitsTwo,
-                                                             elementsPerMolecule,
-                                                             similarities,
-                                                             offset);
+                                THREAD_TILE_Y_OR_NUM_WARP_Y,
+                                TRANSPOSE_OUTPUT>(bitsOne, bitsTwo, elementsPerMolecule, similarities, offset);
 #else
   crossSimilarityKernelSIMT<FingerprintSimilarityMetric::Tanimoto,
                             kThreadReductionType,
@@ -415,6 +419,38 @@ __global__ void tanimotoCrossSimilarityKernel(const cuda::std::span<const kThrea
                             THREAD_TILE_Y_OR_NUM_WARP_Y>(bitsOne, bitsTwo, elementsPerMolecule, similarities, offset);
 
 #endif
+}
+
+template <size_t BLOCK_TILE_SIZE_X,
+          size_t BLOCK_TILE_SIZE_Y,
+          size_t NUM_WARP_X,
+          size_t NUM_WARP_Y,
+          bool   TRANSPOSE_OUTPUT = false>
+void launchTanimotoTensorKernel(const cuda::std::span<const std::uint32_t> bitsOne,
+                                const cuda::std::span<const std::uint32_t> bitsTwo,
+                                const size_t                               numBitsPerMolecule,
+                                const cuda::std::span<double>              results,
+                                const size_t                               offset,
+                                cudaStream_t                               stream) {
+  constexpr unsigned int kBlockTileSizeK  = 32U;
+  constexpr unsigned int kThreadsPerBlock = 32U * NUM_WARP_X * NUM_WARP_Y;
+  const size_t           m                = bitsOne.size() / numBitsPerMolecule;
+  const size_t           n                = bitsTwo.size() / numBitsPerMolecule;
+
+  constexpr unsigned int kBlockTileSizeX = static_cast<unsigned int>(BLOCK_TILE_SIZE_X);
+  constexpr unsigned int kBlockTileSizeY = static_cast<unsigned int>(BLOCK_TILE_SIZE_Y);
+  const dim3             blockDim{kThreadsPerBlock, 1U, 1U};
+  const dim3             gridDim{(static_cast<unsigned int>(n) + kBlockTileSizeX - 1U) / kBlockTileSizeX,
+                     (static_cast<unsigned int>(m) + kBlockTileSizeY - 1U) / kBlockTileSizeY,
+                     1U};
+  tanimotoCrossSimilarityKernel<std::uint32_t,
+                                BLOCK_TILE_SIZE_X,
+                                BLOCK_TILE_SIZE_Y,
+                                kBlockTileSizeK,
+                                NUM_WARP_X,
+                                NUM_WARP_Y,
+                                TRANSPOSE_OUTPUT>
+    <<<gridDim, blockDim, 0, stream>>>(bitsOne, bitsTwo, numBitsPerMolecule, results, offset);
 }
 
 }  // namespace
@@ -514,33 +550,17 @@ void launchCrossTanimotoSimilarity(const cuda::std::span<const std::uint32_t> bi
   size_t n = bitsTwo.size() / numBitsPerMolecule;
 
   if (isTensorOpsSupportedCached()) {
-    constexpr unsigned int BLOCK_TILE_SIZE_X{64U};
-    constexpr unsigned int BLOCK_TILE_SIZE_Y{64U};
-
-    constexpr unsigned int BLOCK_TILE_SIZE_K{32U};
-
-    constexpr int SMEM_IS_ENOUGH = (2 * (BLOCK_TILE_SIZE_X + BLOCK_TILE_SIZE_Y) * (BLOCK_TILE_SIZE_K + 1)) /
-                                   ((BLOCK_TILE_SIZE_Y) * (BLOCK_TILE_SIZE_X + 1));
-
-    static_assert(SMEM_IS_ENOUGH > 0);
-
-    constexpr unsigned int NUM_WARP_X{4U};
-    constexpr unsigned int NUM_WARP_Y{2U};
-
-    constexpr unsigned int NUM_THREADS_PER_BLOCK{32 * NUM_WARP_X * NUM_WARP_Y};
-
-    dim3 const block_dim{NUM_THREADS_PER_BLOCK, 1U, 1U};
-    dim3 const grid_dim{(static_cast<unsigned int>(n) + BLOCK_TILE_SIZE_X - 1U) / (BLOCK_TILE_SIZE_X),
-                        (static_cast<unsigned int>(m) + BLOCK_TILE_SIZE_Y - 1U) / (BLOCK_TILE_SIZE_Y),
-                        1U};
-
-    tanimotoCrossSimilarityKernel<std::uint32_t,
-                                  BLOCK_TILE_SIZE_X,
-                                  BLOCK_TILE_SIZE_Y,
-                                  BLOCK_TILE_SIZE_K,
-                                  NUM_WARP_X,
-                                  NUM_WARP_Y>
-      <<<grid_dim, block_dim, 0, stream>>>(bitsOne, bitsTwo, numBitsPerMolecule, results, offset);
+    // Put a skinny query dimension on BMMA's N axis and transpose the output
+    // back to the public [query, database] layout.
+    if (m <= 8U) {
+      launchTanimotoTensorKernel<8U, 64U, 1U, 4U, true>(bitsTwo, bitsOne, numBitsPerMolecule, results, offset, stream);
+    } else if (m <= 16U) {
+      launchTanimotoTensorKernel<16U, 64U, 2U, 4U, true>(bitsTwo, bitsOne, numBitsPerMolecule, results, offset, stream);
+    } else if (m <= 32U) {
+      launchTanimotoTensorKernel<32U, 64U, 4U, 2U, true>(bitsTwo, bitsOne, numBitsPerMolecule, results, offset, stream);
+    } else {
+      launchTanimotoTensorKernel<64U, 64U, 4U, 2U>(bitsOne, bitsTwo, numBitsPerMolecule, results, offset, stream);
+    }
   } else {
     constexpr unsigned int BLOCK_TILE_SIZE_X{64U};
     constexpr unsigned int BLOCK_TILE_SIZE_Y{128U};
