@@ -28,6 +28,11 @@ drastically lower memory: usage is O(N) rather than O(N^2), making it the
 better choice for large N where the full matrix would be prohibitively large.
 """
 
+from dataclasses import dataclass
+from enum import Enum
+from typing import Literal, overload
+
+import numpy as np
 import torch
 
 from nvmolkit import _clustering
@@ -36,12 +41,69 @@ from nvmolkit.types import ArrayInput, AsyncGpuResult, _as_cuda_tensor, _resolve
 
 _VALID_NEIGHBORLIST_SIZES = (8, 16, 24, 32, 64, 128)
 
+_RDKitClusters = tuple[tuple[int, ...], ...]
 
-def _wrap_result(result, return_centroids: bool):
-    if return_centroids:
-        cluster_ids, centroids = result
-        return AsyncGpuResult(cluster_ids), AsyncGpuResult(centroids)
-    return AsyncGpuResult(result)
+
+class ButinaOutputMode(Enum):
+    """Output format for :func:`butina` and :func:`fused_butina`.
+
+    ``RDKIT`` returns the same tuple of clusters as RDKit's
+    ``Butina.ClusterData``. ``DEVICE`` returns a :class:`ButinaDeviceResult`.
+    """
+
+    RDKIT = "rdkit"
+    DEVICE = "device"
+
+
+@dataclass(frozen=True)
+class ButinaDeviceResult:
+    """GPU-resident Butina clustering result.
+
+    Attributes:
+        cluster_ids: One int32 cluster ID per input item, shape ``(N,)``.
+        centroids: Centroid indices by cluster ID, int32 and shape ``(num_clusters,)``.
+        cluster_sizes: Member counts by cluster ID, int64 and shape ``(num_clusters,)``.
+    """
+
+    cluster_ids: AsyncGpuResult
+    centroids: AsyncGpuResult
+    cluster_sizes: AsyncGpuResult
+
+
+def _wrap_cluster_arrays(result) -> tuple[AsyncGpuResult, AsyncGpuResult]:
+    cluster_ids_obj, centroids_obj = result
+    return AsyncGpuResult(cluster_ids_obj), AsyncGpuResult(centroids_obj)
+
+
+def _wrap_device_result(result) -> ButinaDeviceResult:
+    cluster_ids, centroids = _wrap_cluster_arrays(result)
+    cluster_sizes = torch.bincount(
+        cluster_ids.torch().to(torch.int64),
+        minlength=centroids.torch().numel(),
+    )
+    return ButinaDeviceResult(cluster_ids, centroids, AsyncGpuResult(cluster_sizes))
+
+
+def _to_rdkit_clusters(cluster_ids: AsyncGpuResult, centroids: AsyncGpuResult) -> _RDKitClusters:
+    cluster_ids_array = cluster_ids.numpy()
+    centroids_array = centroids.numpy()
+    clusters = []
+    for cluster_id, centroid_value in enumerate(centroids_array):
+        centroid = int(centroid_value)
+        members = np.flatnonzero(cluster_ids_array == cluster_id)
+        clusters.append(tuple([centroid] + [int(member) for member in members if member != centroid]))
+    return tuple(clusters)
+
+
+def _resolve_output(result, output: ButinaOutputMode) -> _RDKitClusters | ButinaDeviceResult:
+    if output is ButinaOutputMode.DEVICE:
+        return _wrap_device_result(result)
+    return _to_rdkit_clusters(*_wrap_cluster_arrays(result))
+
+
+def _validate_output(output: ButinaOutputMode) -> None:
+    if not isinstance(output, ButinaOutputMode):
+        raise TypeError(f"output must be a ButinaOutputMode, got {type(output).__name__}")
 
 
 def _check_distance_matrix(name: str, x: torch.Tensor) -> torch.Tensor:
@@ -52,14 +114,39 @@ def _check_distance_matrix(name: str, x: torch.Tensor) -> torch.Tensor:
     return x.contiguous()
 
 
+@overload
 def butina(
     distance_matrix: ArrayInput,
     cutoff: float,
     neighborlist_max_size: int = 64,
-    return_centroids: bool = False,
     reordering: bool = True,
     stream: torch.cuda.Stream | None = None,
-) -> AsyncGpuResult | tuple[AsyncGpuResult, AsyncGpuResult]:
+    *,
+    output: Literal[ButinaOutputMode.DEVICE] = ButinaOutputMode.DEVICE,
+) -> ButinaDeviceResult: ...
+
+
+@overload
+def butina(
+    distance_matrix: ArrayInput,
+    cutoff: float,
+    neighborlist_max_size: int = 64,
+    reordering: bool = True,
+    stream: torch.cuda.Stream | None = None,
+    *,
+    output: Literal[ButinaOutputMode.RDKIT],
+) -> _RDKitClusters: ...
+
+
+def butina(
+    distance_matrix: ArrayInput,
+    cutoff: float,
+    neighborlist_max_size: int = 64,
+    reordering: bool = True,
+    stream: torch.cuda.Stream | None = None,
+    *,
+    output: ButinaOutputMode = ButinaOutputMode.DEVICE,
+) -> _RDKitClusters | ButinaDeviceResult:
     """Perform Butina clustering on a distance matrix.
 
     The Butina algorithm is a deterministic clustering method that groups items based
@@ -80,22 +167,37 @@ def butina(
                               optimization. Must be 8, 16, 24, 32, 64, or 128. Larger values
                               allow parallel processing of larger clusters but use more
                               shared memory. Ignored when reordering is False.
-        return_centroids: Whether to return centroid indices for each cluster.
         reordering: Whether to update neighbor counts among unassigned items
                     after each cluster is formed. Defaults to True, while
                     RDKit's ``Butina.ClusterData`` defaults to False.
         stream: CUDA stream to use. If None, uses the current stream.
+        output: Output representation. Defaults to ``ButinaOutputMode.DEVICE``.
 
     Returns:
-        AsyncGpuResult of shape ``(N,)`` with cluster IDs (cluster 0 is the
-        largest) when ``return_centroids`` is False. When ``return_centroids``
-        is True, returns a tuple ``(cluster_ids, centroids)`` where *centroids* is
-        an AsyncGpuResult of shape ``(num_clusters,)`` containing the centroid
-        index for each cluster ID.
+        The representation selected by ``output``.
+
+        ``ButinaOutputMode.RDKIT`` returns a tuple containing one tuple per
+        cluster. Each cluster tuple contains input indices, with the centroid
+        first. Constructing this representation synchronizes the CUDA work and
+        copies the clustering result to the host.
+
+        ``ButinaOutputMode.DEVICE`` returns a :class:`ButinaDeviceResult`
+        containing three :class:`AsyncGpuResult` objects on the active CUDA
+        device. ``cluster_ids`` is int32 with shape ``(N,)`` and maps each input
+        index to a cluster ID. Cluster IDs are contiguous from zero through
+        ``num_clusters - 1``. ``centroids`` is int32 with shape
+        ``(num_clusters,)``; element ``k`` is an input index whose cluster ID is
+        ``k``. ``cluster_sizes`` is int64 with shape ``(num_clusters,)``;
+        element ``k`` equals the number of entries in ``cluster_ids`` that are
+        equal to ``k``, and the sizes sum to ``N``. The return is
+        asynchronous: each field's ``.torch()`` method exposes its CUDA tensor
+        without a host copy, while ``.numpy()`` synchronizes and copies that
+        field to the host.
 
     Note:
         The distance matrix should be symmetric and have zeros on the diagonal.
     """
+    _validate_output(output)
     if neighborlist_max_size not in _VALID_NEIGHBORLIST_SIZES:
         raise ValueError(
             f"neighborlist_max_size must be one of {_VALID_NEIGHBORLIST_SIZES}, got {neighborlist_max_size}"
@@ -108,20 +210,43 @@ def butina(
             distance_matrix_tensor.__cuda_array_interface__,
             cutoff,
             neighborlist_max_size,
-            return_centroids,
+            True,
             reordering,
             active_stream.cuda_stream,
         )
-        return _wrap_result(result, return_centroids)
+        return _resolve_output(result, output)
+
+
+@overload
+def fused_butina(
+    x: ArrayInput,
+    cutoff: float,
+    metric: str = "tanimoto",
+    stream: torch.cuda.Stream | None = None,
+    *,
+    output: Literal[ButinaOutputMode.DEVICE] = ButinaOutputMode.DEVICE,
+) -> ButinaDeviceResult: ...
+
+
+@overload
+def fused_butina(
+    x: ArrayInput,
+    cutoff: float,
+    metric: str = "tanimoto",
+    stream: torch.cuda.Stream | None = None,
+    *,
+    output: Literal[ButinaOutputMode.RDKIT],
+) -> _RDKitClusters: ...
 
 
 def fused_butina(
     x: ArrayInput,
     cutoff: float,
-    return_centroids: bool = False,
     metric: str = "tanimoto",
     stream: torch.cuda.Stream | None = None,
-) -> AsyncGpuResult | tuple[AsyncGpuResult, AsyncGpuResult]:
+    *,
+    output: ButinaOutputMode = ButinaOutputMode.DEVICE,
+) -> _RDKitClusters | ButinaDeviceResult:
     """Perform fused Butina clustering on a set of fingerprints.
 
     This function uses a fused implementation of Butina clustering that computes
@@ -134,17 +259,34 @@ def fused_butina(
            CPU tensors and NumPy arrays are copied to CUDA.
         cutoff: Distance threshold for clustering. Items are neighbors if their
                 distance is at most this cutoff (i.e. similarity >= 1 - cutoff).
-        return_centroids: Whether to return centroid indices for each cluster.
         metric: Metric to use for similarity computation. Currently only "tanimoto"
                 and "cosine" are supported.
         stream: CUDA stream to use. If None, uses the current stream.
+        output: Output representation. Defaults to ``ButinaOutputMode.DEVICE``.
 
     Returns:
-        AsyncGpuResult of shape ``(N,)`` containing one cluster ID per input item
-        when ``return_centroids`` is False. When ``return_centroids`` is True,
-        returns ``(cluster_ids, centroids)``, where *centroids* contains the input
-        index selected as the centroid for each cluster ID.
+        The representation selected by ``output``.
+
+        ``ButinaOutputMode.RDKIT`` returns a tuple containing one tuple per
+        cluster. Each cluster tuple contains input indices, with the centroid
+        first. Constructing this representation synchronizes the CUDA work and
+        copies the clustering result to the host.
+
+        ``ButinaOutputMode.DEVICE`` returns a :class:`ButinaDeviceResult`
+        containing three :class:`AsyncGpuResult` objects on the active CUDA
+        device. ``cluster_ids`` is int32 with shape ``(N,)`` and maps each input
+        index to a cluster ID. Cluster IDs are contiguous from zero through
+        ``num_clusters - 1``. ``centroids`` is int32 with shape
+        ``(num_clusters,)``; element ``k`` is an input index whose cluster ID is
+        ``k``. ``cluster_sizes`` is int64 with shape ``(num_clusters,)``;
+        element ``k`` equals the number of entries in ``cluster_ids`` that are
+        equal to ``k``, and the sizes sum to ``N``. The return is
+        asynchronous: each field's ``.torch()`` method exposes its CUDA tensor
+        without a host copy, while ``.numpy()`` synchronizes and copies that
+        field to the host.
+
     """
+    _validate_output(output)
     if metric not in ("tanimoto", "cosine"):
         raise ValueError(f"metric must be one of ['tanimoto', 'cosine'], got {metric}")
 
@@ -153,7 +295,5 @@ def fused_butina(
 
     (x,), active_stream = _prepare_packed_fingerprints(("x", x), stream=stream)
     with torch.cuda.stream(active_stream):
-        result = _clustering.fused_butina(
-            x.__cuda_array_interface__, cutoff, return_centroids, metric, active_stream.cuda_stream
-        )
-        return _wrap_result(result, return_centroids)
+        result = _clustering.fused_butina(x.__cuda_array_interface__, cutoff, True, metric, active_stream.cuda_stream)
+        return _resolve_output(result, output)

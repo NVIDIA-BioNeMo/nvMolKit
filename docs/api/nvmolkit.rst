@@ -82,6 +82,13 @@ Butina Clustering
    clustering.butina
    clustering.fused_butina
 
+.. autosummary::
+   :toctree: generated/
+   :template: class_template.rst
+
+   clustering.ButinaOutputMode
+   clustering.ButinaDeviceResult
+
 Maximum Common Substructure (MCS)
 ---------------------------------
 

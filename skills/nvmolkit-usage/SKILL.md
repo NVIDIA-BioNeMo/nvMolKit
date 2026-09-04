@@ -83,7 +83,7 @@ If this fails, point the user at the install guide on the docs site rather than 
 | Forcefield with custom options + constraints | `nvmolkit.batchedForcefield` | `MMFFBatchedForcefield(mols, properties=..., nonBondedThreshold=..., ignoreInterfragInteractions=..., hardwareOptions=...)`, `UFFBatchedForcefield(mols, vdwThreshold=..., ...)`. Per-molecule view `ff[i]` exposes `add_distance_constraint`, `add_position_constraint`, `add_angle_constraint`, `add_torsion_constraint`. Methods: `.compute_energy()`, `.compute_gradients()`, `.minimize(maxIters, forceTol, minimizerKind=..., fireOptions=...)` |
 | Pairwise conformer RMSD | `nvmolkit.conformerRmsd` | `GetConformerRMSMatrix(mol)`, `GetConformerRMSMatrixBatch(mols)` |
 | Torsion Fingerprint Deviation (TFD) | `nvmolkit.tfd` | `GetTFDMatrix(mol)`, `GetTFDMatrices(mols)` |
-| Butina clustering | `nvmolkit.clustering` | `butina(distance_matrix, cutoff)` (precomputed matrix), `fused_butina(fingerprints, cutoff)` (memory-efficient, on-the-fly) |
+| Butina clustering | `nvmolkit.clustering` | `butina(distance_matrix, cutoff)` (precomputed matrix), `fused_butina(fingerprints, cutoff)` (memory-efficient, on-the-fly); both support explicit RDKit and device output modes |
 | Substructure search | `nvmolkit.substructure` | `hasSubstructMatch`, `countSubstructMatches`, `getSubstructMatches` |
 | Maximum common substructure | `nvmolkit.mcs` | `findMCS(mols, ...)` for all pairs, explicit pairs, or two paired molecule lists |
 | Hardware tuning (batch size, GPU IDs) | `nvmolkit.types` | `HardwareOptions(...)` passed to ETKDG / MMFF / UFF |
@@ -292,12 +292,21 @@ condensed = GetConformerRMSMatrixBatch(heavy_mols)
 
 # Butina expects a square distance matrix, so request square GPU tensors.
 square = GetConformerRMSMatrixBatch(heavy_mols, output_format="square")
-clusters = [butina(distance_matrix, cutoff=0.5).torch() for distance_matrix in square]
+results = [butina(distance_matrix, cutoff=0.5) for distance_matrix in square]
 
 torch.cuda.synchronize()
-for mol_clusters in clusters:
-    print(mol_clusters.cpu().tolist())
+for result in results:
+    print(result.cluster_ids.torch().cpu().tolist())
 ```
+
+Both Butina functions return GPU-resident results by default:
+
+- The default, `output=ButinaOutputMode.DEVICE`, returns cluster IDs, centroids, and sizes.
+- `output=ButinaOutputMode.RDKIT` returns RDKit cluster tuples on the host. The first element of each cluster is its centroid.
+
+The device output fields are `AsyncGpuResult` objects. Use `.torch()` to access
+their CUDA tensors without a host copy or `.numpy()` to synchronize and copy a
+field to the host.
 
 `GetConformerRMSMatrix(mol)` and `GetConformerRMSMatrixBatch(mols)` default to `output_format="condensed"`, returning `AsyncGpuResult` objects that wrap RDKit-style flat vectors of length `N * (N - 1) // 2`. Use `output_format="square"` when chaining into `butina()` or any other API that expects an `N x N` distance matrix. Both forms live on the GPU; call `.numpy()` on condensed results or synchronize before moving square tensors to the CPU.
 
