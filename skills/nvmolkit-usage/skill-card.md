@@ -1,71 +1,83 @@
 ## Description: <br>
-Guides an agent to write correct code against the installed nvMolKit Python API for GPU-accelerated, batched RDKit-style cheminformatics — Morgan fingerprints, Tanimoto/cosine similarity, ETKDG conformer embedding, MMFF/UFF optimization, TFD, conformer RMSD, Butina clustering, substructure search, and maximum common substructure (MCS) search. <br>
+Write code that calls the installed nvMolKit Python API for GPU-accelerated, batched RDKit-style operations — Morgan fingerprints, Tanimoto/cosine similarity, ETKDG conformer embedding, MMFF/UFF optimization, TFD, conformer RMSD, Butina clustering, substructure search, and maximum common substructure (MCS) search. <br>
 
 This skill is ready for commercial/non-commercial use. <br>
 
 ## Owner
-NVIDIA (Kevin Boyd, @scal444) <br>
+NVIDIA <br>
 
 ### License/Terms of Use: <br>
 Apache-2.0 <br>
-
 ## Use Case: <br>
-Cheminformaticians and ML engineers importing `nvmolkit.*`, debugging an nvMolKit call, deciding between nvMolKit and RDKit for a batched workflow, or wiring nvMolKit results into a torch/numpy pipeline. Out of scope: building nvMolKit from source. <br>
-
-### Requirements/Dependencies: <br>
-Requires API Key or External Credential: No <br>
-Credential Type(s): None <br>
-
-* An existing nvMolKit installation (`uv pip install --torch-backend=cu128 nvmolkit`) <br>
-* CUDA-capable NVIDIA GPU <br>
-* Python with RDKit available for interoperation <br>
-
-Do not include secrets in prompts/logs/output; use least-privilege credentials; rotate keys as appropriate. <br>
+Developers and computational chemists writing Python code that calls the nvMolKit API for GPU-accelerated, batched cheminformatics operations such as fingerprinting, similarity search, conformer generation, force-field optimization, clustering, substructure search, and MCS search. <br>
 
 ### Deployment Geography for Use: <br>
 Global <br>
 
+## Requirements / Dependencies: <br>
+**Requires API Key or External Credential:** [No] <br>
+**Credential Type(s):** [None] <br>
+
+Do not include secrets in prompts/logs/output; use least-privilege credentials; rotate keys as appropriate. <br>
+
 ## Known Risks and Mitigations: <br>
-Risk: The skill emits code for the agent or user to execute; incorrect API usage could produce silently wrong cheminformatics results — for example mismatched fingerprint parameters yielding similarity scores that are not comparable across runs. <br>
-Mitigation: The skill documents result types and the asynchronous execution model (`AsyncGpuResult`, `Device3DResult`) explicitly, and includes a verification step to run against the install before writing real code. Users should review generated code before executing it. <br>
-
-Risk: nvMolKit and RDKit can differ numerically for the same nominal operation (conformer generation and force-field optimization are stochastic and hardware-sensitive), so results may not reproduce bit-for-bit across backends. <br>
-Mitigation: The skill covers where nvMolKit is and is not an appropriate substitute for RDKit, so users choose the backend deliberately rather than assuming equivalence. <br>
-
-Risk: Batched GPU operations on large molecule libraries can exhaust GPU memory mid-run. <br>
-Mitigation: The skill documents the available execution controls for batch sizing and device selection. <br>
-
-Risk: Asynchronous result handles can be read before completion if the execution model is misunderstood, yielding empty or partial data. <br>
-Mitigation: The skill's result-type documentation is explicit about when a result must be awaited or materialized. <br>
+Risk: Review before execution as proposals could introduce incorrect or misleading guidance into skills. <br>
+Mitigation: Review and scan skill before deployment. <br>
 
 ## Reference(s): <br>
-- [nvMolKit repository](https://github.com/NVIDIA-BioNeMo/nvMolKit) <br>
-- [RDKit documentation](https://www.rdkit.org/docs/) — the API surface nvMolKit mirrors <br>
-- `SKILL.md` in this skill directory — result types, execution configuration, and worked recipes <br>
+- [nvMolKit Documentation](https://nvidia-bionemo.github.io/nvMolKit/) <br>
+- [nvMolKit Changelog](https://nvidia-bionemo.github.io/nvMolKit/changelog.html) <br>
+
 
 ## Skill Output: <br>
-**Output Type(s):** [Code, Analysis] <br>
+**Output Type(s):** [Code, Configuration instructions] <br>
 **Output Format:** [Markdown with inline Python code blocks] <br>
 **Output Parameters:** [1D] <br>
-**Other Properties Related to Output:** [The skill produces code and guidance; it does not itself execute cheminformatics workloads. Generated code should be reviewed before execution.] <br>
+**Other Properties Related to Output:** [None] <br>
 
 ## Evaluation Agents Used: <br>
-Target agents: `claude-code`, `codex`. NVSkills-Eval has not yet been run against this skill — see Evaluation Results. <br>
+- Claude Code (`aws/anthropic/bedrock-claude-opus-4-8`) <br>
+- Codex (`openai/openai/gpt-5.5`) <br>
+
+
 
 ## Evaluation Tasks: <br>
-12 functional evaluation tasks in `evals/evals.json` covering fingerprinting, similarity, conformer generation, optimization, clustering, substructure search, and MCS, plus 4 trigger-activation cases and 2 non-trigger cases in `evals/trigger_evals.json`. <br>
+12 evaluation tasks (12 positive), each run in an isolated sandbox pod. Dataset digest: sha256:16ead845d201c386f3f059697aff38c0e6978ce5e90370c6548d7bade427c6fb. <br>
 
 ## Evaluation Metrics Used: <br>
-Planned NVSkills-Eval dimensions: Security, Correctness, Discoverability, Effectiveness, Efficiency. <br>
+Reported benchmark dimensions: <br>
+- Security: Checks for unsafe operations, secret leakage, and unauthorized access. <br>
+- Correctness: Checks final-answer correctness against the reference answer. <br>
+- Discoverability: Checks whether the expected skill was selected, decoys were avoided, and the workflow executed. <br>
+- Effectiveness: Equal-weight mean of goal completion (goal_accuracy) and expected workflow adherence (behavior_check). <br>
+- Efficiency: 50% tool-call productivity (skill_efficiency) and 50% token efficiency. <br>
+
+Underlying evaluation signals used in this run: <br>
+- `security`: Checks for unsafe operations, secret leakage, and unauthorized access. <br>
+- `skill_execution`: Whether the expected skill was selected, decoys were avoided, and the workflow executed. <br>
+- `skill_efficiency`: Tool-call productivity (routing scored under Discoverability, not Efficiency). <br>
+- `accuracy`: Final-answer correctness against the reference answer. <br>
+- `goal_accuracy`: Whether the user's goal was achieved. <br>
+- `behavior_check`: Whether the expected workflow behavior was followed. <br>
+- `token_efficiency`: Actual uncached prompt plus completion token usage. <br>
+
+
 
 ## Evaluation Results: <br>
-Pending. NVSkills-Eval has not been run for this skill; results and a `BENCHMARK.md` will be published when the evaluation pipeline runs. <br>
+| Measure | Claude Code (Baseline → Skill Uplift) | Codex (Baseline → Skill Uplift) |
+|---|---:|---:|
+| Overall | 92.9% | 93.2% |
+| Security | 79.2% → 100.0% (+20.8 points) | 100.0% → 100.0% (±0.0 points) |
+| Correctness | 100.0% → 96.7% (-3.3 points) | 90.0% → 100.0% (+10.0 points) |
+| Discoverability | 98.3% | 94.6% |
+| Effectiveness | 90.9% → 86.5% (-4.4 points) | 74.8% → 91.6% (+16.8 points) |
+| Efficiency | 82.9% | 79.7% |
 
 ## Skill Version(s): <br>
-ea68428 (source: git SHA, committed 2026-08-03) <br>
+0.6.0 (source: pyproject.toml, CHANGELOG, released 2026-08-13) <br>
 
 ## Ethical Considerations: <br>
 NVIDIA believes Trustworthy AI is a shared responsibility and we have established policies and practices to enable development for a wide array of AI applications. When downloaded or used in accordance with our terms of service, developers should work with their internal team to ensure this skill meets requirements for the relevant industry and use case and addresses unforeseen product misuse. <br>
 
 (For Release on NVIDIA Platforms Only) <br>
-Please report quality, risk, security vulnerabilities or NVIDIA AI Concerns [here](https://www.nvidia.com/en-us/support/submit-security-vulnerability/). <br>
+Please report quality, risk, security vulnerabilities or NVIDIA AI Concerns [here](https://app.intigriti.com/programs/nvidia/nvidiavdp/detail). <br>
