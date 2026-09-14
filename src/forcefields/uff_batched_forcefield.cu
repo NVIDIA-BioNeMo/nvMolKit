@@ -66,10 +66,8 @@ UFFBatchedForcefield::UFFBatchedForcefield(const UFF::BatchedMolecularSystemHost
                                            const PrecisionMode                    precision)
     : BatchedForcefield(ForceFieldType::UFF, 3, molSystemHost.indices.atomStarts, nullptr, std::move(metadata)) {
   singlePrecision_ = usesSinglePrecision(precision);
-  positionsFloat_.setStream(stream);
-  gradientsFloat_.setStream(stream);
-  positionsDouble_.setStream(stream);
-  gradientsDouble_.setStream(stream);
+  fullConversion_.setStream(stream);
+  singleConversion_.setStream(stream);
   if (singlePrecision_) {
     auto& buffers = systemDevice_.emplace<UFF::BatchedMolecularDeviceBuffersF32>();
     UFF::setStreams(buffers, stream);
@@ -89,9 +87,10 @@ cudaError_t UFFBatchedForcefield::computeEnergy(double*        energyOuts,
                                                 const uint8_t* activeSystemMask,
                                                 cudaStream_t   stream) {
   if (!singlePrecision_) {
-    positionsDouble_.resize(totalPositions());
-    const auto err = detail::convertDeviceArray(positionsDouble_.data(), positions, totalPositions(), stream);
-    return err == cudaSuccess ? computeEnergy(energyOuts, positionsDouble_.data(), activeSystemMask, stream) : err;
+    fullConversion_.positions.resize(totalPositions());
+    const auto err = detail::convertDeviceArray(fullConversion_.positions.data(), positions, totalPositions(), stream);
+    return err == cudaSuccess ? computeEnergy(energyOuts, fullConversion_.positions.data(), activeSystemMask, stream) :
+                                err;
   }
   auto& buffers = std::get<UFF::BatchedMolecularDeviceBuffersF32>(systemDevice_);
   return launchEnergy(buffers, numMolecules(), positions, energyOuts, activeSystemMask, stream);
@@ -102,13 +101,15 @@ cudaError_t UFFBatchedForcefield::computeGradients(float*         grad,
                                                    const uint8_t* activeSystemMask,
                                                    cudaStream_t   stream) {
   if (!singlePrecision_) {
-    positionsDouble_.resize(totalPositions());
-    gradientsDouble_.resize(totalPositions());
-    auto err = detail::convertDeviceArray(positionsDouble_.data(), positions, totalPositions(), stream);
+    fullConversion_.positions.resize(totalPositions());
+    fullConversion_.gradients.resize(totalPositions());
+    auto err = detail::convertDeviceArray(fullConversion_.positions.data(), positions, totalPositions(), stream);
     if (err == cudaSuccess)
-      err = computeGradients(gradientsDouble_.data(), positionsDouble_.data(), activeSystemMask, stream);
-    return err == cudaSuccess ? detail::convertDeviceArray(grad, gradientsDouble_.data(), totalPositions(), stream) :
-                                err;
+      err =
+        computeGradients(fullConversion_.gradients.data(), fullConversion_.positions.data(), activeSystemMask, stream);
+    return err == cudaSuccess ?
+             detail::convertDeviceArray(grad, fullConversion_.gradients.data(), totalPositions(), stream) :
+             err;
   }
   auto& buffers = std::get<UFF::BatchedMolecularDeviceBuffersF32>(systemDevice_);
   return launchGrad(buffers, numMolecules(), positions, grad, activeSystemMask, stream);
@@ -119,9 +120,11 @@ cudaError_t UFFBatchedForcefield::computeEnergy(double*        energyOuts,
                                                 const uint8_t* activeSystemMask,
                                                 cudaStream_t   stream) {
   if (singlePrecision_) {
-    positionsFloat_.resize(totalPositions());
-    auto err = detail::convertDeviceArray(positionsFloat_.data(), positions, totalPositions(), stream);
-    return err == cudaSuccess ? computeEnergy(energyOuts, positionsFloat_.data(), activeSystemMask, stream) : err;
+    singleConversion_.positions.resize(totalPositions());
+    auto err = detail::convertDeviceArray(singleConversion_.positions.data(), positions, totalPositions(), stream);
+    return err == cudaSuccess ?
+             computeEnergy(energyOuts, singleConversion_.positions.data(), activeSystemMask, stream) :
+             err;
   }
   auto& buffers = std::get<UFF::BatchedMolecularDeviceBuffers>(systemDevice_);
   return launchEnergy(buffers, numMolecules(), positions, energyOuts, activeSystemMask, stream);
@@ -132,15 +135,20 @@ cudaError_t UFFBatchedForcefield::computeGradients(double*        grad,
                                                    const uint8_t* activeSystemMask,
                                                    cudaStream_t   stream) {
   if (singlePrecision_) {
-    positionsFloat_.resize(totalPositions());
-    gradientsFloat_.resize(totalPositions());
-    auto err = detail::convertDeviceArray(positionsFloat_.data(), positions, totalPositions(), stream);
+    singleConversion_.positions.resize(totalPositions());
+    singleConversion_.gradients.resize(totalPositions());
+    auto err = detail::convertDeviceArray(singleConversion_.positions.data(), positions, totalPositions(), stream);
     if (err != cudaSuccess)
       return err;
     auto& buffers = std::get<UFF::BatchedMolecularDeviceBuffersF32>(systemDevice_);
-    err = launchGrad(buffers, numMolecules(), positionsFloat_.data(), gradientsFloat_.data(), activeSystemMask, stream);
+    err           = launchGrad(buffers,
+                     numMolecules(),
+                     singleConversion_.positions.data(),
+                     singleConversion_.gradients.data(),
+                     activeSystemMask,
+                     stream);
     if (err == cudaSuccess)
-      err = detail::convertDeviceArray(grad, gradientsFloat_.data(), totalPositions(), stream);
+      err = detail::convertDeviceArray(grad, singleConversion_.gradients.data(), totalPositions(), stream);
     return err;
   }
   auto& buffers = std::get<UFF::BatchedMolecularDeviceBuffers>(systemDevice_);

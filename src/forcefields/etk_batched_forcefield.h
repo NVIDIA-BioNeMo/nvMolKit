@@ -20,6 +20,7 @@
 
 #include "src/forcefields/batched_forcefield.h"
 #include "src/forcefields/dist_geom.h"
+#include "src/forcefields/precision_workspace.h"
 #include "src/precision/precision_mode.h"
 
 namespace nvMolKit {
@@ -71,14 +72,12 @@ class ETKBatchedForcefield final : public BatchedForcefield, public SinglePrecis
 
  private:
   std::variant<DistGeom::BatchedMolecular3DDeviceBuffers, DistGeom::BatchedMolecular3DDeviceBuffersF32Params>
-                            systemDevice_;
-  AsyncDeviceVector<int>    atomStartsDevice_;
-  AsyncDeviceVector<float>  positionsFloat_;
-  AsyncDeviceVector<float>  gradientsFloat_;
-  AsyncDeviceVector<double> positionsComputeDouble_;
-  AsyncDeviceVector<double> gradientsComputeDouble_;
-  bool                      singlePrecision_ = false;
-  DistGeom::ETKTerm         term_            = DistGeom::ETKTerm::ALL;
+                                      systemDevice_;
+  AsyncDeviceVector<int>              atomStartsDevice_;
+  FullForcefieldConversionWorkspace   fullConversion_;
+  SingleForcefieldConversionWorkspace singleConversion_;
+  bool                                singlePrecision_ = false;
+  DistGeom::ETKTerm                   term_            = DistGeom::ETKTerm::ALL;
 };
 
 }  // namespace nvMolKit

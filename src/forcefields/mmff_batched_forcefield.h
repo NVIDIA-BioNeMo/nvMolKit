@@ -20,6 +20,7 @@
 
 #include "src/forcefields/batched_forcefield.h"
 #include "src/forcefields/mmff.h"
+#include "src/forcefields/precision_workspace.h"
 #include "src/precision/precision_mode.h"
 #include "src/utils/device_vector.h"
 
@@ -63,10 +64,8 @@ class MMFFBatchedForcefield final : public BatchedForcefield, public SinglePreci
 
  private:
   std::variant<MMFF::BatchedMolecularDeviceBuffers, MMFF::BatchedMolecularDeviceBuffersF32> systemDevice_;
-  AsyncDeviceVector<float>                                                                  positionsFloat_;
-  AsyncDeviceVector<float>                                                                  gradientsFloat_;
-  AsyncDeviceVector<double>                                                                 positionsDouble_;
-  AsyncDeviceVector<double>                                                                 gradientsDouble_;
+  FullForcefieldConversionWorkspace                                                         fullConversion_;
+  SingleForcefieldConversionWorkspace                                                       singleConversion_;
   bool                                                                                      singlePrecision_ = false;
 };
 

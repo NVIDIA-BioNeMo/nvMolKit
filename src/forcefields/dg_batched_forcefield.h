@@ -20,6 +20,7 @@
 
 #include "src/forcefields/batched_forcefield.h"
 #include "src/forcefields/dist_geom.h"
+#include "src/forcefields/precision_workspace.h"
 #include "src/precision/precision_mode.h"
 
 namespace nvMolKit {
@@ -62,14 +63,12 @@ class DGBatchedForcefield final : public BatchedForcefield, public SinglePrecisi
 
  private:
   std::variant<DistGeom::BatchedMolecularDeviceBuffers, DistGeom::BatchedMolecularDeviceBuffersF32Params> systemDevice_;
-  AsyncDeviceVector<int>    atomStartsDevice_;
-  AsyncDeviceVector<float>  positionsFloat_;
-  AsyncDeviceVector<float>  gradientsFloat_;
-  AsyncDeviceVector<double> positionsComputeDouble_;
-  AsyncDeviceVector<double> gradientsComputeDouble_;
-  bool                      singlePrecision_ = false;
-  double                    chiralWeight_    = 1.0;
-  double                    fourthDimWeight_ = 0.1;
+  AsyncDeviceVector<int>              atomStartsDevice_;
+  FullForcefieldConversionWorkspace   fullConversion_;
+  SingleForcefieldConversionWorkspace singleConversion_;
+  bool                                singlePrecision_ = false;
+  double                              chiralWeight_    = 1.0;
+  double                              fourthDimWeight_ = 0.1;
 };
 
 }  // namespace nvMolKit

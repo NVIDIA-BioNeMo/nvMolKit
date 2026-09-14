@@ -19,6 +19,7 @@
 #include <variant>
 
 #include "src/forcefields/batched_forcefield.h"
+#include "src/forcefields/precision_workspace.h"
 #include "src/forcefields/uff.h"
 #include "src/precision/precision_mode.h"
 #include "src/utils/device_vector.h"
@@ -52,10 +53,8 @@ class UFFBatchedForcefield final : public BatchedForcefield, public SinglePrecis
 
  private:
   std::variant<UFF::BatchedMolecularDeviceBuffers, UFF::BatchedMolecularDeviceBuffersF32> systemDevice_;
-  AsyncDeviceVector<float>                                                                positionsFloat_;
-  AsyncDeviceVector<float>                                                                gradientsFloat_;
-  AsyncDeviceVector<double>                                                               positionsDouble_;
-  AsyncDeviceVector<double>                                                               gradientsDouble_;
+  FullForcefieldConversionWorkspace                                                       fullConversion_;
+  SingleForcefieldConversionWorkspace                                                     singleConversion_;
   bool                                                                                    singlePrecision_ = false;
 };
 
