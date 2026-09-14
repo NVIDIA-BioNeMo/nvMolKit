@@ -17,7 +17,9 @@
 
 #include "src/forcefields/kernel_utils.cuh"
 #include "src/forcefields/mmff_kernels.h"
-#include "src/forcefields/mmff_kernels_device.cuh"
+#include "src/forcefields/mmff_kernels_device_dispatch.cuh"
+
+using namespace nvMolKit::MMFF::fp64;
 
 using namespace nvMolKit::FFKernelUtils;
 
@@ -1063,33 +1065,33 @@ cudaError_t launchReduceEnergiesKernel(const int      numBlocks,
 
 constexpr int blockSizePerMol = 128;
 
-template <bool HasConstraints>
-__global__ void combinedEnergiesKernel(const EnergyForceContribsDevicePtr* terms,
-                                       const BatchedIndicesDevicePtr*      systemIndices,
-                                       const double*                       coords,
-                                       double*                             energies) {
+template <bool HasConstraints, typename real, typename reduceT, typename Terms, typename storageT>
+__global__ void combinedEnergiesKernel(const Terms*                   terms,
+                                       const BatchedIndicesDevicePtr* systemIndices,
+                                       const storageT*                coords,
+                                       double*                        energies) {
   const int molIdx = blockIdx.x;
   const int tid    = threadIdx.x;
 
-  using BlockReduce = cub::BlockReduce<double, blockSizePerMol>;
+  using BlockReduce = cub::BlockReduce<reduceT, blockSizePerMol>;
   __shared__ typename BlockReduce::TempStorage tempStorage;
 
-  const int     atomStart = systemIndices->atomStarts[molIdx];
-  const double* molCoords = coords + atomStart * 3;
-  const double  threadEnergy =
-    molEnergy<blockSizePerMol, HasConstraints>(*terms, *systemIndices, molCoords, molIdx, tid);
-  const double blockEnergy = BlockReduce(tempStorage).Sum(threadEnergy);
+  const int       atomStart = systemIndices->atomStarts[molIdx];
+  const storageT* molCoords = coords + atomStart * 3;
+  const real      threadEnergy =
+    fp64::molEnergy<blockSizePerMol, HasConstraints>(*terms, *systemIndices, molCoords, molIdx, tid);
+  const reduceT blockEnergy = BlockReduce(tempStorage).Sum(static_cast<reduceT>(threadEnergy));
 
   if (tid == 0) {
     energies[molIdx] = blockEnergy;
   }
 }
 
-template <bool HasConstraints>
-__global__ void combinedGradKernel(const EnergyForceContribsDevicePtr* terms,
-                                   const BatchedIndicesDevicePtr*      systemIndices,
-                                   const double*                       coords,
-                                   double*                             grad) {
+template <bool HasConstraints, typename real, typename Terms, typename storageT>
+__global__ void combinedGradKernel(const Terms*                   terms,
+                                   const BatchedIndicesDevicePtr* systemIndices,
+                                   const storageT*                coords,
+                                   storageT*                      grad) {
   const int molIdx = blockIdx.x;
   const int tid    = threadIdx.x;
 
@@ -1097,63 +1099,100 @@ __global__ void combinedGradKernel(const EnergyForceContribsDevicePtr* terms,
   const int atomEnd   = systemIndices->atomStarts[molIdx + 1];
   const int numAtoms  = atomEnd - atomStart;
 
-  constexpr int     maxAtomSize = 256;
-  __shared__ double accumGrad[maxAtomSize * 3];
+  constexpr int       maxAtomSize = 256;
+  __shared__ storageT accumGrad[maxAtomSize * 3];
 
   const bool useSharedMem = numAtoms <= maxAtomSize;
-  double*    molGradBase  = useSharedMem ? accumGrad : grad + atomStart * 3;
+  storageT*  molGradBase  = useSharedMem ? accumGrad : grad + atomStart * 3;
 
   for (int i = tid; i < numAtoms * 3; i += blockSizePerMol) {
     molGradBase[i] = 0.0;
   }
   __syncthreads();
 
-  const double* molCoords = coords + atomStart * 3;
-  molGrad<blockSizePerMol, HasConstraints>(*terms, *systemIndices, molCoords, molGradBase, molIdx, tid);
+  const storageT* molCoords = coords + atomStart * 3;
+  fp64::molGrad<blockSizePerMol, HasConstraints>(*terms, *systemIndices, molCoords, molGradBase, molIdx, tid);
   __syncthreads();
 
   if (useSharedMem) {
-    double* globalGrad = grad + (atomStart * 3);
+    storageT* globalGrad = grad + (atomStart * 3);
     for (int i = tid; i < numAtoms * 3; i += blockSizePerMol) {
       globalGrad[i] = molGradBase[i];
     }
   }
 }
 
-cudaError_t launchBlockPerMolEnergyKernel(int                                 numMols,
-                                          const EnergyForceContribsDevicePtr& terms,
-                                          const BatchedIndicesDevicePtr&      sytemIndices,
-                                          const double*                       coords,
-                                          double*                             energies,
-                                          bool                                hasConstraints,
-                                          cudaStream_t                        stream) {
-  const AsyncDevicePtr<EnergyForceContribsDevicePtr> devTerms(terms, stream);
-  const AsyncDevicePtr<BatchedIndicesDevicePtr>      devSysIdx(sytemIndices, stream);
-  if (hasConstraints) {
-    combinedEnergiesKernel<true>
-      <<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(), devSysIdx.data(), coords, energies);
-  } else {
-    combinedEnergiesKernel<false>
-      <<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(), devSysIdx.data(), coords, energies);
-  }
+template <typename real, typename reduceT, typename Terms, typename storageT>
+cudaError_t launchBlockPerMolEnergyKernelImpl(int                            numMols,
+                                              const Terms&                   terms,
+                                              const BatchedIndicesDevicePtr& sytemIndices,
+                                              const storageT*                coords,
+                                              double*                        energies,
+                                              bool                           hasConstraints,
+                                              cudaStream_t                   stream) {
+  const AsyncDevicePtr<Terms>                   devTerms(terms, stream);
+  const AsyncDevicePtr<BatchedIndicesDevicePtr> devSysIdx(sytemIndices, stream);
+#define NVMOLKIT_LAUNCH_MMFF_ENERGY(HasConstraints, real, reduceT) \
+  combinedEnergiesKernel<HasConstraints, real, reduceT>            \
+    <<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(), devSysIdx.data(), coords, energies)
+  if (hasConstraints)
+    NVMOLKIT_LAUNCH_MMFF_ENERGY(true, real, reduceT);
+  else
+    NVMOLKIT_LAUNCH_MMFF_ENERGY(false, real, reduceT);
+#undef NVMOLKIT_LAUNCH_MMFF_ENERGY
   return cudaGetLastError();
 }
 
-cudaError_t launchBlockPerMolGradKernel(int                                 numMols,
-                                        const EnergyForceContribsDevicePtr& terms,
-                                        const BatchedIndicesDevicePtr&      sytemIndices,
-                                        const double*                       coords,
-                                        double*                             grad,
-                                        bool                                hasConstraints,
-                                        cudaStream_t                        stream) {
-  const AsyncDevicePtr<EnergyForceContribsDevicePtr> devTerms(terms, stream);
-  const AsyncDevicePtr<BatchedIndicesDevicePtr>      devSysIdx(sytemIndices, stream);
-  if (hasConstraints) {
-    combinedGradKernel<true><<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(), devSysIdx.data(), coords, grad);
-  } else {
-    combinedGradKernel<false><<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(), devSysIdx.data(), coords, grad);
-  }
+template <typename real, typename Terms, typename storageT>
+cudaError_t launchBlockPerMolGradKernelImpl(int                            numMols,
+                                            const Terms&                   terms,
+                                            const BatchedIndicesDevicePtr& sytemIndices,
+                                            const storageT*                coords,
+                                            storageT*                      grad,
+                                            bool                           hasConstraints,
+                                            cudaStream_t                   stream) {
+  const AsyncDevicePtr<Terms>                   devTerms(terms, stream);
+  const AsyncDevicePtr<BatchedIndicesDevicePtr> devSysIdx(sytemIndices, stream);
+  if (hasConstraints)
+    combinedGradKernel<true, real>
+      <<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(), devSysIdx.data(), coords, grad);
+  else
+    combinedGradKernel<false, real>
+      <<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(), devSysIdx.data(), coords, grad);
   return cudaGetLastError();
 }
+
+#define NVMOLKIT_DEFINE_MMFF_ENERGY_LAUNCHER(real, reduceT, TermsType, storageT)           \
+  cudaError_t launchBlockPerMolEnergyKernel(int                            numMols,        \
+                                            const TermsType&               terms,          \
+                                            const BatchedIndicesDevicePtr& indices,        \
+                                            const storageT*                coords,         \
+                                            double*                        energies,       \
+                                            bool                           hasConstraints, \
+                                            cudaStream_t                   stream) {                         \
+    return launchBlockPerMolEnergyKernelImpl<real, reduceT>(numMols,                       \
+                                                            terms,                         \
+                                                            indices,                       \
+                                                            coords,                        \
+                                                            energies,                      \
+                                                            hasConstraints,                \
+                                                            stream);                       \
+  }
+
+#define NVMOLKIT_DEFINE_MMFF_GRAD_LAUNCHER(real, TermsType, storageT)                                            \
+  cudaError_t launchBlockPerMolGradKernel(int                            numMols,                                \
+                                          const TermsType&               terms,                                  \
+                                          const BatchedIndicesDevicePtr& indices,                                \
+                                          const storageT*                coords,                                 \
+                                          storageT*                      grad,                                   \
+                                          bool                           hasConstraints,                         \
+                                          cudaStream_t                   stream) {                                                 \
+    return launchBlockPerMolGradKernelImpl<real>(numMols, terms, indices, coords, grad, hasConstraints, stream); \
+  }
+
+NVMOLKIT_DEFINE_MMFF_ENERGY_LAUNCHER(double, double, EnergyForceContribsDevicePtr, double)
+NVMOLKIT_DEFINE_MMFF_GRAD_LAUNCHER(double, EnergyForceContribsDevicePtr, double)
+#undef NVMOLKIT_DEFINE_MMFF_GRAD_LAUNCHER
+#undef NVMOLKIT_DEFINE_MMFF_ENERGY_LAUNCHER
 }  // namespace MMFF
 }  // namespace nvMolKit

@@ -17,7 +17,7 @@
 
 #include "src/forcefields/dist_geom_kernels_device.cuh"
 #include "src/forcefields/mmff_kernels.h"
-#include "src/forcefields/mmff_kernels_device.cuh"
+#include "src/forcefields/mmff_kernels_device_dispatch.cuh"
 #include "src/minimizer/bfgs_minimize_permol_kernels.h"
 #include "src/utils/cub_helpers.cuh"
 #include "src/utils/device_vector.h"
