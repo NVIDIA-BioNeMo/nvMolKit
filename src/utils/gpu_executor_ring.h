@@ -97,6 +97,8 @@ void runQueuedExecutorRing(const std::vector<ExecutorT*>& executors,
     ++pendingCount;
   }
 
+  // drainOne updates pendingCount through its reference capture.
+  // NOLINTNEXTLINE(bugprone-infinite-loop)
   while (pendingCount > 0) {
     drainOne();
   }

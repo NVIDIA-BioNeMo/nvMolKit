@@ -48,7 +48,10 @@ template <> struct MoleculeViewT<MoleculeType::Target> {
   __device__ __forceinline__ int getAtomDegree(int atomIdx) const { return targetAtomBonds[atomIdx].degree; }
 
   /// Get packed atom data for GPU matching
-  __device__ __forceinline__ AtomDataPacked const& getAtomPacked(int atomIdx) const { return atomDataPacked[atomIdx]; }
+  // Target batches always populate packed atom data before constructing this view.
+  __device__ __forceinline__ AtomDataPacked const& getAtomPacked(int atomIdx) const {
+    return atomDataPacked[atomIdx];  // NOLINT(clang-analyzer-core.uninitialized.UndefReturn)
+  }
 
   /// Get precomputed bond type counts
   __device__ __forceinline__ BondTypeCounts const& getBondTypeCounts(int atomIdx) const {
@@ -87,7 +90,10 @@ template <> struct MoleculeViewT<MoleculeType::Query> {
   __device__ __forceinline__ AtomDataPacked const& getAtomPacked(int atomIdx) const { return atomDataPacked[atomIdx]; }
 
   /// Get precomputed query mask
-  __device__ __forceinline__ AtomQueryMask const& getQueryMask(int atomIdx) const { return atomQueryMasks[atomIdx]; }
+  // Query batches always populate masks before constructing this view.
+  __device__ __forceinline__ AtomQueryMask const& getQueryMask(int atomIdx) const {
+    return atomQueryMasks[atomIdx];  // NOLINT(clang-analyzer-core.uninitialized.UndefReturn)
+  }
 
   /// Get precomputed bond type counts
   __device__ __forceinline__ BondTypeCounts const& getBondTypeCounts(int atomIdx) const {

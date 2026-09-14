@@ -119,12 +119,14 @@ __device__ void populateLabelMatrix(const TargetMoleculeView&                   
     }
   } else {
     // Use fast path for simple AND-only queries
-    __shared__ AtomDataPacked sharedQueryPacked[MaxQueryAtoms];
-    __shared__ AtomQueryMask  sharedQueryMasks[MaxQueryAtoms];
+    __shared__ uint64_t sharedQueryMasks[MaxQueryAtoms][4];
 
     for (int q = tid; q < numQueryAtoms; q += numThreads) {
-      sharedQueryPacked[q] = query.getAtomPacked(q);
-      sharedQueryMasks[q]  = query.getQueryMask(q);
+      const AtomQueryMask queryMask = query.getQueryMask(q);
+      sharedQueryMasks[q][0]        = queryMask.maskLo;
+      sharedQueryMasks[q][1]        = queryMask.maskHi;
+      sharedQueryMasks[q][2]        = queryMask.expectedLo;
+      sharedQueryMasks[q][3]        = queryMask.expectedHi;
     }
     block.sync();
 
@@ -139,7 +141,10 @@ __device__ void populateLabelMatrix(const TargetMoleculeView&                   
       const int queryIdx  = validPair ? (pairIdx % numQueryAtoms) : 0;
 
       const AtomDataPacked targetPacked = validPair ? target.getAtomPacked(targetIdx) : AtomDataPacked{};
-      const AtomQueryMask  queryMask    = sharedQueryMasks[queryIdx];
+      const AtomQueryMask  queryMask{sharedQueryMasks[queryIdx][0],
+                                    sharedQueryMasks[queryIdx][1],
+                                    sharedQueryMasks[queryIdx][2],
+                                    sharedQueryMasks[queryIdx][3]};
 
       const bool atomMatch = atomMatchesPacked(targetPacked, queryMask);
       const bool matches   = validPair && atomMatch;

@@ -188,12 +188,16 @@ template <std::size_t MaxTargetAtoms> struct SubstructAdapter {
   __device__ __forceinline__ Mask neighborsMatching(int targetAtom, uint32_t edgeKey) const {
     uint64_t neighbors;
     uint64_t bondInfo;
-    packAdjacencyRow(target->targetAtomBonds[targetAtom], neighbors, bondInfo);
+    // Substructure targets always provide packed bond rows.
+    packAdjacencyRow(target->targetAtomBonds[targetAtom],
+                     neighbors,
+                     bondInfo);  // NOLINT(clang-analyzer-core.NonNullParamChecker)
     return neighborsMatchingBondMask<MaxTargetAtoms>(neighbors, bondInfo, edgeKey);
   }
 
   __device__ __forceinline__ void packTargetRow(int targetAtom, uint64_t& w0, uint64_t& w1) const {
-    packAdjacencyRow(target->targetAtomBonds[targetAtom], w0, w1);
+    // Substructure targets always provide packed bond rows.
+    packAdjacencyRow(target->targetAtomBonds[targetAtom], w0, w1);  // NOLINT(clang-analyzer-core.NonNullParamChecker)
   }
 
   __device__ __forceinline__ Mask neighborsMatchingPacked(uint64_t w0, uint64_t w1, uint32_t edgeKey) const {
