@@ -29,7 +29,9 @@ namespace nvMolKit {
 class BatchedForcefield;
 
 namespace MMFF {
-struct BatchedMolecularDeviceBuffers;
+template <typename ParameterScalar, typename CoordinateScalar, typename TorsionScalar>
+struct BatchedMolecularDeviceBuffersT;
+using BatchedMolecularDeviceBuffers = BatchedMolecularDeviceBuffersT<double, double, float>;
 }  // namespace MMFF
 
 //! \brief Per-system per-iteration debug snapshot recorded when the minimizer is

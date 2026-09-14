@@ -29,7 +29,9 @@ class BatchedForcefield;
 
 // Forward declarations for forcefield types
 namespace MMFF {
-struct BatchedMolecularDeviceBuffers;
+template <typename ParameterScalar, typename CoordinateScalar, typename TorsionScalar>
+struct BatchedMolecularDeviceBuffersT;
+using BatchedMolecularDeviceBuffers = BatchedMolecularDeviceBuffersT<double, double, float>;
 }  // namespace MMFF
 
 namespace DistGeom {
