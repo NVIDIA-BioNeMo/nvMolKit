@@ -37,6 +37,8 @@ namespace nvMolKit {
 NVMOLKIT_HOST_DEVICE constexpr int getMaxSharedMemoryPerSM_KB(const int sm) {
   if (sm >= 120)
     return 128;  // SM 12.0+ (Blackwell RTX)
+  if (sm == 107)
+    return 328;  // SM 10.7 (Rubin)
   if (sm >= 100)
     return 228;  // SM 10.0+ (Blackwell)
   if (sm >= 90)

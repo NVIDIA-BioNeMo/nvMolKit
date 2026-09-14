@@ -91,6 +91,8 @@ __host__ __device__ constexpr int getComputeCapability() {
 
 /// Max threads per SM for each compute capability
 __host__ __device__ constexpr int getMaxThreadsPerSM(int sm) {
+  if (sm == 107)
+    return 1024;  // Rubin
   if (sm == 120)
     return 1536;  // Consumer Blackwell (sm_120)
   if (sm == 100)
@@ -132,6 +134,10 @@ __host__ __device__ constexpr int computeMaxPartials(int sharedPerSM_KB, int blo
 /// Compute partials for a given SM architecture
 template <std::size_t MaxTargetAtoms, std::size_t MaxQueryAtoms>
 __host__ __device__ constexpr int getMaxPartialsForSM(int sm, int blockSize) {
+  if (sm == 107) {
+    // GSI uses static arrays, which cannot exceed 48 KB per block.
+    return computeMaxPartials<MaxTargetAtoms, MaxQueryAtoms>(48, 1);
+  }
   return computeMaxPartials<MaxTargetAtoms, MaxQueryAtoms>(getMaxSharedMemoryPerSM_KB(sm),
                                                            getMaxBlocksPerSM(sm, blockSize));
 }
