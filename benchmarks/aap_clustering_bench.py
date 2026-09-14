@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Benchmark AAP similarity and AAP+DISE clustering implementations."""
+"""Benchmark Atom-Atom Path (AAP) similarity and directed sphere exclusion
+(DISE) clustering implementations.
+"""
 
 import argparse
 import importlib
@@ -111,12 +113,11 @@ def _remap_clusters_by_size(labels, num_clusters):
 
 
 def _ligand_clustering_cpu_cluster(molecules, threshold, max_path_length, reference):
-    """Run the ligand_clustering exact CPU AAP primitives with DISE.
+    """Run exact CPU Atom-Atom Path (AAP) primitives with directed sphere
+    exclusion (DISE).
 
-    The public ligand_clustering CPU wrapper accepts SMILES and parses them
-    internally. Keeping the DISE driver here lets every timed backend start
-    from the same pre-parsed RDKit molecules while retaining that project's
-    descriptor and exact Hungarian AAP implementations.
+    The timed region starts with pre-parsed RDKit molecules and includes the
+    descriptor and exact Hungarian AAP computations.
     """
     descriptors = reference.precompute_path_integers_batch(molecules, max_path_length)
     labels = [-1] * len(molecules)
@@ -176,12 +177,11 @@ def _priority_order(molecules, sort_tag, descending=False):
 def _rdkit_aap_dise_cluster(
     molecules, threshold, max_path_length, sort_tag, sort_descending, reference, phase_timings=None
 ):
-    """Run the complete RDKit AAP sphere-exclusion workflow.
+    """Run the complete RDKit Atom-Atom Path (AAP) and directed sphere
+    exclusion (DISE) workflow.
 
-    This follows RDKit's documented workflow: use ``LeaderPicker`` to select
-    sphere-exclusion centroids, then assign every non-centroid to its nearest
-    centroid. Priority cleanup and sorting intentionally happen in this timed
-    function because input direction is part of DISE.
+    The timed region includes priority cleanup, sorting, centroid selection
+    with ``LeaderPicker``, and nearest-centroid assignment.
     """
     start = time.perf_counter()
     indexed = _priority_order(molecules, sort_tag, sort_descending)
@@ -591,7 +591,9 @@ def _benchmark_dise(args, molecules, rdkit_reference):
 
 
 def _build_parser():
-    parser = argparse.ArgumentParser(description="AAP similarity and directed sphere-exclusion clustering benchmark")
+    parser = argparse.ArgumentParser(
+        description="Atom-Atom Path (AAP) similarity and directed sphere exclusion (DISE) clustering benchmark"
+    )
     parser.add_argument("--smiles", "-s", default=str(DEFAULT_INPUT), help="Input SMILES file")
     parser.add_argument("--sdf", help="Input SDF file; overrides --csv and --smiles")
     parser.add_argument("--csv", help="Input scored CSV file; overrides --smiles")

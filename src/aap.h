@@ -15,7 +15,7 @@ class ROMol;
 
 namespace nvMolKit {
 
-/** Configuration for approximate GPU Atom-Atom-Path similarity. */
+/** Configuration for approximate GPU Atom-Atom Path (AAP) similarity. */
 struct AapOptions {
   int   maxPathLength       = 7;
   int   histogramBins       = 2048;
@@ -31,7 +31,7 @@ struct AapClusteringResult {
 };
 
 /**
- * Compute directed approximate Atom-Atom-Path similarity on the GPU.
+ * Compute directed approximate Atom-Atom Path (AAP) similarity on the GPU.
  *
  * Rooted paths are hashed into per-atom histograms and compatible atoms are
  * assigned with fixed-iteration Sinkhorn normalization. The current fused
@@ -46,7 +46,8 @@ float aapSimilarityGpu(const RDKit::ROMol& left,
  * Cluster molecules with input-order directed sphere exclusion (DISE).
  *
  * The first unassigned molecule is selected as the next centroid and claims
- * all remaining molecules whose directed AAP similarity meets @p threshold.
+ * all remaining molecules whose directed Atom-Atom Path (AAP) similarity
+ * meets @p threshold.
  * Cluster IDs are zero-based and renumbered by descending cluster size, with
  * centroid order breaking ties. Centroids and sizes use the same cluster-ID
  * order.
@@ -56,7 +57,7 @@ AapClusteringResult aapSimilarityClustering(const std::vector<const RDKit::ROMol
                                             const AapOptions&                       options   = {},
                                             cudaStream_t                            stream    = nullptr);
 
-/** Run full two-stage DISE: select centroids, then assign to the nearest centroid. */
+/** Run full two-stage directed sphere exclusion (DISE) with nearest-centroid assignment. */
 AapClusteringResult aapDiseClustering(const std::vector<const RDKit::ROMol*>& molecules,
                                       float                                   threshold = 0.217F,
                                       const AapOptions&                       options   = {},

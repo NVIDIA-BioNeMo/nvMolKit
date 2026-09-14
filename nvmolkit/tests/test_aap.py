@@ -247,8 +247,8 @@ def test_aap_dise_reassigns_noncentroids_to_the_nearest_centroid():
     molecules = [_mol(smiles) for smiles in ("CCCC", "CCCO", "CCOC")]
 
     # The selection pass absorbs CCCO into the first sphere, while CCOC becomes
-    # a second centroid. The complete DISE workflow then assigns CCCO to CCOC,
-    # because that selected centroid is more similar.
+    # a second centroid. The complete directed sphere exclusion workflow then
+    # assigns CCCO to CCOC because that selected centroid is more similar.
     assert _cluster_ids(molecules, similarity_threshold=0.2) == [0, 0, 1]
     assert aap_similarity(molecules[2], molecules[1]) > aap_similarity(molecules[0], molecules[1])
     assert _cluster_ids(molecules, similarity_threshold=0.2, assignment="nearest") == [1, 0, 0]

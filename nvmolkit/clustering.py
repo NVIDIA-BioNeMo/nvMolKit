@@ -13,25 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Contains GPU-accelerated molecular clustering implementations.
-
-``aap_dise()`` performs directed sphere-exclusion clustering directly from
-RDKit molecules using approximate Atom-Atom-Path similarity. It keeps only
-O(N) cluster state while constructing rooted-path descriptors on the CPU and
-evaluating atom assignments on the GPU.
-
-The standard ``butina()`` path accepts a full N x N distance matrix and
-materializes its neighbor relationships. This is the right choice when you
-already have a distance matrix or plan to reuse it (e.g. at multiple cutoffs),
-and when N is small enough that the O(N^2) data fits comfortably in GPU memory.
-
-``fused_butina()`` avoids materializing the distance matrix entirely.  Each
-clustering round recomputes only the similarities it needs on the fly with
-CUDA kernels that fuse popcount-based fingerprint similarity with the
-neighbor-count and cluster-extraction steps. This trades extra compute for
-drastically lower memory: usage is O(N) rather than O(N^2), making it the
-better choice for large N where the full matrix would be prohibitively large.
-"""
+"""GPU-accelerated clustering from distance matrices, fingerprints, or ordered RDKit molecules."""
 
 from dataclasses import dataclass
 from enum import Enum
@@ -51,7 +33,7 @@ _RDKitClusters = tuple[tuple[int, ...], ...]
 
 
 class DISEOutputMode(Enum):
-    """Output format for :func:`aap_dise`."""
+    """Output format for directed sphere exclusion (DISE) clustering."""
 
     RDKIT = "rdkit"
     DEVICE = "device"
@@ -59,7 +41,7 @@ class DISEOutputMode(Enum):
 
 @dataclass(frozen=True)
 class DISEDeviceResult:
-    """GPU-resident directed sphere-exclusion clustering result.
+    """GPU-resident directed sphere exclusion (DISE) clustering result.
 
     Attributes:
         cluster_ids: One zero-based int32 cluster ID per input molecule.
@@ -133,7 +115,7 @@ def aap_dise(
 ) -> _RDKitClusters: ...
 
 
-# TODO: Explore a GPU-resident DISE control loop and asynchronous result production.
+# TODO: Explore a GPU-resident directed sphere exclusion control loop and asynchronous result production.
 def aap_dise(
     molecules,
     similarity_threshold: float = 0.217,
@@ -146,7 +128,9 @@ def aap_dise(
     stream: torch.cuda.Stream | None = None,
     output: DISEOutputMode = DISEOutputMode.DEVICE,
 ) -> _RDKitClusters | DISEDeviceResult:
-    """Cluster ordered RDKit molecules with AAP-backed DISE.
+    """Cluster ordered RDKit molecules with directed sphere exclusion.
+
+    Atom-Atom Path (AAP) similarity drives directed sphere exclusion (DISE).
 
     Input order supplies the direction: the first unassigned molecule becomes
     the next centroid. ``assignment="first"`` retains the first qualifying
@@ -174,6 +158,8 @@ def aap_dise(
     Note:
         The current DISE control loop makes host-side decisions and therefore
         completes its CUDA stream work before returning either output mode.
+        For method details, see `Gobbi et al. (2015)
+        <https://doi.org/10.1186/s13321-015-0056-8>`_.
     """
     _validate_dise_output(output)
     if not 0 <= similarity_threshold <= 1:

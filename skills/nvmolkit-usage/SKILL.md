@@ -313,10 +313,10 @@ field to the host.
 
 `GetConformerRMSMatrix(mol)` and `GetConformerRMSMatrixBatch(mols)` default to `output_format="condensed"`, returning `AsyncGpuResult` objects that wrap RDKit-style flat vectors of length `N * (N - 1) // 2`. Use `output_format="square"` when chaining into `butina()` or any other API that expects an `N x N` distance matrix. Both forms live on the GPU; call `.numpy()` on condensed results or synchronize before moving square tensors to the CPU.
 
-### AAP similarity and DISE clustering
+### Atom-Atom Path similarity and directed sphere exclusion clustering
 
-AAP-backed directed sphere-exclusion clustering provides device and
-RDKit-style output modes:
+Atom-Atom Path (AAP) similarity with directed sphere exclusion (DISE)
+clustering provides device and RDKit-style output modes:
 
 ```python
 from rdkit import Chem

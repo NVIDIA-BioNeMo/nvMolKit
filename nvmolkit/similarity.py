@@ -37,7 +37,7 @@ def aap_similarity(
     sinkhorn_temperature: float = 0.104,
     stream: torch.cuda.Stream | None = None,
 ) -> float:
-    """Compute directed approximate Atom-Atom-Path molecular similarity.
+    """Compute directed approximate Atom-Atom Path (AAP) molecular similarity.
 
     Rooted paths are hashed into per-atom histograms and compatible atoms are
     assigned with fixed-iteration Sinkhorn normalization on the GPU. The score
@@ -60,6 +60,10 @@ def aap_similarity(
 
     Returns:
         Similarity in the interval ``[0, 1]``.
+
+    Note:
+        For method details, see `Gobbi et al. (2015)
+        <https://doi.org/10.1186/s13321-015-0056-8>`_.
     """
     active_stream = _resolve_cuda_stream(stream)
     return _clustering.aap_similarity(
