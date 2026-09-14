@@ -2232,8 +2232,7 @@ std::unique_ptr<RDKit::RWMol> createHydroCarbon(const int numCarbons, const doub
 
   std::vector<int> carbonIndices;
   carbonIndices.reserve(static_cast<size_t>(numCarbons));
-  std::random_device                     dev;
-  std::mt19937                           rng(dev());
+  std::mt19937                           rng(42);
   std::uniform_real_distribution<double> dist(-0.1, 0.1);
   for (int i = 0; i < numCarbons; ++i) {
     const RDGeom::Point3D carbonPos(0.0 + dist(rng), 0.0 + dist(rng), i * bondLength + dist(rng));
@@ -2249,7 +2248,9 @@ std::unique_ptr<RDKit::RWMol> createHydroCarbon(const int numCarbons, const doub
   return mol;
 }
 
-TEST(MMFFAllowsLargeMol, LargeMoleculeInterleavedOptimizes) {
+class MMFFLargeMoleculePrecisionTest : public ::testing::TestWithParam<nvMolKit::PrecisionMode> {};
+
+TEST_P(MMFFLargeMoleculePrecisionTest, LargeMoleculeInterleavedOptimizes) {
   constexpr double bondLength = 1.0;
 
   const auto small1 = createHydroCarbon(5, bondLength);
@@ -2272,8 +2273,12 @@ TEST(MMFFAllowsLargeMol, LargeMoleculeInterleavedOptimizes) {
 
   std::vector<RDKit::ROMol*>     molPtrs = {small1.get(), big.get(), small2.get()};
   nvMolKit::BatchHardwareOptions options;
-  const auto                     energies =
-    nvMolKit::MMFF::MMFFOptimizeMoleculesConfsBfgs(molPtrs, 10, nvMolKit::MMFFProperties{}, options);
+  const auto                     energies = nvMolKit::MMFF::MMFFOptimizeMoleculesConfsBfgs(molPtrs,
+                                                                       10,
+                                                                       nvMolKit::MMFFProperties{},
+                                                                       options,
+                                                                       nvMolKit::BfgsBackend::BATCHED,
+                                                                       GetParam());
 
   for (size_t molIdx = 0; molIdx < rdkitRefs.size(); ++molIdx) {
     auto& molRef   = *rdkitRefs[molIdx];
@@ -2291,3 +2296,10 @@ TEST(MMFFAllowsLargeMol, LargeMoleculeInterleavedOptimizes) {
     }
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(PrecisionModes,
+                         MMFFLargeMoleculePrecisionTest,
+                         ::testing::Values(nvMolKit::PrecisionMode::FULL, nvMolKit::PrecisionMode::SINGLE),
+                         [](const ::testing::TestParamInfo<nvMolKit::PrecisionMode>& info) {
+                           return info.param == nvMolKit::PrecisionMode::SINGLE ? "Single" : "Full";
+                         });

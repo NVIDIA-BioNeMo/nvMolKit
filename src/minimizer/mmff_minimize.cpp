@@ -23,6 +23,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
+#include <variant>
 
 #include "rdkit_extensions/mmff_flattened_builder.h"
 #include "src/conformer/ff_device_collect.h"
@@ -69,12 +70,14 @@ std::vector<std::vector<double>> MMFFOptimizeMoleculesConfsBfgs(std::vector<RDKi
                                                                 const int                   maxIters,
                                                                 const MMFFProperties&       properties,
                                                                 const BatchHardwareOptions& perfOptions,
-                                                                const BfgsBackend           backend) {
+                                                                const BfgsBackend           backend,
+                                                                PrecisionMode               precision) {
   return MMFFOptimizeMoleculesConfsBfgs(mols,
                                         maxIters,
                                         std::vector<MMFFProperties>(mols.size(), properties),
                                         perfOptions,
-                                        backend);
+                                        backend,
+                                        precision);
 }
 
 MMFFMinimizeResult MMFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>&                                  mols,
@@ -86,7 +89,8 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>&       
                                               const BfgsBackend                                            backend,
                                               const CoordinateOutput                                       output,
                                               int                                                          targetGpu,
-                                              const DeviceCoordResult* deviceInput) {
+                                              const DeviceCoordResult*                                     deviceInput,
+                                              PrecisionMode                                                precision) {
   ScopedNvtxRange fullRange("BFGS MMFF Minimize Molecules Confs");
 
   if (properties.size() != mols.size()) {
@@ -181,6 +185,7 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>&       
                                                                                               deviceInput,         \
                                                                                               deviceInputIndex,    \
                                                                                               backend,             \
+                                                                                              precision,           \
                                                                                               sharedMolProperties, \
                                                                                               exceptionHandler)
   for (size_t batchStart = 0; batchStart < totalConformers; batchStart += effectiveBatchSize) {
@@ -254,8 +259,14 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>&       
       buffers.ensureCapacity(systemHost.positions.size(), batchConformers.size());
       std::copy(systemHost.positions.begin(), systemHost.positions.end(), buffers.initialPositions.begin());
 
-      nvMolKit::BfgsBatchMinimizer bfgsMinimizer(/*dataDim=*/3, nvMolKit::DebugLevel::NONE, true, streamPtr, backend);
-      const auto                   effectiveBackend = bfgsMinimizer.resolveBackend(systemHost.indices.atomStarts);
+      nvMolKit::BfgsBatchMinimizer bfgsMinimizer(
+        /*dataDim=*/3,
+        nvMolKit::DebugLevel::NONE,
+        true,
+        streamPtr,
+        backend,
+        precision);
+      const auto effectiveBackend = bfgsMinimizer.resolveBackend(systemHost.indices.atomStarts);
       setupBatchRange.pop();
 
       const AsyncDeviceVector<double>* finalPositions = nullptr;
@@ -265,7 +276,7 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>&       
       AsyncDeviceVector<double>        energyOutsDevice;
 
       if (effectiveBackend == BfgsBackend::BATCHED) {
-        MMFFBatchedForcefield forcefield(systemHost, metadata, streamPtr);
+        MMFFBatchedForcefield forcefield(systemHost, metadata, streamPtr, precision);
         positionsDevice.setStream(streamPtr);
         gradDevice.setStream(streamPtr);
         energyOutsDevice.setStream(streamPtr);
@@ -297,11 +308,12 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>&       
           cudaStreamSynchronize(streamPtr);
         }
       } else {
-        nvMolKit::MMFF::setStreams(systemDevice, streamPtr);
-        nvMolKit::MMFF::sendContribsAndIndicesToDevice(systemHost, systemDevice);
-        nvMolKit::MMFF::allocateIntermediateBuffers(systemHost, systemDevice);
-        systemDevice.positions.resize(systemHost.positions.size());
-        systemDevice.positions.copyFromHost(buffers.initialPositions.data(), systemHost.positions.size());
+        auto& device = systemDevice;
+        nvMolKit::MMFF::setStreams(device, streamPtr);
+        nvMolKit::MMFF::sendContribsAndIndicesToDevice(systemHost, device);
+        nvMolKit::MMFF::allocateIntermediateBuffers(systemHost, device);
+        device.positions.resize(systemHost.positions.size());
+        device.positions.copyFromHost(buffers.initialPositions.data(), systemHost.positions.size());
         if (useDeviceInput) {
           detail::broadcastDeviceInputBatch(*deviceInput,
                                             deviceInputIndex,
@@ -309,20 +321,20 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>&       
                                             batchAtomCounts,
                                             executingGpu,
                                             streamPtr,
-                                            systemDevice.positions);
+                                            device.positions);
         }
-        systemDevice.grad.resize(systemHost.positions.size());
-        systemDevice.grad.zero();
+        device.grad.resize(systemHost.positions.size());
+        device.grad.zero();
 
-        bfgsMinimizer.minimizeWithMMFF(maxIters, gradTol, systemHost.indices.atomStarts, systemDevice);
+        bfgsMinimizer.minimizeWithMMFF(maxIters, gradTol, systemHost.indices.atomStarts, device);
 
-        finalPositions = &systemDevice.positions;
-        finalEnergies  = &systemDevice.energyOuts;
+        finalPositions = &device.positions;
+        finalEnergies  = &device.energyOuts;
 
         if (!deviceOutput) {
           ScopedNvtxRange finalizeBatchRange("OpenMP loop finalizing batch");
-          systemDevice.positions.copyToHost(buffers.positions.data(), systemDevice.positions.size());
-          systemDevice.energyOuts.copyToHost(buffers.energies.data(), systemDevice.energyOuts.size());
+          device.positions.copyToHost(buffers.positions.data(), device.positions.size());
+          device.energyOuts.copyToHost(buffers.energies.data(), device.energyOuts.size());
           cudaStreamSynchronize(streamPtr);
         }
       }
@@ -360,8 +372,20 @@ std::vector<std::vector<double>> MMFFOptimizeMoleculesConfsBfgs(std::vector<RDKi
                                                                 const int                          maxIters,
                                                                 const std::vector<MMFFProperties>& properties,
                                                                 const BatchHardwareOptions&        perfOptions,
-                                                                const BfgsBackend                  backend) {
-  return MMFFMinimizeMoleculesConfs(mols, maxIters, 1e-4, properties, {}, perfOptions, backend).energies;
+                                                                const BfgsBackend                  backend,
+                                                                PrecisionMode                      precision) {
+  return MMFFMinimizeMoleculesConfs(mols,
+                                    maxIters,
+                                    1e-4,
+                                    properties,
+                                    {},
+                                    perfOptions,
+                                    backend,
+                                    CoordinateOutput::RDKIT_CONFORMERS,
+                                    -1,
+                                    nullptr,
+                                    precision)
+    .energies;
 }
 
 MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(

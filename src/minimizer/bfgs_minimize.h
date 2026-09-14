@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "src/minimizer/bfgs_types.h"
+#include "src/precision/precision_mode.h"
 #include "src/utils/device_vector.h"
 #include "src/utils/host_vector.h"
 
@@ -42,9 +43,57 @@ struct BatchedMolecular3DDeviceBuffers;
 //! \brief Computes energies, optionally on an external set of positions.
 //! \param positions Optional flattened coordinate buffer to evaluate.
 //!        When null, the implementation uses its internal position storage.
-using EnergyFunctor = std::function<void(const double*)>;
+using EnergyFunctor       = std::function<void(const double*)>;
 //! \brief Computes gradients on the internal position buffer.
-using GradFunctor   = std::function<void()>;
+using GradFunctor         = std::function<void()>;
+using SingleEnergyFunctor = std::function<void(const float*)>;
+using SingleGradFunctor   = std::function<void()>;
+
+//! Precision-dependent device state for the batched BFGS implementation.
+template <typename real, typename reduceT, typename storageT> struct BfgsWorkspace {
+  using ComputeScalar   = real;
+  using ReductionScalar = reduceT;
+  using StorageScalar   = storageT;
+
+  AsyncDeviceVector<storageT> scratchPositions;
+  AsyncDeviceVector<storageT> positions;
+  AsyncDeviceVector<storageT> grad;
+  AsyncDeviceVector<storageT> lineSearchDir;
+  AsyncDeviceVector<storageT> lineSearchLambdaMins;
+  AsyncDeviceVector<storageT> lineSearchLambdas;
+  AsyncDeviceVector<storageT> lineSearchLambdas2;
+  AsyncDeviceVector<storageT> lineSearchSlope;
+  AsyncDeviceVector<storageT> lineSearchMaxSteps;
+  AsyncDeviceVector<storageT> lineSearchStoredEnergy;
+  AsyncDeviceVector<storageT> lineSearchEnergyScratch;
+  AsyncDeviceVector<storageT> energy;
+  AsyncDeviceVector<storageT> scratchGrad;
+  AsyncDeviceVector<storageT> gradScales;
+  AsyncDeviceVector<storageT> inverseHessian;
+  AsyncDeviceVector<storageT> hessDGrad;
+
+  void setStream(cudaStream_t stream) {
+    scratchPositions.setStream(stream);
+    positions.setStream(stream);
+    grad.setStream(stream);
+    lineSearchDir.setStream(stream);
+    lineSearchLambdaMins.setStream(stream);
+    lineSearchLambdas.setStream(stream);
+    lineSearchLambdas2.setStream(stream);
+    lineSearchSlope.setStream(stream);
+    lineSearchMaxSteps.setStream(stream);
+    lineSearchStoredEnergy.setStream(stream);
+    lineSearchEnergyScratch.setStream(stream);
+    energy.setStream(stream);
+    scratchGrad.setStream(stream);
+    gradScales.setStream(stream);
+    inverseHessian.setStream(stream);
+    hessDGrad.setStream(stream);
+  }
+};
+
+using FullBfgsWorkspace   = BfgsWorkspace<double, double, double>;
+using SingleBfgsWorkspace = BfgsWorkspace<float, float, float>;
 
 //! BFGS Batch Minimizer
 //!
@@ -57,12 +106,15 @@ using GradFunctor   = std::function<void()>;
 //!                   compatibility with RDKit forcefield calculations.
 //! TODO: Constructor should be parameter struct based, now that we have more parameters.
 struct BfgsBatchMinimizer {
-  explicit BfgsBatchMinimizer(int          dataDim    = 3,
-                              DebugLevel   debugLevel = DebugLevel::NONE,
-                              bool         scaleGrads = true,
-                              cudaStream_t stream     = nullptr,
-                              BfgsBackend  backend    = BfgsBackend::BATCHED);
+  explicit BfgsBatchMinimizer(int           dataDim    = 3,
+                              DebugLevel    debugLevel = DebugLevel::NONE,
+                              bool          scaleGrads = true,
+                              cudaStream_t  stream     = nullptr,
+                              BfgsBackend   backend    = BfgsBackend::BATCHED,
+                              PrecisionMode precision  = PrecisionMode::FULL);
   ~BfgsBatchMinimizer();
+
+  const PrecisionMode& precision() const { return precision_; }
 
   //! \brief Runs host-driven batched BFGS through the forcefield abstraction.
   //! \param numIters Maximum number of BFGS iterations to perform.
@@ -94,7 +146,6 @@ struct BfgsBatchMinimizer {
                         const std::vector<int>&              atomStartsHost,
                         MMFF::BatchedMolecularDeviceBuffers& systemDevice,
                         const uint8_t*                       activeThisStage = nullptr);
-
   //! \brief Runs ETK minimization through the per-molecule CUDA kernels.
   //! \param numIters Maximum number of BFGS iterations to perform.
   //! \param gradTol Convergence tolerance applied to the scaled gradients.
@@ -185,21 +236,15 @@ struct BfgsBatchMinimizer {
   AsyncDeviceVector<int> activeSystemIndices_;  // Indices of systems that are active in the current iteration.
   mutable int            numUnfinishedSystems_ = 0;
 
-  AsyncDeviceVector<double>  scratchPositions_;
+  // Precision-dependent working state. Public coordinates, gradients, and
+  // energies remain double precision at the API boundary.
+  FullBfgsWorkspace          fullWorkspace_;
+  SingleBfgsWorkspace        singleWorkspace_;
   AsyncDeviceVector<int16_t> statuses_;
 
-  // Intermediate buffers used for linear search
-  AsyncDeviceVector<double>  lineSearchDir_;  // xi
+  // Precision-independent line-search status and public energy output.
   AsyncDeviceVector<int16_t> lineSearchStatus_;
-  AsyncDeviceVector<double>  lineSearchLambdaMins_;
-  AsyncDeviceVector<double>  lineSearchLambdas_;
-  AsyncDeviceVector<double>  lineSearchLambdas2_;
-  AsyncDeviceVector<double>  lineSearchSlope_;
-  AsyncDeviceVector<double>  lineSearchMaxSteps_;
-
-  AsyncDeviceVector<double> lineSearchStoredEnergy_;
-  AsyncDeviceVector<double> lineSearchEnergyScratch_;
-  AsyncDeviceVector<double> lineSearchEnergyOut_;
+  AsyncDeviceVector<double>  lineSearchEnergyOut_;
 
   // Temporary buffers for counting finished systems. Mutable to all
   // for const counting methods.
@@ -211,11 +256,6 @@ struct BfgsBatchMinimizer {
 
   // Hessian approximation and scratch buffers.
   AsyncDeviceVector<int> hessianStarts_;
-
-  AsyncDeviceVector<double> scratchGrad_;
-  AsyncDeviceVector<double> gradScales_;
-  AsyncDeviceVector<double> inverseHessian_;
-  AsyncDeviceVector<double> hessDGrad_;
 
   int  dataDim_        = 3;      // Dimensionality of positions.
   bool scaleGrads_     = true;   // Whether to scale gradients to match RDKit forcefield.
@@ -236,6 +276,7 @@ struct BfgsBatchMinimizer {
 
   DebugLevel                        debugLevel_ = DebugLevel::NONE;
   BfgsBackend                       backend_    = BfgsBackend::BATCHED;
+  PrecisionMode                     precision_;
   std::vector<std::vector<int16_t>> stepwiseStatuses;
   std::vector<std::vector<double>>  stepwiseEnergies;
 
@@ -259,6 +300,12 @@ struct BfgsBatchMinimizer {
   cudaStream_t stream_ = nullptr;
 
  private:
+  template <typename DeviceBuffers>
+  bool minimizeWithMMFFImpl(int                     numIters,
+                            double                  gradTol,
+                            const std::vector<int>& atomStartsHost,
+                            DeviceBuffers&          systemDevice,
+                            const uint8_t*          activeThisStage);
   //! \brief Shared host-driven batched BFGS implementation used by the public overload.
   //! \param atomStartsHost Host-side atom offsets for the batch.
   //! \param atomStarts Device-side atom offsets for the batch.
@@ -277,10 +324,13 @@ struct BfgsBatchMinimizer {
                 AsyncDeviceVector<double>& energyOuts,
                 EnergyFunctor              eFunc,
                 GradFunctor                gFunc,
+                SingleEnergyFunctor        eFuncSingle,
+                SingleGradFunctor          gFuncSingle,
                 const uint8_t*             activeThisStage = nullptr);
 };
 
 void copyAndInvert(const AsyncDeviceVector<double>& src, AsyncDeviceVector<double>& dst);
+void copyAndInvert(const AsyncDeviceVector<float>& src, AsyncDeviceVector<float>& dst);
 
 }  // namespace nvMolKit
 
