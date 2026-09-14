@@ -45,7 +45,6 @@ For APIs that modify RDKit structures, nvMolKit applies changes in-place as is d
     # ETKDG conformer generation via nvMolKit
     mols = [AddHs(MolFromSmiles(smi)) for smi in ['C1CCCCC1', 'C1CCCCC2CCCCC12', "COO"]]
     params = ETKDGv3()
-    params.useRandomCoords = True  # Required for nvMolKit
     nvMolKitEmbed(
         molecules=mols,
         params=params,

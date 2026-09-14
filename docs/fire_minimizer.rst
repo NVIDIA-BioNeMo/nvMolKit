@@ -31,7 +31,6 @@ minimizers.
     mols = [Chem.AddHs(Chem.MolFromSmiles(smiles)) for smiles in smiles]
 
     params = ETKDGv3()
-    params.useRandomCoords = True
     EmbedMolecules(mols, params, confsPerMolecule=10)
 
     options = FireOptions()
@@ -118,6 +117,5 @@ Within that bulk, FIRE sits slightly farther from RDKit: its median offset is
 Taken together, at an equal iteration budget, FIRE's bulk distribution is
 slightly looser than BFGS's, while FIRE reaches the lower minimum on most of
 the conformers where the two minimizers end up in different basins.
-
 
 

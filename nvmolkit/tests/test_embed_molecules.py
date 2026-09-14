@@ -13,11 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 import os
+
 import pytest
 import torch
 from rdkit import Chem
-from rdkit.Chem import rdDistGeom, AllChem
+from rdkit.Chem import AllChem, rdDistGeom
 from rdkit.Chem.rdDistGeom import EmbedParameters
 
 import nvmolkit.embedMolecules as embed
@@ -358,15 +360,42 @@ def test_embed_molecules_invalid_input():
         embed.EmbedMolecules([None], params)
 
 
-def test_embed_molecules_invalid_params():
-    """Test nvMolKit EmbedMolecules with invalid parameters."""
-    mol = Chem.MolFromSmiles("CCO")
+@pytest.mark.parametrize("rand_neg_eig", [False, True])
+def test_embed_molecules_eigenvalue_initialization(rand_neg_eig):
+    """Embed mixed-size, chiral, and ring molecules from eigenvalue coordinates."""
+    smiles = ["C", "CC", "CCO", "C[C@H](O)F", "c1ccccc1", "C1CCCCC1"]
+    mols = [Chem.AddHs(Chem.MolFromSmiles(smiles_value)) for smiles_value in smiles]
+    params = rdDistGeom.ETKDGv3()
+    assert params.useRandomCoords is False
+    params.randNegEig = rand_neg_eig
+    params.randomSeed = 0xC0FFEE
 
-    # Test with useRandomCoords=False
-    params = EmbedParameters()
-    params.useRandomCoords = False
+    embed.EmbedMolecules(
+        mols,
+        params,
+        confsPerMolecule=3,
+        hardwareOptions=HardwareOptions(preprocessingThreads=2, batchSize=2, batchesPerGpu=2, gpuIds=[0]),
+    )
 
-    with pytest.raises(ValueError, match="ETKDG requires useRandomCoords=True"):
+    for smiles_value, mol in zip(smiles, mols):
+        assert mol.GetNumConformers() == 3, smiles_value
+        for conformer in mol.GetConformers():
+            for atom_idx in range(mol.GetNumAtoms()):
+                assert all(math.isfinite(value) for value in tuple(conformer.GetAtomPosition(atom_idx)))
+            for bond in mol.GetBonds():
+                begin = conformer.GetAtomPosition(bond.GetBeginAtomIdx())
+                end = conformer.GetAtomPosition(bond.GetEndAtomIdx())
+                assert 0.5 < (begin - end).Length() < 3.0
+
+
+def test_embed_molecules_eigenvalue_initialization_atom_limit():
+    """Reject molecules that exceed the eigenvalue kernel's matrix-size limit."""
+    mol = Chem.AddHs(Chem.MolFromSmiles("C" * 100))
+    assert mol.GetNumAtoms() > 256
+    params = rdDistGeom.ETKDGv3()
+    params.maxIterations = 1
+
+    with pytest.raises(ValueError, match="at most 256 atoms"):
         embed.EmbedMolecules([mol], params)
 
 
@@ -433,7 +462,6 @@ def test_embed_molecules_device_output_returns_device3d_no_writeback():
     """EmbedMolecules(output=DEVICE) returns Device3DResult and does NOT modify RDKit conformers."""
     mols = [Chem.AddHs(Chem.MolFromSmiles("CCO")), Chem.AddHs(Chem.MolFromSmiles("CCCC"))]
     params = EmbedParameters()
-    params.useRandomCoords = True
     params.randomSeed = 42
 
     confs_per_mol = 3

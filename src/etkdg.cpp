@@ -99,17 +99,16 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
                                                 CoordinateOutput                            output,
                                                 int                                         targetGpu) {
   const ScopedNvtxRange fullRange("EmbedMolecules");
-  if (!params.useRandomCoords) {
-    throw std::runtime_error("ETKDG requires useRandomCoords to be true. Please set it in the EmbedParameters.");
-  }
-
-  const bool deviceOutput = output == CoordinateOutput::DEVICE;
+  const bool            deviceOutput = output == CoordinateOutput::DEVICE;
 
   // Validate inputs
   for (size_t i = 0; i < mols.size(); ++i) {
     const auto* mol = mols[i];
     if (mol == nullptr) {
       throw std::invalid_argument("Invalid molecule pointer at index " + std::to_string(i));
+    }
+    if (!params.useRandomCoords && mol->getNumAtoms() > 256) {
+      throw std::invalid_argument("Eigenvalue coordinate generation supports at most 256 atoms per molecule");
     }
   }
 
@@ -130,7 +129,9 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
   auto             paramsCopy              = params;
   constexpr double randomCoordsBasinThresh = 1e8;
   constexpr int    dim                     = 4;  // ETKDG always uses 4D coordinates
-  paramsCopy.basinThresh                   = randomCoordsBasinThresh;
+  if (paramsCopy.useRandomCoords) {
+    paramsCopy.basinThresh = randomCoordsBasinThresh;
+  }
 
   ScopedNvtxRange coordsRange("Init ETKDG");
 
@@ -285,7 +286,8 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
 
       while (!workComplete.load()) {
         // Dispatch work for this thread
-        std::vector<int> molIds = Scheduler.dispatch(effectiveBatchSize);
+        std::vector<int> attemptIds;
+        std::vector<int> molIds = Scheduler.dispatch(effectiveBatchSize, &attemptIds);
 
         if (molIds.empty()) {
           workComplete.store(true);
@@ -300,14 +302,17 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
         // Create batch of molecules and eargs for the dispatched work
         std::vector<RDKit::ROMol*>     batchMolsWithConfs;
         std::vector<detail::EmbedArgs> batchEargs;
+        std::vector<int>               coordinateDimensions;
 
         batchMolsWithConfs.reserve(molIds.size());
         batchEargs.reserve(molIds.size());
+        coordinateDimensions.reserve(molIds.size());
 
         for (const int molId : molIds) {
           // Use the original unique molecules and their prepared eargs
           batchMolsWithConfs.push_back(sortedMols[molId]);
           batchEargs.push_back(eargs[molId]);
+          coordinateDimensions.push_back(eargs[molId].chiralCenters.empty() ? 3 : 4);
         }
 
         auto context = std::make_unique<detail::ETKDGContext>(streamPtr);
@@ -322,14 +327,21 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
         // Convert to const pointers for stages that require them
         const std::vector<const RDKit::ROMol*> constMolPtrs(batchMolsWithConfs.begin(), batchMolsWithConfs.end());
 
-        // Create coordinate generation stage based on parameter
-        // FIXME: arguments still involve useRDKitcoordgen.
-        stages.push_back(std::make_unique<detail::ETKDGCoordGenRDKitStage>(paramsCopy,
-                                                                           constMolPtrs,
-                                                                           batchEargs,
-                                                                           positionsScratch,
-                                                                           activeScratch,
-                                                                           streamPtr));
+        if (paramsCopy.useRandomCoords) {
+          stages.push_back(std::make_unique<detail::ETKDGCoordGenRDKitStage>(paramsCopy,
+                                                                             constMolPtrs,
+                                                                             batchEargs,
+                                                                             positionsScratch,
+                                                                             activeScratch,
+                                                                             streamPtr));
+        } else {
+          stages.push_back(std::make_unique<detail::ETKDGCoordGenStage>(paramsCopy,
+                                                                        batchEargs,
+                                                                        dim,
+                                                                        streamPtr,
+                                                                        std::move(attemptIds),
+                                                                        std::move(coordinateDimensions)));
+        }
 
         // First minimize, then first round of chiral checks.
         auto                           firstMinStage    = std::make_unique<detail::DistGeomMinimizeStage>(constMolPtrs,

@@ -71,11 +71,13 @@ void initETKDG(ROMol* mol, const EmbedParameters& params, ForceFields::CrystalFF
 
 // turn off linting for RDKit port.
 // NOLINTBEGIN
-RDNumeric::SymmMatrix<double> initialCoordsNormDistances(const RDNumeric::SymmMatrix<double>& initialDistMat) {
+bool initialCoordsNormDistances(const RDNumeric::SymmMatrix<double>& initialDistMat,
+                                RDNumeric::SymmMatrix<double>&       normalized,
+                                int&                                 eigenSeed) {
   constexpr double EIGVAL_TOL = 0.001;
   const int        N          = initialDistMat.numRows();
 
-  RDNumeric::SymmMatrix<double> sqMat(N), T(N, 0.0);
+  RDNumeric::SymmMatrix<double> sqMat(N);
 
   double* sqDat = sqMat.getData();
 
@@ -87,9 +89,11 @@ RDNumeric::SymmMatrix<double> initialCoordsNormDistances(const RDNumeric::SymmMa
     sumSqD2 += sqDat[i];
   }
   sumSqD2 /= (N * N);
+  eigenSeed = static_cast<int>(sumSqD2 * N);
 
   RDNumeric::DoubleVector sqD0i(N, 0.0);
   double*                 sqD0iData = sqD0i.getData();
+  bool                    valid     = true;
   for (int i = 0; i < N; i++) {
     for (int j = 0; j < N; j++) {
       sqD0iData[i] += sqMat.getVal(i, j);
@@ -98,6 +102,7 @@ RDNumeric::SymmMatrix<double> initialCoordsNormDistances(const RDNumeric::SymmMa
     sqD0iData[i] -= sumSqD2;
 
     if ((sqD0iData[i] < EIGVAL_TOL) && (N > 3)) {
+      valid          = false;
       sqD0iData[i] = 10 * EIGVAL_TOL;
     }
   }
@@ -105,10 +110,17 @@ RDNumeric::SymmMatrix<double> initialCoordsNormDistances(const RDNumeric::SymmMa
   for (int i = 0; i < N; i++) {
     for (int j = 0; j <= i; j++) {
       double val = 0.5 * (sqD0iData[i] + sqD0iData[j] - sqMat.getVal(i, j));
-      T.setVal(i, j, val);
+      normalized.setVal(i, j, val);
     }
   }
-  return T;
+  return valid;
+}
+
+RDNumeric::SymmMatrix<double> initialCoordsNormDistances(const RDNumeric::SymmMatrix<double>& initialDistMat) {
+  RDNumeric::SymmMatrix<double> normalized(initialDistMat.numRows(), 0.0);
+  int                           eigenSeed = 0;
+  initialCoordsNormDistances(initialDistMat, normalized, eigenSeed);
+  return normalized;
 }
 // NOLINTEND
 

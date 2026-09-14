@@ -16,10 +16,21 @@
 #ifndef NVMOLKIT_SYMMETRIC_EIGENSOLVER_H_
 #define NVMOLKIT_SYMMETRIC_EIGENSOLVER_H_
 
+#include <cuda_runtime_api.h>
+
 #include <memory>
 #include <vector>
 
 namespace nvMolKit {
+
+struct BatchedEigenSolverOptions {
+  const uint8_t* active           = nullptr;
+  int            randomSeed       = 42;
+  const int*     matrixDimensions = nullptr;
+  const int*     randomSeeds      = nullptr;
+  const int*     eigenDimensions  = nullptr;
+  cudaStream_t   stream           = nullptr;
+};
 
 //! Batched symmetric eigensolver implemented as a custom power-iteration CUDA kernel.
 class BatchedEigenSolver {
@@ -42,17 +53,14 @@ class BatchedEigenSolver {
   //! device. Dimensions n * batchsize
   //! \param eigenvectors: Pointer to the first element of the array of eigenvectors on
   //! device. Dimensions n * n * batchsize
-  //! \param active: Optional pointer to an array of uint8_t on device. Dimensions batchSize. If nullptr, all matrices
-  //! are processed. If not nullptr, only the matrices with active[i] == 1 are processed. \param seed: Random seed for
-  //! the algorithm.
-  void solve(int            numEigs,
-             int            matrixDim,
-             int            batch_size,
-             double*        matrices,
-             double*        eigenvalues,
-             double*        eigenvectors,
-             const uint8_t* active     = nullptr,
-             int            randomSeed = 42);
+  //! \param options Active mask, random seeds, per-matrix dimensions, and CUDA stream.
+  void solve(int                              numEigs,
+             int                              matrixDim,
+             int                              batch_size,
+             double*                          matrices,
+             double*                          eigenvalues,
+             double*                          eigenvectors,
+             const BatchedEigenSolverOptions& options = {});
 
   const uint8_t* converged() const;
 
