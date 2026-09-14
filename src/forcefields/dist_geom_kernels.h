@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +17,8 @@
 #define NVMOLKIT_DISTGEOM_KERNELS_H
 
 #include <cuda_runtime.h>
+
+#include <cstdint>
 
 namespace nvMolKit {
 namespace DistGeom {
@@ -246,31 +248,31 @@ cudaError_t launchReduceEnergiesKernel(int            numBlocks,
                                        const uint8_t* activeThisStage = nullptr,
                                        cudaStream_t   stream          = 0);
 
-struct DistViolationContribTermsDevicePtr {
+template <typename Scalar> struct DistViolationContribTermsDevicePtrT {
   const int*    idx1;
   const int*    idx2;
-  const double* ub2;
-  const double* lb2;
-  const double* weight;
+  const Scalar* ub2;
+  const Scalar* lb2;
+  const Scalar* weight;
 };
 
-struct ChiralViolationContribTermsDevicePtr {
+template <typename Scalar> struct ChiralViolationContribTermsDevicePtrT {
   const int*    idx1;
   const int*    idx2;
   const int*    idx3;
   const int*    idx4;
-  const double* volUpper;
-  const double* volLower;
+  const Scalar* volUpper;
+  const Scalar* volLower;
 };
 
 struct FourthDimContribTermsDevicePtr {
   const int* idx;
 };
 
-struct EnergyForceContribsDevicePtr {
-  DistViolationContribTermsDevicePtr   distTerms;
-  ChiralViolationContribTermsDevicePtr chiralTerms;
-  FourthDimContribTermsDevicePtr       fourthTerms;
+template <typename Scalar> struct EnergyForceContribsDevicePtrT {
+  DistViolationContribTermsDevicePtrT<Scalar>   distTerms;
+  ChiralViolationContribTermsDevicePtrT<Scalar> chiralTerms;
+  FourthDimContribTermsDevicePtr                fourthTerms;
 };
 
 struct BatchedIndicesDevicePtr {
@@ -280,52 +282,61 @@ struct BatchedIndicesDevicePtr {
   const int* fourthTermStarts;
 };
 
-struct TorsionAngleContribTermsDevicePtr {
+template <typename Scalar> struct TorsionAngleContribTermsDevicePtrT {
   const int*    idx1;
   const int*    idx2;
   const int*    idx3;
   const int*    idx4;
-  const double* forceConstants;
+  const Scalar* forceConstants;
   const int*    signs;
 };
 
-struct InversionContribTermsDevicePtr {
+template <typename Scalar> struct InversionContribTermsDevicePtrT {
   const int*     idx1;
   const int*     idx2;
   const int*     idx3;
   const int*     idx4;
   const int*     at2AtomicNum;
   const uint8_t* isCBoundToO;
-  const double*  C0;
-  const double*  C1;
-  const double*  C2;
-  const double*  forceConstant;
+  const Scalar*  C0;
+  const Scalar*  C1;
+  const Scalar*  C2;
+  const Scalar*  forceConstant;
 };
 
-struct DistanceConstraintContribTermsDevicePtr {
+template <typename Scalar> struct DistanceConstraintContribTermsDevicePtrT {
   const int*    idx1;
   const int*    idx2;
-  const double* minLen;
-  const double* maxLen;
-  const double* forceConstant;
+  const Scalar* minLen;
+  const Scalar* maxLen;
+  const Scalar* forceConstant;
 };
 
-struct AngleConstraintContribTermsDevicePtr {
+template <typename Scalar> struct AngleConstraintContribTermsDevicePtrT {
   const int*    idx1;
   const int*    idx2;
   const int*    idx3;
-  const double* minAngle;
-  const double* maxAngle;
+  const Scalar* minAngle;
+  const Scalar* maxAngle;
 };
 
-struct Energy3DForceContribsDevicePtr {
-  TorsionAngleContribTermsDevicePtr       experimentalTorsionTerms;
-  InversionContribTermsDevicePtr          improperTorsionTerms;
-  DistanceConstraintContribTermsDevicePtr dist12Terms;
-  DistanceConstraintContribTermsDevicePtr dist13Terms;
-  AngleConstraintContribTermsDevicePtr    angle13Terms;
-  DistanceConstraintContribTermsDevicePtr longRangeDistTerms;
+template <typename Scalar> struct Energy3DForceContribsDevicePtrT {
+  TorsionAngleContribTermsDevicePtrT<Scalar>       experimentalTorsionTerms;
+  InversionContribTermsDevicePtrT<Scalar>          improperTorsionTerms;
+  DistanceConstraintContribTermsDevicePtrT<Scalar> dist12Terms;
+  DistanceConstraintContribTermsDevicePtrT<Scalar> dist13Terms;
+  AngleConstraintContribTermsDevicePtrT<Scalar>    angle13Terms;
+  DistanceConstraintContribTermsDevicePtrT<Scalar> longRangeDistTerms;
 };
+
+using DistViolationContribTermsDevicePtr      = DistViolationContribTermsDevicePtrT<double>;
+using ChiralViolationContribTermsDevicePtr    = ChiralViolationContribTermsDevicePtrT<double>;
+using EnergyForceContribsDevicePtr            = EnergyForceContribsDevicePtrT<double>;
+using TorsionAngleContribTermsDevicePtr       = TorsionAngleContribTermsDevicePtrT<double>;
+using InversionContribTermsDevicePtr          = InversionContribTermsDevicePtrT<double>;
+using DistanceConstraintContribTermsDevicePtr = DistanceConstraintContribTermsDevicePtrT<double>;
+using AngleConstraintContribTermsDevicePtr    = AngleConstraintContribTermsDevicePtrT<double>;
+using Energy3DForceContribsDevicePtr          = Energy3DForceContribsDevicePtrT<double>;
 
 struct BatchedIndices3DDevicePtr {
   const int* atomStarts;
@@ -358,7 +369,6 @@ cudaError_t launchBlockPerMolGradKernel(int                                 numM
                                         double                              fourthDimWeight,
                                         const uint8_t*                      activeThisStage = nullptr,
                                         cudaStream_t                        stream          = 0);
-
 cudaError_t launchBlockPerMolEnergyKernelETK(int                                   numMols,
                                              const Energy3DForceContribsDevicePtr& terms,
                                              const BatchedIndices3DDevicePtr&      systemIndices,

@@ -173,37 +173,37 @@ struct BatchedMolecularSystem3DHost {
   BatchedIndices3DHost      indices;
 };
 
-struct DistViolationContribTermsDevice {
+template <typename Scalar> struct DistViolationContribTermsDeviceT {
   nvMolKit::AsyncDeviceVector<int>    idx1;
   nvMolKit::AsyncDeviceVector<int>    idx2;
-  nvMolKit::AsyncDeviceVector<double> ub2;  // squared upper bounds
-  nvMolKit::AsyncDeviceVector<double> lb2;  // squared lower bounds
-  nvMolKit::AsyncDeviceVector<double> weight;
+  nvMolKit::AsyncDeviceVector<Scalar> ub2;  // squared upper bounds
+  nvMolKit::AsyncDeviceVector<Scalar> lb2;  // squared lower bounds
+  nvMolKit::AsyncDeviceVector<Scalar> weight;
 };
 
-struct ChiralViolationContribTermsDevice {
+template <typename Scalar> struct ChiralViolationContribTermsDeviceT {
   nvMolKit::AsyncDeviceVector<int>    idx1;
   nvMolKit::AsyncDeviceVector<int>    idx2;
   nvMolKit::AsyncDeviceVector<int>    idx3;
   nvMolKit::AsyncDeviceVector<int>    idx4;
-  nvMolKit::AsyncDeviceVector<double> volUpper;
-  nvMolKit::AsyncDeviceVector<double> volLower;
+  nvMolKit::AsyncDeviceVector<Scalar> volUpper;
+  nvMolKit::AsyncDeviceVector<Scalar> volLower;
 };
 
 struct FourthDimContribTermsDevice {
   nvMolKit::AsyncDeviceVector<int> idx;
 };
 
-struct TorsionAngleContribTermsDevice {
+template <typename Scalar> struct TorsionAngleContribTermsDeviceT {
   nvMolKit::AsyncDeviceVector<int>    idx1;            // Index of atom1 of the torsion angle
   nvMolKit::AsyncDeviceVector<int>    idx2;            // Index of atom2 of the torsion angle
   nvMolKit::AsyncDeviceVector<int>    idx3;            // Index of atom3 of the torsion angle
   nvMolKit::AsyncDeviceVector<int>    idx4;            // Index of atom4 of the torsion angle
-  nvMolKit::AsyncDeviceVector<double> forceConstants;  // Force constants for each torsion (6 values per term)
+  nvMolKit::AsyncDeviceVector<Scalar> forceConstants;  // Force constants for each torsion (6 values per term)
   nvMolKit::AsyncDeviceVector<int>    signs;           // Signs for each torsion (6 values per term)
 };
 
-struct InversionContribTermsDevice {
+template <typename Scalar> struct InversionContribTermsDeviceT {
   nvMolKit::AsyncDeviceVector<int> idx1;          // Index of atom1
   nvMolKit::AsyncDeviceVector<int> idx2;          // Index of atom2
   nvMolKit::AsyncDeviceVector<int> idx3;          // Index of atom3
@@ -211,56 +211,59 @@ struct InversionContribTermsDevice {
   nvMolKit::AsyncDeviceVector<int> at2AtomicNum;  // Atomic number for atom 2
   nvMolKit::AsyncDeviceVector<uint8_t>
     isCBoundToO;  // True if atom 2 is sp2 carbon bound to sp2 oxygen (stored as int for device)
-  nvMolKit::AsyncDeviceVector<double> C0;             // Inversion coefficient 0
-  nvMolKit::AsyncDeviceVector<double> C1;             // Inversion coefficient 1
-  nvMolKit::AsyncDeviceVector<double> C2;             // Inversion coefficient 2
-  nvMolKit::AsyncDeviceVector<double> forceConstant;  // Force constant
+  nvMolKit::AsyncDeviceVector<Scalar> C0;             // Inversion coefficient 0
+  nvMolKit::AsyncDeviceVector<Scalar> C1;             // Inversion coefficient 1
+  nvMolKit::AsyncDeviceVector<Scalar> C2;             // Inversion coefficient 2
+  nvMolKit::AsyncDeviceVector<Scalar> forceConstant;  // Force constant
   nvMolKit::AsyncDeviceVector<int>    numImpropers;
 };
 
-struct DistanceConstraintContribTermsDevice {
+template <typename Scalar> struct DistanceConstraintContribTermsDeviceT {
   nvMolKit::AsyncDeviceVector<int>     idx1;                   // Index of atom1 of the distance constraint
   nvMolKit::AsyncDeviceVector<int>     idx2;                   // Index of atom2 of the distance constraint
-  nvMolKit::AsyncDeviceVector<double>  minLen;                 // Lower bound of the flat bottom potential
-  nvMolKit::AsyncDeviceVector<double>  maxLen;                 // Upper bound of the flat bottom potential
-  nvMolKit::AsyncDeviceVector<double>  forceConstant;          // Force constant for distance constraint
+  nvMolKit::AsyncDeviceVector<Scalar>  minLen;                 // Lower bound of the flat bottom potential
+  nvMolKit::AsyncDeviceVector<Scalar>  maxLen;                 // Upper bound of the flat bottom potential
+  nvMolKit::AsyncDeviceVector<Scalar>  forceConstant;          // Force constant for distance constraint
   nvMolKit::AsyncDeviceVector<uint8_t> isImproperConstrained;  // True if the angle is an improper torsion. Only used
                                                                // for 1-3 distances (stored as int for device)
 };
 
-struct AngleConstraintContribTermsDevice {
+template <typename Scalar> struct AngleConstraintContribTermsDeviceT {
   nvMolKit::AsyncDeviceVector<int>    idx1;      // Index of atom1 of the angle constraint
   nvMolKit::AsyncDeviceVector<int>    idx2;      // Index of atom2 of the angle constraint
   nvMolKit::AsyncDeviceVector<int>    idx3;      // Index of atom3 of the angle constraint
-  nvMolKit::AsyncDeviceVector<double> minAngle;  // Lower bound of the flat bottom potential
-  nvMolKit::AsyncDeviceVector<double> maxAngle;  // Upper bound of the flat bottom potential;
+  nvMolKit::AsyncDeviceVector<Scalar> minAngle;  // Lower bound of the flat bottom potential
+  nvMolKit::AsyncDeviceVector<Scalar> maxAngle;  // Upper bound of the flat bottom potential;
 };
 
-struct EnergyForceContribsDevice {
-  DistViolationContribTermsDevice   distTerms;
-  ChiralViolationContribTermsDevice chiralTerms;
-  FourthDimContribTermsDevice       fourthTerms;
+template <typename Scalar> struct EnergyForceContribsDeviceT {
+  DistViolationContribTermsDeviceT<Scalar>   distTerms;
+  ChiralViolationContribTermsDeviceT<Scalar> chiralTerms;
+  FourthDimContribTermsDevice                fourthTerms;
 };
 
-struct Energy3DForceContribsDevice {
+template <typename Scalar> struct Energy3DForceContribsDeviceT {
   // Experimental torsion terms (from addExperimentalTorsionTerms)
-  TorsionAngleContribTermsDevice experimentalTorsionTerms;
+  TorsionAngleContribTermsDeviceT<Scalar> experimentalTorsionTerms;
 
   // Improper torsion terms (from addImproperTorsionTerms)
-  InversionContribTermsDevice improperTorsionTerms;
+  InversionContribTermsDeviceT<Scalar> improperTorsionTerms;
 
   // 1-2 distance terms (from add12Terms)
-  DistanceConstraintContribTermsDevice dist12Terms;
+  DistanceConstraintContribTermsDeviceT<Scalar> dist12Terms;
 
   // 1-3 distance terms (from add13Terms)
-  DistanceConstraintContribTermsDevice dist13Terms;
+  DistanceConstraintContribTermsDeviceT<Scalar> dist13Terms;
 
   // 1-3 angle terms (from add13Terms)
-  AngleConstraintContribTermsDevice angle13Terms;
+  AngleConstraintContribTermsDeviceT<Scalar> angle13Terms;
 
   // Long range distance terms (from addLongRangeDistanceConstraints)
-  DistanceConstraintContribTermsDevice longRangeDistTerms;
+  DistanceConstraintContribTermsDeviceT<Scalar> longRangeDistTerms;
 };
+
+using EnergyForceContribsDevice         = EnergyForceContribsDeviceT<double>;
+using Energy3DForceContribsDevice       = Energy3DForceContribsDeviceT<double>;
 
 //! See BatchedIndices for more information on each field.
 struct BatchedIndicesDevice {
@@ -306,32 +309,35 @@ struct BatchedIndices3DDevice {
 //!   a multiple of the block size, there will be some zero elements. This is fine and expected.
 //!   Finally, on reduction, each block does a local summation, then atomically adds to the output energy for the
 //!   molecule, using the energyBufferBlockIdxToBatchIdx to map the block to the molecule output index.
-struct BatchedMolecularDeviceBuffers {
-  EnergyForceContribsDevice           contribs;
+template <typename ParameterScalar> struct BatchedMolecularDeviceBuffersT {
+  EnergyForceContribsDeviceT<ParameterScalar> contribs;
   //! Size n_molecules
-  BatchedIndicesDevice                indices;
+  BatchedIndicesDevice                        indices;
   //! Size total num positions of all molecules
-  nvMolKit::AsyncDeviceVector<double> grad;
+  nvMolKit::AsyncDeviceVector<double>         grad;
   //! Variable size - max terms in each molecule concatenated.
   //! Each molecule has an energy buffer to add to and reduce to energyOuts.
-  nvMolKit::AsyncDeviceVector<double> energyBuffer;
+  nvMolKit::AsyncDeviceVector<double>         energyBuffer;
   //! Size n_molecules
-  nvMolKit::AsyncDeviceVector<double> energyOuts;
+  nvMolKit::AsyncDeviceVector<double>         energyOuts;
   //! Dimension of all molecules in the batch (3 or 4)
-  int                                 dimension = 3;
+  int                                         dimension = 3;
 };
 
-struct BatchedMolecular3DDeviceBuffers {
-  Energy3DForceContribsDevice         contribs;
-  BatchedIndices3DDevice              indices;
+template <typename ParameterScalar> struct BatchedMolecular3DDeviceBuffersT {
+  Energy3DForceContribsDeviceT<ParameterScalar> contribs;
+  BatchedIndices3DDevice                        indices;
   //! Size total num positions of all molecules
-  nvMolKit::AsyncDeviceVector<double> grad;
+  nvMolKit::AsyncDeviceVector<double>           grad;
   //! Variable size - max terms in each molecule concatenated.
   //! Each molecule has an energy buffer to add to and reduce to energyOuts.
-  nvMolKit::AsyncDeviceVector<double> energyBuffer;
+  nvMolKit::AsyncDeviceVector<double>           energyBuffer;
   //! Size n_molecules
-  nvMolKit::AsyncDeviceVector<double> energyOuts;
+  nvMolKit::AsyncDeviceVector<double>           energyOuts;
 };
+
+using BatchedMolecularDeviceBuffers         = BatchedMolecularDeviceBuffersT<double>;
+using BatchedMolecular3DDeviceBuffers       = BatchedMolecular3DDeviceBuffersT<double>;
 
 //! Set all DeviceVector streams for the batched molecular device buffers.
 void setStreams(BatchedMolecularDeviceBuffers& devBuffers, cudaStream_t stream);
@@ -433,7 +439,7 @@ void setupDeviceBuffers3D(BatchedMolecularSystem3DHost&    molSystemHost,
                           const int                        numMols);
 
 //! Create pointer struct from device buffers for use in per-molecule kernels (4D DG)
-EnergyForceContribsDevicePtr toEnergyForceContribsDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice);
+EnergyForceContribsDevicePtr       toEnergyForceContribsDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice);
 
 //! Create pointer struct from device buffers for use in per-molecule kernels (4D DG)
 BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice,

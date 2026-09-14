@@ -16,7 +16,7 @@
 #include <cub/cub.cuh>
 
 #include "src/forcefields/dist_geom_kernels.h"
-#include "src/forcefields/dist_geom_kernels_device.cuh"
+#include "src/forcefields/dist_geom_kernels_device_dispatch.cuh"
 #include "src/forcefields/kernel_utils.cuh"
 
 using namespace nvMolKit::FFKernelUtils;
@@ -1048,13 +1048,34 @@ cudaError_t launchReduceEnergiesKernel(const int      numBlocks,
 constexpr int blockSizePerMol = 128;
 
 template <int dimension>
-__global__ void combinedEnergiesKernel(const EnergyForceContribsDevicePtr* terms,
-                                       const BatchedIndicesDevicePtr*      systemIndices,
-                                       const double*                       coords,
-                                       double*                             energies,
-                                       const double                        chiralWeight,
-                                       const double                        fourthDimWeight,
-                                       const uint8_t*                      activeThisStage) {
+__device__ double molEnergyDGDispatch(const EnergyForceContribsDevicePtr& terms,
+                                      const BatchedIndicesDevicePtr&      indices,
+                                      const double*                       coords,
+                                      int                                 molIdx,
+                                      double                              cw,
+                                      double                              fw,
+                                      int                                 tid) {
+  return fp64::molEnergyDG<dimension>(terms, indices, coords, molIdx, cw, fw, tid);
+}
+template <int dimension>
+__device__ void molGradDGDispatch(const EnergyForceContribsDevicePtr& terms,
+                                  const BatchedIndicesDevicePtr&      indices,
+                                  const double*                       coords,
+                                  double*                             grad,
+                                  int                                 molIdx,
+                                  double                              cw,
+                                  double                              fw,
+                                  int                                 tid) {
+  fp64::molGradDG<dimension>(terms, indices, coords, grad, molIdx, cw, fw, tid);
+}
+template <int dimension, typename real, typename reduceT, typename Terms>
+__global__ void combinedEnergiesKernel(const Terms*                   terms,
+                                       const BatchedIndicesDevicePtr* systemIndices,
+                                       const real*                    coords,
+                                       double*                        energies,
+                                       const real                     chiralWeight,
+                                       const real                     fourthDimWeight,
+                                       const uint8_t*                 activeThisStage) {
   const int molIdx = blockIdx.x;
   const int tid    = threadIdx.x;
 
@@ -1065,28 +1086,28 @@ __global__ void combinedEnergiesKernel(const EnergyForceContribsDevicePtr* terms
     return;
   }
 
-  using BlockReduce = cub::BlockReduce<double, blockSizePerMol>;
+  using BlockReduce = cub::BlockReduce<reduceT, blockSizePerMol>;
   __shared__ typename BlockReduce::TempStorage tempStorage;
 
-  const int     atomStart = systemIndices->atomStarts[molIdx];
-  const double* molCoords = coords + atomStart * dimension;
-  const double  threadEnergy =
-    molEnergyDG<dimension>(*terms, *systemIndices, molCoords, molIdx, chiralWeight, fourthDimWeight, tid);
-  const double blockEnergy = BlockReduce(tempStorage).Sum(threadEnergy);
+  const int   atomStart = systemIndices->atomStarts[molIdx];
+  const real* molCoords = coords + atomStart * dimension;
+  const real  threadEnergy =
+    molEnergyDGDispatch<dimension>(*terms, *systemIndices, molCoords, molIdx, chiralWeight, fourthDimWeight, tid);
+  const reduceT blockEnergy = BlockReduce(tempStorage).Sum(static_cast<reduceT>(threadEnergy));
 
   if (tid == 0) {
-    energies[molIdx] = blockEnergy;
+    energies[molIdx] = static_cast<double>(blockEnergy);
   }
 }
 
-template <int dimension>
-__global__ void combinedGradKernel(const EnergyForceContribsDevicePtr* terms,
-                                   const BatchedIndicesDevicePtr*      systemIndices,
-                                   const double*                       coords,
-                                   double*                             grad,
-                                   const double                        chiralWeight,
-                                   const double                        fourthDimWeight,
-                                   const uint8_t*                      activeThisStage) {
+template <int dimension, typename real, typename Terms>
+__global__ void combinedGradKernel(const Terms*                   terms,
+                                   const BatchedIndicesDevicePtr* systemIndices,
+                                   const real*                    coords,
+                                   real*                          grad,
+                                   const real                     chiralWeight,
+                                   const real                     fourthDimWeight,
+                                   const uint8_t*                 activeThisStage) {
   const int molIdx = blockIdx.x;
   const int tid    = threadIdx.x;
 
@@ -1098,27 +1119,100 @@ __global__ void combinedGradKernel(const EnergyForceContribsDevicePtr* terms,
   const int atomEnd   = systemIndices->atomStarts[molIdx + 1];
   const int numAtoms  = atomEnd - atomStart;
 
-  constexpr int     maxAtomSize = 256;
-  __shared__ double accumGrad[maxAtomSize * 4];  // Support up to 4D
+  constexpr int   maxAtomSize = 256;
+  __shared__ real accumGrad[maxAtomSize * 4];  // Support up to 4D
 
   const bool useSharedMem = numAtoms * dimension <= maxAtomSize * 4;
-  double*    molGradBase  = useSharedMem ? accumGrad : grad + atomStart * dimension;
+  real*      molGradBase  = useSharedMem ? accumGrad : grad + atomStart * dimension;
 
   for (int i = tid; i < numAtoms * dimension; i += blockSizePerMol) {
-    molGradBase[i] = 0.0;
+    molGradBase[i] = real{0};
   }
   __syncthreads();
 
-  const double* molCoords = coords + atomStart * dimension;
-  molGradDG<dimension>(*terms, *systemIndices, molCoords, molGradBase, molIdx, chiralWeight, fourthDimWeight, tid);
+  const real* molCoords = coords + atomStart * dimension;
+  molGradDGDispatch<dimension>(*terms,
+                               *systemIndices,
+                               molCoords,
+                               molGradBase,
+                               molIdx,
+                               chiralWeight,
+                               fourthDimWeight,
+                               tid);
   __syncthreads();
 
   if (useSharedMem) {
-    double* globalGrad = grad + (atomStart * dimension);
+    real* globalGrad = grad + (atomStart * dimension);
     for (int i = tid; i < numAtoms * dimension; i += blockSizePerMol) {
       globalGrad[i] = molGradBase[i];
     }
   }
+}
+
+template <typename real, typename reduceT, typename Terms>
+cudaError_t launchBlockPerMolEnergyKernelImpl(int                            numMols,
+                                              const Terms&                   terms,
+                                              const BatchedIndicesDevicePtr& systemIndices,
+                                              const real*                    coords,
+                                              double*                        energies,
+                                              const int                      dimension,
+                                              const real                     chiralWeight,
+                                              const real                     fourthDimWeight,
+                                              const uint8_t*                 activeThisStage,
+                                              cudaStream_t                   stream) {
+  const AsyncDevicePtr<Terms>                   devTerms(terms, stream);
+  const AsyncDevicePtr<BatchedIndicesDevicePtr> devSysIdx(systemIndices, stream);
+  if (dimension == 3) {
+    combinedEnergiesKernel<3, real, reduceT><<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(),
+                                                                                      devSysIdx.data(),
+                                                                                      coords,
+                                                                                      energies,
+                                                                                      chiralWeight,
+                                                                                      fourthDimWeight,
+                                                                                      activeThisStage);
+  } else {
+    combinedEnergiesKernel<4, real, reduceT><<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(),
+                                                                                      devSysIdx.data(),
+                                                                                      coords,
+                                                                                      energies,
+                                                                                      chiralWeight,
+                                                                                      fourthDimWeight,
+                                                                                      activeThisStage);
+  }
+  return cudaGetLastError();
+}
+
+template <typename real, typename Terms>
+cudaError_t launchBlockPerMolGradKernelImpl(int                            numMols,
+                                            const Terms&                   terms,
+                                            const BatchedIndicesDevicePtr& systemIndices,
+                                            const real*                    coords,
+                                            real*                          grad,
+                                            const int                      dimension,
+                                            const real                     chiralWeight,
+                                            const real                     fourthDimWeight,
+                                            const uint8_t*                 activeThisStage,
+                                            cudaStream_t                   stream) {
+  const AsyncDevicePtr<Terms>                   devTerms(terms, stream);
+  const AsyncDevicePtr<BatchedIndicesDevicePtr> devSysIdx(systemIndices, stream);
+  if (dimension == 3) {
+    combinedGradKernel<3, real><<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(),
+                                                                         devSysIdx.data(),
+                                                                         coords,
+                                                                         grad,
+                                                                         chiralWeight,
+                                                                         fourthDimWeight,
+                                                                         activeThisStage);
+  } else {
+    combinedGradKernel<4, real><<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(),
+                                                                         devSysIdx.data(),
+                                                                         coords,
+                                                                         grad,
+                                                                         chiralWeight,
+                                                                         fourthDimWeight,
+                                                                         activeThisStage);
+  }
+  return cudaGetLastError();
 }
 
 cudaError_t launchBlockPerMolEnergyKernel(int                                 numMols,
@@ -1131,26 +1225,16 @@ cudaError_t launchBlockPerMolEnergyKernel(int                                 nu
                                           const double                        fourthDimWeight,
                                           const uint8_t*                      activeThisStage,
                                           cudaStream_t                        stream) {
-  const AsyncDevicePtr<EnergyForceContribsDevicePtr> devTerms(terms, stream);
-  const AsyncDevicePtr<BatchedIndicesDevicePtr>      devSysIdx(systemIndices, stream);
-  if (dimension == 3) {
-    combinedEnergiesKernel<3><<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(),
-                                                                       devSysIdx.data(),
-                                                                       coords,
-                                                                       energies,
-                                                                       chiralWeight,
-                                                                       fourthDimWeight,
-                                                                       activeThisStage);
-  } else {
-    combinedEnergiesKernel<4><<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(),
-                                                                       devSysIdx.data(),
-                                                                       coords,
-                                                                       energies,
-                                                                       chiralWeight,
-                                                                       fourthDimWeight,
-                                                                       activeThisStage);
-  }
-  return cudaGetLastError();
+  return launchBlockPerMolEnergyKernelImpl<double, double>(numMols,
+                                                           terms,
+                                                           systemIndices,
+                                                           coords,
+                                                           energies,
+                                                           dimension,
+                                                           chiralWeight,
+                                                           fourthDimWeight,
+                                                           activeThisStage,
+                                                           stream);
 }
 
 cudaError_t launchBlockPerMolGradKernel(int                                 numMols,
@@ -1163,34 +1247,40 @@ cudaError_t launchBlockPerMolGradKernel(int                                 numM
                                         const double                        fourthDimWeight,
                                         const uint8_t*                      activeThisStage,
                                         cudaStream_t                        stream) {
-  const AsyncDevicePtr<EnergyForceContribsDevicePtr> devTerms(terms, stream);
-  const AsyncDevicePtr<BatchedIndicesDevicePtr>      devSysIdx(systemIndices, stream);
-  if (dimension == 3) {
-    combinedGradKernel<3><<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(),
-                                                                   devSysIdx.data(),
-                                                                   coords,
-                                                                   grad,
-                                                                   chiralWeight,
-                                                                   fourthDimWeight,
-                                                                   activeThisStage);
-  } else {
-    combinedGradKernel<4><<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(),
-                                                                   devSysIdx.data(),
-                                                                   coords,
-                                                                   grad,
-                                                                   chiralWeight,
-                                                                   fourthDimWeight,
-                                                                   activeThisStage);
-  }
-  return cudaGetLastError();
+  return launchBlockPerMolGradKernelImpl(numMols,
+                                         terms,
+                                         systemIndices,
+                                         coords,
+                                         grad,
+                                         dimension,
+                                         chiralWeight,
+                                         fourthDimWeight,
+                                         activeThisStage,
+                                         stream);
 }
 
 // ETK (3D) combined kernels
-__global__ void combinedEnergiesKernelETK(const Energy3DForceContribsDevicePtr* terms,
-                                          const BatchedIndices3DDevicePtr*      systemIndices,
-                                          const double*                         coords,
-                                          double*                               energies,
-                                          const uint8_t*                        activeThisStage) {
+__device__ double molEnergyETKDispatch(const Energy3DForceContribsDevicePtr& terms,
+                                       const BatchedIndices3DDevicePtr&      indices,
+                                       const double*                         coords,
+                                       int                                   molIdx,
+                                       int                                   tid) {
+  return fp64::molEnergyETK(terms, indices, coords, molIdx, tid);
+}
+__device__ void molGradETKDispatch(const Energy3DForceContribsDevicePtr& terms,
+                                   const BatchedIndices3DDevicePtr&      indices,
+                                   const double*                         coords,
+                                   double*                               grad,
+                                   int                                   molIdx,
+                                   int                                   tid) {
+  fp64::molGradETK(terms, indices, coords, grad, molIdx, tid);
+}
+template <typename real, typename reduceT, typename Terms>
+__global__ void combinedEnergiesKernelETK(const Terms*                     terms,
+                                          const BatchedIndices3DDevicePtr* systemIndices,
+                                          const real*                      coords,
+                                          double*                          energies,
+                                          const uint8_t*                   activeThisStage) {
   const int molIdx = blockIdx.x;
   const int tid    = threadIdx.x;
 
@@ -1201,17 +1291,68 @@ __global__ void combinedEnergiesKernelETK(const Energy3DForceContribsDevicePtr* 
     return;
   }
 
-  using BlockReduce = cub::BlockReduce<double, blockSizePerMol>;
+  using BlockReduce = cub::BlockReduce<reduceT, blockSizePerMol>;
   __shared__ typename BlockReduce::TempStorage tempStorage;
 
   const int     atomStart    = systemIndices->atomStarts[molIdx];
-  const double* molCoords    = coords + atomStart * 4;  // ETK uses 4D
-  const double  threadEnergy = molEnergyETK(*terms, *systemIndices, molCoords, molIdx, tid);
-  const double  blockEnergy  = BlockReduce(tempStorage).Sum(threadEnergy);
+  const real*   molCoords    = coords + atomStart * 4;  // ETK uses 4D
+  const real    threadEnergy = molEnergyETKDispatch(*terms, *systemIndices, molCoords, molIdx, tid);
+  const reduceT blockEnergy  = BlockReduce(tempStorage).Sum(static_cast<reduceT>(threadEnergy));
 
   if (tid == 0) {
-    energies[molIdx] = blockEnergy;
+    energies[molIdx] = static_cast<double>(blockEnergy);
   }
+}
+
+template <typename real, typename reduceT, typename Terms>
+cudaError_t launchBlockPerMolEnergyKernelETKImpl(int                              numMols,
+                                                 const Terms&                     terms,
+                                                 const BatchedIndices3DDevicePtr& systemIndices,
+                                                 const real*                      coords,
+                                                 double*                          energies,
+                                                 const uint8_t*                   activeThisStage,
+                                                 cudaStream_t                     stream) {
+  const AsyncDevicePtr<Terms>                     devTerms(terms, stream);
+  const AsyncDevicePtr<BatchedIndices3DDevicePtr> devSysIdx(systemIndices, stream);
+  combinedEnergiesKernelETK<real, reduceT>
+    <<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(), devSysIdx.data(), coords, energies, activeThisStage);
+  return cudaGetLastError();
+}
+
+// ETK (3D) combined gradient kernel
+template <typename real, typename Terms>
+__global__ void combinedGradKernelETK(const Terms*                     terms,
+                                      const BatchedIndices3DDevicePtr* systemIndices,
+                                      const real*                      coords,
+                                      real*                            grad,
+                                      const uint8_t*                   activeThisStage) {
+  const int molIdx = blockIdx.x;
+  const int tid    = threadIdx.x;
+
+  if (activeThisStage != nullptr && activeThisStage[molIdx] == 0) {
+    return;
+  }
+
+  const int   atomStart = systemIndices->atomStarts[molIdx];
+  const real* molCoords = coords + atomStart * 4;  // ETK uses 4D
+  real*       molGrad   = grad + atomStart * 4;    // Offset to molecule start for ETK (4D)
+
+  molGradETKDispatch(*terms, *systemIndices, molCoords, molGrad, molIdx, tid);
+}
+
+template <typename real, typename Terms>
+cudaError_t launchBlockPerMolGradKernelETKImpl(int                              numMols,
+                                               const Terms&                     terms,
+                                               const BatchedIndices3DDevicePtr& systemIndices,
+                                               const real*                      coords,
+                                               real*                            grad,
+                                               const uint8_t*                   activeThisStage,
+                                               cudaStream_t                     stream) {
+  const AsyncDevicePtr<Terms>                     devTerms(terms, stream);
+  const AsyncDevicePtr<BatchedIndices3DDevicePtr> devSysIdx(systemIndices, stream);
+  combinedGradKernelETK<real>
+    <<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(), devSysIdx.data(), coords, grad, activeThisStage);
+  return cudaGetLastError();
 }
 
 cudaError_t launchBlockPerMolEnergyKernelETK(int                                   numMols,
@@ -1221,34 +1362,13 @@ cudaError_t launchBlockPerMolEnergyKernelETK(int                                
                                              double*                               energies,
                                              const uint8_t*                        activeThisStage,
                                              cudaStream_t                          stream) {
-  const AsyncDevicePtr<Energy3DForceContribsDevicePtr> devTerms(terms, stream);
-  const AsyncDevicePtr<BatchedIndices3DDevicePtr>      devSysIdx(systemIndices, stream);
-  combinedEnergiesKernelETK<<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(),
-                                                                     devSysIdx.data(),
-                                                                     coords,
-                                                                     energies,
-                                                                     activeThisStage);
-  return cudaGetLastError();
-}
-
-// ETK (3D) combined gradient kernel
-__global__ void combinedGradKernelETK(const Energy3DForceContribsDevicePtr* terms,
-                                      const BatchedIndices3DDevicePtr*      systemIndices,
-                                      const double*                         coords,
-                                      double*                               grad,
-                                      const uint8_t*                        activeThisStage) {
-  const int molIdx = blockIdx.x;
-  const int tid    = threadIdx.x;
-
-  if (activeThisStage != nullptr && activeThisStage[molIdx] == 0) {
-    return;
-  }
-
-  const int     atomStart = systemIndices->atomStarts[molIdx];
-  const double* molCoords = coords + atomStart * 4;  // ETK uses 4D
-  double*       molGrad   = grad + atomStart * 4;    // Offset to molecule start for ETK (4D)
-
-  molGradETK(*terms, *systemIndices, molCoords, molGrad, molIdx, tid);
+  return launchBlockPerMolEnergyKernelETKImpl<double, double>(numMols,
+                                                              terms,
+                                                              systemIndices,
+                                                              coords,
+                                                              energies,
+                                                              activeThisStage,
+                                                              stream);
 }
 
 cudaError_t launchBlockPerMolGradKernelETK(int                                   numMols,
@@ -1258,14 +1378,8 @@ cudaError_t launchBlockPerMolGradKernelETK(int                                  
                                            double*                               grad,
                                            const uint8_t*                        activeThisStage,
                                            cudaStream_t                          stream) {
-  const AsyncDevicePtr<Energy3DForceContribsDevicePtr> devTerms(terms, stream);
-  const AsyncDevicePtr<BatchedIndices3DDevicePtr>      devSysIdx(systemIndices, stream);
-  combinedGradKernelETK<<<numMols, blockSizePerMol, 0, stream>>>(devTerms.data(),
-                                                                 devSysIdx.data(),
-                                                                 coords,
-                                                                 grad,
-                                                                 activeThisStage);
-  return cudaGetLastError();
+  return launchBlockPerMolGradKernelETKImpl(numMols, terms, systemIndices, coords, grad, activeThisStage, stream);
 }
+
 }  // namespace DistGeom
 }  // namespace nvMolKit
