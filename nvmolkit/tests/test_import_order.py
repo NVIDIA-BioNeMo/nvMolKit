@@ -22,17 +22,14 @@ import pytest
 @pytest.mark.parametrize(
     "module_name",
     [
+        "nvmolkit.embedMolecules",
         "nvmolkit.mmffOptimization",
         "nvmolkit.uffOptimization",
+        "nvmolkit.batchedForcefield",
     ],
 )
 def test_module_imports_as_first_nvmolkit_import(module_name):
-    """Importing an optimization module first must not require nvmolkit.types to be imported first.
-
-    The native extensions declare BatchHardwareOptions default arguments whose to-Python converter
-    is registered by nvmolkit._embedMolecules. Each import runs in a fresh interpreter so the
-    converter is not already registered by an earlier import in this test session.
-    """
+    """Use a fresh interpreter to expose native registration-order dependencies."""
     result = subprocess.run(
         [sys.executable, "-c", f"import {module_name}"],
         capture_output=True,
