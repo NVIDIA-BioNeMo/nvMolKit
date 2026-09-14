@@ -20,17 +20,19 @@ random sample drawn (via reservoir sampling for streaming inputs) when the
 source contains more entries than requested.
 """
 
+import csv
 import pickle
 import random
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
 from math import ceil
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterable, Iterator, TypeVar
 
 from rdkit import Chem, RDLogger
 from tqdm.auto import tqdm
 
 _PROCESS_BATCH_SIZE = 1000
+_T = TypeVar("_T")
 
 
 def _apply_batch(function: Callable[[Any], Any], batch: list[Any]) -> list[Any]:
@@ -81,6 +83,22 @@ def _mol_from_binary(binary_mol: bytes) -> Chem.Mol:
 def _buffered_count(max_count: int) -> int:
     """Return a 10% candidate reserve for a positive requested count."""
     return max_count + max(1, ceil(max_count * 0.1)) if max_count > 0 else 0
+
+
+def _reservoir_sample(values: Iterable[_T], max_count: int, rng: random.Random) -> list[_T]:
+    """Return a uniform reservoir sample, or all values when uncapped."""
+    if max_count <= 0:
+        return list(values)
+
+    reservoir: list[_T] = []
+    for index, value in enumerate(values):
+        if index < max_count:
+            reservoir.append(value)
+            continue
+        replace_index = rng.randint(0, index)
+        if replace_index < max_count:
+            reservoir[replace_index] = value
+    return reservoir
 
 
 def load_pickle(
@@ -173,18 +191,7 @@ def load_smiles(
     read_limit = _buffered_count(max_count)
     rng = random.Random(seed)
 
-    if read_limit > 0:
-        reservoir: list[str] = []
-        for index, smi in enumerate(_iter_smiles_tokens(filepath, sanitize)):
-            if index < read_limit:
-                reservoir.append(smi)
-            else:
-                replace_index = rng.randint(0, index)
-                if replace_index < read_limit:
-                    reservoir[replace_index] = smi
-        smiles_list = reservoir
-    else:
-        smiles_list = list(_iter_smiles_tokens(filepath, sanitize))
+    smiles_list = _reservoir_sample(_iter_smiles_tokens(filepath, sanitize), read_limit, rng)
 
     mols: list[Chem.Mol] = []
     if smiles_list:
@@ -204,6 +211,70 @@ def load_smiles(
     else:
         rng.shuffle(mols)
 
+    print(f"  Loaded {len(mols)} molecules from {filepath}")
+    return mols
+
+
+def load_csv(
+    filepath: str,
+    smiles_column: str = "smiles",
+    property_columns: list[str] | None = None,
+    max_count: int = 0,
+    sanitize: bool = True,
+    seed: int | None = None,
+    keep_buffer: bool = False,
+) -> list[Chem.Mol]:
+    """Load molecules and selected properties from a scored CSV file.
+
+    Rows are reservoir-sampled before SMILES parsing, and the returned list is
+    always shuffled. Selected CSV values are attached as RDKit string
+    properties after worker-process parsing so priority metadata is preserved.
+    """
+    properties = property_columns or []
+    read_limit = _buffered_count(max_count)
+    rng = random.Random(seed)
+    with open(filepath, "r", newline="") as fh:
+        reader = csv.DictReader(fh)
+        if reader.fieldnames is None:
+            raise ValueError(f"CSV has no header: {filepath}")
+        required = [smiles_column, *properties]
+        missing = [column for column in required if column not in reader.fieldnames]
+        if missing:
+            raise ValueError(f"CSV is missing required columns: {', '.join(missing)}")
+
+        def selected_rows():
+            for row_number, row in enumerate(reader, start=2):
+                missing_values = [column for column in required if row[column] is None]
+                if missing_values:
+                    raise ValueError(
+                        f"CSV row {row_number} is missing required values for: {', '.join(missing_values)}"
+                    )
+                selected = {column: row[column] for column in required}
+                if selected[smiles_column].strip():
+                    yield selected
+
+        reservoir = _reservoir_sample(selected_rows(), read_limit, rng)
+
+    smiles_list = [row[smiles_column] for row in reservoir]
+    parse_func = partial(_parse_smiles, sanitize=sanitize)
+    parsed = _process_map_batches(parse_func, smiles_list, desc="Parsing molecules")
+    mols: list[Chem.Mol] = []
+    parse_failures = 0
+    for mol, row in zip(parsed, reservoir, strict=True):
+        if mol is None:
+            parse_failures += 1
+            continue
+        for column in properties:
+            mol.SetProp(column, row[column])
+        mols.append(mol)
+
+    if not keep_buffer and max_count > 0 and len(mols) > max_count:
+        mols = rng.sample(mols, max_count)
+    else:
+        rng.shuffle(mols)
+
+    if parse_failures > 0:
+        print(f"    ({parse_failures} parse failures)")
     print(f"  Loaded {len(mols)} molecules from {filepath}")
     return mols
 
