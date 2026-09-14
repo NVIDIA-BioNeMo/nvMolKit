@@ -23,6 +23,7 @@
 namespace nvMolKit {
 namespace {
 
+// TODO: Support molecules with more than 64 atoms.
 constexpr int           kMaxAtoms        = 64;
 constexpr int           kSharedStride    = kMaxAtoms + 1;
 constexpr int           kThreads         = 256;
