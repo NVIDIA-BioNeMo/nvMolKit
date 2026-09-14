@@ -43,8 +43,8 @@ constexpr double RAD2DEG             = 180.0 / M_PI;
 }  // namespace fp64
 
 namespace fp32 {
-using EnergyForceContribsDevicePtr   = DistGeom::EnergyForceContribsDevicePtrF32;
-using Energy3DForceContribsDevicePtr = DistGeom::Energy3DForceContribsDevicePtrF32;
+using EnergyForceContribsDevicePtr   = DistGeom::EnergyForceContribsDevicePtrSingle;
+using Energy3DForceContribsDevicePtr = DistGeom::Energy3DForceContribsDevicePtrSingle;
 constexpr float RAD2DEG              = 180.0f / static_cast<float>(M_PI);
 #define DG_REAL       float
 #define DG_PARAM_REAL float

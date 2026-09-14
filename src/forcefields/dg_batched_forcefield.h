@@ -62,7 +62,7 @@ class DGBatchedForcefield final : public BatchedForcefield, public SinglePrecisi
   cudaError_t computeGradients(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
 
  private:
-  std::variant<DistGeom::BatchedMolecularDeviceBuffers, DistGeom::BatchedMolecularDeviceBuffersF32Params> systemDevice_;
+  std::variant<DistGeom::BatchedMolecularDeviceBuffers, DistGeom::BatchedMolecularDeviceBuffersSingle> systemDevice_;
   AsyncDeviceVector<int>              atomStartsDevice_;
   FullForcefieldConversionWorkspace   fullConversion_;
   SingleForcefieldConversionWorkspace singleConversion_;

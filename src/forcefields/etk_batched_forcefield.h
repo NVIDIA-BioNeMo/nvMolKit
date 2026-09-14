@@ -65,13 +65,19 @@ class ETKBatchedForcefield final : public BatchedForcefield, public SinglePrecis
                                   const uint8_t* activeSystemMask = nullptr,
                                   cudaStream_t   stream           = nullptr);
 
-  //! \brief Returns the uploaded ETK contribution buffers for auxiliary kernels.
+  //! \brief Returns the full-precision ETK contribution buffers for auxiliary kernels.
+  //! \pre This force field was constructed with PrecisionMode::FULL.
+  const DistGeom::Energy3DForceContribsDevice& contribs() const {
+    return std::get<DistGeom::BatchedMolecular3DDeviceBuffers>(systemDevice_).contribs;
+  }
+
+  //! \brief Visits uploaded ETK contribution buffers in their native precision.
   template <typename Visitor> decltype(auto) visitContribs(Visitor&& visitor) const {
     return std::visit([&](const auto& buffers) -> decltype(auto) { return visitor(buffers.contribs); }, systemDevice_);
   }
 
  private:
-  std::variant<DistGeom::BatchedMolecular3DDeviceBuffers, DistGeom::BatchedMolecular3DDeviceBuffersF32Params>
+  std::variant<DistGeom::BatchedMolecular3DDeviceBuffers, DistGeom::BatchedMolecular3DDeviceBuffersSingle>
                                       systemDevice_;
   AsyncDeviceVector<int>              atomStartsDevice_;
   FullForcefieldConversionWorkspace   fullConversion_;

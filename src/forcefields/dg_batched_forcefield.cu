@@ -43,7 +43,7 @@ DGBatchedForcefield::DGBatchedForcefield(const DistGeom::BatchedMolecularSystemH
   fullConversion_.setStream(stream);
   singleConversion_.setStream(stream);
   if (singlePrecision_) {
-    auto& buffers = systemDevice_.emplace<DistGeom::BatchedMolecularDeviceBuffersF32Params>();
+    auto& buffers = systemDevice_.emplace<DistGeom::BatchedMolecularDeviceBuffersSingle>();
     DistGeom::setStreams(buffers, stream);
     DistGeom::sendContribsAndIndicesToDevice(molSystemHost, buffers);
     buffers.dimension = molSystemHost.dimension;
@@ -122,18 +122,17 @@ cudaError_t DGBatchedForcefield::computeEnergy(double*        energyOuts,
       return err;
     return computeEnergy(energyOuts, fullConversion_.positions.data(), activeSystemMask, stream);
   }
-  const auto& buffers = std::get<DistGeom::BatchedMolecularDeviceBuffersF32Params>(systemDevice_);
-  return DistGeom::launchBlockPerMolEnergyKernelF32(
-    numMolecules(),
-    DistGeom::toEnergyForceContribsDevicePtr(buffers),
-    DistGeom::toBatchedIndicesDevicePtr(buffers, atomStartsDevice_.data()),
-    positions,
-    energyOuts,
-    dataDim(),
-    static_cast<float>(chiralWeight_),
-    static_cast<float>(fourthDimWeight_),
-    activeSystemMask,
-    stream);
+  const auto& buffers = std::get<DistGeom::BatchedMolecularDeviceBuffersSingle>(systemDevice_);
+  return DistGeom::launchBlockPerMolEnergyKernel(numMolecules(),
+                                                 DistGeom::toEnergyForceContribsDevicePtr(buffers),
+                                                 DistGeom::toBatchedIndicesDevicePtr(buffers, atomStartsDevice_.data()),
+                                                 positions,
+                                                 energyOuts,
+                                                 dataDim(),
+                                                 static_cast<float>(chiralWeight_),
+                                                 static_cast<float>(fourthDimWeight_),
+                                                 activeSystemMask,
+                                                 stream);
 }
 
 cudaError_t DGBatchedForcefield::computeGradients(float*         grad,
@@ -153,18 +152,17 @@ cudaError_t DGBatchedForcefield::computeGradients(float*         grad,
              detail::convertDeviceArray(grad, fullConversion_.gradients.data(), totalPositions(), stream) :
              err;
   }
-  const auto& buffers = std::get<DistGeom::BatchedMolecularDeviceBuffersF32Params>(systemDevice_);
-  return DistGeom::launchBlockPerMolGradKernelF32(
-    numMolecules(),
-    DistGeom::toEnergyForceContribsDevicePtr(buffers),
-    DistGeom::toBatchedIndicesDevicePtr(buffers, atomStartsDevice_.data()),
-    positions,
-    grad,
-    dataDim(),
-    static_cast<float>(chiralWeight_),
-    static_cast<float>(fourthDimWeight_),
-    activeSystemMask,
-    stream);
+  const auto& buffers = std::get<DistGeom::BatchedMolecularDeviceBuffersSingle>(systemDevice_);
+  return DistGeom::launchBlockPerMolGradKernel(numMolecules(),
+                                               DistGeom::toEnergyForceContribsDevicePtr(buffers),
+                                               DistGeom::toBatchedIndicesDevicePtr(buffers, atomStartsDevice_.data()),
+                                               positions,
+                                               grad,
+                                               dataDim(),
+                                               static_cast<float>(chiralWeight_),
+                                               static_cast<float>(fourthDimWeight_),
+                                               activeSystemMask,
+                                               stream);
 }
 
 }  // namespace nvMolKit

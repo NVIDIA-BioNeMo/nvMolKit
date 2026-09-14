@@ -338,8 +338,8 @@ using DistanceConstraintContribTermsDevicePtr = DistanceConstraintContribTermsDe
 using AngleConstraintContribTermsDevicePtr    = AngleConstraintContribTermsDevicePtrT<double>;
 using Energy3DForceContribsDevicePtr          = Energy3DForceContribsDevicePtrT<double>;
 
-using EnergyForceContribsDevicePtrF32   = EnergyForceContribsDevicePtrT<float>;
-using Energy3DForceContribsDevicePtrF32 = Energy3DForceContribsDevicePtrT<float>;
+using EnergyForceContribsDevicePtrSingle   = EnergyForceContribsDevicePtrT<float>;
+using Energy3DForceContribsDevicePtrSingle = Energy3DForceContribsDevicePtrT<float>;
 
 struct BatchedIndices3DDevicePtr {
   const int* atomStarts;
@@ -387,47 +387,47 @@ cudaError_t launchBlockPerMolGradKernelETK(int                                  
                                            double*                               grad,
                                            const uint8_t*                        activeThisStage = nullptr,
                                            cudaStream_t                          stream          = 0);
-cudaError_t launchBlockPerMolEnergyKernelF32(int                                    numMols,
-                                             const EnergyForceContribsDevicePtrF32& terms,
-                                             const BatchedIndicesDevicePtr&         systemIndices,
-                                             const float*                           coords,
-                                             double*                                energies,
-                                             int                                    dimension,
-                                             float                                  chiralWeight,
-                                             float                                  fourthDimWeight,
-                                             const uint8_t*                         activeThisStage = nullptr,
-                                             cudaStream_t                           stream          = 0);
-cudaError_t launchBlockPerMolGradKernelF32(int                                    numMols,
-                                           const EnergyForceContribsDevicePtrF32& terms,
-                                           const BatchedIndicesDevicePtr&         systemIndices,
-                                           const float*                           coords,
-                                           float*                                 grad,
-                                           int                                    dimension,
-                                           float                                  chiralWeight,
-                                           float                                  fourthDimWeight,
-                                           const uint8_t*                         activeThisStage = nullptr,
-                                           cudaStream_t                           stream          = 0);
-cudaError_t launchBlockPerMolEnergyKernelETKF32(int                                      numMols,
-                                                const Energy3DForceContribsDevicePtrF32& terms,
-                                                const BatchedIndices3DDevicePtr&         systemIndices,
-                                                const float*                             coords,
-                                                double*                                  energies,
-                                                const uint8_t*                           activeThisStage = nullptr,
-                                                cudaStream_t                             stream          = 0);
-cudaError_t launchBlockPerMolGradKernelETKF32(int                                      numMols,
-                                              const Energy3DForceContribsDevicePtrF32& terms,
-                                              const BatchedIndices3DDevicePtr&         systemIndices,
-                                              const float*                             coords,
-                                              float*                                   grad,
-                                              const uint8_t*                           activeThisStage = nullptr,
-                                              cudaStream_t                             stream          = 0);
-cudaError_t launchPlanarEnergyKernelETKF32(int                                      numMols,
-                                           const Energy3DForceContribsDevicePtrF32& terms,
-                                           const BatchedIndices3DDevicePtr&         systemIndices,
-                                           const float*                             coords,
-                                           double*                                  energies,
-                                           const uint8_t*                           activeThisStage = nullptr,
-                                           cudaStream_t                             stream          = 0);
+cudaError_t launchBlockPerMolEnergyKernel(int                                       numMols,
+                                          const EnergyForceContribsDevicePtrSingle& terms,
+                                          const BatchedIndicesDevicePtr&            systemIndices,
+                                          const float*                              coords,
+                                          double*                                   energies,
+                                          int                                       dimension,
+                                          float                                     chiralWeight,
+                                          float                                     fourthDimWeight,
+                                          const uint8_t*                            activeThisStage = nullptr,
+                                          cudaStream_t                              stream          = 0);
+cudaError_t launchBlockPerMolGradKernel(int                                       numMols,
+                                        const EnergyForceContribsDevicePtrSingle& terms,
+                                        const BatchedIndicesDevicePtr&            systemIndices,
+                                        const float*                              coords,
+                                        float*                                    grad,
+                                        int                                       dimension,
+                                        float                                     chiralWeight,
+                                        float                                     fourthDimWeight,
+                                        const uint8_t*                            activeThisStage = nullptr,
+                                        cudaStream_t                              stream          = 0);
+cudaError_t launchBlockPerMolEnergyKernelETK(int                                         numMols,
+                                             const Energy3DForceContribsDevicePtrSingle& terms,
+                                             const BatchedIndices3DDevicePtr&            systemIndices,
+                                             const float*                                coords,
+                                             double*                                     energies,
+                                             const uint8_t*                              activeThisStage = nullptr,
+                                             cudaStream_t                                stream          = 0);
+cudaError_t launchBlockPerMolGradKernelETK(int                                         numMols,
+                                           const Energy3DForceContribsDevicePtrSingle& terms,
+                                           const BatchedIndices3DDevicePtr&            systemIndices,
+                                           const float*                                coords,
+                                           float*                                      grad,
+                                           const uint8_t*                              activeThisStage = nullptr,
+                                           cudaStream_t                                stream          = 0);
+cudaError_t launchPlanarEnergyKernelETK(int                                         numMols,
+                                        const Energy3DForceContribsDevicePtrSingle& terms,
+                                        const BatchedIndices3DDevicePtr&            systemIndices,
+                                        const float*                                coords,
+                                        double*                                     energies,
+                                        const uint8_t*                              activeThisStage = nullptr,
+                                        cudaStream_t                                stream          = 0);
 }  // namespace DistGeom
 }  // namespace nvMolKit
 

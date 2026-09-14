@@ -750,29 +750,29 @@ void setStreams3DImpl(BatchedMolecular3DDeviceBuffersT<ParameterScalar>& devBuff
 void setStreams(BatchedMolecularDeviceBuffers& buffers, cudaStream_t stream) {
   setStreamsImpl(buffers, stream);
 }
-void setStreams(BatchedMolecularDeviceBuffersF32Params& buffers, cudaStream_t stream) {
+void setStreams(BatchedMolecularDeviceBuffersSingle& buffers, cudaStream_t stream) {
   setStreamsImpl(buffers, stream);
 }
 void setStreams(BatchedMolecular3DDeviceBuffers& buffers, cudaStream_t stream) {
   setStreams3DImpl(buffers, stream);
 }
-void setStreams(BatchedMolecular3DDeviceBuffersF32Params& buffers, cudaStream_t stream) {
+void setStreams(BatchedMolecular3DDeviceBuffersSingle& buffers, cudaStream_t stream) {
   setStreams3DImpl(buffers, stream);
 }
 
 void sendContribsAndIndicesToDevice(const BatchedMolecularSystemHost& host, BatchedMolecularDeviceBuffers& buffers) {
   sendContribsAndIndicesToDeviceImpl(host, buffers);
 }
-void sendContribsAndIndicesToDevice(const BatchedMolecularSystemHost&       host,
-                                    BatchedMolecularDeviceBuffersF32Params& buffers) {
+void sendContribsAndIndicesToDevice(const BatchedMolecularSystemHost&    host,
+                                    BatchedMolecularDeviceBuffersSingle& buffers) {
   sendContribsAndIndicesToDeviceImpl(host, buffers);
 }
 void sendContribsAndIndicesToDevice3D(const BatchedMolecularSystem3DHost& host,
                                       BatchedMolecular3DDeviceBuffers&    buffers) {
   sendContribsAndIndicesToDevice3DImpl(host, buffers);
 }
-void sendContribsAndIndicesToDevice3D(const BatchedMolecularSystem3DHost&       host,
-                                      BatchedMolecular3DDeviceBuffersF32Params& buffers) {
+void sendContribsAndIndicesToDevice3D(const BatchedMolecularSystem3DHost&    host,
+                                      BatchedMolecular3DDeviceBuffersSingle& buffers) {
   sendContribsAndIndicesToDevice3DImpl(host, buffers);
 }
 
@@ -1561,8 +1561,8 @@ cudaError_t computeGradBlockPerMolETK(BatchedMolecular3DDeviceBuffers&          
 EnergyForceContribsDevicePtr toEnergyForceContribsDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice) {
   return toPointerStruct(molSystemDevice.contribs);
 }
-EnergyForceContribsDevicePtrF32 toEnergyForceContribsDevicePtr(
-  const BatchedMolecularDeviceBuffersF32Params& molSystemDevice) {
+EnergyForceContribsDevicePtrSingle toEnergyForceContribsDevicePtr(
+  const BatchedMolecularDeviceBuffersSingle& molSystemDevice) {
   return toPointerStruct(molSystemDevice.contribs);
 }
 
@@ -1572,8 +1572,8 @@ BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBu
   dst.atomStarts = atomStarts;
   return dst;
 }
-BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBuffersF32Params& molSystemDevice,
-                                                  const int*                                    atomStarts) {
+BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBuffersSingle& molSystemDevice,
+                                                  const int*                                 atomStarts) {
   auto dst       = toPointerStruct(molSystemDevice.indices);
   dst.atomStarts = atomStarts;
   return dst;
@@ -1583,8 +1583,8 @@ Energy3DForceContribsDevicePtr toEnergy3DForceContribsDevicePtr(
   const BatchedMolecular3DDeviceBuffers& molSystemDevice) {
   return toPointerStruct(molSystemDevice.contribs);
 }
-Energy3DForceContribsDevicePtrF32 toEnergy3DForceContribsDevicePtr(
-  const BatchedMolecular3DDeviceBuffersF32Params& molSystemDevice) {
+Energy3DForceContribsDevicePtrSingle toEnergy3DForceContribsDevicePtr(
+  const BatchedMolecular3DDeviceBuffersSingle& molSystemDevice) {
   return toPointerStruct(molSystemDevice.contribs);
 }
 
@@ -1592,8 +1592,8 @@ BatchedIndices3DDevicePtr toBatchedIndices3DDevicePtr(const BatchedMolecular3DDe
                                                       const int*                             atomStarts) {
   return toPointerStruct(molSystemDevice.indices, atomStarts);
 }
-BatchedIndices3DDevicePtr toBatchedIndices3DDevicePtr(const BatchedMolecular3DDeviceBuffersF32Params& molSystemDevice,
-                                                      const int*                                      atomStarts) {
+BatchedIndices3DDevicePtr toBatchedIndices3DDevicePtr(const BatchedMolecular3DDeviceBuffersSingle& molSystemDevice,
+                                                      const int*                                   atomStarts) {
   return toPointerStruct(molSystemDevice.indices, atomStarts);
 }
 
