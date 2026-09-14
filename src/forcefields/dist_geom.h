@@ -262,8 +262,10 @@ template <typename Scalar> struct Energy3DForceContribsDeviceT {
   DistanceConstraintContribTermsDeviceT<Scalar> longRangeDistTerms;
 };
 
-using EnergyForceContribsDevice   = EnergyForceContribsDeviceT<double>;
-using Energy3DForceContribsDevice = Energy3DForceContribsDeviceT<double>;
+using EnergyForceContribsDevice         = EnergyForceContribsDeviceT<double>;
+using EnergyForceContribsDeviceSingle   = EnergyForceContribsDeviceT<float>;
+using Energy3DForceContribsDevice       = Energy3DForceContribsDeviceT<double>;
+using Energy3DForceContribsDeviceSingle = Energy3DForceContribsDeviceT<float>;
 
 //! See BatchedIndices for more information on each field.
 struct BatchedIndicesDevice {
@@ -336,13 +338,17 @@ template <typename ParameterScalar> struct BatchedMolecular3DDeviceBuffersT {
   nvMolKit::AsyncDeviceVector<double>           energyOuts;
 };
 
-using BatchedMolecularDeviceBuffers   = BatchedMolecularDeviceBuffersT<double>;
-using BatchedMolecular3DDeviceBuffers = BatchedMolecular3DDeviceBuffersT<double>;
+using BatchedMolecularDeviceBuffers         = BatchedMolecularDeviceBuffersT<double>;
+using BatchedMolecularDeviceBuffersSingle   = BatchedMolecularDeviceBuffersT<float>;
+using BatchedMolecular3DDeviceBuffers       = BatchedMolecular3DDeviceBuffersT<double>;
+using BatchedMolecular3DDeviceBuffersSingle = BatchedMolecular3DDeviceBuffersT<float>;
 
 //! Set all DeviceVector streams for the batched molecular device buffers.
 void setStreams(BatchedMolecularDeviceBuffers& devBuffers, cudaStream_t stream);
+void setStreams(BatchedMolecularDeviceBuffersSingle& devBuffers, cudaStream_t stream);
 //! Set all DeviceVector streams for the batched 3D molecular device buffers.
 void setStreams(BatchedMolecular3DDeviceBuffers& devBuffers, cudaStream_t stream);
+void setStreams(BatchedMolecular3DDeviceBuffersSingle& devBuffers, cudaStream_t stream);
 
 //! Add a molecule to the context.
 void addMoleculeToContext(int                  dimension,
@@ -415,10 +421,14 @@ void addMoleculeToBatch3D(const Energy3DForceContribsHost& contribs,
 //! Send the batched molecular system to the device.
 void sendContribsAndIndicesToDevice(const BatchedMolecularSystemHost& molSystemHost,
                                     BatchedMolecularDeviceBuffers&    molSystemDevice);
+void sendContribsAndIndicesToDevice(const BatchedMolecularSystemHost&    molSystemHost,
+                                    BatchedMolecularDeviceBuffersSingle& molSystemDevice);
 
 //! Send the batched molecular system to the device.
 void sendContribsAndIndicesToDevice3D(const BatchedMolecularSystem3DHost& molSystemHost,
                                       BatchedMolecular3DDeviceBuffers&    molSystemDevice);
+void sendContribsAndIndicesToDevice3D(const BatchedMolecularSystem3DHost&    molSystemHost,
+                                      BatchedMolecular3DDeviceBuffersSingle& molSystemDevice);
 
 //! Send the context to the device.
 void sendContextToDevice(const std::vector<double>&           ctxPositionsHost,
@@ -439,18 +449,26 @@ void setupDeviceBuffers3D(BatchedMolecularSystem3DHost&    molSystemHost,
                           const int                        numMols);
 
 //! Create pointer struct from device buffers for use in per-molecule kernels (4D DG)
-EnergyForceContribsDevicePtr toEnergyForceContribsDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice);
+EnergyForceContribsDevicePtr       toEnergyForceContribsDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice);
+EnergyForceContribsDevicePtrSingle toEnergyForceContribsDevicePtr(
+  const BatchedMolecularDeviceBuffersSingle& molSystemDevice);
 
 //! Create pointer struct from device buffers for use in per-molecule kernels (4D DG)
 BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice,
                                                   const int*                           atomStarts);
+BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBuffersSingle& molSystemDevice,
+                                                  const int*                                 atomStarts);
 
 //! Create pointer struct from device buffers for use in per-molecule kernels (3D ETK)
 Energy3DForceContribsDevicePtr toEnergy3DForceContribsDevicePtr(const BatchedMolecular3DDeviceBuffers& molSystemDevice);
+Energy3DForceContribsDevicePtrSingle toEnergy3DForceContribsDevicePtr(
+  const BatchedMolecular3DDeviceBuffersSingle& molSystemDevice);
 
 //! Create pointer struct from device buffers for use in per-molecule kernels (3D ETK)
 BatchedIndices3DDevicePtr toBatchedIndices3DDevicePtr(const BatchedMolecular3DDeviceBuffers& molSystemDevice,
                                                       const int*                             atomStarts);
+BatchedIndices3DDevicePtr toBatchedIndices3DDevicePtr(const BatchedMolecular3DDeviceBuffersSingle& molSystemDevice,
+                                                      const int*                                   atomStarts);
 
 //! Allocate intermediate buffers on the device for the batched molecular system.
 //! These include the gradients, energy buffer, and energy outs.

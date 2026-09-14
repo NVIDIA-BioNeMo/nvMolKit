@@ -29,12 +29,13 @@ constexpr int dim = 4;
 namespace {
 
 // TODO: Only run on active systems.
+template <typename Scalar>
 __global__ void updateReferencePositionsKernel(const int      numTerms,
                                                const double*  refPos,
                                                const int*     idx1,
                                                const int*     idx2,
-                                               double*        lowerBound,
-                                               double*        upperBound,
+                                               Scalar*        lowerBound,
+                                               Scalar*        upperBound,
                                                const uint8_t* isImproperConstrainedTerm = nullptr) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < numTerms) {
@@ -58,8 +59,8 @@ __global__ void updateReferencePositionsKernel(const int      numTerms,
 
     const double dist = sqrt((p1x - p2x) * (p1x - p2x) + (p1y - p2y) * (p1y - p2y) + (p1z - p2z) * (p1z - p2z));
 
-    lowerBound[idx] = dist - boundDelta;
-    upperBound[idx] = dist + boundDelta;
+    lowerBound[idx] = static_cast<Scalar>(dist - boundDelta);
+    upperBound[idx] = static_cast<Scalar>(dist + boundDelta);
   }
 }
 
@@ -173,8 +174,9 @@ ETKMinimizationStage::ETKMinimizationStage(
   }
 }
 
-void ETKMinimizationStage::setReferenceValues(const ETKDGContext&                          ctx,
-                                              const DistGeom::Energy3DForceContribsDevice& contribs) {
+template <typename Scalar>
+void ETKMinimizationStage::setReferenceValues(const ETKDGContext&                                   ctx,
+                                              const DistGeom::Energy3DForceContribsDeviceT<Scalar>& contribs) {
   const int numTerms12 = contribs.dist12Terms.idx1.size();
   const int numTerms13 = contribs.dist13Terms.idx1.size();
 
@@ -212,8 +214,13 @@ void ETKMinimizationStage::execute(ETKDGContext& ctx) {
   const int*                                numImpropers   = nullptr;
 
   if (effectiveBackend == BfgsBackend::BATCHED) {
-    forcefield.emplace(molSystemHost, ctx.systemHost.atomStarts, embedParam_.useBasicKnowledge, metadata_, stream_);
-    setReferenceValues(ctx, forcefield->contribs());
+    forcefield.emplace(molSystemHost,
+                       ctx.systemHost.atomStarts,
+                       embedParam_.useBasicKnowledge,
+                       metadata_,
+                       stream_,
+                       minimizer_.precision());
+    forcefield->visitContribs([&](const auto& contribs) { setReferenceValues(ctx, contribs); });
     grad_.resize(ctx.systemHost.positions.size());
     grad_.zero();
     energyOuts_.resize(ctx.systemHost.atomStarts.size() - 1);
@@ -226,7 +233,8 @@ void ETKMinimizationStage::execute(ETKDGContext& ctx) {
                         energyOuts_,
                         ctx.activeThisStage.data());
     planarEnergies = &energyOuts_;
-    numImpropers   = forcefield->contribs().improperTorsionTerms.numImpropers.data();
+    forcefield->visitContribs(
+      [&](const auto& contribs) { numImpropers = contribs.improperTorsionTerms.numImpropers.data(); });
     if (embedParam_.useBasicKnowledge) {
       planarEnergies->zero();
       forcefield->computePlanarEnergy(planarEnergies->data(),

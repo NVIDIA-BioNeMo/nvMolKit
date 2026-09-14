@@ -45,7 +45,8 @@ class ETKMinimizationStage final : public ETKDGStage {
 
  private:
   //! Re-sets the bounds for distance constraints based on the current positions.
-  void setReferenceValues(const ETKDGContext& ctx, const DistGeom::Energy3DForceContribsDevice& contribs);
+  template <typename Scalar>
+  void setReferenceValues(const ETKDGContext& ctx, const DistGeom::Energy3DForceContribsDeviceT<Scalar>& contribs);
 
   BatchedForcefieldMetadata                        metadata_;
   nvMolKit::DistGeom::BatchedMolecularSystem3DHost molSystemHost;

@@ -335,7 +335,8 @@ void runTestInBatch(const std::vector<std::unique_ptr<RDKit::ROMol>>& mols,
                     double                                            energyTolerance   = 1e-4,
                     double                                            gradTolerance     = 1e-4,
                     const uint8_t*                                    h_activeThisStage = nullptr,
-                    const uint8_t*                                    d_activeThisStage = nullptr) {
+                    const uint8_t*                                    d_activeThisStage = nullptr,
+                    nvMolKit::PrecisionMode                           precision = nvMolKit::PrecisionMode::FULL) {
   const int                        numMols = mols.size();
   std::vector<ValidationFailures>  failures;
   std::vector<ValidationFailures>  gradFailures;
@@ -378,7 +379,7 @@ void runTestInBatch(const std::vector<std::unique_ptr<RDKit::ROMol>>& mols,
   }
 
   sendContextToDevice(positionsHost, positionsDevice, atomStartsHost, atomStartsDevice);
-  nvMolKit::DGBatchedForcefield forcefield(systemHost, atomStartsHost, 1.0, 0.1);
+  nvMolKit::DGBatchedForcefield forcefield(systemHost, atomStartsHost, 1.0, 0.1, {}, nullptr, precision);
   AsyncDeviceVector<double>     energyOutsDevice;
   AsyncDeviceVector<double>     gradDevice;
   energyOutsDevice.resize(atomStartsHost.size() - 1);
@@ -594,4 +595,10 @@ TEST_P(ETKDGFFGpuBatchEdgeCases, BatchTestWithActiveStage) {
   d_activeThisStage.setFromVector(activeStages_);
 
   runTestInBatch(mols_, ETKDGOption::ETKDGv3, 1e-6, 1e-4, activeStages_.data(), d_activeThisStage.data());
+}
+
+TEST(DGPrecisionModes, SinglePrecisionProducesFiniteAccurateEnergyAndGradients) {
+  std::vector<std::unique_ptr<RDKit::ROMol>> mols;
+  getMols(getTestDataFolderPath() + "/MMFF94_dative.sdf", mols, 2);
+  runTestInBatch(mols, ETKDGOption::ETKDGv3, 2e-3, 2e-3, nullptr, nullptr, {nvMolKit::PrecisionMode::SINGLE});
 }

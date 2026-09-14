@@ -97,7 +97,8 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
                                                 const BatchHardwareOptions&                 hardwareOptions,
                                                 BfgsBackend                                 backend,
                                                 CoordinateOutput                            output,
-                                                int                                         targetGpu) {
+                                                int                                         targetGpu,
+                                                PrecisionMode                               precision) {
   const ScopedNvtxRange fullRange("EmbedMolecules");
   const bool            deviceOutput = output == CoordinateOutput::DEVICE;
 
@@ -277,7 +278,8 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
                                                             DebugLevel::NONE,
                                                             true,  // scaleGrads
                                                             streamPtr,
-                                                            backend);
+                                                            backend,
+                                                            precision);
       std::unordered_map<const RDKit::ROMol*, nvMolKit::DistGeom::EnergyForceContribsHost>   dgCache;
       std::unordered_map<const RDKit::ROMol*, nvMolKit::DistGeom::Energy3DForceContribsHost> etkCache;
       // Pinned reusable buffers for common copies.

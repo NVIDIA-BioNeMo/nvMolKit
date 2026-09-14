@@ -296,6 +296,57 @@ TEST_P(ETKStageSingleMolTestFixture, MinimizeCompare) {
   EXPECT_THAT(refEnergies, ::testing::Pointwise(testing::Ge(), gpuEnergies));
 }
 
+TEST(ETKPrecisionModes, SupportedPrecisionsMinimizeBatchedSmallMolecules) {
+  const std::string                          path       = getTestDataFolderPath() + "/rdkit_smallmol_1.mol2";
+  const std::vector<nvMolKit::PrecisionMode> precisions = {
+    {nvMolKit::PrecisionMode::FULL},
+    {nvMolKit::PrecisionMode::SINGLE},
+  };
+  for (size_t precisionIdx = 0; precisionIdx < precisions.size(); ++precisionIdx) {
+    SCOPED_TRACE("precision case " + std::to_string(precisionIdx));
+    std::vector<std::unique_ptr<RDKit::RWMol>> ownedMols;
+    std::vector<RDKit::ROMol*>                 mols;
+    for (int molIdx = 0; molIdx < 8; ++molIdx) {
+      auto mol = std::unique_ptr<RDKit::RWMol>(RDKit::MolFileToMol(path, false));
+      ASSERT_NE(mol, nullptr);
+      RDKit::MolOps::sanitizeMol(*mol);
+      perturbConformer(mol->getConformer(), 0.5, molIdx);
+      mols.push_back(mol.get());
+      ownedMols.push_back(std::move(mol));
+    }
+    ETKDGContext                             context;
+    std::vector<nvMolKit::detail::EmbedArgs> eargs;
+    auto                                     params = getETKDGOption(ETKDGOption::ETKDGv3);
+    params.useRandomCoords                          = true;
+    initTestComponentsCommon(mols, context, eargs, params);
+    const std::vector<const RDKit::ROMol*> constMols(mols.begin(), mols.end());
+    const auto initialEnergy = getGPUEnergy(constMols, context.systemDevice.positions, eargs, params.useBasicKnowledge);
+    nvMolKit::BfgsBatchMinimizer             minimizer(4,
+                                           nvMolKit::DebugLevel::NONE,
+                                           true,
+                                           nullptr,
+                                           nvMolKit::BfgsBackend::BATCHED,
+                                           precisions[precisionIdx]);
+    std::vector<std::unique_ptr<ETKDGStage>> stages;
+    stages.push_back(
+      std::make_unique<nvMolKit::detail::ETKMinimizationStage>(constMols, eargs, params, context, minimizer, nullptr));
+    nvMolKit::detail::ETKDGDriver driver(std::make_unique<ETKDGContext>(std::move(context)), std::move(stages));
+    driver.run(1);
+    const auto finalEnergy =
+      getGPUEnergy(constMols, driver.context().systemDevice.positions, eargs, params.useBasicKnowledge);
+    nvMolKit::PinnedHostVector<int16_t> failuresScratch;
+    const auto                          failureCounts = driver.getFailures(failuresScratch);
+    ASSERT_EQ(failureCounts.size(), 1);
+    EXPECT_THAT(failureCounts[0], testing::Each(0));
+    ASSERT_EQ(finalEnergy.size(), initialEnergy.size());
+    for (size_t molIdx = 0; molIdx < finalEnergy.size(); ++molIdx) {
+      SCOPED_TRACE("molecule " + std::to_string(molIdx));
+      EXPECT_TRUE(std::isfinite(finalEnergy[molIdx]));
+      EXPECT_LT(finalEnergy[molIdx], initialEnergy[molIdx]);
+    }
+  }
+}
+
 namespace {
 std::vector<ETKStageTestParam> makeETKStageParams(const std::vector<ETKDGOption>& options) {
   std::vector<ETKStageTestParam> params;
