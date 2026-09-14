@@ -1224,8 +1224,8 @@ cudaError_t launchBlockPerMolGradKernelImpl(int                            numMo
 
 NVMOLKIT_DEFINE_MMFF_ENERGY_LAUNCHER(double, double, EnergyForceContribsDevicePtr, double)
 NVMOLKIT_DEFINE_MMFF_GRAD_LAUNCHER(double, EnergyForceContribsDevicePtr, double)
-NVMOLKIT_DEFINE_MMFF_ENERGY_LAUNCHER(float, float, EnergyForceContribsDevicePtrF32, float)
-NVMOLKIT_DEFINE_MMFF_GRAD_LAUNCHER(float, EnergyForceContribsDevicePtrF32, float)
+NVMOLKIT_DEFINE_MMFF_ENERGY_LAUNCHER(float, float, EnergyForceContribsDevicePtrSingle, float)
+NVMOLKIT_DEFINE_MMFF_GRAD_LAUNCHER(float, EnergyForceContribsDevicePtrSingle, float)
 #undef NVMOLKIT_DEFINE_MMFF_GRAD_LAUNCHER
 #undef NVMOLKIT_DEFINE_MMFF_ENERGY_LAUNCHER
 }  // namespace MMFF

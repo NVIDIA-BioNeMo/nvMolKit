@@ -63,10 +63,10 @@ class MMFFBatchedForcefield final : public BatchedForcefield, public SinglePreci
                                cudaStream_t   stream           = nullptr) override;
 
  private:
-  std::variant<MMFF::BatchedMolecularDeviceBuffers, MMFF::BatchedMolecularDeviceBuffersF32> systemDevice_;
-  FullForcefieldConversionWorkspace                                                         fullConversion_;
-  SingleForcefieldConversionWorkspace                                                       singleConversion_;
-  bool                                                                                      singlePrecision_ = false;
+  std::variant<MMFF::BatchedMolecularDeviceBuffers, MMFF::BatchedMolecularDeviceBuffersSingle> systemDevice_;
+  FullForcefieldConversionWorkspace                                                            fullConversion_;
+  SingleForcefieldConversionWorkspace                                                          singleConversion_;
+  bool                                                                                         singlePrecision_ = false;
 };
 
 }  // namespace nvMolKit

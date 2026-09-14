@@ -214,13 +214,13 @@ template <typename Scalar> struct EnergyForceContribsDevicePtrT {
   MMFF::TorsionConstraintTermsDevicePtrT<Scalar>  torsionConstraintTerms;
 };
 
-using BondStretchTermsDevicePtr       = BondStretchTermsDevicePtrT<double>;
-using AngleBendTermsDevicePtr         = AngleBendTermsDevicePtrT<double>;
-using TorsionTermsDevicePtr           = TorsionTermsDevicePtrT<double>;
-using InversionTermsDevicePtr         = InversionTermsDevicePtrT<double>;
-using VdwTermsDevicePtr               = VdwTermsDevicePtrT<double>;
-using EnergyForceContribsDevicePtr    = EnergyForceContribsDevicePtrT<double>;
-using EnergyForceContribsDevicePtrF32 = EnergyForceContribsDevicePtrT<float>;
+using BondStretchTermsDevicePtr          = BondStretchTermsDevicePtrT<double>;
+using AngleBendTermsDevicePtr            = AngleBendTermsDevicePtrT<double>;
+using TorsionTermsDevicePtr              = TorsionTermsDevicePtrT<double>;
+using InversionTermsDevicePtr            = InversionTermsDevicePtrT<double>;
+using VdwTermsDevicePtr                  = VdwTermsDevicePtrT<double>;
+using EnergyForceContribsDevicePtr       = EnergyForceContribsDevicePtrT<double>;
+using EnergyForceContribsDevicePtrSingle = EnergyForceContribsDevicePtrT<float>;
 
 struct BatchedIndicesDevicePtr {
   int* atomStarts                   = nullptr;
@@ -253,23 +253,23 @@ cudaError_t launchBlockPerMolGradKernel(int                                 numM
                                         cudaStream_t                        stream           = nullptr,
                                         const uint8_t*                      activeSystemMask = nullptr);
 
-cudaError_t launchBlockPerMolEnergyKernel(int                                    numMols,
-                                          const EnergyForceContribsDevicePtrF32& terms,
-                                          const BatchedIndicesDevicePtr&         sytemIndices,
-                                          const float*                           coords,
-                                          double*                                energies,
-                                          bool                                   hasConstraints,
-                                          cudaStream_t                           stream           = nullptr,
-                                          const uint8_t*                         activeSystemMask = nullptr);
+cudaError_t launchBlockPerMolEnergyKernel(int                                       numMols,
+                                          const EnergyForceContribsDevicePtrSingle& terms,
+                                          const BatchedIndicesDevicePtr&            sytemIndices,
+                                          const float*                              coords,
+                                          double*                                   energies,
+                                          bool                                      hasConstraints,
+                                          cudaStream_t                              stream           = nullptr,
+                                          const uint8_t*                            activeSystemMask = nullptr);
 
-cudaError_t launchBlockPerMolGradKernel(int                                    numMols,
-                                        const EnergyForceContribsDevicePtrF32& terms,
-                                        const BatchedIndicesDevicePtr&         sytemIndices,
-                                        const float*                           coords,
-                                        float*                                 grad,
-                                        bool                                   hasConstraints,
-                                        cudaStream_t                           stream           = nullptr,
-                                        const uint8_t*                         activeSystemMask = nullptr);
+cudaError_t launchBlockPerMolGradKernel(int                                       numMols,
+                                        const EnergyForceContribsDevicePtrSingle& terms,
+                                        const BatchedIndicesDevicePtr&            sytemIndices,
+                                        const float*                              coords,
+                                        float*                                    grad,
+                                        bool                                      hasConstraints,
+                                        cudaStream_t                              stream           = nullptr,
+                                        const uint8_t*                            activeSystemMask = nullptr);
 
 }  // namespace UFF
 }  // namespace nvMolKit

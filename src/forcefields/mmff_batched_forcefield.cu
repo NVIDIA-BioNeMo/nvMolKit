@@ -70,7 +70,7 @@ MMFFBatchedForcefield::MMFFBatchedForcefield(const MMFF::BatchedMolecularSystemH
   fullConversion_.setStream(stream);
   singleConversion_.setStream(stream);
   if (singlePrecision_) {
-    auto& buffers = systemDevice_.emplace<MMFF::BatchedMolecularDeviceBuffersF32>();
+    auto& buffers = systemDevice_.emplace<MMFF::BatchedMolecularDeviceBuffersSingle>();
     MMFF::setStreams(buffers, stream);
     MMFF::sendContribsAndIndicesToDevice(molSystemHost, buffers);
     setAtomStartsDevice(buffers.indices.atomStarts.data());
@@ -93,7 +93,7 @@ cudaError_t MMFFBatchedForcefield::computeEnergy(double*        energyOuts,
     return err == cudaSuccess ? computeEnergy(energyOuts, fullConversion_.positions.data(), activeSystemMask, stream) :
                                 err;
   }
-  auto& buffers = std::get<MMFF::BatchedMolecularDeviceBuffersF32>(systemDevice_);
+  auto& buffers = std::get<MMFF::BatchedMolecularDeviceBuffersSingle>(systemDevice_);
   return launchEnergy(buffers, numMolecules(), positions, energyOuts, activeSystemMask, stream);
 }
 
@@ -112,7 +112,7 @@ cudaError_t MMFFBatchedForcefield::computeGradients(float*         grad,
              detail::convertDeviceArray(grad, fullConversion_.gradients.data(), totalPositions(), stream) :
              err;
   }
-  auto& buffers = std::get<MMFF::BatchedMolecularDeviceBuffersF32>(systemDevice_);
+  auto& buffers = std::get<MMFF::BatchedMolecularDeviceBuffersSingle>(systemDevice_);
   return launchGrad(buffers, numMolecules(), positions, grad, activeSystemMask, stream);
 }
 
@@ -141,7 +141,7 @@ cudaError_t MMFFBatchedForcefield::computeGradients(double*        grad,
     auto err = detail::convertDeviceArray(singleConversion_.positions.data(), positions, totalPositions(), stream);
     if (err != cudaSuccess)
       return err;
-    auto& buffers = std::get<MMFF::BatchedMolecularDeviceBuffersF32>(systemDevice_);
+    auto& buffers = std::get<MMFF::BatchedMolecularDeviceBuffersSingle>(systemDevice_);
     err           = launchGrad(buffers,
                      numMolecules(),
                      singleConversion_.positions.data(),
