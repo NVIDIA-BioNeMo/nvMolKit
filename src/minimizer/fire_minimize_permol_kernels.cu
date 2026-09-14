@@ -57,26 +57,25 @@ FirePerMolKernelParams buildKernelParams(const FireOptions& opts, const double g
   return params;
 }
 
-template <typename storageT, typename Terms>
 __launch_bounds__(kFirePerMolBlockSize)
-  __global__ void firePerMolMmffKernel(const int                            numIters,
-                                       const FirePerMolKernelParams         params,
-                                       const bool                           takeHalfStepBack,
-                                       const bool                           useAbc,
-                                       const bool                           useMass,
-                                       const Terms*                         terms,
-                                       const MMFF::BatchedIndicesDevicePtr* systemIndices,
-                                       const int*                           molIdList,
-                                       const int*                           atomStarts,
-                                       double*                              positions,
-                                       double*                              grad,
-                                       storageT*                            velocities,
-                                       storageT*                            alphas,
-                                       storageT*                            dts,
-                                       int*                                 nStepsPositive,
-                                       const double*                        masses,
-                                       double*                              energyOuts,
-                                       uint8_t*                             statuses) {
+  __global__ void firePerMolMmffKernel(const int                                 numIters,
+                                       const FirePerMolKernelParams              params,
+                                       const bool                                takeHalfStepBack,
+                                       const bool                                useAbc,
+                                       const bool                                useMass,
+                                       const MMFF::EnergyForceContribsDevicePtr* terms,
+                                       const MMFF::BatchedIndicesDevicePtr*      systemIndices,
+                                       const int*                                molIdList,
+                                       const int*                                atomStarts,
+                                       double*                                   positions,
+                                       double*                                   grad,
+                                       double*                                   velocities,
+                                       double*                                   alphas,
+                                       double*                                   dts,
+                                       int*                                      nStepsPositive,
+                                       const double*                             masses,
+                                       double*                                   energyOuts,
+                                       uint8_t*                                  statuses) {
   const int molIdx = molIdList[blockIdx.x];
   const int tid    = threadIdx.x;
 
@@ -90,7 +89,7 @@ __launch_bounds__(kFirePerMolBlockSize)
 
   double* const       molCoords = positions + atomStart * kDataDim;
   double* const       molGrad   = grad + atomStart * kDataDim;
-  storageT* const     molVel    = velocities + atomStart * kDataDim;
+  double* const       molVel    = velocities + atomStart * kDataDim;
   const double* const massSys   = useMass ? (masses + atomStart) : nullptr;
 
   using BlockReduce = cub::BlockReduce<double, kFirePerMolBlockSize>;
@@ -243,7 +242,7 @@ __launch_bounds__(kFirePerMolBlockSize)
       if (params.dMax > 0.0) {
         const double maxV = params.dMax / dt;
         for (int i = tid; i < numTerms; i += kFirePerMolBlockSize) {
-          molVel[i] = fmax(-maxV, fmin(maxV, static_cast<double>(molVel[i])));
+          molVel[i] = fmax(-maxV, fmin(maxV, molVel[i]));
         }
         __syncthreads();
       }
@@ -287,27 +286,26 @@ __launch_bounds__(kFirePerMolBlockSize)
 
 }  // namespace
 
-template <typename storageT, typename Terms>
-cudaError_t launchFirePerMolKernelImpl(const int                            numMols,
-                                       const int*                           molIds,
-                                       [[maybe_unused]] const int           maxAtoms,
-                                       const int*                           atomStarts,
-                                       const FireOptions&                   fireOptions,
-                                       const int                            numIters,
-                                       const double                         gradTol,
-                                       const Terms&                         terms,
-                                       const MMFF::BatchedIndicesDevicePtr& systemIndices,
-                                       const bool                           hasConstraints,
-                                       double*                              positions,
-                                       double*                              grad,
-                                       storageT*                            velocities,
-                                       storageT*                            alphas,
-                                       storageT*                            dts,
-                                       int*                                 nStepsPositive,
-                                       const double*                        masses,
-                                       double*                              energyOuts,
-                                       uint8_t*                             statuses,
-                                       const cudaStream_t                   stream) {
+cudaError_t launchFirePerMolKernel(const int                                 numMols,
+                                   const int*                                molIds,
+                                   [[maybe_unused]] const int                maxAtoms,
+                                   const int*                                atomStarts,
+                                   const FireOptions&                        fireOptions,
+                                   const int                                 numIters,
+                                   const double                              gradTol,
+                                   const MMFF::EnergyForceContribsDevicePtr& terms,
+                                   const MMFF::BatchedIndicesDevicePtr&      systemIndices,
+                                   const bool                                hasConstraints,
+                                   double*                                   positions,
+                                   double*                                   grad,
+                                   double*                                   velocities,
+                                   double*                                   alphas,
+                                   double*                                   dts,
+                                   int*                                      nStepsPositive,
+                                   const double*                             masses,
+                                   double*                                   energyOuts,
+                                   uint8_t*                                  statuses,
+                                   const cudaStream_t                        stream) {
   if (numMols == 0) {
     return cudaSuccess;
   }
@@ -315,10 +313,10 @@ cudaError_t launchFirePerMolKernelImpl(const int                            numM
     return cudaErrorNotSupported;
   }
 
-  const AsyncDevicePtr<Terms>                         devTerms(terms, stream);
-  const AsyncDevicePtr<MMFF::BatchedIndicesDevicePtr> devSysIdx(systemIndices, stream);
-  const FirePerMolKernelParams                        params  = buildKernelParams(fireOptions, gradTol);
-  const bool                                          useMass = fireOptions.useMass && masses != nullptr;
+  const AsyncDevicePtr<MMFF::EnergyForceContribsDevicePtr> devTerms(terms, stream);
+  const AsyncDevicePtr<MMFF::BatchedIndicesDevicePtr>      devSysIdx(systemIndices, stream);
+  const FirePerMolKernelParams                             params  = buildKernelParams(fireOptions, gradTol);
+  const bool                                               useMass = fireOptions.useMass && masses != nullptr;
   firePerMolMmffKernel<<<numMols, kFirePerMolBlockSize, 0, stream>>>(numIters,
                                                                      params,
                                                                      fireOptions.takeHalfStepBack,
@@ -339,52 +337,5 @@ cudaError_t launchFirePerMolKernelImpl(const int                            numM
                                                                      statuses);
   return cudaGetLastError();
 }
-
-#define NVMOLKIT_DEFINE_FIRE_STATE_OVERLOAD(STATE_TYPE, TERMS_TYPE)                       \
-  cudaError_t launchFirePerMolKernel(int                                  numMols,        \
-                                     const int*                           molIds,         \
-                                     int                                  maxAtoms,       \
-                                     const int*                           atomStarts,     \
-                                     const FireOptions&                   fireOptions,    \
-                                     int                                  numIters,       \
-                                     double                               gradTol,        \
-                                     const TERMS_TYPE&                    terms,          \
-                                     const MMFF::BatchedIndicesDevicePtr& systemIndices,  \
-                                     bool                                 hasConstraints, \
-                                     double*                              positions,      \
-                                     double*                              grad,           \
-                                     STATE_TYPE*                          velocities,     \
-                                     STATE_TYPE*                          alphas,         \
-                                     STATE_TYPE*                          dts,            \
-                                     int*                                 nStepsPositive, \
-                                     const double*                        masses,         \
-                                     double*                              energyOuts,     \
-                                     uint8_t*                             statuses,       \
-                                     cudaStream_t                         stream) {                               \
-    return launchFirePerMolKernelImpl(numMols,                                            \
-                                      molIds,                                             \
-                                      maxAtoms,                                           \
-                                      atomStarts,                                         \
-                                      fireOptions,                                        \
-                                      numIters,                                           \
-                                      gradTol,                                            \
-                                      terms,                                              \
-                                      systemIndices,                                      \
-                                      hasConstraints,                                     \
-                                      positions,                                          \
-                                      grad,                                               \
-                                      velocities,                                         \
-                                      alphas,                                             \
-                                      dts,                                                \
-                                      nStepsPositive,                                     \
-                                      masses,                                             \
-                                      energyOuts,                                         \
-                                      statuses,                                           \
-                                      stream);                                            \
-  }
-
-NVMOLKIT_DEFINE_FIRE_STATE_OVERLOAD(double, MMFF::EnergyForceContribsDevicePtr)
-
-#undef NVMOLKIT_DEFINE_FIRE_STATE_OVERLOAD
 
 }  // namespace nvMolKit
