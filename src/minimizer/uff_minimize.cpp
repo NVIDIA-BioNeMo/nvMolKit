@@ -42,7 +42,8 @@ UFFMinimizeResult UFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>& mols,
                                             const BatchHardwareOptions&                                  perfOptions,
                                             const CoordinateOutput                                       output,
                                             int                                                          targetGpu,
-                                            const DeviceCoordResult*                                     deviceInput) {
+                                            const DeviceCoordResult*                                     deviceInput,
+                                            PrecisionMode                                                precision) {
   ScopedNvtxRange fullRange("BFGS UFF Minimize Molecules Confs");
 
   if (vdwThresholds.size() != mols.size()) {
@@ -136,6 +137,7 @@ UFFMinimizeResult UFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>& mols,
            useDeviceInput,                                                           \
            deviceInput,                                                              \
            deviceInputIndex,                                                         \
+           precision,                                                                \
            exceptionHandler)
   for (size_t batchStart = 0; batchStart < totalConformers; batchStart += effectiveBatchSize) {
     try {
@@ -188,7 +190,7 @@ UFFMinimizeResult UFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>& mols,
       buffers.ensureCapacity(systemHost.positions.size(), batchConformers.size());
       std::copy(systemHost.positions.begin(), systemHost.positions.end(), buffers.initialPositions.begin());
 
-      UFFBatchedForcefield      forcefield(systemHost, metadata, streamPtr);
+      UFFBatchedForcefield      forcefield(systemHost, metadata, streamPtr, precision);
       AsyncDeviceVector<double> positionsDevice;
       AsyncDeviceVector<double> gradDevice;
       AsyncDeviceVector<double> energyOutsDevice;
@@ -216,7 +218,8 @@ UFFMinimizeResult UFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>& mols,
         nvMolKit::DebugLevel::NONE,
         true,
         streamPtr,
-        nvMolKit::BfgsBackend::BATCHED);
+        nvMolKit::BfgsBackend::BATCHED,
+        precision);
       setupBatchRange.pop();
       bfgsMinimizer.minimize(maxIters, gradTol, forcefield, positionsDevice, gradDevice, energyOutsDevice);
 
@@ -257,8 +260,19 @@ std::vector<std::vector<double>> UFFOptimizeMoleculesConfsBfgs(std::vector<RDKit
                                                                const int                   maxIters,
                                                                const std::vector<double>&  vdwThresholds,
                                                                const std::vector<bool>&    ignoreInterfragInteractions,
-                                                               const BatchHardwareOptions& perfOptions) {
-  return UFFMinimizeMoleculesConfs(mols, maxIters, 1e-4, vdwThresholds, ignoreInterfragInteractions, {}, perfOptions)
+                                                               const BatchHardwareOptions& perfOptions,
+                                                               PrecisionMode               precision) {
+  return UFFMinimizeMoleculesConfs(mols,
+                                   maxIters,
+                                   1e-4,
+                                   vdwThresholds,
+                                   ignoreInterfragInteractions,
+                                   {},
+                                   perfOptions,
+                                   CoordinateOutput::RDKIT_CONFORMERS,
+                                   -1,
+                                   nullptr,
+                                   precision)
     .energies;
 }
 
@@ -271,7 +285,8 @@ UFFMinimizeResult UFFMinimizeMoleculesConfsFire(
   const std::vector<ForceFieldConstraints::PerMolConstraints>& constraints,
   const BatchHardwareOptions&                                  perfOptions,
   const CoordinateOutput                                       output,
-  int                                                          targetGpu) {
+  int                                                          targetGpu,
+  PrecisionMode                                                precision) {
   ScopedNvtxRange fullRange("FIRE UFF Minimize Molecules Confs");
 
   if (vdwThresholds.size() != mols.size()) {
@@ -344,6 +359,7 @@ UFFMinimizeResult UFFMinimizeMoleculesConfsFire(
            threadBuffers,                                                            \
            deviceCollectors,                                                         \
            deviceOutput,                                                             \
+           precision,                                                                \
            exceptionHandler)
   for (size_t batchStart = 0; batchStart < totalConformers; batchStart += effectiveBatchSize) {
     try {
@@ -388,7 +404,7 @@ UFFMinimizeResult UFFMinimizeMoleculesConfsFire(
       buffers.ensureCapacity(systemHost.positions.size(), batchConformers.size());
       std::copy(systemHost.positions.begin(), systemHost.positions.end(), buffers.initialPositions.begin());
 
-      UFFBatchedForcefield      forcefield(systemHost, metadata, streamPtr);
+      UFFBatchedForcefield      forcefield(systemHost, metadata, streamPtr, precision);
       AsyncDeviceVector<double> positionsDevice;
       AsyncDeviceVector<double> gradDevice;
       AsyncDeviceVector<double> energyOutsDevice;
@@ -406,7 +422,8 @@ UFFMinimizeResult UFFMinimizeMoleculesConfsFire(
                                        fireOptions,
                                        streamPtr,
                                        /*debugMode=*/false,
-                                       FireBackend::BATCHED);
+                                       FireBackend::BATCHED,
+                                       precision);
       if (fireOptions.useMass) {
         fireMinimizer.setMasses(massesPerAtom);
       }
@@ -450,14 +467,18 @@ std::vector<std::vector<double>> UFFOptimizeMoleculesConfsFire(std::vector<RDKit
                                                                const FireOptions&          fireOptions,
                                                                const std::vector<double>&  vdwThresholds,
                                                                const std::vector<bool>&    ignoreInterfragInteractions,
-                                                               const BatchHardwareOptions& perfOptions) {
+                                                               const BatchHardwareOptions& perfOptions,
+                                                               PrecisionMode               precision) {
   return UFFMinimizeMoleculesConfsFire(mols,
                                        maxIters,
                                        fireOptions,
                                        vdwThresholds,
                                        ignoreInterfragInteractions,
                                        {},
-                                       perfOptions)
+                                       perfOptions,
+                                       CoordinateOutput::RDKIT_CONFORMERS,
+                                       -1,
+                                       precision)
     .energies;
 }
 

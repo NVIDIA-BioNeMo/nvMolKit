@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include <cassert>
+#include <type_traits>
 #include <vector>
 
 #include "src/forcefields/kernel_utils.cuh"
@@ -23,8 +24,19 @@ namespace nvMolKit {
 namespace UFF {
 namespace {
 
-EnergyForceContribsDevicePtr toPointerStruct(const EnergyForceContribsDevice& src) {
-  EnergyForceContribsDevicePtr dst;
+template <typename ParameterScalar>
+void uploadWithPrecisionConversion(AsyncDeviceVector<ParameterScalar>& destination, const std::vector<double>& source) {
+  if constexpr (std::is_same_v<ParameterScalar, double>) {
+    destination.setFromVector(source);
+  } else {
+    static_assert(std::is_same_v<ParameterScalar, float>);
+    destination.setFromVector(std::vector<float>(source.begin(), source.end()));
+  }
+}
+
+template <typename ParameterScalar>
+EnergyForceContribsDevicePtrT<ParameterScalar> toPointerStruct(const EnergyForceContribsDeviceT<ParameterScalar>& src) {
+  EnergyForceContribsDevicePtrT<ParameterScalar> dst;
   dst.bondTerms.idx1          = src.bondTerms.idx1.data();
   dst.bondTerms.idx2          = src.bondTerms.idx2.data();
   dst.bondTerms.restLen       = src.bondTerms.restLen.data();
@@ -137,7 +149,9 @@ template <typename T> void appendValues(std::vector<T>& dst, const std::vector<T
 
 }  // namespace
 
-void setStreams(BatchedMolecularDeviceBuffers& molSystemDevice, cudaStream_t stream) {
+template <typename ParameterScalar, typename CoordinateScalar>
+void setStreamsImpl(BatchedMolecularDeviceBuffersT<ParameterScalar, CoordinateScalar>& molSystemDevice,
+                    cudaStream_t                                                       stream) {
   molSystemDevice.positions.setStream(stream);
   molSystemDevice.grad.setStream(stream);
   molSystemDevice.energyOuts.setStream(stream);
@@ -225,76 +239,87 @@ void setStreams(BatchedMolecularDeviceBuffers& molSystemDevice, cudaStream_t str
   molSystemDevice.indices.torsionConstraintTermStarts.setStream(stream);
 }
 
-void sendContribsAndIndicesToDevice(const BatchedMolecularSystemHost& molSystemHost,
-                                    BatchedMolecularDeviceBuffers&    molSystemDevice) {
+template <typename ParameterScalar, typename CoordinateScalar>
+void sendContribsAndIndicesToDeviceImpl(
+  const BatchedMolecularSystemHost&                                  molSystemHost,
+  BatchedMolecularDeviceBuffersT<ParameterScalar, CoordinateScalar>& molSystemDevice) {
   const auto& hostContribs = molSystemHost.contribs;
   auto&       contribs     = molSystemDevice.contribs;
 
   contribs.bondTerms.idx1.setFromVector(hostContribs.bondTerms.idx1);
   contribs.bondTerms.idx2.setFromVector(hostContribs.bondTerms.idx2);
-  contribs.bondTerms.restLen.setFromVector(hostContribs.bondTerms.restLen);
-  contribs.bondTerms.forceConstant.setFromVector(hostContribs.bondTerms.forceConstant);
+  uploadWithPrecisionConversion(contribs.bondTerms.restLen, hostContribs.bondTerms.restLen);
+  uploadWithPrecisionConversion(contribs.bondTerms.forceConstant, hostContribs.bondTerms.forceConstant);
 
   contribs.angleTerms.idx1.setFromVector(hostContribs.angleTerms.idx1);
   contribs.angleTerms.idx2.setFromVector(hostContribs.angleTerms.idx2);
   contribs.angleTerms.idx3.setFromVector(hostContribs.angleTerms.idx3);
-  contribs.angleTerms.theta0.setFromVector(hostContribs.angleTerms.theta0);
-  contribs.angleTerms.forceConstant.setFromVector(hostContribs.angleTerms.forceConstant);
+  uploadWithPrecisionConversion(contribs.angleTerms.theta0, hostContribs.angleTerms.theta0);
+  uploadWithPrecisionConversion(contribs.angleTerms.forceConstant, hostContribs.angleTerms.forceConstant);
   contribs.angleTerms.order.setFromVector(hostContribs.angleTerms.order);
-  contribs.angleTerms.C0.setFromVector(hostContribs.angleTerms.C0);
-  contribs.angleTerms.C1.setFromVector(hostContribs.angleTerms.C1);
-  contribs.angleTerms.C2.setFromVector(hostContribs.angleTerms.C2);
+  uploadWithPrecisionConversion(contribs.angleTerms.C0, hostContribs.angleTerms.C0);
+  uploadWithPrecisionConversion(contribs.angleTerms.C1, hostContribs.angleTerms.C1);
+  uploadWithPrecisionConversion(contribs.angleTerms.C2, hostContribs.angleTerms.C2);
 
   contribs.torsionTerms.idx1.setFromVector(hostContribs.torsionTerms.idx1);
   contribs.torsionTerms.idx2.setFromVector(hostContribs.torsionTerms.idx2);
   contribs.torsionTerms.idx3.setFromVector(hostContribs.torsionTerms.idx3);
   contribs.torsionTerms.idx4.setFromVector(hostContribs.torsionTerms.idx4);
-  contribs.torsionTerms.forceConstant.setFromVector(hostContribs.torsionTerms.forceConstant);
+  uploadWithPrecisionConversion(contribs.torsionTerms.forceConstant, hostContribs.torsionTerms.forceConstant);
   contribs.torsionTerms.order.setFromVector(hostContribs.torsionTerms.order);
-  contribs.torsionTerms.cosTerm.setFromVector(hostContribs.torsionTerms.cosTerm);
+  uploadWithPrecisionConversion(contribs.torsionTerms.cosTerm, hostContribs.torsionTerms.cosTerm);
 
   contribs.inversionTerms.idx1.setFromVector(hostContribs.inversionTerms.idx1);
   contribs.inversionTerms.idx2.setFromVector(hostContribs.inversionTerms.idx2);
   contribs.inversionTerms.idx3.setFromVector(hostContribs.inversionTerms.idx3);
   contribs.inversionTerms.idx4.setFromVector(hostContribs.inversionTerms.idx4);
-  contribs.inversionTerms.forceConstant.setFromVector(hostContribs.inversionTerms.forceConstant);
-  contribs.inversionTerms.C0.setFromVector(hostContribs.inversionTerms.C0);
-  contribs.inversionTerms.C1.setFromVector(hostContribs.inversionTerms.C1);
-  contribs.inversionTerms.C2.setFromVector(hostContribs.inversionTerms.C2);
+  uploadWithPrecisionConversion(contribs.inversionTerms.forceConstant, hostContribs.inversionTerms.forceConstant);
+  uploadWithPrecisionConversion(contribs.inversionTerms.C0, hostContribs.inversionTerms.C0);
+  uploadWithPrecisionConversion(contribs.inversionTerms.C1, hostContribs.inversionTerms.C1);
+  uploadWithPrecisionConversion(contribs.inversionTerms.C2, hostContribs.inversionTerms.C2);
 
   contribs.vdwTerms.idx1.setFromVector(hostContribs.vdwTerms.idx1);
   contribs.vdwTerms.idx2.setFromVector(hostContribs.vdwTerms.idx2);
-  contribs.vdwTerms.x_ij.setFromVector(hostContribs.vdwTerms.x_ij);
-  contribs.vdwTerms.wellDepth.setFromVector(hostContribs.vdwTerms.wellDepth);
-  contribs.vdwTerms.threshold.setFromVector(hostContribs.vdwTerms.threshold);
+  uploadWithPrecisionConversion(contribs.vdwTerms.x_ij, hostContribs.vdwTerms.x_ij);
+  uploadWithPrecisionConversion(contribs.vdwTerms.wellDepth, hostContribs.vdwTerms.wellDepth);
+  uploadWithPrecisionConversion(contribs.vdwTerms.threshold, hostContribs.vdwTerms.threshold);
 
   contribs.distanceConstraintTerms.idx1.setFromVector(hostContribs.distanceConstraintTerms.idx1);
   contribs.distanceConstraintTerms.idx2.setFromVector(hostContribs.distanceConstraintTerms.idx2);
-  contribs.distanceConstraintTerms.minLen.setFromVector(hostContribs.distanceConstraintTerms.minLen);
-  contribs.distanceConstraintTerms.maxLen.setFromVector(hostContribs.distanceConstraintTerms.maxLen);
-  contribs.distanceConstraintTerms.forceConstant.setFromVector(hostContribs.distanceConstraintTerms.forceConstant);
+  uploadWithPrecisionConversion(contribs.distanceConstraintTerms.minLen, hostContribs.distanceConstraintTerms.minLen);
+  uploadWithPrecisionConversion(contribs.distanceConstraintTerms.maxLen, hostContribs.distanceConstraintTerms.maxLen);
+  uploadWithPrecisionConversion(contribs.distanceConstraintTerms.forceConstant,
+                                hostContribs.distanceConstraintTerms.forceConstant);
 
   contribs.positionConstraintTerms.idx.setFromVector(hostContribs.positionConstraintTerms.idx);
-  contribs.positionConstraintTerms.refX.setFromVector(hostContribs.positionConstraintTerms.refX);
-  contribs.positionConstraintTerms.refY.setFromVector(hostContribs.positionConstraintTerms.refY);
-  contribs.positionConstraintTerms.refZ.setFromVector(hostContribs.positionConstraintTerms.refZ);
-  contribs.positionConstraintTerms.maxDispl.setFromVector(hostContribs.positionConstraintTerms.maxDispl);
-  contribs.positionConstraintTerms.forceConstant.setFromVector(hostContribs.positionConstraintTerms.forceConstant);
+  uploadWithPrecisionConversion(contribs.positionConstraintTerms.refX, hostContribs.positionConstraintTerms.refX);
+  uploadWithPrecisionConversion(contribs.positionConstraintTerms.refY, hostContribs.positionConstraintTerms.refY);
+  uploadWithPrecisionConversion(contribs.positionConstraintTerms.refZ, hostContribs.positionConstraintTerms.refZ);
+  uploadWithPrecisionConversion(contribs.positionConstraintTerms.maxDispl,
+                                hostContribs.positionConstraintTerms.maxDispl);
+  uploadWithPrecisionConversion(contribs.positionConstraintTerms.forceConstant,
+                                hostContribs.positionConstraintTerms.forceConstant);
 
   contribs.angleConstraintTerms.idx1.setFromVector(hostContribs.angleConstraintTerms.idx1);
   contribs.angleConstraintTerms.idx2.setFromVector(hostContribs.angleConstraintTerms.idx2);
   contribs.angleConstraintTerms.idx3.setFromVector(hostContribs.angleConstraintTerms.idx3);
-  contribs.angleConstraintTerms.minAngleDeg.setFromVector(hostContribs.angleConstraintTerms.minAngleDeg);
-  contribs.angleConstraintTerms.maxAngleDeg.setFromVector(hostContribs.angleConstraintTerms.maxAngleDeg);
-  contribs.angleConstraintTerms.forceConstant.setFromVector(hostContribs.angleConstraintTerms.forceConstant);
+  uploadWithPrecisionConversion(contribs.angleConstraintTerms.minAngleDeg,
+                                hostContribs.angleConstraintTerms.minAngleDeg);
+  uploadWithPrecisionConversion(contribs.angleConstraintTerms.maxAngleDeg,
+                                hostContribs.angleConstraintTerms.maxAngleDeg);
+  uploadWithPrecisionConversion(contribs.angleConstraintTerms.forceConstant,
+                                hostContribs.angleConstraintTerms.forceConstant);
 
   contribs.torsionConstraintTerms.idx1.setFromVector(hostContribs.torsionConstraintTerms.idx1);
   contribs.torsionConstraintTerms.idx2.setFromVector(hostContribs.torsionConstraintTerms.idx2);
   contribs.torsionConstraintTerms.idx3.setFromVector(hostContribs.torsionConstraintTerms.idx3);
   contribs.torsionConstraintTerms.idx4.setFromVector(hostContribs.torsionConstraintTerms.idx4);
-  contribs.torsionConstraintTerms.minDihedralDeg.setFromVector(hostContribs.torsionConstraintTerms.minDihedralDeg);
-  contribs.torsionConstraintTerms.maxDihedralDeg.setFromVector(hostContribs.torsionConstraintTerms.maxDihedralDeg);
-  contribs.torsionConstraintTerms.forceConstant.setFromVector(hostContribs.torsionConstraintTerms.forceConstant);
+  uploadWithPrecisionConversion(contribs.torsionConstraintTerms.minDihedralDeg,
+                                hostContribs.torsionConstraintTerms.minDihedralDeg);
+  uploadWithPrecisionConversion(contribs.torsionConstraintTerms.maxDihedralDeg,
+                                hostContribs.torsionConstraintTerms.maxDihedralDeg);
+  uploadWithPrecisionConversion(contribs.torsionConstraintTerms.forceConstant,
+                                hostContribs.torsionConstraintTerms.forceConstant);
 
   molSystemDevice.indices.atomStarts.setFromVector(molSystemHost.indices.atomStarts);
   molSystemDevice.indices.atomIdxToBatchIdx.setFromVector(molSystemHost.indices.atomIdxToBatchIdx);
@@ -443,11 +468,35 @@ void addMoleculeToBatch(const EnergyForceContribsHost& contribs,
   addMoleculeToBatch(contribsCopy, positions, molSystem);
 }
 
-void allocateIntermediateBuffers(const BatchedMolecularSystemHost& molSystemHost,
-                                 BatchedMolecularDeviceBuffers&    molSystemDevice) {
+template <typename ParameterScalar, typename CoordinateScalar>
+void allocateIntermediateBuffersImpl(
+  const BatchedMolecularSystemHost&                                  molSystemHost,
+  BatchedMolecularDeviceBuffersT<ParameterScalar, CoordinateScalar>& molSystemDevice) {
   FFKernelUtils::allocateIntermediateBuffers(molSystemHost,
                                              molSystemDevice,
                                              molSystemHost.indices.atomStarts.size() - 1);
+}
+
+void setStreams(BatchedMolecularDeviceBuffers& buffers, cudaStream_t stream) {
+  setStreamsImpl(buffers, stream);
+}
+void setStreams(BatchedMolecularDeviceBuffersSingle& buffers, cudaStream_t stream) {
+  setStreamsImpl(buffers, stream);
+}
+
+void sendContribsAndIndicesToDevice(const BatchedMolecularSystemHost& host, BatchedMolecularDeviceBuffers& buffers) {
+  sendContribsAndIndicesToDeviceImpl(host, buffers);
+}
+void sendContribsAndIndicesToDevice(const BatchedMolecularSystemHost&    host,
+                                    BatchedMolecularDeviceBuffersSingle& buffers) {
+  sendContribsAndIndicesToDeviceImpl(host, buffers);
+}
+
+void allocateIntermediateBuffers(const BatchedMolecularSystemHost& host, BatchedMolecularDeviceBuffers& buffers) {
+  allocateIntermediateBuffersImpl(host, buffers);
+}
+void allocateIntermediateBuffers(const BatchedMolecularSystemHost& host, BatchedMolecularDeviceBuffersSingle& buffers) {
+  allocateIntermediateBuffersImpl(host, buffers);
 }
 
 cudaError_t computeEnergy(BatchedMolecularDeviceBuffers& molSystemDevice,
@@ -770,6 +819,21 @@ cudaError_t computeEnergyBlockPerMol(BatchedMolecularDeviceBuffers& molSystemDev
                                        stream);
 }
 
+cudaError_t computeEnergyBlockPerMol(BatchedMolecularDeviceBuffersSingle& molSystemDevice,
+                                     double*                              energyOuts,
+                                     const float*                         coords,
+                                     const uint8_t*                       activeSystemMask,
+                                     cudaStream_t                         stream) {
+  return launchBlockPerMolEnergyKernel(molSystemDevice.indices.atomStarts.size() - 1,
+                                       toPointerStruct(molSystemDevice.contribs),
+                                       toPointerStruct(molSystemDevice.indices),
+                                       coords != nullptr ? coords : molSystemDevice.positions.data(),
+                                       energyOuts,
+                                       batchHasConstraints(molSystemDevice.contribs),
+                                       stream,
+                                       activeSystemMask);
+}
+
 cudaError_t computeGradBlockPerMol(BatchedMolecularDeviceBuffers& molSystemDevice, cudaStream_t stream) {
   return launchBlockPerMolGradKernel(molSystemDevice.indices.atomStarts.size() - 1,
                                      toPointerStruct(molSystemDevice.contribs),
@@ -780,7 +844,27 @@ cudaError_t computeGradBlockPerMol(BatchedMolecularDeviceBuffers& molSystemDevic
                                      stream);
 }
 
+cudaError_t computeGradBlockPerMol(BatchedMolecularDeviceBuffersSingle& molSystemDevice,
+                                   const float*                         coords,
+                                   float*                               grad,
+                                   const uint8_t*                       activeSystemMask,
+                                   cudaStream_t                         stream) {
+  return launchBlockPerMolGradKernel(molSystemDevice.indices.atomStarts.size() - 1,
+                                     toPointerStruct(molSystemDevice.contribs),
+                                     toPointerStruct(molSystemDevice.indices),
+                                     coords != nullptr ? coords : molSystemDevice.positions.data(),
+                                     grad != nullptr ? grad : molSystemDevice.grad.data(),
+                                     batchHasConstraints(molSystemDevice.contribs),
+                                     stream,
+                                     activeSystemMask);
+}
+
 EnergyForceContribsDevicePtr toEnergyForceContribsDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice) {
+  return toPointerStruct(molSystemDevice.contribs);
+}
+
+EnergyForceContribsDevicePtrSingle toEnergyForceContribsDevicePtr(
+  const BatchedMolecularDeviceBuffersSingle& molSystemDevice) {
   return toPointerStruct(molSystemDevice.contribs);
 }
 
@@ -788,7 +872,16 @@ BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBu
   return toPointerStruct(molSystemDevice.indices);
 }
 
+BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBuffersSingle& molSystemDevice) {
+  return toPointerStruct(molSystemDevice.indices);
+}
+
 bool batchHasConstraints(const EnergyForceContribsDevice& contribs) {
+  return contribs.distanceConstraintTerms.idx1.size() > 0 || contribs.positionConstraintTerms.idx.size() > 0 ||
+         contribs.angleConstraintTerms.idx1.size() > 0 || contribs.torsionConstraintTerms.idx1.size() > 0;
+}
+
+bool batchHasConstraints(const EnergyForceContribsDeviceSingle& contribs) {
   return contribs.distanceConstraintTerms.idx1.size() > 0 || contribs.positionConstraintTerms.idx.size() > 0 ||
          contribs.angleConstraintTerms.idx1.size() > 0 || contribs.torsionConstraintTerms.idx1.size() > 0;
 }

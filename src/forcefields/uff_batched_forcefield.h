@@ -16,16 +16,22 @@
 #ifndef NVMOLKIT_UFF_BATCHED_FORCEFIELD_H
 #define NVMOLKIT_UFF_BATCHED_FORCEFIELD_H
 
+#include <variant>
+
 #include "src/forcefields/batched_forcefield.h"
+#include "src/forcefields/precision_workspace.h"
 #include "src/forcefields/uff.h"
+#include "src/precision/precision_mode.h"
+#include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 
-class UFFBatchedForcefield final : public BatchedForcefield {
+class UFFBatchedForcefield final : public BatchedForcefield, public SinglePrecisionBatchedForcefield {
  public:
   explicit UFFBatchedForcefield(const UFF::BatchedMolecularSystemHost& molSystemHost,
-                                BatchedForcefieldMetadata              metadata = {},
-                                cudaStream_t                           stream   = nullptr);
+                                BatchedForcefieldMetadata              metadata  = {},
+                                cudaStream_t                           stream    = nullptr,
+                                PrecisionMode                          precision = PrecisionMode::FULL);
 
   cudaError_t computeEnergy(double*        energyOuts,
                             const double*  positions,
@@ -36,9 +42,20 @@ class UFFBatchedForcefield final : public BatchedForcefield {
                                const double*  positions,
                                const uint8_t* activeSystemMask = nullptr,
                                cudaStream_t   stream           = nullptr) override;
+  cudaError_t computeEnergy(double*        energyOuts,
+                            const float*   positions,
+                            const uint8_t* activeSystemMask = nullptr,
+                            cudaStream_t   stream           = nullptr) override;
+  cudaError_t computeGradients(float*         grad,
+                               const float*   positions,
+                               const uint8_t* activeSystemMask = nullptr,
+                               cudaStream_t   stream           = nullptr) override;
 
  private:
-  UFF::BatchedMolecularDeviceBuffers systemDevice_;
+  std::variant<UFF::BatchedMolecularDeviceBuffers, UFF::BatchedMolecularDeviceBuffersSingle> systemDevice_;
+  FullForcefieldConversionWorkspace                                                          fullConversion_;
+  SingleForcefieldConversionWorkspace                                                        singleConversion_;
+  bool                                                                                       singlePrecision_ = false;
 };
 
 }  // namespace nvMolKit

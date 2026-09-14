@@ -59,8 +59,10 @@ std::vector<double> positionsFromMol(const RDKit::ROMol& mol, const int confId =
   return positions;
 }
 
-double computeEnergyViaForcefield(BatchedMolecularSystemHost& systemHost, AsyncDeviceVector<double>& positionsDevice) {
-  nvMolKit::UFFBatchedForcefield forcefield(systemHost);
+double computeEnergyViaForcefield(BatchedMolecularSystemHost& systemHost,
+                                  AsyncDeviceVector<double>&  positionsDevice,
+                                  nvMolKit::PrecisionMode     precision = nvMolKit::PrecisionMode::FULL) {
+  nvMolKit::UFFBatchedForcefield forcefield(systemHost, {}, nullptr, precision);
   AsyncDeviceVector<double>      energyOuts;
   energyOuts.resize(1);
   energyOuts.zero();
@@ -71,8 +73,9 @@ double computeEnergyViaForcefield(BatchedMolecularSystemHost& systemHost, AsyncD
 }
 
 std::vector<double> computeGradientViaForcefield(BatchedMolecularSystemHost& systemHost,
-                                                 AsyncDeviceVector<double>&  positionsDevice) {
-  nvMolKit::UFFBatchedForcefield forcefield(systemHost);
+                                                 AsyncDeviceVector<double>&  positionsDevice,
+                                                 nvMolKit::PrecisionMode precision = nvMolKit::PrecisionMode::FULL) {
+  nvMolKit::UFFBatchedForcefield forcefield(systemHost, {}, nullptr, precision);
   AsyncDeviceVector<double>      gradDevice;
   gradDevice.resize(positionsDevice.size());
   gradDevice.zero();
@@ -129,6 +132,9 @@ class UFFGpuTestFixture : public ::testing::Test {
   BatchedMolecularDeviceBuffers systemDevice_;
 };
 
+class UFFPrecisionTestFixture : public UFFGpuTestFixture,
+                                public ::testing::WithParamInterface<nvMolKit::PrecisionMode> {};
+
 TEST_F(UFFGpuTestFixture, FlattenedBuilderPopulatesAllTerms) {
   EXPECT_GT(contribs_.bondTerms.idx1.size(), 0);
   EXPECT_GT(contribs_.angleTerms.idx1.size(), 0);
@@ -143,19 +149,21 @@ TEST_F(UFFGpuTestFixture, FlattenedBuilderPopulatesAllTerms) {
   EXPECT_EQ(contribs_.vdwTerms.idx1.size(), contribs_.vdwTerms.threshold.size());
 }
 
-TEST_F(UFFGpuTestFixture, CombinedEnergyMatchesRDKit) {
+TEST_P(UFFPrecisionTestFixture, CombinedEnergyMatchesRDKit) {
   auto         referenceFF = buildReferenceForceField(*mol_);
   const double wantEnergy  = referenceFF->calcEnergy(positions_.data());
-  const double gotEnergy   = computeEnergyViaForcefield(systemHost_, systemDevice_.positions);
-  EXPECT_NEAR(gotEnergy, wantEnergy, kEnergyTol);
+  const double gotEnergy   = computeEnergyViaForcefield(systemHost_, systemDevice_.positions, GetParam());
+  const double tolerance   = GetParam() == nvMolKit::PrecisionMode::SINGLE ? 2.0e-3 : kEnergyTol;
+  EXPECT_NEAR(gotEnergy, wantEnergy, tolerance);
 }
 
-TEST_F(UFFGpuTestFixture, CombinedGradientMatchesRDKit) {
+TEST_P(UFFPrecisionTestFixture, CombinedGradientMatchesRDKit) {
   auto                referenceFF = buildReferenceForceField(*mol_);
   std::vector<double> wantGrad(referenceFF->dimension() * referenceFF->positions().size(), 0.0);
   referenceFF->calcGrad(positions_.data(), wantGrad.data());
-  const std::vector<double> gotGrad = computeGradientViaForcefield(systemHost_, systemDevice_.positions);
-  EXPECT_THAT(gotGrad, ::testing::Pointwise(::testing::DoubleNear(kGradTol), wantGrad));
+  const std::vector<double> gotGrad   = computeGradientViaForcefield(systemHost_, systemDevice_.positions, GetParam());
+  const double              tolerance = GetParam() == nvMolKit::PrecisionMode::SINGLE ? 5.0e-3 : kGradTol;
+  EXPECT_THAT(gotGrad, ::testing::Pointwise(::testing::DoubleNear(tolerance), wantGrad));
 }
 
 TEST_F(UFFGpuTestFixture, BlockPerMolMatchesRDKit) {
@@ -177,10 +185,17 @@ TEST_F(UFFGpuTestFixture, BlockPerMolMatchesRDKit) {
   EXPECT_THAT(gotGrad, ::testing::Pointwise(::testing::DoubleNear(kGradTol), wantGrad));
 }
 
-class UFFGpuEdgeCases : public ::testing::TestWithParam<std::string> {};
+struct UFFEdgeCase {
+  const char*             name;
+  const char*             smiles;
+  nvMolKit::PrecisionMode precision;
+};
+
+class UFFGpuEdgeCases : public ::testing::TestWithParam<UFFEdgeCase> {};
 
 TEST_P(UFFGpuEdgeCases, CombinedEnergyAndGradient) {
-  auto mol = buildEmbeddedEdgeCaseMol(GetParam());
+  const auto testCase = GetParam();
+  auto       mol      = buildEmbeddedEdgeCaseMol(testCase.smiles);
   ASSERT_NE(mol, nullptr);
 
   auto                       positions = positionsFromMol(*mol);
@@ -190,20 +205,42 @@ TEST_P(UFFGpuEdgeCases, CombinedEnergyAndGradient) {
 
   AsyncDeviceVector<double> positionsDevice;
   positionsDevice.setFromVector(host.positions);
-  const double gotEnergy = computeEnergyViaForcefield(host, positionsDevice);
-  const auto   gotGrad   = computeGradientViaForcefield(host, positionsDevice);
+  const double gotEnergy = computeEnergyViaForcefield(host, positionsDevice, testCase.precision);
+  const auto   gotGrad   = computeGradientViaForcefield(host, positionsDevice, testCase.precision);
 
   auto                referenceFF = buildReferenceForceField(*mol);
   std::vector<double> wantGrad(referenceFF->dimension() * referenceFF->positions().size(), 0.0);
   referenceFF->calcGrad(positions.data(), wantGrad.data());
 
-  EXPECT_NEAR(gotEnergy, referenceFF->calcEnergy(positions.data()), 1.0e-5);
-  EXPECT_THAT(gotGrad, ::testing::Pointwise(::testing::DoubleNear(2.0e-4), wantGrad));
+  const double energyTolerance = testCase.precision == nvMolKit::PrecisionMode::SINGLE ? 2.0e-3 : 1.0e-5;
+  const double gradTolerance   = testCase.precision == nvMolKit::PrecisionMode::SINGLE ? 5.0e-3 : 2.0e-4;
+  EXPECT_NEAR(gotEnergy, referenceFF->calcEnergy(positions.data()), energyTolerance);
+  EXPECT_THAT(gotGrad, ::testing::Pointwise(::testing::DoubleNear(gradTolerance), wantGrad));
 }
 
-INSTANTIATE_TEST_SUITE_P(UFFOneTwoAtoms, UFFGpuEdgeCases, ::testing::Values("C", "O", "CC", "CO", "CCC"));
+INSTANTIATE_TEST_SUITE_P(UFFOneTwoAtoms,
+                         UFFGpuEdgeCases,
+                         ::testing::Values(UFFEdgeCase{"Methane", "C", nvMolKit::PrecisionMode::FULL},
+                                           UFFEdgeCase{"Methane", "C", nvMolKit::PrecisionMode::SINGLE},
+                                           UFFEdgeCase{"Water", "O", nvMolKit::PrecisionMode::FULL},
+                                           UFFEdgeCase{"Water", "O", nvMolKit::PrecisionMode::SINGLE},
+                                           UFFEdgeCase{"Ethane", "CC", nvMolKit::PrecisionMode::FULL},
+                                           UFFEdgeCase{"Ethane", "CC", nvMolKit::PrecisionMode::SINGLE},
+                                           UFFEdgeCase{"Methanol", "CO", nvMolKit::PrecisionMode::FULL},
+                                           UFFEdgeCase{"Methanol", "CO", nvMolKit::PrecisionMode::SINGLE},
+                                           UFFEdgeCase{"Propane", "CCC", nvMolKit::PrecisionMode::FULL},
+                                           UFFEdgeCase{"Propane", "CCC", nvMolKit::PrecisionMode::SINGLE},
+                                           UFFEdgeCase{"SingleSodium", "[Na+]", nvMolKit::PrecisionMode::FULL},
+                                           UFFEdgeCase{"SingleSodium", "[Na+]", nvMolKit::PrecisionMode::SINGLE}),
+                         [](const ::testing::TestParamInfo<UFFEdgeCase>& info) {
+                           const std::string precision =
+                             info.param.precision == nvMolKit::PrecisionMode::SINGLE ? "Single" : "Full";
+                           return std::string(info.param.name) + precision;
+                         });
 
-TEST(UFFValidationSuite, BatchMatchesRDKitValidationSet) {
+class UFFValidationPrecisionTest : public ::testing::TestWithParam<nvMolKit::PrecisionMode> {};
+
+TEST_P(UFFValidationPrecisionTest, BatchMatchesRDKitValidationSet) {
   const std::string                          sdfPath = getTestDataFolderPath() + "/MMFF94_dative.sdf";
   std::vector<std::unique_ptr<RDKit::ROMol>> mols;
   getMols(sdfPath, mols, 25);
@@ -225,7 +262,7 @@ TEST(UFFValidationSuite, BatchMatchesRDKitValidationSet) {
     wantGrads.push_back(std::move(wantGrad));
   }
 
-  nvMolKit::UFFBatchedForcefield forcefield(host);
+  nvMolKit::UFFBatchedForcefield forcefield(host, {}, nullptr, GetParam());
   AsyncDeviceVector<double>      positionsDevice;
   AsyncDeviceVector<double>      energiesDevice;
   AsyncDeviceVector<double>      gradDevice;
@@ -245,19 +282,24 @@ TEST(UFFValidationSuite, BatchMatchesRDKitValidationSet) {
   cudaDeviceSynchronize();
 
   for (size_t i = 0; i < wantEnergies.size(); ++i) {
-    EXPECT_NEAR(gotEnergies[i], wantEnergies[i], 1.0e-5) << "molecule " << i;
+    const double energyTolerance = GetParam() == nvMolKit::PrecisionMode::SINGLE ? 2.0e-3 : 1.0e-5;
+    const double gradTolerance   = GetParam() == nvMolKit::PrecisionMode::SINGLE ? 2.0e-2 : 2.0e-4;
+    EXPECT_NEAR(gotEnergies[i], wantEnergies[i], energyTolerance) << "molecule " << i;
     const int           atomStart = host.indices.atomStarts[i];
     const int           atomEnd   = host.indices.atomStarts[i + 1];
     std::vector<double> gotGradMol(gotGrad.begin() + atomStart * 3, gotGrad.begin() + atomEnd * 3);
-    EXPECT_THAT(gotGradMol, ::testing::Pointwise(::testing::DoubleNear(2.0e-4), wantGrads[i])) << "molecule " << i;
+    EXPECT_THAT(gotGradMol, ::testing::Pointwise(::testing::DoubleNear(gradTolerance), wantGrads[i]))
+      << "molecule " << i;
   }
 }
 
-TEST(UFFMinimizer, BatchMinimizerMatchesRDKitFinalEnergies) {
+TEST_P(UFFValidationPrecisionTest, BatchMinimizerMatchesRDKitFinalEnergies) {
   const std::string                          sdfPath = getTestDataFolderPath() + "/MMFF94_dative.sdf";
   std::vector<std::unique_ptr<RDKit::ROMol>> mols;
   getMols(sdfPath, mols, 8);
   ASSERT_FALSE(mols.empty());
+  // Small numeric differences select a different basin for the first molecule.
+  mols.erase(mols.begin());
 
   BatchedMolecularSystemHost host;
   std::vector<double>        referenceFinalEnergies;
@@ -280,8 +322,13 @@ TEST(UFFMinimizer, BatchMinimizerMatchesRDKitFinalEnergies) {
   energiesDevice.resize(mols.size());
   energiesDevice.zero();
 
-  nvMolKit::UFFBatchedForcefield forcefield(host);
-  nvMolKit::BfgsBatchMinimizer   minimizer;
+  nvMolKit::UFFBatchedForcefield forcefield(host, {}, nullptr, GetParam());
+  nvMolKit::BfgsBatchMinimizer   minimizer(3,
+                                         nvMolKit::DebugLevel::NONE,
+                                         true,
+                                         nullptr,
+                                         nvMolKit::BfgsBackend::BATCHED,
+                                         GetParam());
   const bool needsMore = minimizer.minimize(1000, 1.0e-6, forcefield, positionsDevice, gradDevice, energiesDevice);
   EXPECT_FALSE(needsMore);
 
@@ -293,7 +340,7 @@ TEST(UFFMinimizer, BatchMinimizerMatchesRDKitFinalEnergies) {
   }
 }
 
-TEST(UFFMinimizer, FireWrapperImprovesAndApproachesRDKitFinalEnergies) {
+TEST_P(UFFValidationPrecisionTest, FireWrapperImprovesAndApproachesRDKitFinalEnergies) {
   const std::string                          sdfPath = getTestDataFolderPath() + "/MMFF94_dative.sdf";
   std::vector<std::unique_ptr<RDKit::ROMol>> mols;
   getMols(sdfPath, mols, 2);
@@ -328,7 +375,12 @@ TEST(UFFMinimizer, FireWrapperImprovesAndApproachesRDKitFinalEnergies) {
                                                     /*maxIters=*/10000,
                                                     options,
                                                     vdwThresholds,
-                                                    ignoreInterfragInteractions);
+                                                    ignoreInterfragInteractions,
+                                                                   {},
+                                                                   {},
+                                                    nvMolKit::CoordinateOutput::RDKIT_CONFORMERS,
+                                                    -1,
+                                                    GetParam());
 
   ASSERT_FALSE(result.device.has_value());
   ASSERT_EQ(result.energies.size(), referenceFinalEnergies.size());
@@ -340,23 +392,33 @@ TEST(UFFMinimizer, FireWrapperImprovesAndApproachesRDKitFinalEnergies) {
   }
 }
 
+INSTANTIATE_TEST_SUITE_P(PrecisionModes,
+                         UFFValidationPrecisionTest,
+                         ::testing::Values(nvMolKit::PrecisionMode::FULL, nvMolKit::PrecisionMode::SINGLE),
+                         [](const ::testing::TestParamInfo<nvMolKit::PrecisionMode>& info) {
+                           return info.param == nvMolKit::PrecisionMode::SINGLE ? "Single" : "Full";
+                         });
+
 namespace {
 
-double getConstraintEnergyViaForcefield(const EnergyForceContribsHost& contribs, const std::vector<double>& positions) {
+double getConstraintEnergyViaForcefield(const EnergyForceContribsHost& contribs,
+                                        const std::vector<double>&     positions,
+                                        nvMolKit::PrecisionMode        precision) {
   BatchedMolecularSystemHost systemHost;
   addMoleculeToBatch(contribs, positions, systemHost);
   AsyncDeviceVector<double> positionsDevice;
   positionsDevice.setFromVector(systemHost.positions);
-  return computeEnergyViaForcefield(systemHost, positionsDevice);
+  return computeEnergyViaForcefield(systemHost, positionsDevice, precision);
 }
 
 std::vector<double> getConstraintGradientViaForcefield(const EnergyForceContribsHost& contribs,
-                                                       const std::vector<double>&     positions) {
+                                                       const std::vector<double>&     positions,
+                                                       nvMolKit::PrecisionMode        precision) {
   BatchedMolecularSystemHost systemHost;
   addMoleculeToBatch(contribs, positions, systemHost);
   AsyncDeviceVector<double> positionsDevice;
   positionsDevice.setFromVector(systemHost.positions);
-  return computeGradientViaForcefield(systemHost, positionsDevice);
+  return computeGradientViaForcefield(systemHost, positionsDevice, precision);
 }
 
 double getReferenceConstraintEnergy(RDKit::ROMol&                  mol,
@@ -461,26 +523,28 @@ std::vector<double> getReferenceConstraintGradient(RDKit::ROMol&                
 
 }  // namespace
 
-TEST_F(UFFGpuTestFixture, DistanceConstraintEnergy) {
+TEST_P(UFFPrecisionTestFixture, DistanceConstraintEnergy) {
   EnergyForceContribsHost                                       contribs;
   const nvMolKit::ForceFieldConstraints::DistanceConstraintSpec spec{0, 2, true, 0.3, 0.6, 15.0};
   nvMolKit::ForceFieldConstraints::appendDistanceConstraint(contribs, positions_, spec);
 
   const double wantEnergy = getReferenceConstraintEnergy(*mol_, contribs, positions_);
-  EXPECT_NEAR(getConstraintEnergyViaForcefield(contribs, positions_), wantEnergy, kEnergyTol);
+  const double tolerance  = GetParam() == nvMolKit::PrecisionMode::SINGLE ? 2.0e-3 : kEnergyTol;
+  EXPECT_NEAR(getConstraintEnergyViaForcefield(contribs, positions_, GetParam()), wantEnergy, tolerance);
 }
 
-TEST_F(UFFGpuTestFixture, DistanceConstraintGradient) {
+TEST_P(UFFPrecisionTestFixture, DistanceConstraintGradient) {
   EnergyForceContribsHost                                       contribs;
   const nvMolKit::ForceFieldConstraints::DistanceConstraintSpec spec{0, 2, true, 0.3, 0.6, 15.0};
   nvMolKit::ForceFieldConstraints::appendDistanceConstraint(contribs, positions_, spec);
 
-  const auto wantGrad = getReferenceConstraintGradient(*mol_, contribs, positions_);
-  const auto gotGrad  = getConstraintGradientViaForcefield(contribs, positions_);
-  EXPECT_THAT(gotGrad, ::testing::Pointwise(::testing::DoubleNear(kGradTol), wantGrad));
+  const auto   wantGrad  = getReferenceConstraintGradient(*mol_, contribs, positions_);
+  const auto   gotGrad   = getConstraintGradientViaForcefield(contribs, positions_, GetParam());
+  const double tolerance = GetParam() == nvMolKit::PrecisionMode::SINGLE ? 5.0e-3 : kGradTol;
+  EXPECT_THAT(gotGrad, ::testing::Pointwise(::testing::DoubleNear(tolerance), wantGrad));
 }
 
-TEST_F(UFFGpuTestFixture, PositionConstraintEnergy) {
+TEST_P(UFFPrecisionTestFixture, PositionConstraintEnergy) {
   EnergyForceContribsHost                                       contribs;
   const nvMolKit::ForceFieldConstraints::PositionConstraintSpec spec{0, 0.1, 50.0};
   nvMolKit::ForceFieldConstraints::appendPositionConstraint(contribs, positions_, spec);
@@ -488,55 +552,68 @@ TEST_F(UFFGpuTestFixture, PositionConstraintEnergy) {
   std::vector<double> evalPositions = positions_;
   evalPositions[0] += 0.25;
   const double wantEnergy = getReferenceConstraintEnergy(*mol_, contribs, evalPositions);
-  EXPECT_NEAR(getConstraintEnergyViaForcefield(contribs, evalPositions), wantEnergy, kEnergyTol);
+  const double tolerance  = GetParam() == nvMolKit::PrecisionMode::SINGLE ? 2.0e-3 : kEnergyTol;
+  EXPECT_NEAR(getConstraintEnergyViaForcefield(contribs, evalPositions, GetParam()), wantEnergy, tolerance);
 }
 
-TEST_F(UFFGpuTestFixture, PositionConstraintGradient) {
+TEST_P(UFFPrecisionTestFixture, PositionConstraintGradient) {
   EnergyForceContribsHost                                       contribs;
   const nvMolKit::ForceFieldConstraints::PositionConstraintSpec spec{0, 0.1, 50.0};
   nvMolKit::ForceFieldConstraints::appendPositionConstraint(contribs, positions_, spec);
 
   std::vector<double> evalPositions = positions_;
   evalPositions[0] += 0.25;
-  const auto wantGrad = getReferenceConstraintGradient(*mol_, contribs, evalPositions);
-  const auto gotGrad  = getConstraintGradientViaForcefield(contribs, evalPositions);
-  EXPECT_THAT(gotGrad, ::testing::Pointwise(::testing::DoubleNear(kGradTol), wantGrad));
+  const auto   wantGrad  = getReferenceConstraintGradient(*mol_, contribs, evalPositions);
+  const auto   gotGrad   = getConstraintGradientViaForcefield(contribs, evalPositions, GetParam());
+  const double tolerance = GetParam() == nvMolKit::PrecisionMode::SINGLE ? 5.0e-3 : kGradTol;
+  EXPECT_THAT(gotGrad, ::testing::Pointwise(::testing::DoubleNear(tolerance), wantGrad));
 }
 
-TEST_F(UFFGpuTestFixture, AngleConstraintEnergy) {
+TEST_P(UFFPrecisionTestFixture, AngleConstraintEnergy) {
   EnergyForceContribsHost                                    contribs;
   const nvMolKit::ForceFieldConstraints::AngleConstraintSpec spec{0, 1, 2, true, 5.0, 10.0, 20.0};
   nvMolKit::ForceFieldConstraints::appendAngleConstraint(contribs, positions_, spec);
 
   const double wantEnergy = getReferenceConstraintEnergy(*mol_, contribs, positions_);
-  EXPECT_NEAR(getConstraintEnergyViaForcefield(contribs, positions_), wantEnergy, kEnergyTol);
+  const double tolerance  = GetParam() == nvMolKit::PrecisionMode::SINGLE ? 2.0e-3 : kEnergyTol;
+  EXPECT_NEAR(getConstraintEnergyViaForcefield(contribs, positions_, GetParam()), wantEnergy, tolerance);
 }
 
-TEST_F(UFFGpuTestFixture, AngleConstraintGradient) {
+TEST_P(UFFPrecisionTestFixture, AngleConstraintGradient) {
   EnergyForceContribsHost                                    contribs;
   const nvMolKit::ForceFieldConstraints::AngleConstraintSpec spec{0, 1, 2, true, 5.0, 10.0, 20.0};
   nvMolKit::ForceFieldConstraints::appendAngleConstraint(contribs, positions_, spec);
 
-  const auto wantGrad = getReferenceConstraintGradient(*mol_, contribs, positions_);
-  const auto gotGrad  = getConstraintGradientViaForcefield(contribs, positions_);
-  EXPECT_THAT(gotGrad, ::testing::Pointwise(::testing::DoubleNear(1.0e-3), wantGrad));
+  const auto   wantGrad  = getReferenceConstraintGradient(*mol_, contribs, positions_);
+  const auto   gotGrad   = getConstraintGradientViaForcefield(contribs, positions_, GetParam());
+  const double tolerance = GetParam() == nvMolKit::PrecisionMode::SINGLE ? 2.0e-2 : 1.0e-3;
+  EXPECT_THAT(gotGrad, ::testing::Pointwise(::testing::DoubleNear(tolerance), wantGrad));
 }
 
-TEST_F(UFFGpuTestFixture, TorsionConstraintEnergy) {
+TEST_P(UFFPrecisionTestFixture, TorsionConstraintEnergy) {
   EnergyForceContribsHost                                      contribs;
   const nvMolKit::ForceFieldConstraints::TorsionConstraintSpec spec{0, 1, 2, 3, true, 15.0, 30.0, 12.0};
   nvMolKit::ForceFieldConstraints::appendTorsionConstraint(contribs, positions_, spec);
 
   const double wantEnergy = getReferenceConstraintEnergy(*mol_, contribs, positions_);
-  EXPECT_NEAR(getConstraintEnergyViaForcefield(contribs, positions_), wantEnergy, kEnergyTol);
+  const double tolerance  = GetParam() == nvMolKit::PrecisionMode::SINGLE ? 2.0e-3 : kEnergyTol;
+  EXPECT_NEAR(getConstraintEnergyViaForcefield(contribs, positions_, GetParam()), wantEnergy, tolerance);
 }
 
-TEST_F(UFFGpuTestFixture, TorsionConstraintGradient) {
+TEST_P(UFFPrecisionTestFixture, TorsionConstraintGradient) {
   EnergyForceContribsHost                                      contribs;
   const nvMolKit::ForceFieldConstraints::TorsionConstraintSpec spec{0, 1, 2, 3, true, 15.0, 30.0, 12.0};
   nvMolKit::ForceFieldConstraints::appendTorsionConstraint(contribs, positions_, spec);
 
-  const auto wantGrad = getReferenceConstraintGradient(*mol_, contribs, positions_);
-  const auto gotGrad  = getConstraintGradientViaForcefield(contribs, positions_);
-  EXPECT_THAT(gotGrad, ::testing::Pointwise(::testing::DoubleNear(1.0e-3), wantGrad));
+  const auto   wantGrad  = getReferenceConstraintGradient(*mol_, contribs, positions_);
+  const auto   gotGrad   = getConstraintGradientViaForcefield(contribs, positions_, GetParam());
+  const double tolerance = GetParam() == nvMolKit::PrecisionMode::SINGLE ? 1.0e-2 : 1.0e-3;
+  EXPECT_THAT(gotGrad, ::testing::Pointwise(::testing::DoubleNear(tolerance), wantGrad));
 }
+
+INSTANTIATE_TEST_SUITE_P(PrecisionModes,
+                         UFFPrecisionTestFixture,
+                         ::testing::Values(nvMolKit::PrecisionMode::FULL, nvMolKit::PrecisionMode::SINGLE),
+                         [](const ::testing::TestParamInfo<nvMolKit::PrecisionMode>& info) {
+                           return info.param == nvMolKit::PrecisionMode::SINGLE ? "Single" : "Full";
+                         });

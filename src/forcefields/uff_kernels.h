@@ -154,65 +154,73 @@ cudaError_t launchVdwGradientKernel(int           numVdws,
                                     double*       grad,
                                     cudaStream_t  stream = 0);
 
-struct BondStretchTermsDevicePtr {
+template <typename Scalar> struct BondStretchTermsDevicePtrT {
   int*    idx1          = nullptr;
   int*    idx2          = nullptr;
-  double* restLen       = nullptr;
-  double* forceConstant = nullptr;
+  Scalar* restLen       = nullptr;
+  Scalar* forceConstant = nullptr;
 };
 
-struct AngleBendTermsDevicePtr {
+template <typename Scalar> struct AngleBendTermsDevicePtrT {
   int*          idx1          = nullptr;
   int*          idx2          = nullptr;
   int*          idx3          = nullptr;
-  double*       theta0        = nullptr;
-  double*       forceConstant = nullptr;
+  Scalar*       theta0        = nullptr;
+  Scalar*       forceConstant = nullptr;
   std::uint8_t* order         = nullptr;
-  double*       C0            = nullptr;
-  double*       C1            = nullptr;
-  double*       C2            = nullptr;
+  Scalar*       C0            = nullptr;
+  Scalar*       C1            = nullptr;
+  Scalar*       C2            = nullptr;
 };
 
-struct TorsionTermsDevicePtr {
+template <typename Scalar> struct TorsionTermsDevicePtrT {
   int*          idx1          = nullptr;
   int*          idx2          = nullptr;
   int*          idx3          = nullptr;
   int*          idx4          = nullptr;
-  double*       forceConstant = nullptr;
+  Scalar*       forceConstant = nullptr;
   std::uint8_t* order         = nullptr;
-  double*       cosTerm       = nullptr;
+  Scalar*       cosTerm       = nullptr;
 };
 
-struct InversionTermsDevicePtr {
+template <typename Scalar> struct InversionTermsDevicePtrT {
   int*    idx1          = nullptr;
   int*    idx2          = nullptr;
   int*    idx3          = nullptr;
   int*    idx4          = nullptr;
-  double* forceConstant = nullptr;
-  double* C0            = nullptr;
-  double* C1            = nullptr;
-  double* C2            = nullptr;
+  Scalar* forceConstant = nullptr;
+  Scalar* C0            = nullptr;
+  Scalar* C1            = nullptr;
+  Scalar* C2            = nullptr;
 };
 
-struct VdwTermsDevicePtr {
+template <typename Scalar> struct VdwTermsDevicePtrT {
   int*    idx1      = nullptr;
   int*    idx2      = nullptr;
-  double* x_ij      = nullptr;
-  double* wellDepth = nullptr;
-  double* threshold = nullptr;
+  Scalar* x_ij      = nullptr;
+  Scalar* wellDepth = nullptr;
+  Scalar* threshold = nullptr;
 };
 
-struct EnergyForceContribsDevicePtr {
-  BondStretchTermsDevicePtr              bondTerms;
-  AngleBendTermsDevicePtr                angleTerms;
-  TorsionTermsDevicePtr                  torsionTerms;
-  InversionTermsDevicePtr                inversionTerms;
-  VdwTermsDevicePtr                      vdwTerms;
-  MMFF::DistanceConstraintTermsDevicePtr distanceConstraintTerms;
-  MMFF::PositionConstraintTermsDevicePtr positionConstraintTerms;
-  MMFF::AngleConstraintTermsDevicePtr    angleConstraintTerms;
-  MMFF::TorsionConstraintTermsDevicePtr  torsionConstraintTerms;
+template <typename Scalar> struct EnergyForceContribsDevicePtrT {
+  BondStretchTermsDevicePtrT<Scalar>              bondTerms;
+  AngleBendTermsDevicePtrT<Scalar>                angleTerms;
+  TorsionTermsDevicePtrT<Scalar>                  torsionTerms;
+  InversionTermsDevicePtrT<Scalar>                inversionTerms;
+  VdwTermsDevicePtrT<Scalar>                      vdwTerms;
+  MMFF::DistanceConstraintTermsDevicePtrT<Scalar> distanceConstraintTerms;
+  MMFF::PositionConstraintTermsDevicePtrT<Scalar> positionConstraintTerms;
+  MMFF::AngleConstraintTermsDevicePtrT<Scalar>    angleConstraintTerms;
+  MMFF::TorsionConstraintTermsDevicePtrT<Scalar>  torsionConstraintTerms;
 };
+
+using BondStretchTermsDevicePtr          = BondStretchTermsDevicePtrT<double>;
+using AngleBendTermsDevicePtr            = AngleBendTermsDevicePtrT<double>;
+using TorsionTermsDevicePtr              = TorsionTermsDevicePtrT<double>;
+using InversionTermsDevicePtr            = InversionTermsDevicePtrT<double>;
+using VdwTermsDevicePtr                  = VdwTermsDevicePtrT<double>;
+using EnergyForceContribsDevicePtr       = EnergyForceContribsDevicePtrT<double>;
+using EnergyForceContribsDevicePtrSingle = EnergyForceContribsDevicePtrT<float>;
 
 struct BatchedIndicesDevicePtr {
   int* atomStarts                   = nullptr;
@@ -233,7 +241,8 @@ cudaError_t launchBlockPerMolEnergyKernel(int                                 nu
                                           const double*                       coords,
                                           double*                             energies,
                                           bool                                hasConstraints,
-                                          cudaStream_t                        stream = nullptr);
+                                          cudaStream_t                        stream           = nullptr,
+                                          const uint8_t*                      activeSystemMask = nullptr);
 
 cudaError_t launchBlockPerMolGradKernel(int                                 numMols,
                                         const EnergyForceContribsDevicePtr& terms,
@@ -241,7 +250,26 @@ cudaError_t launchBlockPerMolGradKernel(int                                 numM
                                         const double*                       coords,
                                         double*                             grad,
                                         bool                                hasConstraints,
-                                        cudaStream_t                        stream = nullptr);
+                                        cudaStream_t                        stream           = nullptr,
+                                        const uint8_t*                      activeSystemMask = nullptr);
+
+cudaError_t launchBlockPerMolEnergyKernel(int                                       numMols,
+                                          const EnergyForceContribsDevicePtrSingle& terms,
+                                          const BatchedIndicesDevicePtr&            sytemIndices,
+                                          const float*                              coords,
+                                          double*                                   energies,
+                                          bool                                      hasConstraints,
+                                          cudaStream_t                              stream           = nullptr,
+                                          const uint8_t*                            activeSystemMask = nullptr);
+
+cudaError_t launchBlockPerMolGradKernel(int                                       numMols,
+                                        const EnergyForceContribsDevicePtrSingle& terms,
+                                        const BatchedIndicesDevicePtr&            sytemIndices,
+                                        const float*                              coords,
+                                        float*                                    grad,
+                                        bool                                      hasConstraints,
+                                        cudaStream_t                              stream           = nullptr,
+                                        const uint8_t*                            activeSystemMask = nullptr);
 
 }  // namespace UFF
 }  // namespace nvMolKit

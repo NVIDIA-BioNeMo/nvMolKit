@@ -122,70 +122,77 @@ struct BatchedMolecularSystemHost {
   int                     maxNumAtoms = 0;
 };
 
-struct BondStretchTermsDevice {
+template <typename Scalar> struct BondStretchTermsDeviceT {
   AsyncDeviceVector<int>    idx1;
   AsyncDeviceVector<int>    idx2;
-  AsyncDeviceVector<double> restLen;
-  AsyncDeviceVector<double> forceConstant;
+  AsyncDeviceVector<Scalar> restLen;
+  AsyncDeviceVector<Scalar> forceConstant;
 };
 
-struct AngleBendTermsDevice {
+template <typename Scalar> struct AngleBendTermsDeviceT {
   AsyncDeviceVector<int>          idx1;
   AsyncDeviceVector<int>          idx2;
   AsyncDeviceVector<int>          idx3;
-  AsyncDeviceVector<double>       theta0;
-  AsyncDeviceVector<double>       forceConstant;
+  AsyncDeviceVector<Scalar>       theta0;
+  AsyncDeviceVector<Scalar>       forceConstant;
   AsyncDeviceVector<std::uint8_t> order;
-  AsyncDeviceVector<double>       C0;
-  AsyncDeviceVector<double>       C1;
-  AsyncDeviceVector<double>       C2;
+  AsyncDeviceVector<Scalar>       C0;
+  AsyncDeviceVector<Scalar>       C1;
+  AsyncDeviceVector<Scalar>       C2;
 };
 
-struct TorsionTermsDevice {
+template <typename Scalar> struct TorsionTermsDeviceT {
   AsyncDeviceVector<int>          idx1;
   AsyncDeviceVector<int>          idx2;
   AsyncDeviceVector<int>          idx3;
   AsyncDeviceVector<int>          idx4;
-  AsyncDeviceVector<double>       forceConstant;
+  AsyncDeviceVector<Scalar>       forceConstant;
   AsyncDeviceVector<std::uint8_t> order;
-  AsyncDeviceVector<double>       cosTerm;
+  AsyncDeviceVector<Scalar>       cosTerm;
 };
 
-struct InversionTermsDevice {
+template <typename Scalar> struct InversionTermsDeviceT {
   AsyncDeviceVector<int>    idx1;
   AsyncDeviceVector<int>    idx2;
   AsyncDeviceVector<int>    idx3;
   AsyncDeviceVector<int>    idx4;
-  AsyncDeviceVector<double> forceConstant;
-  AsyncDeviceVector<double> C0;
-  AsyncDeviceVector<double> C1;
-  AsyncDeviceVector<double> C2;
+  AsyncDeviceVector<Scalar> forceConstant;
+  AsyncDeviceVector<Scalar> C0;
+  AsyncDeviceVector<Scalar> C1;
+  AsyncDeviceVector<Scalar> C2;
 };
 
-struct VdwTermsDevice {
+template <typename Scalar> struct VdwTermsDeviceT {
   AsyncDeviceVector<int>    idx1;
   AsyncDeviceVector<int>    idx2;
-  AsyncDeviceVector<double> x_ij;
-  AsyncDeviceVector<double> wellDepth;
-  AsyncDeviceVector<double> threshold;
+  AsyncDeviceVector<Scalar> x_ij;
+  AsyncDeviceVector<Scalar> wellDepth;
+  AsyncDeviceVector<Scalar> threshold;
 };
 
-using DistanceConstraintTermsDevice = MMFF::DistanceConstraintTermsDevice;
-using PositionConstraintTermsDevice = MMFF::PositionConstraintTermsDevice;
-using AngleConstraintTermsDevice    = MMFF::AngleConstraintTermsDevice;
-using TorsionConstraintTermsDevice  = MMFF::TorsionConstraintTermsDevice;
-
-struct EnergyForceContribsDevice {
-  BondStretchTermsDevice        bondTerms;
-  AngleBendTermsDevice          angleTerms;
-  TorsionTermsDevice            torsionTerms;
-  InversionTermsDevice          inversionTerms;
-  VdwTermsDevice                vdwTerms;
-  DistanceConstraintTermsDevice distanceConstraintTerms;
-  PositionConstraintTermsDevice positionConstraintTerms;
-  AngleConstraintTermsDevice    angleConstraintTerms;
-  TorsionConstraintTermsDevice  torsionConstraintTerms;
+template <typename Scalar> struct EnergyForceContribsDeviceT {
+  BondStretchTermsDeviceT<Scalar>              bondTerms;
+  AngleBendTermsDeviceT<Scalar>                angleTerms;
+  TorsionTermsDeviceT<Scalar>                  torsionTerms;
+  InversionTermsDeviceT<Scalar>                inversionTerms;
+  VdwTermsDeviceT<Scalar>                      vdwTerms;
+  MMFF::DistanceConstraintTermsDeviceT<Scalar> distanceConstraintTerms;
+  MMFF::PositionConstraintTermsDeviceT<Scalar> positionConstraintTerms;
+  MMFF::AngleConstraintTermsDeviceT<Scalar>    angleConstraintTerms;
+  MMFF::TorsionConstraintTermsDeviceT<Scalar>  torsionConstraintTerms;
 };
+
+using BondStretchTermsDevice          = BondStretchTermsDeviceT<double>;
+using AngleBendTermsDevice            = AngleBendTermsDeviceT<double>;
+using TorsionTermsDevice              = TorsionTermsDeviceT<double>;
+using InversionTermsDevice            = InversionTermsDeviceT<double>;
+using VdwTermsDevice                  = VdwTermsDeviceT<double>;
+using DistanceConstraintTermsDevice   = MMFF::DistanceConstraintTermsDevice;
+using PositionConstraintTermsDevice   = MMFF::PositionConstraintTermsDevice;
+using AngleConstraintTermsDevice      = MMFF::AngleConstraintTermsDevice;
+using TorsionConstraintTermsDevice    = MMFF::TorsionConstraintTermsDevice;
+using EnergyForceContribsDevice       = EnergyForceContribsDeviceT<double>;
+using EnergyForceContribsDeviceSingle = EnergyForceContribsDeviceT<float>;
 
 struct BatchedIndicesDevice {
   AsyncDeviceVector<int> atomStarts;
@@ -204,14 +211,17 @@ struct BatchedIndicesDevice {
   AsyncDeviceVector<int> torsionConstraintTermStarts;
 };
 
-struct BatchedMolecularDeviceBuffers {
-  EnergyForceContribsDevice contribs;
-  BatchedIndicesDevice      indices;
-  AsyncDeviceVector<double> positions;
-  AsyncDeviceVector<double> grad;
-  AsyncDeviceVector<double> energyBuffer;
-  AsyncDeviceVector<double> energyOuts;
+template <typename ParameterScalar, typename CoordinateScalar> struct BatchedMolecularDeviceBuffersT {
+  EnergyForceContribsDeviceT<ParameterScalar> contribs;
+  BatchedIndicesDevice                        indices;
+  AsyncDeviceVector<CoordinateScalar>         positions;
+  AsyncDeviceVector<CoordinateScalar>         grad;
+  AsyncDeviceVector<double>                   energyBuffer;
+  AsyncDeviceVector<double>                   energyOuts;
 };
+
+using BatchedMolecularDeviceBuffers       = BatchedMolecularDeviceBuffersT<double, double>;
+using BatchedMolecularDeviceBuffersSingle = BatchedMolecularDeviceBuffersT<float, float>;
 
 void addMoleculeToBatch(const EnergyForceContribsHost& contribs,
                         const std::vector<double>&     positions,
@@ -226,12 +236,17 @@ void addMoleculeToBatch(const EnergyForceContribsHost& contribs,
                         const HostCustomization&       customization = {});
 
 void setStreams(BatchedMolecularDeviceBuffers& molSystemDevice, cudaStream_t stream);
+void setStreams(BatchedMolecularDeviceBuffersSingle& molSystemDevice, cudaStream_t stream);
 
 void sendContribsAndIndicesToDevice(const BatchedMolecularSystemHost& molSystemHost,
                                     BatchedMolecularDeviceBuffers&    molSystemDevice);
+void sendContribsAndIndicesToDevice(const BatchedMolecularSystemHost&    molSystemHost,
+                                    BatchedMolecularDeviceBuffersSingle& molSystemDevice);
 
 void allocateIntermediateBuffers(const BatchedMolecularSystemHost& molSystemHost,
                                  BatchedMolecularDeviceBuffers&    molSystemDevice);
+void allocateIntermediateBuffers(const BatchedMolecularSystemHost&    molSystemHost,
+                                 BatchedMolecularDeviceBuffersSingle& molSystemDevice);
 
 cudaError_t computeEnergy(BatchedMolecularDeviceBuffers& molSystemDevice,
                           double*                        energyOuts,
@@ -246,6 +261,11 @@ cudaError_t computeEnergy(BatchedMolecularDeviceBuffers& molSystemDevice,
 cudaError_t computeEnergyBlockPerMol(BatchedMolecularDeviceBuffers& molSystemDevice,
                                      const double*                  coords = nullptr,
                                      cudaStream_t                   stream = nullptr);
+cudaError_t computeEnergyBlockPerMol(BatchedMolecularDeviceBuffersSingle& molSystemDevice,
+                                     double*                              energyOuts,
+                                     const float*                         coords,
+                                     const uint8_t*                       activeSystemMask = nullptr,
+                                     cudaStream_t                         stream           = nullptr);
 
 cudaError_t computeGradients(BatchedMolecularDeviceBuffers& molSystemDevice,
                              const double*                  positions,
@@ -256,15 +276,24 @@ cudaError_t computeGradients(BatchedMolecularDeviceBuffers& molSystemDevice,
 cudaError_t computeGradients(BatchedMolecularDeviceBuffers& molSystemDevice, cudaStream_t stream = nullptr);
 
 cudaError_t computeGradBlockPerMol(BatchedMolecularDeviceBuffers& molSystemDevice, cudaStream_t stream = nullptr);
+cudaError_t computeGradBlockPerMol(BatchedMolecularDeviceBuffersSingle& molSystemDevice,
+                                   const float*                         coords,
+                                   float*                               grad,
+                                   const uint8_t*                       activeSystemMask = nullptr,
+                                   cudaStream_t                         stream           = nullptr);
 
-EnergyForceContribsDevicePtr toEnergyForceContribsDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice);
+EnergyForceContribsDevicePtr       toEnergyForceContribsDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice);
+EnergyForceContribsDevicePtrSingle toEnergyForceContribsDevicePtr(
+  const BatchedMolecularDeviceBuffersSingle& molSystemDevice);
 
 BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice);
+BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBuffersSingle& molSystemDevice);
 
 //! Returns true if any molecule in the batch contributes a distance, position, angle, or torsion
 //! constraint term. Used by per-molecule kernels to dispatch to a specialization that compiles out
 //! the constraint loops, recovering register pressure when no constraints are active.
 bool batchHasConstraints(const EnergyForceContribsDevice& contribs);
+bool batchHasConstraints(const EnergyForceContribsDeviceSingle& contribs);
 
 }  // namespace UFF
 }  // namespace nvMolKit

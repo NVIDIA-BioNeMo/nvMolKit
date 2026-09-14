@@ -83,7 +83,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, overload
 
-from nvmolkit import _batchedForcefield  # type: ignore
 from nvmolkit._mmff_bridge import default_rdkit_mmff_properties, make_internal_mmff_properties
 from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions, HardwareOptions, PrecisionMode
 
@@ -339,7 +338,7 @@ class _BatchedForcefieldBase:
         molecules: list["Mol"],
         ignoreInterfragInteractions,
         hardwareOptions: HardwareOptions | None,
-        precision: PrecisionMode = PrecisionMode.FULL,
+        precision: PrecisionMode,
     ) -> None:
         self._molecules = molecules
         self._ignore_interfrag_interactions = _normalize_scalar_or_list(
@@ -664,6 +663,7 @@ class UFFBatchedForcefield(_BatchedForcefieldBase):
         vdwThreshold: float | Sequence[float] = 10.0,
         ignoreInterfragInteractions: bool | Sequence[bool] = True,
         hardwareOptions: HardwareOptions | None = None,
+        precision: PrecisionMode = PrecisionMode.FULL,
     ):
         """Create a batched UFF forcefield wrapper.
 
@@ -677,8 +677,10 @@ class UFFBatchedForcefield(_BatchedForcefieldBase):
                 non-bonded interactions, as a scalar or per-molecule list.
             hardwareOptions: GPU device and batching configuration.  Uses
                 reasonable defaults when ``None``.
+            precision: ``PrecisionMode.FULL`` (default) or
+                ``PrecisionMode.SINGLE``.
         """
-        self._init_common(molecules, ignoreInterfragInteractions, hardwareOptions)
+        self._init_common(molecules, ignoreInterfragInteractions, hardwareOptions, precision)
         self._vdw_thresholds = _normalize_scalar_or_list(vdwThreshold, len(molecules), "vdwThreshold")
 
     def __getitem__(self, idx: int) -> UFFBatchElement:
@@ -696,6 +698,7 @@ class UFFBatchedForcefield(_BatchedForcefieldBase):
             ang,
             tor,
             self._hardware_options._as_native(),
+            self._precision,
         )
 
     @overload
