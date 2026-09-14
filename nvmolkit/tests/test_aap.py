@@ -9,7 +9,11 @@ import pytest
 import torch
 from rdkit import Chem
 
-from nvmolkit.clustering import aap_dise, aap_dise_clustering, aap_similarity_clustering
+from nvmolkit.clustering import (
+    DISEDeviceResult,
+    DISEOutputMode,
+    aap_dise,
+)
 from nvmolkit.similarity import aap_similarity
 
 
@@ -19,6 +23,16 @@ def _mol(smiles):
     return molecule
 
 
+def _cluster_ids(molecules, similarity_threshold=0.217, assignment="first", **options):
+    result = aap_dise(
+        molecules,
+        similarity_threshold=similarity_threshold,
+        assignment=assignment,
+        **options,
+    )
+    return result.cluster_ids.numpy().tolist()
+
+
 def test_aap_similarity_is_one_for_identical_and_renumbered_molecules():
     molecule = _mol("CC(=O)Oc1ccccc1C(=O)O")
     renumbered = Chem.RenumberAtoms(molecule, list(reversed(range(molecule.GetNumAtoms()))))
@@ -26,7 +40,7 @@ def test_aap_similarity_is_one_for_identical_and_renumbered_molecules():
     assert aap_similarity(molecule, molecule) == 1.0
     assert aap_similarity(molecule, renumbered) == 1.0
     assert aap_similarity(renumbered, molecule) == 1.0
-    assert aap_similarity_clustering([molecule, renumbered], threshold=1.0) == [1, 1]
+    assert _cluster_ids([molecule, renumbered], similarity_threshold=1.0) == [0, 0]
 
 
 def test_aap_similarity_has_expected_directed_numerical_result():
@@ -113,7 +127,7 @@ def test_aap_options_are_validated_for_pair_and_empty_clustering(kwargs, message
     with pytest.raises(ValueError, match=message):
         aap_similarity(molecule, molecule, **kwargs)
     with pytest.raises(ValueError, match=message):
-        aap_similarity_clustering([], **kwargs)
+        aap_dise([], **kwargs)
 
 
 def test_aap_accepts_smallest_positive_normal_sinkhorn_temperature():
@@ -124,13 +138,21 @@ def test_aap_accepts_smallest_positive_normal_sinkhorn_temperature():
 
     assert math.isfinite(score)
     assert 0.0 <= score <= 1.0
-    assert aap_similarity_clustering(molecules, sinkhorn_temperature=temperature)
+    assert _cluster_ids(molecules, sinkhorn_temperature=temperature) == [0, 1]
+
+
+def test_aap_supports_paths_beyond_the_reference_default():
+    molecules = [_mol("CCCCCCCCC"), _mol("CCCCCCCCO")]
+
+    score = aap_similarity(*molecules, max_path_length=8)
+
+    assert 0.0 <= score <= 1.0
 
 
 @pytest.mark.parametrize("threshold", [-0.01, 1.01, float("nan"), float("inf"), -float("inf")])
 def test_aap_clustering_rejects_invalid_thresholds(threshold):
     with pytest.raises(ValueError, match="threshold must be in"):
-        aap_similarity_clustering([], threshold=threshold)
+        aap_dise([], similarity_threshold=threshold)
 
 
 def test_aap_rejects_empty_oversized_null_and_unsupported_molecules():
@@ -147,7 +169,7 @@ def test_aap_rejects_empty_oversized_null_and_unsupported_molecules():
     with pytest.raises(ValueError, match="at most 64 atoms"):
         aap_similarity(oversized, oversized)
     with pytest.raises(ValueError, match="Invalid molecule at index 0"):
-        aap_similarity_clustering([None])
+        aap_dise([None])
     with pytest.raises(ValueError, match="supports only single, double, triple, and aromatic bonds"):
         aap_similarity(unsupported.GetMol(), molecule)
 
@@ -155,17 +177,17 @@ def test_aap_rejects_empty_oversized_null_and_unsupported_molecules():
 def test_aap_supports_the_64_atom_boundary():
     molecule = _mol("C" * 64)
 
-    assert aap_similarity_clustering([molecule]) == [1]
+    assert _cluster_ids([molecule]) == [0]
 
 
 def test_aap_clustering_handles_empty_singleton_and_generator_inputs():
     ethanol = _mol("CCO")
     benzene = _mol("c1ccccc1")
 
-    assert aap_similarity_clustering([]) == []
-    assert aap_similarity_clustering([ethanol]) == [1]
+    assert _cluster_ids([]) == []
+    assert _cluster_ids([ethanol]) == [0]
     molecules = (molecule for molecule in (ethanol, ethanol, benzene))
-    assert aap_similarity_clustering(molecules, threshold=1.0) == [1, 1, 2]
+    assert _cluster_ids(molecules, similarity_threshold=1.0) == [0, 0, 1]
 
 
 def test_aap_clustering_threshold_is_inclusive():
@@ -173,16 +195,16 @@ def test_aap_clustering_threshold_is_inclusive():
     propane = _mol("CCC")
     score = aap_similarity(ethane, propane)
 
-    assert aap_similarity_clustering([ethane, propane], threshold=score) == [1, 1]
-    assert aap_similarity_clustering([ethane, propane], threshold=score + 1e-4) == [1, 2]
+    assert _cluster_ids([ethane, propane], similarity_threshold=score) == [0, 0]
+    assert _cluster_ids([ethane, propane], similarity_threshold=score + 1e-4) == [0, 1]
 
 
 def test_aap_clustering_is_directed_and_uses_input_order_centroids():
     ethane = _mol("CC")
     propane = _mol("CCC")
 
-    assert aap_similarity_clustering([ethane, propane], threshold=0.25) == [1, 1]
-    assert aap_similarity_clustering([propane, ethane], threshold=0.25) == [1, 2]
+    assert _cluster_ids([ethane, propane], similarity_threshold=0.25) == [0, 0]
+    assert _cluster_ids([propane, ethane], similarity_threshold=0.25) == [0, 1]
 
 
 def test_aap_clustering_is_centroid_based_not_transitive():
@@ -193,7 +215,7 @@ def test_aap_clustering_is_centroid_based_not_transitive():
     assert aap_similarity(ethane, propane) >= 0.3
     assert aap_similarity(propane, butane) >= 0.3
     assert aap_similarity(ethane, butane) < 0.3
-    assert aap_similarity_clustering([ethane, propane, butane], threshold=0.3) == [1, 1, 2]
+    assert _cluster_ids([ethane, propane, butane], similarity_threshold=0.3) == [0, 0, 1]
 
 
 def test_aap_clustering_renumbers_clusters_by_size_then_centroid_order():
@@ -202,46 +224,79 @@ def test_aap_clustering_renumbers_clusters_by_size_then_centroid_order():
     propane = _mol("CCC")
     molecules = [benzene, ethanol, ethanol, ethanol, propane, propane]
 
-    assert aap_similarity_clustering(molecules, threshold=1.0) == [3, 1, 1, 1, 2, 2]
+    assert _cluster_ids(molecules, similarity_threshold=1.0) == [2, 0, 0, 0, 1, 1]
 
 
 def test_aap_clustering_threshold_zero_assigns_every_molecule_to_first_centroid():
     molecules = [_mol(smiles) for smiles in ("CCO", "c1ccccc1", "[NH4+]", "ClCCCl")]
 
-    assert aap_similarity_clustering(molecules, threshold=0.0) == [1, 1, 1, 1]
+    assert _cluster_ids(molecules, similarity_threshold=0.0) == [0, 0, 0, 0]
 
 
-def test_aap_dise_clustering_handles_empty_singleton_duplicates_and_generator():
+def test_aap_dise_nearest_assignment_handles_empty_singleton_duplicates_and_generator():
     ethanol = _mol("CCO")
     benzene = _mol("c1ccccc1")
 
-    assert aap_dise_clustering([]) == []
-    assert aap_dise_clustering([ethanol]) == [1]
+    assert _cluster_ids([], assignment="nearest") == []
+    assert _cluster_ids([ethanol], assignment="nearest") == [0]
     molecules = (molecule for molecule in (ethanol, ethanol, benzene))
-    assert aap_dise_clustering(molecules, threshold=1.0) == [1, 1, 2]
+    assert _cluster_ids(molecules, similarity_threshold=1.0, assignment="nearest") == [0, 0, 1]
 
 
-def test_aap_dise_clustering_reassigns_noncentroids_to_the_nearest_centroid():
+def test_aap_dise_reassigns_noncentroids_to_the_nearest_centroid():
     molecules = [_mol(smiles) for smiles in ("CCCC", "CCCO", "CCOC")]
 
     # The selection pass absorbs CCCO into the first sphere, while CCOC becomes
     # a second centroid. The complete DISE workflow then assigns CCCO to CCOC,
     # because that selected centroid is more similar.
-    assert aap_similarity_clustering(molecules, threshold=0.2) == [1, 1, 2]
+    assert _cluster_ids(molecules, similarity_threshold=0.2) == [0, 0, 1]
     assert aap_similarity(molecules[2], molecules[1]) > aap_similarity(molecules[0], molecules[1])
-    assert aap_dise_clustering(molecules, threshold=0.2) == [2, 1, 1]
+    assert _cluster_ids(molecules, similarity_threshold=0.2, assignment="nearest") == [1, 0, 0]
 
 
 @pytest.mark.parametrize(
-    "assignment, compatibility_function",
-    [("first", aap_similarity_clustering), ("nearest", aap_dise_clustering)],
+    "assignment, expected_ids, expected_centroids, expected_sizes, expected_clusters",
+    [
+        ("first", [0, 0, 1], [0, 2], [2, 1], ((0, 1), (2,))),
+        ("nearest", [1, 0, 0], [2, 0], [2, 1], ((2, 1), (0,))),
+    ],
 )
-def test_aap_dise_assignment_modes_match_compatibility_functions(assignment, compatibility_function):
-    molecules = [_mol(smiles) for smiles in ("CCCC", "CCCO", "CCOC", "c1ccccc1")]
+def test_aap_dise_output_modes_share_one_cluster_contract(
+    assignment, expected_ids, expected_centroids, expected_sizes, expected_clusters
+):
+    molecules = [_mol(smiles) for smiles in ("CCCC", "CCCO", "CCOC")]
 
-    assert aap_dise(molecules, similarity_threshold=0.2, assignment=assignment) == compatibility_function(
-        molecules, threshold=0.2
+    device = aap_dise(molecules, similarity_threshold=0.2, assignment=assignment)
+    rdkit = aap_dise(
+        molecules,
+        similarity_threshold=0.2,
+        assignment=assignment,
+        output=DISEOutputMode.RDKIT,
     )
+
+    assert isinstance(device, DISEDeviceResult)
+    assert device.cluster_ids.torch().dtype == torch.int32
+    assert device.centroids.torch().dtype == torch.int32
+    assert device.cluster_sizes.torch().dtype == torch.int64
+    assert device.cluster_ids.numpy().tolist() == expected_ids
+    assert device.centroids.numpy().tolist() == expected_centroids
+    assert device.cluster_sizes.numpy().tolist() == expected_sizes
+    assert rdkit == expected_clusters
+
+
+def test_aap_dise_output_modes_handle_empty_input():
+    device = aap_dise([])
+
+    assert device.cluster_ids.torch().shape == (0,)
+    assert device.centroids.torch().shape == (0,)
+    assert device.cluster_sizes.torch().shape == (0,)
+    assert aap_dise([], output=DISEOutputMode.RDKIT) == ()
+
+
+@pytest.mark.parametrize("output", ["device", None, DISEDeviceResult])
+def test_aap_dise_rejects_invalid_output(output):
+    with pytest.raises(TypeError, match="output must be a DISEOutputMode"):
+        aap_dise([], output=output)
 
 
 @pytest.mark.parametrize("assignment", ["", "closest", None])
@@ -257,9 +312,24 @@ def test_aap_similarity_and_clustering_are_deterministic_across_streams():
     streams = [torch.cuda.Stream(), torch.cuda.Stream()]
 
     scores = [aap_similarity(left, right, stream=stream) for stream in streams]
-    labels = [aap_similarity_clustering(molecules, threshold=0.2, stream=stream) for stream in streams]
+    labels = [_cluster_ids(molecules, similarity_threshold=0.2, stream=stream) for stream in streams]
     assert scores[0] == scores[1]
     assert labels[0] == labels[1]
+
+
+def test_aap_dise_device_output_on_explicit_stream_matches_default():
+    molecules = [_mol(smiles) for smiles in ("CCCC", "CCCO", "CCOC", "c1ccccc1")]
+    expected = aap_dise(molecules, similarity_threshold=0.2)
+    stream = torch.cuda.Stream()
+
+    actual = aap_dise(molecules, similarity_threshold=0.2, stream=stream)
+
+    assert actual.cluster_ids.device == stream.device
+    assert actual.centroids.device == stream.device
+    assert actual.cluster_sizes.device == stream.device
+    torch.testing.assert_close(actual.cluster_ids.torch(), expected.cluster_ids.torch())
+    torch.testing.assert_close(actual.centroids.torch(), expected.centroids.torch())
+    torch.testing.assert_close(actual.cluster_sizes.torch(), expected.cluster_sizes.torch())
 
 
 def test_aap_similarity_tracks_optional_rdkit_reference_over_corpus():
@@ -308,4 +378,5 @@ def test_aap_matches_optional_ligand_clustering_source():
         expected_labels = reference.aap_similarity_clustering(
             smiles, dist_thresh=threshold, sinkhorn_execution="eager"
         )
-        assert aap_similarity_clustering(molecules, threshold=threshold) == expected_labels
+        actual_labels = [cluster_id + 1 for cluster_id in _cluster_ids(molecules, similarity_threshold=threshold)]
+        assert actual_labels == expected_labels

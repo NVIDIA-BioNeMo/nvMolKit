@@ -428,7 +428,8 @@ CentroidSelection selectCentroids(const AapHostDescriptors&   hostDescriptors,
   return result;
 }
 
-std::vector<int> remapClustersBySize(const std::vector<int>& labels, const int numClusters) {
+AapClusteringResult buildClusteringResult(const std::vector<int>& labels, const std::vector<int>& centroids) {
+  const int        numClusters = static_cast<int>(centroids.size());
   std::vector<int> sizes(numClusters, 0);
   for (const int label : labels) {
     ++sizes[label];
@@ -440,10 +441,20 @@ std::vector<int> remapClustersBySize(const std::vector<int>& labels, const int n
   });
   std::vector<int> remap(numClusters);
   for (int newId = 0; newId < numClusters; ++newId) {
-    remap[order[newId]] = newId + 1;
+    remap[order[newId]] = newId;
   }
-  std::vector<int> result(labels.size());
-  std::transform(labels.begin(), labels.end(), result.begin(), [&remap](const int label) { return remap[label]; });
+  AapClusteringResult result;
+  result.clusterIds.resize(labels.size());
+  result.centroids.resize(numClusters);
+  result.clusterSizes.resize(numClusters);
+  std::transform(labels.begin(), labels.end(), result.clusterIds.begin(), [&remap](const int label) {
+    return remap[label];
+  });
+  for (int newId = 0; newId < numClusters; ++newId) {
+    const int oldId            = order[newId];
+    result.centroids[newId]    = centroids[oldId];
+    result.clusterSizes[newId] = sizes[oldId];
+  }
   return result;
 }
 
@@ -472,10 +483,10 @@ float aapSimilarityGpu(const RDKit::ROMol& left,
   return outputHost[0];
 }
 
-std::vector<int> aapSimilarityClustering(const std::vector<const RDKit::ROMol*>& molecules,
-                                         const float                             threshold,
-                                         const AapOptions&                       options,
-                                         cudaStream_t                            stream) {
+AapClusteringResult aapSimilarityClustering(const std::vector<const RDKit::ROMol*>& molecules,
+                                            const float                             threshold,
+                                            const AapOptions&                       options,
+                                            cudaStream_t                            stream) {
   validateOptions(options);
   if (!(threshold >= 0.0F && threshold <= 1.0F)) {
     throw std::invalid_argument("threshold must be between 0 and 1");
@@ -502,13 +513,13 @@ std::vector<int> aapSimilarityClustering(const std::vector<const RDKit::ROMol*>&
                                          candidateHost,
                                          outputHost,
                                          stream);
-  return remapClustersBySize(selection.labels, static_cast<int>(selection.centroids.size()));
+  return buildClusteringResult(selection.labels, selection.centroids);
 }
 
-std::vector<int> aapDiseClustering(const std::vector<const RDKit::ROMol*>& molecules,
-                                   const float                             threshold,
-                                   const AapOptions&                       options,
-                                   cudaStream_t                            stream) {
+AapClusteringResult aapDiseClustering(const std::vector<const RDKit::ROMol*>& molecules,
+                                      const float                             threshold,
+                                      const AapOptions&                       options,
+                                      cudaStream_t                            stream) {
   validateOptions(options);
   if (!(threshold >= 0.0F && threshold <= 1.0F)) {
     throw std::invalid_argument("threshold must be between 0 and 1");
@@ -578,7 +589,7 @@ std::vector<int> aapDiseClustering(const std::vector<const RDKit::ROMol*>& molec
     }
   }
 
-  return remapClustersBySize(labels, static_cast<int>(centroids.size()));
+  return buildClusteringResult(labels, centroids);
 }
 
 }  // namespace nvMolKit

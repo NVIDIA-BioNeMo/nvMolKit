@@ -50,8 +50,60 @@ _VALID_NEIGHBORLIST_SIZES = (8, 16, 24, 32, 64, 128)
 _RDKitClusters = tuple[tuple[int, ...], ...]
 
 
-# TODO: Revisit a GPU-resident DISE control loop and device result after it
-# demonstrates representative end-to-end gains, especially for small inputs.
+class DISEOutputMode(Enum):
+    """Output format for :func:`aap_dise`."""
+
+    RDKIT = "rdkit"
+    DEVICE = "device"
+
+
+@dataclass(frozen=True)
+class DISEDeviceResult:
+    """GPU-resident directed sphere-exclusion clustering result.
+
+    Attributes:
+        cluster_ids: One zero-based int32 cluster ID per input molecule.
+        centroids: Centroid indices by cluster ID, int32 and shape ``(num_clusters,)``.
+        cluster_sizes: Member counts by cluster ID, int64 and shape ``(num_clusters,)``.
+    """
+
+    cluster_ids: AsyncGpuResult
+    centroids: AsyncGpuResult
+    cluster_sizes: AsyncGpuResult
+
+
+def _validate_dise_output(output: DISEOutputMode) -> None:
+    if not isinstance(output, DISEOutputMode):
+        raise TypeError(f"output must be a DISEOutputMode, got {type(output).__name__}")
+
+
+def _cluster_arrays_to_rdkit(cluster_ids_array, centroids_array) -> _RDKitClusters:
+    cluster_ids_array = np.asarray(cluster_ids_array)
+    centroids_array = np.asarray(centroids_array)
+    member_order = np.argsort(cluster_ids_array, kind="stable")
+    sorted_cluster_ids = cluster_ids_array[member_order]
+    cluster_offsets = np.searchsorted(sorted_cluster_ids, np.arange(centroids_array.size + 1))
+
+    clusters = []
+    for cluster_id, centroid_value in enumerate(centroids_array):
+        centroid = int(centroid_value)
+        members = member_order[cluster_offsets[cluster_id] : cluster_offsets[cluster_id + 1]]
+        clusters.append(tuple([centroid] + [int(member) for member in members if member != centroid]))
+    return tuple(clusters)
+
+
+def _resolve_dise_output(result, output: DISEOutputMode) -> _RDKitClusters | DISEDeviceResult:
+    cluster_ids_obj, centroids_obj, cluster_sizes_obj = result
+    if output is DISEOutputMode.DEVICE:
+        return DISEDeviceResult(
+            AsyncGpuResult(cluster_ids_obj),
+            AsyncGpuResult(centroids_obj),
+            AsyncGpuResult(cluster_sizes_obj),
+        )
+    return _cluster_arrays_to_rdkit(cluster_ids_obj, centroids_obj)
+
+
+@overload
 def aap_dise(
     molecules,
     similarity_threshold: float = 0.217,
@@ -62,7 +114,38 @@ def aap_dise(
     sinkhorn_iterations: int = 8,
     sinkhorn_temperature: float = 0.104,
     stream: torch.cuda.Stream | None = None,
-) -> list[int]:
+    output: Literal[DISEOutputMode.DEVICE] = DISEOutputMode.DEVICE,
+) -> DISEDeviceResult: ...
+
+
+@overload
+def aap_dise(
+    molecules,
+    similarity_threshold: float = 0.217,
+    *,
+    assignment: Literal["first", "nearest"] = "nearest",
+    max_path_length: int = 7,
+    histogram_bins: int = 2048,
+    sinkhorn_iterations: int = 8,
+    sinkhorn_temperature: float = 0.104,
+    stream: torch.cuda.Stream | None = None,
+    output: Literal[DISEOutputMode.RDKIT],
+) -> _RDKitClusters: ...
+
+
+# TODO: Explore a GPU-resident DISE control loop and asynchronous result production.
+def aap_dise(
+    molecules,
+    similarity_threshold: float = 0.217,
+    *,
+    assignment: Literal["first", "nearest"] = "nearest",
+    max_path_length: int = 7,
+    histogram_bins: int = 2048,
+    sinkhorn_iterations: int = 8,
+    sinkhorn_temperature: float = 0.104,
+    stream: torch.cuda.Stream | None = None,
+    output: DISEOutputMode = DISEOutputMode.DEVICE,
+) -> _RDKitClusters | DISEDeviceResult:
     """Cluster ordered RDKit molecules with AAP-backed DISE.
 
     Input order supplies the direction: the first unassigned molecule becomes
@@ -80,10 +163,19 @@ def aap_dise(
         sinkhorn_iterations: Number of Sinkhorn normalization iterations.
         sinkhorn_temperature: Sinkhorn temperature.
         stream: CUDA stream to use. If None, uses the current stream.
+        output: Output representation. Defaults to ``DISEOutputMode.DEVICE``.
 
     Returns:
-        One one-based cluster ID per molecule, ordered by descending cluster size.
+        ``DISEOutputMode.DEVICE`` returns zero-based cluster IDs, centroids,
+        and cluster sizes on the GPU. ``DISEOutputMode.RDKIT`` returns a tuple
+        of centroid-first cluster tuples on the host. Both representations
+        order clusters by descending size, with centroid order breaking ties.
+
+    Note:
+        The current DISE control loop makes host-side decisions and therefore
+        completes its CUDA stream work before returning either output mode.
     """
+    _validate_dise_output(output)
     if not 0 <= similarity_threshold <= 1:
         raise ValueError(f"similarity_threshold must be in [0, 1], got {similarity_threshold}")
     if assignment not in ("first", "nearest"):
@@ -91,119 +183,17 @@ def aap_dise(
 
     active_stream = _resolve_cuda_stream(stream)
     function = _clustering.aap_similarity_clustering if assignment == "first" else _clustering.aap_dise_clustering
-    return function(
+    native_result = function(
         list(molecules),
         similarity_threshold,
         max_path_length,
         histogram_bins,
         sinkhorn_iterations,
         sinkhorn_temperature,
+        output is DISEOutputMode.DEVICE,
         active_stream.cuda_stream,
     )
-
-
-def aap_similarity_clustering(
-    molecules,
-    threshold: float = 0.217,
-    *,
-    max_path_length: int = 7,
-    histogram_bins: int = 2048,
-    sinkhorn_iterations: int = 8,
-    sinkhorn_temperature: float = 0.104,
-    stream: torch.cuda.Stream | None = None,
-) -> list[int]:
-    """Cluster RDKit molecules with AAP directed sphere exclusion.
-
-    The first unassigned molecule in input order becomes the next centroid and
-    claims all remaining molecules whose directed AAP similarity is at least
-    ``threshold``. Final one-based cluster IDs are ordered by descending
-    cluster size, with centroid order breaking ties. Working memory is O(N).
-
-    Each provided molecule must be non-empty and may currently contain at most
-    64 RDKit atoms, including explicit hydrogens. Supported bond types are
-    single, double, triple, and aromatic. Rooted-path descriptors are constructed
-    on the CPU, while atom assignments are evaluated on the GPU. Changing the
-    descriptor or Sinkhorn options can change cluster assignments. This function
-    synchronizes ``stream`` before returning the Python list.
-
-    Args:
-        molecules: Sequence of RDKit molecules, each with at most 64 atoms.
-        threshold: Inclusive directed similarity threshold. The ``0.217``
-            default is provided for compatibility and should be validated for
-            the intended chemical series.
-        max_path_length: Maximum rooted path length in bonds.
-        histogram_bins: Number of hashed path bins, at most 32767.
-        sinkhorn_iterations: Number of Sinkhorn normalization iterations.
-        sinkhorn_temperature: Sinkhorn temperature, at least the smallest
-            positive normal single-precision value.
-        stream: CUDA stream to use. If None, uses the current stream.
-
-    Returns:
-        One one-based cluster ID per molecule.
-    """
-    return aap_dise(
-        molecules,
-        similarity_threshold=threshold,
-        assignment="first",
-        max_path_length=max_path_length,
-        histogram_bins=histogram_bins,
-        sinkhorn_iterations=sinkhorn_iterations,
-        sinkhorn_temperature=sinkhorn_temperature,
-        stream=stream,
-    )
-
-
-def aap_dise_clustering(
-    molecules,
-    threshold: float = 0.217,
-    *,
-    max_path_length: int = 7,
-    histogram_bins: int = 2048,
-    sinkhorn_iterations: int = 8,
-    sinkhorn_temperature: float = 0.104,
-    stream: torch.cuda.Stream | None = None,
-) -> list[int]:
-    """Run complete AAP sphere exclusion with nearest-centroid assignment.
-
-    The caller supplies molecules in priority order. The first stage selects
-    centroids with input-order sphere exclusion; the second assigns every
-    non-centroid to its most similar selected centroid. Final one-based cluster
-    IDs are ordered by descending cluster size, with centroid order breaking
-    ties. Working memory is O(N).
-
-    Each provided molecule must be non-empty and may currently contain at most
-    64 RDKit atoms, including explicit hydrogens. Supported bond types are
-    single, double, triple, and aromatic. Rooted-path descriptors are constructed
-    on the CPU, while atom assignments are evaluated on the GPU. Changing the
-    descriptor or Sinkhorn options can change cluster assignments. This function
-    synchronizes ``stream`` before returning the Python list.
-
-    Args:
-        molecules: Sequence of RDKit molecules in the desired priority order,
-            each with at most 64 atoms.
-        threshold: Inclusive directed similarity threshold used during centroid
-            selection. The ``0.217`` default is provided for compatibility and
-            should be validated for the intended chemical series.
-        max_path_length: Maximum rooted path length in bonds.
-        histogram_bins: Number of hashed path bins, at most 32767.
-        sinkhorn_iterations: Number of Sinkhorn normalization iterations.
-        sinkhorn_temperature: Sinkhorn temperature, at least the smallest
-            positive normal single-precision value.
-        stream: CUDA stream to use. If None, uses the current stream.
-
-    Returns:
-        One one-based cluster ID per molecule.
-    """
-    return aap_dise(
-        molecules,
-        similarity_threshold=threshold,
-        assignment="nearest",
-        max_path_length=max_path_length,
-        histogram_bins=histogram_bins,
-        sinkhorn_iterations=sinkhorn_iterations,
-        sinkhorn_temperature=sinkhorn_temperature,
-        stream=stream,
-    )
+    return _resolve_dise_output(native_result, output)
 
 
 class ButinaOutputMode(Enum):
@@ -246,18 +236,7 @@ def _wrap_device_result(result) -> ButinaDeviceResult:
 
 
 def _to_rdkit_clusters(cluster_ids: AsyncGpuResult, centroids: AsyncGpuResult) -> _RDKitClusters:
-    cluster_ids_array = cluster_ids.numpy()
-    centroids_array = centroids.numpy()
-    member_order = np.argsort(cluster_ids_array, kind="stable")
-    sorted_cluster_ids = cluster_ids_array[member_order]
-    cluster_offsets = np.searchsorted(sorted_cluster_ids, np.arange(centroids_array.size + 1))
-
-    clusters = []
-    for cluster_id, centroid_value in enumerate(centroids_array):
-        centroid = int(centroid_value)
-        members = member_order[cluster_offsets[cluster_id] : cluster_offsets[cluster_id + 1]]
-        clusters.append(tuple([centroid] + [int(member) for member in members if member != centroid]))
-    return tuple(clusters)
+    return _cluster_arrays_to_rdkit(cluster_ids.numpy(), centroids.numpy())
 
 
 def _resolve_output(result, output: ButinaOutputMode) -> _RDKitClusters | ButinaDeviceResult:

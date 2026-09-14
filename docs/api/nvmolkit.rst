@@ -90,6 +90,8 @@ Clustering
 
    clustering.ButinaOutputMode
    clustering.ButinaDeviceResult
+   clustering.DISEOutputMode
+   clustering.DISEDeviceResult
 
 Maximum Common Substructure (MCS)
 ---------------------------------

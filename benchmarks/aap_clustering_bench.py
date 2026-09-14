@@ -403,7 +403,7 @@ def _benchmark_clustering(args, molecules, ligand_clustering_cpu_reference):
     outputs = {}
 
     if not args.no_nvmolkit:
-        timing, labels = _time_callable(
+        timing, result = _time_callable(
             lambda: aap_dise(
                 molecules,
                 similarity_threshold=args.threshold,
@@ -414,6 +414,7 @@ def _benchmark_clustering(args, molecules, ligand_clustering_cpu_reference):
             args.warmup,
             gpu_sync=True,
         )
+        labels = result.cluster_ids.numpy().tolist()
         outputs["nvmolkit_gpu"] = labels
         row = _base_row(args, "clustering", "nvmolkit_gpu", len(molecules), timing, molecules)
         _add_cluster_stats(row, labels)
@@ -496,12 +497,13 @@ def _benchmark_dise(args, molecules, rdkit_reference):
         def run_gpu_workflow():
             nonlocal gpu_labels
             indexed = _priority_order(molecules, args.sort_tag, args.sort_descending)
-            ordered_labels = aap_dise(
+            result = aap_dise(
                 [molecule for _, molecule in indexed],
                 similarity_threshold=args.threshold,
                 assignment="nearest",
                 **_aap_kwargs(args),
             )
+            ordered_labels = result.cluster_ids.numpy().tolist()
             gpu_labels = [-1] * len(molecules)
             for (input_index, _), label in zip(indexed, ordered_labels, strict=True):
                 gpu_labels[input_index] = label
@@ -652,14 +654,21 @@ def _build_parser():
 
 def main():
     args = _build_parser().parse_args()
-    if args.runs <= 0 or args.num_pairs <= 0:
-        print("Error: --runs and --num_pairs must be positive", file=sys.stderr)
+    wants_pairs = args.operation in ("similarity", "both", "all")
+    wants_clusters = args.operation in ("clustering", "dise", "both", "all")
+    if args.runs <= 0:
+        print("Error: --runs must be positive", file=sys.stderr)
         sys.exit(1)
-    if not args.sizes or any(size <= 0 for size in args.sizes):
+    if wants_pairs and args.num_pairs <= 0:
+        print("Error: --num_pairs must be positive for similarity benchmarks", file=sys.stderr)
+        sys.exit(1)
+    if wants_clusters and (not args.sizes or any(size <= 0 for size in args.sizes)):
         print("Error: --sizes must contain positive values", file=sys.stderr)
         sys.exit(1)
-    if args.sample_pool_size is not None and args.sample_pool_size < max(args.sizes):
-        print("Error: --sample-pool-size must be at least the largest requested size", file=sys.stderr)
+    largest_size = max(args.sizes) if wants_clusters else 0
+    required_count = max(largest_size, 2 if wants_pairs else 0)
+    if args.sample_pool_size is not None and args.sample_pool_size < required_count:
+        print(f"Error: --sample-pool-size must be at least {required_count}", file=sys.stderr)
         sys.exit(1)
     if not 1 <= args.max_atoms <= 64:
         print("Error: --max_atoms must be between 1 and 64", file=sys.stderr)
@@ -692,8 +701,9 @@ def main():
     if ligand_clustering_cpu_reference is None and not args.no_ligand_clustering_cpu:
         print("ligand_clustering CPU unavailable; its timing fields will be empty")
 
-    largest_size = max(args.sizes)
-    requested = args.sample_pool_size or max(largest_size * 3, args.num_pairs * 2)
+    clustering_pool_size = largest_size * 3 if wants_clusters else 0
+    pair_pool_size = max(2, args.num_pairs * 2) if wants_pairs else 0
+    requested = args.sample_pool_size or max(clustering_pool_size, pair_pool_size)
     try:
         if args.sdf:
             loaded = load_sdf(args.sdf, max_count=requested, sanitize=True, seed=args.seed)
@@ -718,9 +728,9 @@ def main():
         dropped_count = supported_count - len(molecules)
         if dropped_count:
             print(f"  Dropped {dropped_count} molecules without a valid {args.sort_tag!r} priority value")
-    if len(molecules) < max(largest_size, 2):
+    if len(molecules) < required_count:
         print(
-            f"Error: need {max(largest_size, 2)} supported molecules with sortable data, retained {len(molecules)}",
+            f"Error: need {required_count} supported molecules, retained {len(molecules)}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -728,7 +738,7 @@ def main():
     print("\nConfiguration:")
     print(f"  Input: {args.sdf or args.csv or args.smiles}")
     print(f"  Retained molecules: {len(molecules)}")
-    print(f"  Clustering sizes: {args.sizes}")
+    print(f"  Clustering sizes: {args.sizes if wants_clusters else 'N/A'}")
     print(f"  Pair count: {args.num_pairs}")
     print(f"  Runs: {args.runs}")
     print(f"  Threshold: {args.threshold}")
@@ -747,7 +757,7 @@ def main():
         rows.extend(
             _benchmark_pairs(
                 args,
-                molecules[:largest_size],
+                molecules,
                 rdkit_reference,
                 ligand_clustering_cpu_reference,
             )

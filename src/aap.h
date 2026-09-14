@@ -23,6 +23,13 @@ struct AapOptions {
   float sinkhornTemperature = 0.104F;
 };
 
+/** Clustering assignments and metadata, ordered by descending cluster size. */
+struct AapClusteringResult {
+  std::vector<int>          clusterIds;
+  std::vector<int>          centroids;
+  std::vector<std::int64_t> clusterSizes;
+};
+
 /**
  * Compute directed approximate Atom-Atom-Path similarity on the GPU.
  *
@@ -40,19 +47,20 @@ float aapSimilarityGpu(const RDKit::ROMol& left,
  *
  * The first unassigned molecule is selected as the next centroid and claims
  * all remaining molecules whose directed AAP similarity meets @p threshold.
- * Returned cluster IDs are one-based and renumbered by descending cluster
- * size, with centroid order breaking ties.
+ * Cluster IDs are zero-based and renumbered by descending cluster size, with
+ * centroid order breaking ties. Centroids and sizes use the same cluster-ID
+ * order.
  */
-std::vector<int> aapSimilarityClustering(const std::vector<const RDKit::ROMol*>& molecules,
-                                         float                                   threshold = 0.217F,
-                                         const AapOptions&                       options   = {},
-                                         cudaStream_t                            stream    = nullptr);
+AapClusteringResult aapSimilarityClustering(const std::vector<const RDKit::ROMol*>& molecules,
+                                            float                                   threshold = 0.217F,
+                                            const AapOptions&                       options   = {},
+                                            cudaStream_t                            stream    = nullptr);
 
 /** Run full two-stage DISE: select centroids, then assign to the nearest centroid. */
-std::vector<int> aapDiseClustering(const std::vector<const RDKit::ROMol*>& molecules,
-                                   float                                   threshold = 0.217F,
-                                   const AapOptions&                       options   = {},
-                                   cudaStream_t                            stream    = nullptr);
+AapClusteringResult aapDiseClustering(const std::vector<const RDKit::ROMol*>& molecules,
+                                      float                                   threshold = 0.217F,
+                                      const AapOptions&                       options   = {},
+                                      cudaStream_t                            stream    = nullptr);
 
 }  // namespace nvMolKit
 

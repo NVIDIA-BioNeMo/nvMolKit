@@ -45,6 +45,31 @@ boost::python::object wrapButinaResult(nvMolKit::ButinaResult& result, const int
   return boost::python::make_tuple(toOwnedPyArray(clusterArray), toOwnedPyArray(centroidArray));
 }
 
+boost::python::tuple wrapAapClusteringResult(const nvMolKit::AapClusteringResult& result,
+                                             const bool                           deviceOutput,
+                                             cudaStream_t                         stream) {
+  if (!deviceOutput) {
+    return boost::python::make_tuple(nvMolKit::vectorToList(result.clusterIds),
+                                     nvMolKit::vectorToList(result.centroids),
+                                     nvMolKit::vectorToList(result.clusterSizes));
+  }
+
+  nvMolKit::AsyncDeviceVector<int>          clusterIds(result.clusterIds.size(), stream);
+  nvMolKit::AsyncDeviceVector<int>          centroids(result.centroids.size(), stream);
+  nvMolKit::AsyncDeviceVector<std::int64_t> clusterSizes(result.clusterSizes.size(), stream);
+  clusterIds.copyFromHost(result.clusterIds);
+  centroids.copyFromHost(result.centroids);
+  clusterSizes.copyFromHost(result.clusterSizes);
+  // The source vectors are pageable and go out of scope when this binding
+  // returns, so complete these small staging copies before releasing them.
+  nvMolKit::checkReturnCode<true>(cudaStreamSynchronize(stream), __FILE__, __LINE__);
+
+  return boost::python::make_tuple(
+    toOwnedPyArray(nvMolKit::makePyArray(clusterIds)),
+    toOwnedPyArray(nvMolKit::makePyArray(centroids)),
+    toOwnedPyArray(nvMolKit::makePyArray(clusterSizes, "i8", boost::python::make_tuple(clusterSizes.size()))));
+}
+
 }  // namespace
 
 BOOST_PYTHON_MODULE(_clustering) {
@@ -80,6 +105,7 @@ BOOST_PYTHON_MODULE(_clustering) {
         const int                  histogramBins,
         const int                  sinkhornIterations,
         const float                sinkhornTemperature,
+        const bool                 deviceOutput,
         std::uintptr_t             streamPtr) {
       auto streamOpt = nvMolKit::acquireExternalStream(streamPtr);
       if (!streamOpt) {
@@ -88,7 +114,9 @@ BOOST_PYTHON_MODULE(_clustering) {
       const auto                             extracted = nvMolKit::extractMolecules(molecules);
       const std::vector<const RDKit::ROMol*> mols(extracted.begin(), extracted.end());
       const nvMolKit::AapOptions options{maxPathLength, histogramBins, sinkhornIterations, sinkhornTemperature};
-      return nvMolKit::vectorToList(nvMolKit::aapSimilarityClustering(mols, threshold, options, *streamOpt));
+      return wrapAapClusteringResult(nvMolKit::aapSimilarityClustering(mols, threshold, options, *streamOpt),
+                                     deviceOutput,
+                                     *streamOpt);
     },
     (boost::python::arg("molecules"),
      boost::python::arg("threshold")            = 0.217F,
@@ -96,6 +124,7 @@ BOOST_PYTHON_MODULE(_clustering) {
      boost::python::arg("histogram_bins")       = 2048,
      boost::python::arg("sinkhorn_iterations")  = 8,
      boost::python::arg("sinkhorn_temperature") = 0.104F,
+     boost::python::arg("device_output")        = true,
      boost::python::arg("stream")               = 0));
 
   boost::python::def(
@@ -106,6 +135,7 @@ BOOST_PYTHON_MODULE(_clustering) {
         const int                  histogramBins,
         const int                  sinkhornIterations,
         const float                sinkhornTemperature,
+        const bool                 deviceOutput,
         std::uintptr_t             streamPtr) {
       auto streamOpt = nvMolKit::acquireExternalStream(streamPtr);
       if (!streamOpt) {
@@ -114,7 +144,9 @@ BOOST_PYTHON_MODULE(_clustering) {
       const auto                             extracted = nvMolKit::extractMolecules(molecules);
       const std::vector<const RDKit::ROMol*> mols(extracted.begin(), extracted.end());
       const nvMolKit::AapOptions options{maxPathLength, histogramBins, sinkhornIterations, sinkhornTemperature};
-      return nvMolKit::vectorToList(nvMolKit::aapDiseClustering(mols, threshold, options, *streamOpt));
+      return wrapAapClusteringResult(nvMolKit::aapDiseClustering(mols, threshold, options, *streamOpt),
+                                     deviceOutput,
+                                     *streamOpt);
     },
     (boost::python::arg("molecules"),
      boost::python::arg("threshold")            = 0.217F,
@@ -122,6 +154,7 @@ BOOST_PYTHON_MODULE(_clustering) {
      boost::python::arg("histogram_bins")       = 2048,
      boost::python::arg("sinkhorn_iterations")  = 8,
      boost::python::arg("sinkhorn_temperature") = 0.104F,
+     boost::python::arg("device_output")        = true,
      boost::python::arg("stream")               = 0));
 
   boost::python::def(
