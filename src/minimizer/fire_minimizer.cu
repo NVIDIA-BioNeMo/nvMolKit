@@ -914,8 +914,8 @@ bool FireBatchMinimizer::minimizeImpl(const int                                 
                                       [[maybe_unused]] AsyncDeviceVector<double>& energyBuffer,
                                       EnergyFunctor                               eFunc,
                                       const GradFunctor                           gFunc,
-                                      FireFloatEnergyFunctor                      eFuncFloat,
-                                      const FireFloatGradFunctor                  gFuncFloat,
+                                      FireSingleEnergyFunctor                     eFuncSingle,
+                                      const FireSingleGradFunctor                 gFuncSingle,
                                       const uint8_t*                              activeThisStage) {
   const ScopedNvtxRange minimizeRange("FireBatchMinimizer::minimize (batched)");
   initialize(atomStartsHost, nullptr, activeThisStage, FireBackend::BATCHED);
@@ -929,7 +929,7 @@ bool FireBatchMinimizer::minimizeImpl(const int                                 
       energyBuffer.zero();
       energyOuts.zero();
       if (singlePrecision)
-        eFuncFloat(singleWorkspace_.positions.data());
+        eFuncSingle(singleWorkspace_.positions.data());
       else
         eFunc(positions.data());
 
@@ -954,7 +954,7 @@ bool FireBatchMinimizer::minimizeImpl(const int                                 
 
     if (singlePrecision) {
       singleWorkspace_.grad.zero();
-      gFuncFloat();
+      gFuncSingle();
     } else {
       grad.zero();
       gFunc();
@@ -972,7 +972,7 @@ bool FireBatchMinimizer::minimizeImpl(const int                                 
       launchPreKick(gradTol, atomStarts, positions, grad, lastKnownNumUnfinished_, isFirstStep);
     if (singlePrecision) {
       singleWorkspace_.grad.zero();
-      gFuncFloat();
+      gFuncSingle();
       launchPostKick(gradTol, atomStarts, singleWorkspace_.positions, singleWorkspace_.grad, lastKnownNumUnfinished_);
     } else {
       grad.zero();
@@ -990,7 +990,7 @@ bool FireBatchMinimizer::minimizeImpl(const int                                 
           pollsSinceLastEnergyEval_ = 0;
           energyOuts.zero();
           if (singlePrecision)
-            eFuncFloat(singleWorkspace_.positions.data());
+            eFuncSingle(singleWorkspace_.positions.data());
           else
             eFunc(nullptr);
 #define NVMOLKIT_LAUNCH_FIRE_STUCK(real, storageT, Energies, MinState, MaxState)          \
@@ -1075,13 +1075,13 @@ bool FireBatchMinimizer::minimize(const int                     numIters,
                                   EnergyFunctor                 eFunc,
                                   GradFunctor                   gFunc,
                                   const uint8_t*                activeThisStage) {
-  auto eFuncFloat = [&](const float* evalPositions) {
+  auto eFuncSingle = [&](const float* evalPositions) {
     cudaCheckError(detail::convertDeviceArray(positions.data(), evalPositions, positions.size(), stream_));
     eFunc(positions.data());
     cudaCheckError(
       detail::convertDeviceArray(singleWorkspace_.energy.data(), energyOuts.data(), energyOuts.size(), stream_));
   };
-  auto gFuncFloat = [&]() {
+  auto gFuncSingle = [&]() {
     cudaCheckError(
       detail::convertDeviceArray(positions.data(), singleWorkspace_.positions.data(), positions.size(), stream_));
     grad.zero();
@@ -1098,8 +1098,8 @@ bool FireBatchMinimizer::minimize(const int                     numIters,
                       energyBuffer,
                       eFunc,
                       gFunc,
-                      eFuncFloat,
-                      gFuncFloat,
+                      eFuncSingle,
+                      gFuncSingle,
                       activeThisStage);
 }
 
@@ -1123,8 +1123,8 @@ bool FireBatchMinimizer::minimize(const int                  numIters,
     const double* positionsToEvaluate = evalPositions != nullptr ? evalPositions : positions.data();
     ff.computeEnergy(energyOuts.data(), positionsToEvaluate, activeSystemMask, stream_);
   };
-  auto gFunc      = [&]() { ff.computeGradients(grad.data(), positions.data(), activeSystemMask, stream_); };
-  auto eFuncFloat = [&](const float* evalPositions) {
+  auto gFunc       = [&]() { ff.computeGradients(grad.data(), positions.data(), activeSystemMask, stream_); };
+  auto eFuncSingle = [&](const float* evalPositions) {
     if (singlePrecisionForcefield == nullptr) {
       cudaCheckError(detail::convertDeviceArray(positions.data(), evalPositions, positions.size(), stream_));
       cudaCheckError(ff.computeEnergy(energyOuts.data(), positions.data(), activeSystemMask, stream_));
@@ -1135,7 +1135,7 @@ bool FireBatchMinimizer::minimize(const int                  numIters,
     cudaCheckError(
       detail::convertDeviceArray(singleWorkspace_.energy.data(), energyOuts.data(), energyOuts.size(), stream_));
   };
-  auto gFuncFloat = [&]() {
+  auto gFuncSingle = [&]() {
     if (singlePrecisionForcefield == nullptr) {
       cudaCheckError(
         detail::convertDeviceArray(positions.data(), singleWorkspace_.positions.data(), positions.size(), stream_));
@@ -1165,8 +1165,8 @@ bool FireBatchMinimizer::minimize(const int                  numIters,
                       energyBuffer,
                       eFunc,
                       gFunc,
-                      eFuncFloat,
-                      gFuncFloat,
+                      eFuncSingle,
+                      gFuncSingle,
                       activeSystemMask);
 }
 

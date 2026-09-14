@@ -45,11 +45,11 @@ using BatchedMolecular3DDeviceBuffers = BatchedMolecular3DDeviceBuffersT<double>
 //! \brief Computes energies, optionally on an external set of positions.
 //! \param positions Optional flattened coordinate buffer to evaluate.
 //!        When null, the implementation uses its internal position storage.
-using EnergyFunctor      = std::function<void(const double*)>;
+using EnergyFunctor       = std::function<void(const double*)>;
 //! \brief Computes gradients on the internal position buffer.
-using GradFunctor        = std::function<void()>;
-using FloatEnergyFunctor = std::function<void(const float*)>;
-using FloatGradFunctor   = std::function<void()>;
+using GradFunctor         = std::function<void()>;
+using SingleEnergyFunctor = std::function<void(const float*)>;
+using SingleGradFunctor   = std::function<void()>;
 
 //! Precision-dependent device state for the batched BFGS implementation.
 template <typename real, typename reduceT, typename storageT> struct BfgsWorkspace {
@@ -326,8 +326,8 @@ struct BfgsBatchMinimizer {
                 AsyncDeviceVector<double>& energyOuts,
                 EnergyFunctor              eFunc,
                 GradFunctor                gFunc,
-                FloatEnergyFunctor         eFuncFloat,
-                FloatGradFunctor           gFuncFloat,
+                SingleEnergyFunctor        eFuncSingle,
+                SingleGradFunctor          gFuncSingle,
                 const uint8_t*             activeThisStage = nullptr);
 };
 

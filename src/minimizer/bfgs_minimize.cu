@@ -1272,8 +1272,8 @@ bool BfgsBatchMinimizer::minimize(const int                  numIters,
                                   AsyncDeviceVector<double>& energyOuts,
                                   EnergyFunctor              eFunc,
                                   GradFunctor                gFunc,
-                                  FloatEnergyFunctor         eFuncFloat,
-                                  FloatGradFunctor           gFuncFloat,
+                                  SingleEnergyFunctor        eFuncSingle,
+                                  SingleGradFunctor          gFuncSingle,
                                   const uint8_t*             activeThisStage) {
   gradTol_             = gradTol;
   const int numSystems = atomStartsHost.size() - 1;
@@ -1298,9 +1298,9 @@ bool BfgsBatchMinimizer::minimize(const int                  numIters,
 
     energyOuts.zero();
     if (usesSinglePrecision(precision_)) {
-      eFuncFloat(singleWorkspace_.positions.data());
+      eFuncSingle(singleWorkspace_.positions.data());
       singleWorkspace_.grad.zero();
-      gFuncFloat();
+      gFuncSingle();
     } else {
       eFunc(nullptr);
       grad.zero();
@@ -1327,7 +1327,7 @@ bool BfgsBatchMinimizer::minimize(const int                  numIters,
         doLineSearchPerturb();
         energyOuts.zero();
         if (usesSinglePrecision(precision_))
-          eFuncFloat(singleWorkspace_.scratchPositions.data());
+          eFuncSingle(singleWorkspace_.scratchPositions.data());
         else
           eFunc(fullWorkspace_.scratchPositions.data());
         doLineSearchPostEnergy(lineSearchIter);
@@ -1341,7 +1341,7 @@ bool BfgsBatchMinimizer::minimize(const int                  numIters,
       const ScopedNvtxRange bfgsGetAndScaleGrad("BfgsBatchMinimizer::getAndScaleGrad");
       if (usesSinglePrecision(precision_)) {
         singleWorkspace_.grad.zero();
-        gFuncFloat();
+        gFuncSingle();
       } else {
         grad.zero();
         gFunc();
@@ -1356,7 +1356,7 @@ bool BfgsBatchMinimizer::minimize(const int                  numIters,
 
   energyOuts.zero();
   if (usesSinglePrecision(precision_)) {
-    eFuncFloat(singleWorkspace_.positions.data());
+    eFuncSingle(singleWorkspace_.positions.data());
     cudaCheckError(
       detail::convertDeviceArray(positions.data(), singleWorkspace_.positions.data(), positions.size(), stream_));
     cudaCheckError(detail::convertDeviceArray(grad.data(), singleWorkspace_.grad.data(), grad.size(), stream_));
@@ -1385,8 +1385,8 @@ bool BfgsBatchMinimizer::minimize(const int                  numIters,
     const double* positionsToEvaluate = evalPositions != nullptr ? evalPositions : positions.data();
     ff.computeEnergy(energyOuts.data(), positionsToEvaluate, activeSystemMask, stream_);
   };
-  auto gFunc      = [&]() { ff.computeGradients(grad.data(), positions.data(), activeSystemMask, stream_); };
-  auto eFuncFloat = [&](const float* evalPositions) {
+  auto gFunc       = [&]() { ff.computeGradients(grad.data(), positions.data(), activeSystemMask, stream_); };
+  auto eFuncSingle = [&](const float* evalPositions) {
     if (singlePrecisionForcefield == nullptr) {
       cudaCheckError(detail::convertDeviceArray(positions.data(), evalPositions, positions.size(), stream_));
       cudaCheckError(ff.computeEnergy(energyOuts.data(), positions.data(), activeSystemMask, stream_));
@@ -1397,7 +1397,7 @@ bool BfgsBatchMinimizer::minimize(const int                  numIters,
     cudaCheckError(
       detail::convertDeviceArray(singleWorkspace_.energy.data(), energyOuts.data(), energyOuts.size(), stream_));
   };
-  auto gFuncFloat = [&]() {
+  auto gFuncSingle = [&]() {
     if (singlePrecisionForcefield == nullptr) {
       cudaCheckError(
         detail::convertDeviceArray(positions.data(), singleWorkspace_.positions.data(), positions.size(), stream_));
@@ -1421,8 +1421,8 @@ bool BfgsBatchMinimizer::minimize(const int                  numIters,
                   energyOuts,
                   eFunc,
                   gFunc,
-                  eFuncFloat,
-                  gFuncFloat,
+                  eFuncSingle,
+                  gFuncSingle,
                   activeSystemMask);
 }
 

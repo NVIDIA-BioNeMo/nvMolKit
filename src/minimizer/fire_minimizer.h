@@ -29,8 +29,8 @@ namespace nvMolKit {
 
 class BatchedForcefield;
 
-using FireFloatEnergyFunctor = std::function<void(const float*)>;
-using FireFloatGradFunctor   = std::function<void()>;
+using FireSingleEnergyFunctor = std::function<void(const float*)>;
+using FireSingleGradFunctor   = std::function<void()>;
 
 namespace MMFF {
 template <typename ParameterScalar, typename CoordinateScalar, typename TorsionScalar>
@@ -207,8 +207,8 @@ class FireBatchMinimizer final : public BatchMinimizer {
                     AsyncDeviceVector<double>&    energyBuffer,
                     EnergyFunctor                 eFunc,
                     GradFunctor                   gFunc,
-                    FireFloatEnergyFunctor        eFuncFloat,
-                    FireFloatGradFunctor          gFuncFloat,
+                    FireSingleEnergyFunctor       eFuncSingle,
+                    FireSingleGradFunctor         gFuncSingle,
                     const uint8_t*                activeThisStage);
   template <typename storageT>
   void launchPreKick(double                        gradTol,
