@@ -95,7 +95,8 @@ struct SubstructSearchResults {
 
   /// Get the matches for a (target, query) pair (returns empty if none)
   [[nodiscard]] const std::vector<std::vector<int>>& getMatches(int targetIdx, int queryIdx) const {
-    static const std::vector<std::vector<int>> empty;
+    // Function-local initialization is thread-safe and avoids global state.
+    static const std::vector<std::vector<int>> empty;  // NOLINT(bugprone-dynamic-static-initializers)
     auto                                       it = matches.find(pairIndex(targetIdx, queryIdx));
     return (it != matches.end()) ? it->second : empty;
   }
