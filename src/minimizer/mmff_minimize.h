@@ -131,7 +131,8 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
   const BatchHardwareOptions&                                  perfOptions = {},
   FireBackend                                                  backend     = FireBackend::HYBRID,
   CoordinateOutput                                             output      = CoordinateOutput::RDKIT_CONFORMERS,
-  int                                                          targetGpu   = -1);
+  int                                                          targetGpu   = -1,
+  PrecisionMode                                                precision   = PrecisionMode::FULL);
 
 //! \brief Minimize MMFF energies with FIRE 2.0 and return the final energy of each conformer.
 //! \note Use @ref MMFFMinimizeMoleculesConfsFire when convergence status is required.
@@ -140,7 +141,8 @@ std::vector<std::vector<double>> MMFFOptimizeMoleculesConfsFire(std::vector<RDKi
                                                                 const FireOptions&                 fireOptions = {},
                                                                 const std::vector<MMFFProperties>& properties  = {},
                                                                 const BatchHardwareOptions&        perfOptions = {},
-                                                                FireBackend backend = FireBackend::HYBRID);
+                                                                FireBackend   backend   = FireBackend::HYBRID,
+                                                                PrecisionMode precision = PrecisionMode::FULL);
 
 }  // namespace nvMolKit::MMFF
 #endif  // NVMOLKIT_MMFF_MINIMIZE_H

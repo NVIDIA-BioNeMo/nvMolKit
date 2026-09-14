@@ -427,7 +427,8 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
   const BatchHardwareOptions&                                  perfOptions,
   const FireBackend                                            backend,
   const CoordinateOutput                                       output,
-  int                                                          targetGpu) {
+  int                                                          targetGpu,
+  PrecisionMode                                                precision) {
   ScopedNvtxRange fullRange("FIRE MMFF Minimize Molecules Confs");
 
   std::vector<MMFFProperties> properties = propertiesIn;
@@ -501,6 +502,7 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
                                                                                               deviceCollectors,    \
                                                                                               deviceOutput,        \
                                                                                               backend,             \
+                                                                                              precision,           \
                                                                                               sharedMolProperties, \
                                                                                               exceptionHandler)
   for (size_t batchStart = 0; batchStart < totalConformers; batchStart += effectiveBatchSize) {
@@ -562,7 +564,13 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
       buffers.ensureCapacity(systemHost.positions.size(), batchConformers.size());
       std::copy(systemHost.positions.begin(), systemHost.positions.end(), buffers.initialPositions.begin());
 
-      FireBatchMinimizer fireMinimizer(/*dataDim=*/3, fireOptions, streamPtr, /*debugMode=*/false, backend);
+      FireBatchMinimizer fireMinimizer(
+        /*dataDim=*/3,
+        fireOptions,
+        streamPtr,
+        /*debugMode=*/false,
+        backend,
+        precision);
       if (fireOptions.useMass) {
         fireMinimizer.setMasses(massesPerAtom);
       }
@@ -577,7 +585,7 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
       BatchedMolecularDeviceBuffers    systemDevice;
 
       if (effectiveBackend == FireBackend::BATCHED) {
-        MMFFBatchedForcefield forcefield(systemHost, metadata, streamPtr);
+        MMFFBatchedForcefield forcefield(systemHost, metadata, streamPtr, precision);
         positionsDevice.setStream(streamPtr);
         gradDevice.setStream(streamPtr);
         energyOutsDevice.setStream(streamPtr);
@@ -603,23 +611,24 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
           cudaStreamSynchronize(streamPtr);
         }
       } else {
-        nvMolKit::MMFF::setStreams(systemDevice, streamPtr);
-        nvMolKit::MMFF::sendContribsAndIndicesToDevice(systemHost, systemDevice);
-        nvMolKit::MMFF::allocateIntermediateBuffers(systemHost, systemDevice);
-        systemDevice.positions.resize(systemHost.positions.size());
-        systemDevice.positions.copyFromHost(buffers.initialPositions.data(), systemHost.positions.size());
-        systemDevice.grad.resize(systemHost.positions.size());
-        systemDevice.grad.zero();
+        auto& device = systemDevice;
+        nvMolKit::MMFF::setStreams(device, streamPtr);
+        nvMolKit::MMFF::sendContribsAndIndicesToDevice(systemHost, device);
+        nvMolKit::MMFF::allocateIntermediateBuffers(systemHost, device);
+        device.positions.resize(systemHost.positions.size());
+        device.positions.copyFromHost(buffers.initialPositions.data(), systemHost.positions.size());
+        device.grad.resize(systemHost.positions.size());
+        device.grad.zero();
 
-        fireMinimizer.minimizeWithMMFF(maxIters, fireOptions.gradTol, systemHost.indices.atomStarts, systemDevice);
+        fireMinimizer.minimizeWithMMFF(maxIters, fireOptions.gradTol, systemHost.indices.atomStarts, device);
 
-        finalPositions = &systemDevice.positions;
-        finalEnergies  = &systemDevice.energyOuts;
+        finalPositions = &device.positions;
+        finalEnergies  = &device.energyOuts;
 
         if (!deviceOutput) {
           ScopedNvtxRange finalizeBatchRange("OpenMP loop finalizing batch");
-          systemDevice.positions.copyToHost(buffers.positions.data(), systemDevice.positions.size());
-          systemDevice.energyOuts.copyToHost(buffers.energies.data(), systemDevice.energyOuts.size());
+          device.positions.copyToHost(buffers.positions.data(), device.positions.size());
+          device.energyOuts.copyToHost(buffers.energies.data(), device.energyOuts.size());
           cudaStreamSynchronize(streamPtr);
         }
       }
@@ -659,8 +668,19 @@ std::vector<std::vector<double>> MMFFOptimizeMoleculesConfsFire(std::vector<RDKi
                                                                 const FireOptions&                 fireOptions,
                                                                 const std::vector<MMFFProperties>& properties,
                                                                 const BatchHardwareOptions&        perfOptions,
-                                                                const FireBackend                  backend) {
-  return MMFFMinimizeMoleculesConfsFire(mols, maxIters, fireOptions, properties, {}, perfOptions, backend).energies;
+                                                                const FireBackend                  backend,
+                                                                PrecisionMode                      precision) {
+  return MMFFMinimizeMoleculesConfsFire(mols,
+                                        maxIters,
+                                        fireOptions,
+                                        properties,
+                                        {},
+                                        perfOptions,
+                                        backend,
+                                        CoordinateOutput::RDKIT_CONFORMERS,
+                                        -1,
+                                        precision)
+    .energies;
 }
 
 }  // namespace nvMolKit::MMFF

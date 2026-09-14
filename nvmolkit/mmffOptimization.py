@@ -26,7 +26,7 @@ from rdkit.Chem import AllChem
 
 from nvmolkit._arrayHelpers import *  # noqa: F403  # registers PyArray for DEVICE-mode returns
 from nvmolkit._mmff_bridge import default_rdkit_mmff_properties, make_internal_mmff_properties
-from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions, HardwareOptions
+from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions, HardwareOptions, PrecisionMode
 
 if TYPE_CHECKING:
     from rdkit.Chem import Mol
@@ -48,6 +48,7 @@ def MMFFOptimizeMoleculesConfs(
     backend: str = "HYBRID",
     minimizerKind: str = "BFGS",
     fireOptions: FireOptions | None = None,
+    precision: PrecisionMode = PrecisionMode.FULL,
 ) -> list[list[float]]: ...
 @overload
 def MMFFOptimizeMoleculesConfs(
@@ -63,6 +64,7 @@ def MMFFOptimizeMoleculesConfs(
     backend: str = "HYBRID",
     minimizerKind: str = "BFGS",
     fireOptions: FireOptions | None = None,
+    precision: PrecisionMode = PrecisionMode.FULL,
 ) -> Device3DResult: ...
 def MMFFOptimizeMoleculesConfs(
     molecules: list["Mol"],
@@ -76,6 +78,7 @@ def MMFFOptimizeMoleculesConfs(
     backend: str = "HYBRID",
     minimizerKind: str = "BFGS",
     fireOptions: FireOptions | None = None,
+    precision: PrecisionMode = PrecisionMode.FULL,
 ):
     """Optimize conformers for multiple molecules using MMFF force field.
 
@@ -103,6 +106,8 @@ def MMFFOptimizeMoleculesConfs(
             or ``"HYBRID"``.
         minimizerKind: ``"BFGS"`` (default) or ``"FIRE"``.
         fireOptions: FIRE algorithm options used when ``minimizerKind="FIRE"``.
+        precision: ``PrecisionMode.FULL`` (default) or
+            ``PrecisionMode.SINGLE``.
 
     Returns:
         For ``RDKIT_CONFORMERS``: list of lists of energies, where each inner list contains the
@@ -227,6 +232,7 @@ def MMFFOptimizeMoleculesConfs(
             backend_name,
             minimizer_kind,
             fireOptions._as_native(),
+            precision,
         )
     return _mmffOptimization.MMFFOptimizeMoleculesConfs(
         molecules,
@@ -236,4 +242,5 @@ def MMFFOptimizeMoleculesConfs(
         backend_name,
         minimizer_kind,
         fireOptions._as_native(),
+        precision,
     )
