@@ -34,7 +34,6 @@ from nvmolkit.types import (
 
 @pytest.fixture
 def uff_test_mols(num_mols=4):
-    """Load reliable UFF reference cases from the shared validation set."""
     sdf_path = os.path.join(
         os.path.dirname(__file__),
         "..",
@@ -61,8 +60,7 @@ def uff_test_mols(num_mols=4):
     if len(molecules) < num_mols + 1:
         pytest.skip(f"Expected {num_mols + 1} UFF-valid molecules, found {len(molecules)}")
 
-    # The first UFF-valid entry is a known basin-boundary case. It is useful
-    # for optimizer validation, but not for a precision API parity test.
+    # Small numeric differences select a different basin for the first molecule.
     return molecules[1:]
 
 
@@ -279,7 +277,6 @@ def test_uff_optimization_threshold_and_interfrag_vs_rdkit(precision):
 
 
 def test_uff_optimization_device_output_matches_host(uff_test_mols, precision):
-    """UFFOptimizeMoleculesConfs(output=DEVICE) returns Device3DResult; energies match host path."""
     host_mols = create_hard_copy_mols(uff_test_mols)
     device_mols = create_hard_copy_mols(uff_test_mols)
 
@@ -306,7 +303,6 @@ def test_uff_optimization_device_output_matches_host(uff_test_mols, precision):
 
 
 def test_uff_optimization_allows_large_molecule_interleaved(precision):
-    """Exercise the large-system path with small systems on either side."""
     small1 = Chem.AddHs(Chem.MolFromSmiles("CCCCCC"), explicitOnly=False)
     small2 = Chem.AddHs(Chem.MolFromSmiles("CCC"), explicitOnly=False)
     big = Chem.AddHs(Chem.MolFromSmiles("C" * 100), explicitOnly=False)

@@ -148,9 +148,7 @@ class BatchedForcefield {
   ForceFieldType            type_;
 };
 
-//! Optional capability implemented by batched force fields with native
-//! single-precision coordinate kernels. Keeping this separate preserves the
-//! established BatchedForcefield virtual interface for double-only clients.
+//! Interface for force fields that accept single-precision coordinates and gradients.
 class SinglePrecisionBatchedForcefield {
  public:
   virtual ~SinglePrecisionBatchedForcefield() = default;

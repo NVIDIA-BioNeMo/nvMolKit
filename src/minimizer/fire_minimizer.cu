@@ -369,9 +369,9 @@ __global__ void firePostKickKernel(const cuda::std::span<const int>      atomSta
 //! per-system streak state. When the windowed extrema relative spread falls below
 //! @p relTol, the streak counter increments; otherwise the window resets to the current
 //! sample. Reaching @p streakLimit declares the system converged (status = 0).
-//! @tparam real Arithmetic type selected by the precision profile.
-//! @tparam storageT Persistent extrema storage type selected by the precision profile. This
-//! single-thread check has no reduction role; API-boundary energies are converted to this type before launch.
+//! @tparam real Arithmetic type.
+//! @tparam storageT Persistent energy-extrema storage type. API-boundary energies are
+//! converted to this type before launch.
 template <typename real, typename storageT>
 __global__ void fireStuckCheckKernel(cuda::std::span<const int>      activeSystemIndices,
                                      cuda::std::span<const storageT> energies,

@@ -5,10 +5,10 @@
 
 namespace nvMolKit {
 
-//! Precision profiles supported by minimizers and force fields.
+//! Precision modes supported by minimizers and force fields.
 enum class PrecisionMode {
-  FULL = 0,  //!< Existing full-precision device path.
-  SINGLE     //!< Full single precision for device storage, compute, and reductions.
+  FULL = 0,  //!< Double-precision coordinates, arithmetic, state, and reductions.
+  SINGLE     //!< Single-precision device storage, arithmetic, and reductions.
 };
 
 inline const char* precisionModeName(const PrecisionMode precision) {

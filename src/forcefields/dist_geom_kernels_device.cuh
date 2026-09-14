@@ -1,5 +1,5 @@
-// Shared DG/ETK formulas. Intentionally included twice by dist_geom_kernels_device_dispatch.cuh;
-// define DG_REAL and DG_* math policy macros before including.
+// Instantiated by dist_geom_kernels_device_dispatch.cuh for each arithmetic type.
+// DG_REAL and the DG_* math macros must be defined before inclusion.
 // --------------
 // DG terms
 // --------------
@@ -112,7 +112,6 @@ static __device__ __forceinline__ DG_REAL chiralViolationEnergy(const DG_REAL* p
   const int posIdx4 = idx4 * dimension;
 
   DG_REAL v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z;
-  // Using the float version of this causes drift on the order of ~10^-5, so stay in DG_REAL precision.
   DG_REAL vol = calcChiralVolume(posIdx1, posIdx2, posIdx3, posIdx4, pos, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z);
 
   if (vol < lb) {
@@ -407,7 +406,6 @@ static __device__ __forceinline__ DG_REAL angleConstraintEnergy(const DG_REAL* p
   }
 
   const DG_REAL dot      = dx1 * dx2 + dy1 * dy2 + dz1 * dz2;
-  // This DG_REAL precision DG_SQRT is sensitive, can't downcast.
   const DG_REAL cosTheta = clamp(dot * DG_RSQRT(distTerm), -DG_REAL(1.0), DG_REAL(1.0));
   const DG_REAL angle    = RAD2DEG * DG_ACOS(cosTheta);
 

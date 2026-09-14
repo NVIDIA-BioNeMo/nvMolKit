@@ -1,6 +1,5 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
-// Intentionally included twice by mmff_kernels_device_dispatch.cuh.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -13,6 +12,8 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
+// Instantiated by mmff_kernels_device_dispatch.cuh for each arithmetic type.
 
 using namespace nvMolKit::FFKernelUtils;
 
@@ -325,7 +326,6 @@ static __device__ __forceinline__ void angleBendGrad(const int   idx1,
                                                      auto*       grad) {
   constexpr real c1       = real{143.9325} * degreeToRadian;
   constexpr real cbFactor = -real{0.006981317} * real{1.5};
-  // These values are sensitive to real precision.
   real           dx1, dy1, dz1, dx2, dy2, dz2;
   const real     dist1Squared = distanceSquaredWithComponents(pos, idx1, idx2, dx1, dy1, dz1);
   const real     dist2Squared = distanceSquaredWithComponents(pos, idx3, idx2, dx2, dy2, dz2);
@@ -424,7 +424,6 @@ static __device__ __forceinline__ void bendStretchGrad(const auto* pos,
   real       dx1, dy1, dz1, dx2, dy2, dz2;
   const real dist1Squared = distanceSquaredWithComponents(pos, idx1, idx2, dx1, dy1, dz1);
   const real dist2Squared = distanceSquaredWithComponents(pos, idx3, idx2, dx2, dy2, dz2);
-  // Note that doing the inverse NVMOLKIT_SQRT would be better here, but it causes drift in some edge case tests.
   const real dist1        = NVMOLKIT_SQRT(dist1Squared);
   const real dist2        = NVMOLKIT_SQRT(dist2Squared);
   const real invDist1     = real{1.0} / dist1;
@@ -568,7 +567,6 @@ static __device__ __forceinline__ real torsionEnergy(const auto* pos,
 
 static __device__ __forceinline__ real
 vdwEnergy(const auto* pos, const int idx1, const int idx2, const real R_ij_star, const real wellDepth) {
-  // Note, this kernel is quite sensitive, any downcasting to fp32 causes significant drift.
   real R_ij_star2 = R_ij_star * R_ij_star;
   real R_ij_star7 = R_ij_star2 * R_ij_star2 * R_ij_star2 * R_ij_star;
 

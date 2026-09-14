@@ -171,24 +171,18 @@ def assert_energy_and_gradient_close(got_energy, want_energy, got_grad, want_gra
 
 
 def _assert_batched_compute_matches_rdkit_mmff(mol_specs, precision):
-    """Check a batched MMFF force field against per-molecule RDKit results.
+    """Compare a batched MMFF force field with separately configured RDKit force fields.
 
-    Build one ``MMFFBatchedForcefield`` from ``mol_specs`` and verify that each
-    molecule's energy and gradient match its configured RDKit force field.
-
-    When any mol has a constraint configured, additionally verify that the
-    constraint has an observable effect on that mol's energy AND gradient — as
-    long as RDKit's own constrained-vs-unconstrained delta is above a small
-    threshold (which guards against pathological zero-contribution geometries,
-    e.g. an undisplaced position constraint).
-
-    Each spec is a dict with keys:
+    Each spec accepts these keys:
         factory: callable returning an RDKit mol
         property_settings (optional): dict for ``make_rdkit_mmff_properties`` or ``None``
         non_bonded_threshold (optional): defaults to 100.0
         ignore_interfrag_interactions (optional): defaults to True
         configure_batch (optional): ``lambda element: ...`` adding a constraint
         configure_rdkit (optional): ``lambda ff: ...`` adding the matching RDKit constraint
+
+    Constraints with a nonzero RDKit contribution must also have an observable
+    effect on the batched energy and gradient.
     """
     mols = [spec["factory"]() for spec in mol_specs]
     properties = [
@@ -279,11 +273,6 @@ def _assert_batched_compute_matches_rdkit_mmff(mol_specs, precision):
 
 
 def test_mmff_batched_forcefield_properties_match_rdkit(precision):
-    """Check a batch containing varied per-molecule property configurations.
-
-    This covers the default and alternate MMFF variants, dielectric settings,
-    term toggles, and fragmented molecules with interfragment interactions.
-    """
     _assert_batched_compute_matches_rdkit_mmff(
         [
             {"factory": load_reference_mol},
@@ -313,14 +302,7 @@ def test_mmff_batched_forcefield_properties_match_rdkit(precision):
 
 
 def test_mmff_batched_forcefield_reads_externally_configured_properties(precision):
-    """Read an externally configured RDKit MMFF properties object.
-
-    Configure it through raw ``rdForceFieldHelpers.MMFFGetMoleculeProperties``
-    plus direct setters, with no nvmolkit helpers in the path, before handing
-    it to ``MMFFBatchedForcefield``.
-
-    Needed because of our workaround for RDKit bug https://github.com/rdkit/rdkit/issues/9253
-    """
+    """Cover externally configured properties affected by RDKit issue 9253."""
     mol = make_embedded_mol("CCO")
 
     props = rdForceFieldHelpers.MMFFGetMoleculeProperties(mol)
@@ -346,11 +328,6 @@ def test_mmff_batched_forcefield_reads_externally_configured_properties(precisio
 
 
 def test_mmff_batched_forcefield_constraints_match_rdkit(precision):
-    """Check all five MMFF constraint types in one batch.
-
-    Some molecules also carry non-default property settings to exercise the
-    combined properties-and-constraints path.
-    """
     _assert_batched_compute_matches_rdkit_mmff(
         [
             {
@@ -497,10 +474,7 @@ def test_batched_forcefield_invalid_indices(ff_factory, apply_bad_constraint):
         apply_bad_constraint(forcefield[0])
 
 
-# Per-mol constraint specs used across batched MMFF tests. Each entry drives both the
-# nvMolKit constraint application and the matching RDKit reference. Different atom indices,
-# constraint kinds, and parameter magnitudes verify the batched path routes each mol's
-# constraints correctly.
+# Each spec applies equivalent nvMolKit and RDKit constraints.
 _MMFF_BATCH_CONSTRAINT_SPECS = [
     {
         "smiles": "CCCCO",
@@ -541,7 +515,6 @@ def _build_constrained_mmff_batch(
 
 
 def _build_stable_hardware_options_batch(forcefield_type, hardware_options, precision):
-    """Build a stable corpus for testing scheduling rather than basin choice."""
     source_mols = [
         make_embedded_mol("CCO", num_confs=2),
         make_embedded_mol("CCCO", num_confs=2),
@@ -551,10 +524,6 @@ def _build_stable_hardware_options_batch(forcefield_type, hardware_options, prec
 
 
 def _assert_batched_minimize_matches_rdkit(specs, mols, opt_energies, converged, make_ref_ff, precision):
-    """Compare batched minimization with constrained RDKit references.
-
-    Each molecule carries a different constraint from ``specs``.
-    """
     for mol_idx, (mol, spec) in enumerate(zip(mols, specs)):
         assert len(opt_energies[mol_idx]) == mol.GetNumConformers()
         assert all(converged[mol_idx]), f"Mol {mol_idx} failed to converge"
@@ -570,11 +539,6 @@ def _assert_batched_minimize_matches_rdkit(specs, mols, opt_energies, converged,
 
 
 def test_mmff_batched_minimize_with_constraints_batch_matches_rdkit(precision):
-    """Compare a varied constrained batch with RDKit minimization.
-
-    The batch covers different molecule sizes, conformer counts, and
-    constraint types.
-    """
     mols, _, ff = _build_constrained_mmff_batch(precision=precision)
     opt_energies, converged = ff.minimize(maxIters=500)
 
@@ -587,11 +551,6 @@ def test_mmff_batched_minimize_with_constraints_batch_matches_rdkit(precision):
 
 
 def test_mmff_batched_minimize_respects_maxiters_and_forcetol(precision):
-    """Check that ``maxIters`` and ``forceTol`` are plumbed through.
-
-    A single-iteration minimize should not converge and should leave energies
-    closer to the starting point than a generous-iteration minimize.
-    """
     perturbed_mols = [
         perturb_conformers(make_embedded_mol("CCCO", num_confs=2)),
         perturb_conformers(make_embedded_mol("c1ccccc1CCO", num_confs=2)),
@@ -621,7 +580,6 @@ def test_mmff_batched_minimize_respects_maxiters_and_forcetol(precision):
 @pytest.mark.parametrize("batch_size", [0, 2])
 @pytest.mark.parametrize("batches_per_gpu", [1, 3])
 def test_mmff_batched_minimize_single_gpu_hardware_options_matches_default(batch_size, batches_per_gpu, precision):
-    """HardwareOptions must produce the same results on a stable batch."""
     default_ff = _build_stable_hardware_options_batch(MMFFBatchedForcefield, None, precision)
     default_energies, default_converged = default_ff.minimize(maxIters=500)
 
@@ -919,10 +877,7 @@ def test_uff_batched_minimize_with_constraints_batch_matches_rdkit(precision):
 @pytest.mark.parametrize("batch_size", [0, 2])
 @pytest.mark.parametrize("batches_per_gpu", [1, 3])
 def test_uff_batched_minimize_single_gpu_hardware_options_matches_default(batch_size, batches_per_gpu, precision):
-    # Keep this scheduling test on a stable, unconstrained optimization
-    # corpus. The deliberately perturbed constrained corpus above contains
-    # basin-boundary cases where FP32 atomics can legitimately select a
-    # different local minimum, obscuring whether partitioning itself works.
+    # Isolate scheduling from optimizer basin selection.
     default_ff = _build_stable_hardware_options_batch(UFFBatchedForcefield, None, precision)
     default_energies, default_converged = default_ff.minimize(maxIters=500)
 

@@ -450,7 +450,6 @@ def test_embed_molecules_prune_rmsthresh(precision):
 
 
 def test_embed_molecules_device_output_returns_device3d_no_writeback(precision):
-    """EmbedMolecules(output=DEVICE) returns Device3DResult and does NOT modify RDKit conformers."""
     mols = [Chem.AddHs(Chem.MolFromSmiles("CCO")), Chem.AddHs(Chem.MolFromSmiles("CCCC"))]
     params = EmbedParameters()
     params.useRandomCoords = True

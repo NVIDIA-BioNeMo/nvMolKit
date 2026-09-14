@@ -36,7 +36,6 @@ void updateInverseHessianBFGSBatch(int            numActiveSystems,
                                    const int*     activeSystemIndices,
                                    cudaStream_t   stream = nullptr);
 
-//! Full-single-precision Hessian update.
 void updateInverseHessianBFGSBatch(int            numActiveSystems,
                                    const int16_t* statuses,
                                    const int*     hessianStarts,

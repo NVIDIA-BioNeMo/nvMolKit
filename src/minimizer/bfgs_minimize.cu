@@ -489,9 +489,7 @@ BfgsBatchMinimizer::BfgsBatchMinimizer(const int     dataDim,
   dataDim_    = dataDim;
   scaleGrads_ = scaleGrads;
   stream_     = stream;
-  // The batched kernels carry the real/reduceT/storageT precision profile.
-  // The fused backends are full-precision specializations, so SINGLE uses the
-  // complete typed batched path.
+  // Per-molecule kernels operate in double precision.
   backend_    = usesSinglePrecision(precision) ? BfgsBackend::BATCHED : backend;
   precision_  = precision;
   // For HYBRID, we need to support both paths, so initialize for both

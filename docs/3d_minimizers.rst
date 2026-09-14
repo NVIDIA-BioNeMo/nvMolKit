@@ -125,14 +125,13 @@ Taken together, at an equal iteration budget, FIRE's bulk distribution is
 slightly looser than BFGS's, while FIRE reaches the lower minimum on most of
 the conformers where the two minimizers end up in different basins.
 
-Single-precision BFGS
----------------------
+Precision modes
+---------------
 
-Use ``PrecisionMode.SINGLE`` to run the complete BFGS device pipeline in
-single precision, including force-field data and arithmetic, minimizer state,
-the inverse Hessian, and reductions. ``PrecisionMode.FULL`` is the default
-full double-precision mode. Partial and per-component precision combinations
-are not supported.
+``PrecisionMode.FULL`` uses double precision for coordinates, force-field
+arithmetic, minimizer state, the BFGS inverse Hessian, and reductions.
+Force-field parameters retain their defined storage types. ``PrecisionMode.SINGLE``
+uses single precision for all of those values. ``FULL`` is the default.
 
 .. code-block:: python
 
@@ -145,9 +144,7 @@ are not supported.
         precision=PrecisionMode.SINGLE,
     )
 
-The same ``precision`` argument is available for UFF, FIRE, embedding,
-and batched force-field minimization. Public coordinates and energies retain
-their float64 API representation; ``SINGLE`` controls storage and computation
-inside the GPU pipeline. Single precision uses the typed batched backend even
-when another backend is requested.
-
+The same ``precision`` argument is available for UFF, FIRE, embedding, and
+batched force-field minimization. Public coordinates and energies retain their
+float64 API representation. BFGS and FIRE use the batched backend in ``SINGLE``
+mode because their per-molecule kernels operate in double precision.

@@ -29,11 +29,7 @@ import pytest
     ],
 )
 def test_module_imports_as_first_nvmolkit_import(module_name):
-    """Importing a public wrapper first must not require nvmolkit.types to be imported first.
-
-    Shared native option converters are registered by nvmolkit._types. Each import runs in a fresh
-    interpreter so an earlier import in this test session cannot hide dependency-order problems.
-    """
+    """Use a fresh interpreter to expose native registration-order dependencies."""
     result = subprocess.run(
         [sys.executable, "-c", f"import {module_name}"],
         capture_output=True,

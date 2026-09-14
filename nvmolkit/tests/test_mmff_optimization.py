@@ -552,7 +552,6 @@ def test_error_case_throws_properly():
 
 
 def test_mmff_optimization_device_output_matches_host(mmff_test_mols, precision):
-    """MMFFOptimizeMoleculesConfs(output=DEVICE) returns Device3DResult; energies match host path."""
     host_mols = create_hard_copy_mols(mmff_test_mols)
     device_mols = create_hard_copy_mols(mmff_test_mols)
 

@@ -270,7 +270,6 @@ class FireBatchMinimizer final : public BatchMinimizer {
   //! Per-system state for energy-plateau stuck detection. The workspace extrema
   //! track the window while ``stuckStreak_`` counts
   //! consecutive plateau polls; all reset when the relative tolerance is violated.
-  //! Exactly one workspace's extrema pair is allocated for the selected precision.
   AsyncDeviceVector<int32_t> stuckStreak_;
   int                        pollsSinceLastEnergyEval_ = 0;
 

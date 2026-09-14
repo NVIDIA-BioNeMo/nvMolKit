@@ -298,8 +298,7 @@ TEST_P(UFFValidationPrecisionTest, BatchMinimizerMatchesRDKitFinalEnergies) {
   std::vector<std::unique_ptr<RDKit::ROMol>> mols;
   getMols(sdfPath, mols, 8);
   ASSERT_FALSE(mols.empty());
-  // The first validation molecule is on a known optimizer basin boundary.
-  // Keep minimizer parity on the shared, reliable remainder of the corpus.
+  // Small numeric differences select a different basin for the first molecule.
   mols.erase(mols.begin());
 
   BatchedMolecularSystemHost host;

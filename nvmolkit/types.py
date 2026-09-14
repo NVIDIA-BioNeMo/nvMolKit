@@ -298,7 +298,7 @@ class HardwareOptions:
 
 
 PrecisionMode = _types.PrecisionMode
-"""Precision profile: :attr:`FULL` or :attr:`SINGLE`."""
+"""Device precision mode: :attr:`FULL` or :attr:`SINGLE`."""
 
 
 class AsyncGpuResult:

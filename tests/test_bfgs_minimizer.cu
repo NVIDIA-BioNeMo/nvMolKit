@@ -295,8 +295,7 @@ struct BfgsBackendPrecisionCase {
   nvMolKit::PrecisionMode precision;
 };
 
-// Full precision exercises every backend. Single precision uses the typed
-// batched backend and runs the same behavioral test bodies.
+// Per-molecule and hybrid cases apply only to full precision.
 class BFGSMinimizerBackendTest : public BFGSMinimizerTestFixture,
                                  public ::testing::WithParamInterface<BfgsBackendPrecisionCase> {};
 
@@ -1532,7 +1531,7 @@ TEST_P(BFGSMinimizerBackendTest, ReuseMinimizer_VariedSizes) {
 
 INSTANTIATE_TEST_SUITE_P(BFGSMinimizer4DTest, BFGSMinimizerTest4DTest, ::testing::Values(false, true));
 
-TEST(BFGSPrecisionStateTest, PresetsAllocateResolvedStateAndHessianWidths) {
+TEST(BFGSPrecisionStateTest, ModesAllocateMatchingStateAndHessianWidths) {
   const std::vector<int>           atomStarts{0, 2, 5};
   nvMolKit::AsyncDeviceVector<int> atomStartsDevice;
   atomStartsDevice.setFromVector(atomStarts);
@@ -1571,12 +1570,11 @@ TEST(BFGSPrecisionStateTest, PresetsAllocateResolvedStateAndHessianWidths) {
     EXPECT_EQ(minimizer.fullWorkspace_.gradScales.size() != 0, !singlePrecision);
     EXPECT_EQ(minimizer.singleWorkspace_.inverseHessian.size() != 0, singlePrecision);
     EXPECT_EQ(minimizer.fullWorkspace_.inverseHessian.size() != 0, !singlePrecision);
-    // Required double ABI bridge exists even when candidate state is float.
     EXPECT_EQ(minimizer.fullWorkspace_.scratchPositions.size() != 0, !singlePrecision);
   }
 }
 
-TEST_F(BFGSMinimizerHarmonicTestFixture, AllPrecisionPresetsExecuteNumerically) {
+TEST_F(BFGSMinimizerHarmonicTestFixture, PrecisionModesExecuteNumerically) {
   for (const auto mode : {nvMolKit::PrecisionMode::FULL, nvMolKit::PrecisionMode::SINGLE}) {
     SCOPED_TRACE(nvMolKit::precisionModeName(mode));
     setUpSystems(/*computeLastDim=*/true, /*seed=*/42);

@@ -4,9 +4,7 @@
 #define NVMOLKIT_MMFF_KERNELS_DEVICE_DISPATCH_CUH
 #include "src/forcefields/kernel_utils.cuh"
 
-// The implementation is instantiated from one source for both arithmetic
-// widths. Keeping the namespace in the type makes accidental promotion at a
-// dispatch site visible in generated symbols and source inspection.
+// Instantiate the shared device implementation for each arithmetic type.
 namespace nvMolKit::MMFF::fp64 {
 using real = double;
 #define NVMOLKIT_FMOD    fmod
@@ -64,7 +62,7 @@ using real = float;
 }  // namespace nvMolKit::MMFF::fp32
 
 namespace nvMolKit::MMFF {
-// Preserve the existing unqualified API while new dispatch chooses fp32/fp64.
+// Unqualified device helpers use the full-precision instantiation.
 using namespace fp64;
 }  // namespace nvMolKit::MMFF
 #endif  // NVMOLKIT_MMFF_KERNELS_DEVICE_DISPATCH_CUH
