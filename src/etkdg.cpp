@@ -114,6 +114,8 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
 
   // Default to 4 batches per GPU and 500 conformers per batch
   const int batchesPerGpu = hardwareOptions.batchesPerGpu == -1 ? 4 : hardwareOptions.batchesPerGpu;
+  // Used by the OpenMP pragma below.
+  // NOLINTNEXTLINE(clang-analyzer-deadcode.DeadStores)
   const int numThreads =
     hardwareOptions.preprocessingThreads == -1 ? omp_get_max_threads() : hardwareOptions.preprocessingThreads;
   const int batchSize = hardwareOptions.batchSize == -1 ? 500 : hardwareOptions.batchSize;

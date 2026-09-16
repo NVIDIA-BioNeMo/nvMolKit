@@ -343,16 +343,10 @@ void DeviceBoundsMatrixBatch::copyToHost(std::vector<::DistGeom::BoundsMatPtr>& 
       throw std::runtime_error("Matrix size mismatch in copyToHost for molecule " + std::to_string(molIdx));
     }
 
-    bool shouldCopy = false;
-    if (!beforeSmoothing && !afterSmoothing) {
-      // Both null - copy everything
-      shouldCopy = true;
-    } else if (beforeSmoothing && afterSmoothing) {
+    bool shouldCopy = true;
+    if (beforeSmoothing && afterSmoothing) {
       // Both provided - copy only molecules that converged (needed smoothing before but not after)
       shouldCopy = (*beforeSmoothing)[molIdx] && !(*afterSmoothing)[molIdx];
-    } else {
-      // Only one provided - this shouldn't happen in normal usage, but default to copying
-      shouldCopy = true;
     }
 
     if (shouldCopy) {
