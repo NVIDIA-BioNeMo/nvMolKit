@@ -21,13 +21,14 @@ from typing import Any, Iterable, List, NamedTuple, Optional
 import numpy as np
 import torch
 
-# Import order is significant: these native modules register converters used by
-# the modules imported after them.
-from nvmolkit import (
-    _arrayHelpers,  # noqa: F401
-    _embedMolecules,  # type: ignore
-    _types,
-)
+# These imports populate Boost.Python's global converter registry. Keep this
+# bootstrap sequence developer-controlled so future binding dependencies are
+# not silently reordered by the formatter.
+# isort: off
+from nvmolkit import _arrayHelpers  # noqa: F401
+from nvmolkit import _embedMolecules  # type: ignore
+from nvmolkit import _types
+# isort: on
 
 
 class FireOptions:
