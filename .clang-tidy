@@ -19,6 +19,10 @@ Checks:
   # This is expensive flow-sensitive analysis that cannot model project
   # invariants outside the local function.
   - '-bugprone-unchecked-optional-access'
+  - performance-*
+  # Enum representation is an ABI and data-layout decision, not a blanket
+  # optimization; smaller underlying types can also add conversion overhead.
+  - '-performance-enum-size'
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*/(src|rdkit_extensions)/.*'
 FormatStyle: none
