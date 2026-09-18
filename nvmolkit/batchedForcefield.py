@@ -454,8 +454,7 @@ class _BatchedForcefieldBase:
 
 
 class MMFFBatchedForcefield(_BatchedForcefieldBase):
-    """Evaluate MMFF energies and gradients, or run BFGS minimization, for a
-    batch of molecules with all their conformers.
+    """Evaluate MMFF energies and gradients or run BFGS minimization for molecule batches.
 
     Properties and constraints are per-molecule and are shared across all
     conformers of that molecule.  Results are nested as
@@ -630,8 +629,7 @@ class MMFFBatchedForcefield(_BatchedForcefieldBase):
 
 
 class UFFBatchedForcefield(_BatchedForcefieldBase):
-    """Evaluate UFF energies and gradients, or run BFGS minimization, for a
-    batch of molecules with all their conformers.
+    """Evaluate UFF energies and gradients or run BFGS minimization for molecule batches.
 
     Constraints are per-molecule and are shared across all conformers of
     that molecule.  Results are nested as ``list[list[...]]`` — outer

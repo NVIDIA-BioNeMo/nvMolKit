@@ -39,7 +39,6 @@ if TYPE_CHECKING:
 
 def default_rdkit_mmff_properties(mol: "Mol"):
     """Create default RDKit MMFF properties for ``mol``."""
-
     properties = rdForceFieldHelpers.MMFFGetMoleculeProperties(mol)
     if properties is None:
         raise ValueError("RDKit could not create MMFF properties for molecule")
@@ -58,7 +57,6 @@ def make_internal_mmff_properties(
     (variant, dielectric, per-term flags); the corresponding getters are not
     wrapped.  We read the settings through the C++ binding layer instead.
     """
-
     return _batchedForcefield.buildMMFFPropertiesFromRDKit(
         properties,
         float(non_bonded_threshold),
