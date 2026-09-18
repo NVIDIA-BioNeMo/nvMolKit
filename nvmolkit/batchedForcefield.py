@@ -87,8 +87,6 @@ from nvmolkit import _batchedForcefield  # type: ignore
 from nvmolkit._mmff_bridge import default_rdkit_mmff_properties, make_internal_mmff_properties
 from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions, HardwareOptions
 
-from nvmolkit import _batchedForcefield  # type: ignore
-
 if TYPE_CHECKING:
     from rdkit.Chem import Mol
     from rdkit.ForceField.rdForceField import MMFFMolProperties as RDKitMMFFMolProperties

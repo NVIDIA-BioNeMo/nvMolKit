@@ -23,9 +23,13 @@ from rdkit.Chem.AllChem import ETKDGv3
 from rdkit.ForceField import rdForceField as _rdForceField  # noqa: F401
 from rdkit.Geometry import Point3D
 
+# Preserve this initialization order so converter registration remains
+# explicit in the integration test module.
+# isort: off
 from nvmolkit.embedMolecules import EmbedMolecules
 import nvmolkit.mmffOptimization as nvmolkit_mmff
 from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions, HardwareOptions
+# isort: on
 
 
 @pytest.fixture

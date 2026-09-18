@@ -21,9 +21,13 @@ from typing import Any, Iterable, List, NamedTuple, Optional
 import numpy as np
 import torch
 
+# Import order is significant: these native modules register converters used by
+# the modules imported after them.
+# isort: off
 from nvmolkit import _arrayHelpers  # noqa: F401
 from nvmolkit import _embedMolecules  # type: ignore
 from nvmolkit import _types
+# isort: on
 
 
 class FireOptions:

@@ -24,7 +24,6 @@ from rdkit.DataStructs import BulkCosineSimilarity, BulkTanimotoSimilarity
 from nvmolkit.fingerprints import MorganFingerprintGenerator
 from nvmolkit.similarity import crossCosineSimilarity, crossTanimotoSimilarity
 
-
 SIZES = [2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000, 20000, 24000, 28000, 32000]
 CPU_SINGLE_VALUE_ABOVE = 6000
 
