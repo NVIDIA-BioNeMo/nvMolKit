@@ -152,13 +152,18 @@ ignore = [
     "RUF005",  # Checks for uses of the + operator to concatenate collections.
 ]
 select = [
-    "C",   # Pylint conventions
+    "A",   # Builtin shadowing
+    "C",   # C-prefixed convention checks
     "D",   # Documentation formatting
+    "DTZ", # Datetime timezone checks
     "E",   # Style and whitespace checks
     "F",   # Pyflakes correctness checks
     "I",   # Import sorting
+    "LOG", # Logging checks
+    "PIE", # Miscellaneous correctness checks
+    "PLE", # Pylint errors
     "RUF", # Ruff-specific checks
-    "W",   # Pylint warnings
+    "W",   # Pycodestyle warnings
 ]
 
 [tool.ruff.lint.per-file-ignores]
