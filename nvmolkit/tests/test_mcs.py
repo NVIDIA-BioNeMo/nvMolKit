@@ -90,13 +90,13 @@ def _assert_result_storage(result, mol_table):
         assert item.bond_mapping.shape == (item.num_bonds, 2)
 
         if item.num_atoms:
-            assert np.all((0 <= item.atom_mapping[:, 0]) & (item.atom_mapping[:, 0] < mol_table[idx_a].GetNumAtoms()))
-            assert np.all((0 <= item.atom_mapping[:, 1]) & (item.atom_mapping[:, 1] < mol_table[idx_b].GetNumAtoms()))
+            assert np.all((item.atom_mapping[:, 0] >= 0) & (item.atom_mapping[:, 0] < mol_table[idx_a].GetNumAtoms()))
+            assert np.all((item.atom_mapping[:, 1] >= 0) & (item.atom_mapping[:, 1] < mol_table[idx_b].GetNumAtoms()))
             assert len(np.unique(item.atom_mapping[:, 0])) == item.num_atoms
             assert len(np.unique(item.atom_mapping[:, 1])) == item.num_atoms
         if item.num_bonds:
-            assert np.all((0 <= item.bond_mapping[:, 0]) & (item.bond_mapping[:, 0] < mol_table[idx_a].GetNumBonds()))
-            assert np.all((0 <= item.bond_mapping[:, 1]) & (item.bond_mapping[:, 1] < mol_table[idx_b].GetNumBonds()))
+            assert np.all((item.bond_mapping[:, 0] >= 0) & (item.bond_mapping[:, 0] < mol_table[idx_a].GetNumBonds()))
+            assert np.all((item.bond_mapping[:, 1] >= 0) & (item.bond_mapping[:, 1] < mol_table[idx_b].GetNumBonds()))
             assert len(np.unique(item.bond_mapping[:, 0])) == item.num_bonds
             assert len(np.unique(item.bond_mapping[:, 1])) == item.num_bonds
 

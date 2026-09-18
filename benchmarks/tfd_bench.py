@@ -187,11 +187,7 @@ def verify_correctness(mol: Chem.Mol, tolerance: float = 0.01) -> bool:
     if len(rdkit_result) != len(nvmol_result):
         return False
 
-    for rd, nv in zip(rdkit_result, nvmol_result):
-        if abs(rd - nv) > tolerance:
-            return False
-
-    return True
+    return all(abs(rd - nv) <= tolerance for rd, nv in zip(rdkit_result, nvmol_result, strict=True))
 
 
 def load_pkl_files(pkl_paths: List[str]) -> List[Chem.Mol]:

@@ -149,21 +149,25 @@ ignore = [
     "D100",    # Checks for undocumented public module definitions.
     "E501",    # Checks for lines that exceed the specified maximum character length.
     "E741",    # Checks for the use of the characters 'l', 'O', or 'I' as variable names.
+    "RET505",  # Preserve elif chains after terminating branches.
     "RUF005",  # Checks for uses of the + operator to concatenate collections.
 ]
 select = [
-    "A",   # Builtin shadowing
-    "C",   # C-prefixed convention checks
-    "D",   # Documentation formatting
-    "DTZ", # Datetime timezone checks
-    "E",   # Style and whitespace checks
-    "F",   # Pyflakes correctness checks
-    "I",   # Import sorting
-    "LOG", # Logging checks
-    "PIE", # Miscellaneous correctness checks
-    "PLE", # Pylint errors
-    "RUF", # Ruff-specific checks
-    "W",   # Pycodestyle warnings
+    "A",     # Builtin shadowing
+    "ASYNC", # Async correctness checks
+    "C",     # C-prefixed convention checks
+    "D",     # Documentation formatting
+    "DTZ",   # Datetime timezone checks
+    "E",     # Style and whitespace checks
+    "F",     # Pyflakes correctness checks
+    "I",     # Import sorting
+    "LOG",   # Logging checks
+    "PIE",   # Miscellaneous correctness checks
+    "PLE",   # Pylint errors
+    "RET",   # Return statement checks
+    "RUF",   # Ruff-specific checks
+    "SIM",   # Simplification checks
+    "W",     # Pycodestyle warnings
 ]
 
 [tool.ruff.lint.per-file-ignores]
