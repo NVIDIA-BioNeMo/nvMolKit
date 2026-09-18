@@ -534,9 +534,9 @@ __global__ void substructPaintKernelT(TargetMoleculesDeviceView     targets,
     return;
   }
 
-  const int mainQueryIdx  = patternEntries ? patternEntries[localPatternIdx].mainQueryIdx : defaultMainQueryIdx;
-  const int patternId     = patternEntries ? patternEntries[localPatternIdx].patternId : defaultPatternId;
-  const int patternMolIdx = patternEntries ? patternEntries[localPatternIdx].patternMolIdx : localPatternIdx;
+  const int      mainQueryIdx = patternEntries ? patternEntries[localPatternIdx].mainQueryIdx : defaultMainQueryIdx;
+  const uint32_t patternMask  = patternEntries ? patternEntries[localPatternIdx].patternMask : (1u << defaultPatternId);
+  const int      patternMolIdx = patternEntries ? patternEntries[localPatternIdx].patternMolIdx : localPatternIdx;
 
   const int globalPairIdx = targetIdx * outputNumQueries + mainQueryIdx;
 
@@ -601,7 +601,7 @@ __global__ void substructPaintKernelT(TargetMoleculesDeviceView     targets,
 
   PaintModeParams paintParams;
   paintParams.recursiveBits  = outputRecursiveBits;
-  paintParams.patternId      = patternId;
+  paintParams.patternMask    = patternMask;
   paintParams.maxTargetAtoms = maxTargetAtoms;
   paintParams.outputPairIdx  = batchLocalPairIdx;
 
@@ -749,9 +749,9 @@ __launch_bounds__(dfs::kBlockSize, dfs::minBlocksPerSM<MaxTargetAtoms, MaxQueryA
     return;
   }
 
-  const int mainQueryIdx  = patternEntries ? patternEntries[localPatternIdx].mainQueryIdx : defaultMainQueryIdx;
-  const int patternId     = patternEntries ? patternEntries[localPatternIdx].patternId : defaultPatternId;
-  const int patternMolIdx = patternEntries ? patternEntries[localPatternIdx].patternMolIdx : localPatternIdx;
+  const int      mainQueryIdx = patternEntries ? patternEntries[localPatternIdx].mainQueryIdx : defaultMainQueryIdx;
+  const uint32_t patternMask  = patternEntries ? patternEntries[localPatternIdx].patternMask : (1u << defaultPatternId);
+  const int      patternMolIdx = patternEntries ? patternEntries[localPatternIdx].patternMolIdx : localPatternIdx;
 
   const int globalPairIdx = targetIdx * outputNumQueries + mainQueryIdx;
   if (globalPairIdx < miniBatchPairOffset || globalPairIdx >= miniBatchPairOffset + miniBatchSize) {
@@ -763,7 +763,7 @@ __launch_bounds__(dfs::kBlockSize, dfs::minBlocksPerSM<MaxTargetAtoms, MaxQueryA
 
   dfs::DfsPairOutput out;
   out.paint.recursiveBits  = outputRecursiveBits;
-  out.paint.patternId      = patternId;
+  out.paint.patternMask    = patternMask;
   out.paint.maxTargetAtoms = maxTargetAtoms;
   out.paint.outputPairIdx  = globalPairIdx - miniBatchPairOffset;
 
