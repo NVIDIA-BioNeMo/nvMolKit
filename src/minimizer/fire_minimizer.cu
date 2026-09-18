@@ -190,8 +190,8 @@ __global__ void firePreKickKernel(const cuda::std::span<const int>      atomStar
       debugPowers[sysIdx] = powerShared;
     }
 
-    real newDt     = dtIn;
-    real newAlpha  = alphaIn;
+    real      newDt     = dtIn;
+    real      newAlpha  = alphaIn;
     const int newNsteps = powerShared >= reduceT{0} ? nstepIn + 1 : 0;
 
     if (powerShared >= reduceT{0}) {
@@ -200,8 +200,8 @@ __global__ void firePreKickKernel(const cuda::std::span<const int>      atomStar
         newAlpha = alphaIn * static_cast<real>(params.alphaDecrementFactor);
       }
     } else {
-      newAlpha  = static_cast<real>(params.alphaStart);
-      newDt     = max(dtIn * static_cast<real>(params.dtDecrementFactor), static_cast<real>(params.minDt));
+      newAlpha = static_cast<real>(params.alphaStart);
+      newDt    = max(dtIn * static_cast<real>(params.dtDecrementFactor), static_cast<real>(params.minDt));
     }
 
     sharedDt               = newDt;

@@ -33,6 +33,7 @@ from nvmolkit.types import (
     PrecisionMode,
 )
 
+
 @pytest.fixture
 def mmff_test_mols(num_mols=5):
     """Load molecules from MMFF94_dative.sdf for testing.
