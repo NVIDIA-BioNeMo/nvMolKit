@@ -60,11 +60,11 @@ oopGrad(const auto* pos, const int idx1, const int idx2, const int idx3, const i
   normalJIKy *= invNormLength;
   normalJIKz *= invNormLength;
 
-  const real sinChi    = clamp(dotProduct(dJLx, dJLy, dJLz, normalJIKx, normalJIKy, normalJIKz), -1.0f, 1.0f);
+  const real sinChi    = clamp(dotProduct(dJLx, dJLy, dJLz, normalJIKx, normalJIKy, normalJIKz), real{-1.0}, real{1.0});
   const real cosChiSq  = real{1.0} - sinChi * sinChi;
   const real invCosChi = cosChiSq > 0 ? NVMOLKIT_RSQRT(cosChiSq) : real{1.0e8};
   const real chi       = radianToDegree * NVMOLKIT_ASIN(sinChi);
-  const real cosTheta  = clamp(dotProduct(dJIx, dJIy, dJIz, dJKx, dJKy, dJKz), -1.0f, 1.0f);
+  const real cosTheta  = clamp(dotProduct(dJIx, dJIy, dJIz, dJKx, dJKy, dJKz), real{-1.0}, real{1.0});
 
   real invSinTheta = NVMOLKIT_RSQRT(NVMOLKIT_FMAX(real{1.0} - cosTheta * cosTheta, real{1.0e-8}));
 
@@ -304,7 +304,7 @@ static __device__ __forceinline__ real angleBendEnergy(const auto* pos,
   const real dist2        = NVMOLKIT_RSQRT(dist2Squared);
 
   const real dot         = dx1 * dx2 + dy1 * dy2 + dz1 * dz2;
-  const real cosTheta    = clamp(dot * (dist1 * dist2), -1.0f, 1.0f);
+  const real cosTheta    = clamp(dot * (dist1 * dist2), real{-1.0}, real{1.0});
   const real theta       = radianToDegree * NVMOLKIT_ACOS(cosTheta);
   const real deltaTheta  = theta - theta0;
   const real deltaTheta2 = deltaTheta * deltaTheta;
@@ -399,7 +399,7 @@ static __device__ __forceinline__ real bendStretchEnergy(const auto* pos,
   const real dist2        = NVMOLKIT_SQRT(dist2Squared);
 
   const real dot      = dx1 * dx2 + dy1 * dy2 + dz1 * dz2;
-  const real cosTheta = clamp(dot / (dist1 * dist2), -1.0f, 1.0f);
+  const real cosTheta = clamp(dot / (dist1 * dist2), real{-1.0}, real{1.0});
   const real theta    = 180 / static_cast<real>(M_PI) * NVMOLKIT_ACOS(cosTheta);
 
   const real deltaTheta = theta - theta0;
