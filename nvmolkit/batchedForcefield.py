@@ -512,6 +512,7 @@ class MMFFBatchedForcefield(_BatchedForcefieldBase):
         )
 
     def __getitem__(self, idx: int) -> MMFFBatchElement:
+        """Return the force-field element at ``idx``."""
         return super().__getitem__(idx)
 
     def _normalize_properties(
@@ -675,6 +676,7 @@ class UFFBatchedForcefield(_BatchedForcefieldBase):
         self._vdw_thresholds = _normalize_scalar_or_list(vdwThreshold, len(molecules), "vdwThreshold")
 
     def __getitem__(self, idx: int) -> UFFBatchElement:
+        """Return the force-field element at ``idx``."""
         return super().__getitem__(idx)
 
     def _build_native(self):
