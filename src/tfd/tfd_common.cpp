@@ -605,7 +605,7 @@ static TFDSystemHost buildTFDSystemImpl(const RDKit::ROMol& mol, const TFDComput
   desc.torsStart     = torsStart;
   desc.numTorsions   = numTorsions;
   desc.tfdOutStart   = tfdOutStart;
-  system.molDescriptors.push_back(std::move(desc));
+  system.molDescriptors.push_back(desc);
 
   system.dihedralWorkStarts.push_back(system.dihedralWorkStarts.back() + numDihedrals);
   system.tfdWorkStarts.push_back(system.tfdWorkStarts.back() + numTFDOutputs);

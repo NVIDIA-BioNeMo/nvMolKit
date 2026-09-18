@@ -55,7 +55,7 @@ template <std::size_t NBits> struct FlatBitVectStorage {
       bits[i] = other.bits[i];
     }
   }
-  CUDA_CALLABLE_MEMBER FlatBitVectStorage(FlatBitVectStorage&& other) {
+  CUDA_CALLABLE_MEMBER FlatBitVectStorage(FlatBitVectStorage&& other) noexcept {
     for (std::size_t i = 0; i < kStorageCount; ++i) {
       bits[i] = other.bits[i];
     }
@@ -68,7 +68,7 @@ template <std::size_t NBits> struct FlatBitVectStorage {
     }
     return *this;
   }
-  CUDA_CALLABLE_MEMBER FlatBitVectStorage& operator=(FlatBitVectStorage&& other) {
+  CUDA_CALLABLE_MEMBER FlatBitVectStorage& operator=(FlatBitVectStorage&& other) noexcept {
     for (std::size_t i = 0; i < kStorageCount; ++i) {
       bits[i] = other.bits[i];
     }

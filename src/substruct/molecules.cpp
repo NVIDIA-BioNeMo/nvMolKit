@@ -820,7 +820,7 @@ bool isAndOnlyQuery(const RDKit::Atom::QUERYATOM_QUERY* query) {
     return false;
   }
 
-  const std::string desc = query->getDescription();
+  const std::string& desc = query->getDescription();
   if (desc == "AtomOr" || desc == "AtomXor" || desc == "RecursiveStructure") {
     return false;
   }
@@ -849,7 +849,7 @@ bool isAndOnlyQuery(const RDKit::Atom::QUERYATOM_QUERY* query) {
  * sets AtomQueryNeverMatches when found.
  */
 void collectAndOnlyFlags(const RDKit::Atom::QUERYATOM_QUERY* query, AtomQuery& flags, AtomDataPacked& packed) {
-  const std::string desc = query->getDescription();
+  const std::string& desc = query->getDescription();
 
   if constexpr (kDebugBoolTreeBuild) {
     printf("[collectAndOnlyFlags] desc=\"%s\" negated=%d\n", desc.c_str(), query->getNegation());
@@ -1040,8 +1040,8 @@ uint8_t processQueryTree(const RDKit::Atom::QUERYATOM_QUERY* query,
                          const BondTypeCounts&               bondCounts,
                          int&                                nextPatternId,
                          const std::vector<int>*             childPatternIds = nullptr) {
-  const std::string desc      = query->getDescription();
-  const bool        isNegated = query->getNegation();
+  const std::string& desc      = query->getDescription();
+  const bool         isNegated = query->getNegation();
 
   // Handle AND-only subtrees efficiently by merging into a single leaf
   if (!isNegated && isAndOnlyQuery(query)) {
@@ -1248,7 +1248,7 @@ void populateQueryAtomDataPacked(const RDKit::Atom* atom, AtomDataPacked& packed
   // We'll duplicate the logic here to avoid converting back and forth
   std::function<void(const RDKit::Atom::QUERYATOM_QUERY*)> populatePacked;
   populatePacked = [&](const RDKit::Atom::QUERYATOM_QUERY* q) {
-    const std::string desc = q->getDescription();
+    const std::string& desc = q->getDescription();
 
     if (desc == "AtomAnd") {
       for (auto it = q->beginChildren(); it != q->endChildren(); ++it) {
@@ -1340,8 +1340,8 @@ void extractBondQueryFlags(const RDKit::Bond* bond, BondQueryData& queryData) {
   // Recursive function to process bond query tree
   std::function<void(const RDKit::Bond::QUERYBOND_QUERY*)> processQuery;
   processQuery = [&](const RDKit::Bond::QUERYBOND_QUERY* q) {
-    const std::string desc      = q->getDescription();
-    const bool        isNegated = q->getNegation();
+    const std::string& desc      = q->getDescription();
+    const bool         isNegated = q->getNegation();
 
     if (desc == "BondAnd") {
       // Check for impossible constraints like single AND aromatic
@@ -1709,7 +1709,7 @@ bool containsRecursiveSmarts(const RDKit::Atom::QUERYATOM_QUERY* query) {
     return false;
   }
 
-  const std::string desc = query->getDescription();
+  const std::string& desc = query->getDescription();
   if (desc == "RecursiveStructure") {
     return true;
   }
@@ -1756,8 +1756,8 @@ int collectRecursivePatterns(const RDKit::Atom::QUERYATOM_QUERY* query,
     return 0;
   }
 
-  const std::string desc     = query->getDescription();
-  int               maxDepth = 0;
+  const std::string& desc     = query->getDescription();
+  int                maxDepth = 0;
 
   if (desc == "RecursiveStructure") {
     if (nextPatternId >= RecursivePatternInfo::kMaxPatterns) {
