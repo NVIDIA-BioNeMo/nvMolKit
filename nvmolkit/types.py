@@ -23,11 +23,11 @@ import torch
 
 # Import order is significant: these native modules register converters used by
 # the modules imported after them.
-# isort: off
-from nvmolkit import _arrayHelpers  # noqa: F401
-from nvmolkit import _embedMolecules  # type: ignore
-from nvmolkit import _types
-# isort: on
+from nvmolkit import (
+    _arrayHelpers,  # noqa: F401
+    _embedMolecules,  # type: ignore
+    _types,
+)
 
 
 class FireOptions:
