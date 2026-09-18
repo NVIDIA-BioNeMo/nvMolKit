@@ -820,7 +820,7 @@ cudaError_t computeEnergyBlockPerMol(BatchedMolecularDeviceBuffers& molSystemDev
 }
 
 cudaError_t computeEnergyBlockPerMol(BatchedMolecularDeviceBuffersSingle& molSystemDevice,
-                                     double*                              energyOuts,
+                                     float*                               energyOuts,
                                      const float*                         coords,
                                      const uint8_t*                       activeSystemMask,
                                      cudaStream_t                         stream) {

@@ -217,7 +217,7 @@ template <typename ParameterScalar, typename CoordinateScalar> struct BatchedMol
   AsyncDeviceVector<CoordinateScalar>         positions;
   AsyncDeviceVector<CoordinateScalar>         grad;
   AsyncDeviceVector<double>                   energyBuffer;
-  AsyncDeviceVector<double>                   energyOuts;
+  AsyncDeviceVector<CoordinateScalar>         energyOuts;
 };
 
 using BatchedMolecularDeviceBuffers       = BatchedMolecularDeviceBuffersT<double, double>;
@@ -262,7 +262,7 @@ cudaError_t computeEnergyBlockPerMol(BatchedMolecularDeviceBuffers& molSystemDev
                                      const double*                  coords = nullptr,
                                      cudaStream_t                   stream = nullptr);
 cudaError_t computeEnergyBlockPerMol(BatchedMolecularDeviceBuffersSingle& molSystemDevice,
-                                     double*                              energyOuts,
+                                     float*                               energyOuts,
                                      const float*                         coords,
                                      const uint8_t*                       activeSystemMask = nullptr,
                                      cudaStream_t                         stream           = nullptr);

@@ -244,7 +244,7 @@ template <bool HasConstraints, typename real, typename reduceT, typename Terms, 
 __global__ void combinedEnergiesKernel(const Terms*                                  terms,
                                        const nvMolKit::UFF::BatchedIndicesDevicePtr* systemIndices,
                                        const storageT*                               coords,
-                                       double*                                       energies,
+                                       storageT*                                     energies,
                                        const uint8_t*                                activeSystemMask) {
   const int molIdx = blockIdx.x;
   const int tid    = threadIdx.x;
@@ -608,7 +608,7 @@ cudaError_t launchBlockPerMolEnergyKernelImpl(int                            num
                                               const Terms&                   terms,
                                               const BatchedIndicesDevicePtr& systemIndices,
                                               const storageT*                coords,
-                                              double*                        energies,
+                                              storageT*                      energies,
                                               bool                           hasConstraints,
                                               cudaStream_t                   stream,
                                               const uint8_t*                 activeSystemMask) {
@@ -650,7 +650,7 @@ cudaError_t launchBlockPerMolGradKernelImpl(int                            numMo
                                             const TermsType&               terms,          \
                                             const BatchedIndicesDevicePtr& indices,        \
                                             const storageT*                coords,         \
-                                            double*                        energies,       \
+                                            storageT*                      energies,       \
                                             bool                           hasConstraints, \
                                             cudaStream_t                   stream,         \
                                             const uint8_t*                 activeSystemMask) {             \
