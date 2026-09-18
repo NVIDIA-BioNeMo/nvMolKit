@@ -63,13 +63,13 @@ TEST(BFGSMinimizerTest, AllocationAndIdentity) {
                            nvMolKit::BfgsBackend::BATCHED,
                            nullptr);
   // expect (2 * 3)^2 + (3 * 3)^2 + (5*3)^2 (2*3)^2 = 378
-  int           hessianStorageSize = bfgsMinimizer.fullWorkspace_.inverseHessian.size();
-  constexpr int wantStorageSize    = 378;
+  int hessianStorageSize        = std::get<nvMolKit::FullBfgsWorkspace>(bfgsMinimizer.workspace_).inverseHessian.size();
+  constexpr int wantStorageSize = 378;
   ASSERT_EQ(hessianStorageSize, wantStorageSize);
 
   bfgsMinimizer.setHessianToIdentity();
 
-  const double*       hessian = bfgsMinimizer.fullWorkspace_.inverseHessian.data();
+  const double*       hessian = std::get<nvMolKit::FullBfgsWorkspace>(bfgsMinimizer.workspace_).inverseHessian.data();
   std::vector<double> hessianHost(hessianStorageSize);
   ASSERT_EQ(cudaMemcpy(hessianHost.data(), hessian, hessianStorageSize * sizeof(double), cudaMemcpyDeviceToHost), 0);
 
@@ -107,13 +107,13 @@ TEST(BFGSMinimizerTest, SinglePrecisionStorageAllocationAndIdentity) {
                        nullptr);
 
   constexpr int wantStorageSize = 378;
-  EXPECT_EQ(minimizer.fullWorkspace_.inverseHessian.size(), 0);
-  ASSERT_EQ(minimizer.singleWorkspace_.inverseHessian.size(), wantStorageSize);
+  ASSERT_TRUE(std::holds_alternative<nvMolKit::SingleBfgsWorkspace>(minimizer.workspace_));
+  ASSERT_EQ(std::get<nvMolKit::SingleBfgsWorkspace>(minimizer.workspace_).inverseHessian.size(), wantStorageSize);
 
   minimizer.setHessianToIdentity();
   std::vector<float> hessianHost(wantStorageSize);
   ASSERT_EQ(cudaMemcpy(hessianHost.data(),
-                       minimizer.singleWorkspace_.inverseHessian.data(),
+                       std::get<nvMolKit::SingleBfgsWorkspace>(minimizer.workspace_).inverseHessian.data(),
                        wantStorageSize * sizeof(float),
                        cudaMemcpyDeviceToHost),
             cudaSuccess);
@@ -411,29 +411,29 @@ TEST_F(BFGSMinimizerTestFixture, LineSearchSetup) {
 
   std::vector<double> accumDirs(accumGrads.size());
   std::transform(accumGrads.begin(), accumGrads.end(), accumDirs.begin(), std::negate<double>());
-  bfgsMinimizer.fullWorkspace_.lineSearchDir.setFromVector(accumDirs);
+  std::get<nvMolKit::FullBfgsWorkspace>(bfgsMinimizer.workspace_).lineSearchDir.setFromVector(accumDirs);
 
   std::vector<double> maxStepsHost(numMols, 0.1);
-  bfgsMinimizer.fullWorkspace_.lineSearchMaxSteps.setFromVector(maxStepsHost);
+  std::get<nvMolKit::FullBfgsWorkspace>(bfgsMinimizer.workspace_).lineSearchMaxSteps.setFromVector(maxStepsHost);
   bfgsMinimizer.doLineSearchSetup(systemDevice.energyOuts.data());
 
-  ASSERT_EQ(bfgsMinimizer.fullWorkspace_.lineSearchDir.size(), wantDirs.size());
+  ASSERT_EQ(std::get<nvMolKit::FullBfgsWorkspace>(bfgsMinimizer.workspace_).lineSearchDir.size(), wantDirs.size());
   std::vector<double> gotDirs(wantDirs.size());
   ASSERT_EQ(0,
             cudaMemcpy(gotDirs.data(),
-                       bfgsMinimizer.fullWorkspace_.lineSearchDir.data(),
+                       std::get<nvMolKit::FullBfgsWorkspace>(bfgsMinimizer.workspace_).lineSearchDir.data(),
                        wantDirs.size() * sizeof(double),
                        cudaMemcpyDeviceToHost));
   std::vector<double> gotSlopes(numMols);
   ASSERT_EQ(0,
             cudaMemcpy(gotSlopes.data(),
-                       bfgsMinimizer.fullWorkspace_.lineSearchSlope.data(),
+                       std::get<nvMolKit::FullBfgsWorkspace>(bfgsMinimizer.workspace_).lineSearchSlope.data(),
                        wantSlopes.size() * sizeof(double),
                        cudaMemcpyDeviceToHost));
   std::vector<double> gotLambdaMins(numMols);
   ASSERT_EQ(0,
             cudaMemcpy(gotLambdaMins.data(),
-                       bfgsMinimizer.fullWorkspace_.lineSearchLambdaMins.data(),
+                       std::get<nvMolKit::FullBfgsWorkspace>(bfgsMinimizer.workspace_).lineSearchLambdaMins.data(),
                        wantLambdaMins.size() * sizeof(double),
                        cudaMemcpyDeviceToHost));
   EXPECT_THAT(gotDirs, ::testing::Pointwise(::testing::DoubleNear(1e-4), wantDirs));
@@ -479,7 +479,7 @@ TEST_F(BFGSMinimizerTestFixture, ComputeMaxSteps) {
   std::vector<double> gotMaxSteps(numMols);
   ASSERT_EQ(0,
             cudaMemcpy(gotMaxSteps.data(),
-                       bfgsMinimizer.fullWorkspace_.lineSearchMaxSteps.data(),
+                       std::get<nvMolKit::FullBfgsWorkspace>(bfgsMinimizer.workspace_).lineSearchMaxSteps.data(),
                        gotMaxSteps.size() * sizeof(double),
                        cudaMemcpyDeviceToHost));
   EXPECT_THAT(gotMaxSteps, ::testing::Pointwise(::testing::DoubleNear(1e-4), wantMaxSteps));
@@ -570,7 +570,8 @@ TEST_F(BFGSMinimizerTestFixture, FullLineSearch) {
 
   eFunc(nullptr);
   nvMolKit::MMFF::computeGradients(systemDevice);
-  nvMolKit::copyAndInvert(systemDevice.grad, bfgsMinimizer.fullWorkspace_.lineSearchDir);
+  nvMolKit::copyAndInvert(systemDevice.grad,
+                          std::get<nvMolKit::FullBfgsWorkspace>(bfgsMinimizer.workspace_).lineSearchDir);
   bfgsMinimizer.doLineSearchSetup(systemDevice.energyOuts.data());
   auto             res                    = debugDump(bfgsMinimizer.lineSearchStatus_, "statuses");
   int              lineSearchIter         = 0;
@@ -581,8 +582,9 @@ TEST_F(BFGSMinimizerTestFixture, FullLineSearch) {
 
     systemDevice.energyOuts.zero();
     systemDevice.energyBuffer.zero();
-    auto res2 = debugDump(bfgsMinimizer.fullWorkspace_.scratchPositions, "scratchpos");
-    eFunc(bfgsMinimizer.fullWorkspace_.scratchPositions.data());
+    auto res2 =
+      debugDump(std::get<nvMolKit::FullBfgsWorkspace>(bfgsMinimizer.workspace_).scratchPositions, "scratchpos");
+    eFunc(std::get<nvMolKit::FullBfgsWorkspace>(bfgsMinimizer.workspace_).scratchPositions.data());
     auto res3 = debugDump(systemDevice.energyOuts, "energyOuts");
     bfgsMinimizer.doLineSearchPostEnergy(lineSearchIter);
     lineSearchIter++;
@@ -592,7 +594,7 @@ TEST_F(BFGSMinimizerTestFixture, FullLineSearch) {
   std::vector<double> gotPositions(accumPositions.size());
   ASSERT_EQ(0,
             cudaMemcpy(gotPositions.data(),
-                       bfgsMinimizer.fullWorkspace_.scratchPositions.data(),
+                       std::get<nvMolKit::FullBfgsWorkspace>(bfgsMinimizer.workspace_).scratchPositions.data(),
                        gotPositions.size() * sizeof(double),
                        cudaMemcpyDeviceToHost));
   std::vector<double> gotEnergies(accumEnergies.size());
@@ -1532,7 +1534,7 @@ TEST_P(BFGSMinimizerBackendTest, ReuseMinimizer_VariedSizes) {
 
 INSTANTIATE_TEST_SUITE_P(BFGSMinimizer4DTest, BFGSMinimizerTest4DTest, ::testing::Values(false, true));
 
-TEST(BFGSPrecisionStateTest, ModesAllocateMatchingStateAndHessianWidths) {
+TEST(BFGSPrecisionStateTest, ModesOwnExactlyOneMatchingWorkspace) {
   const std::vector<int>           atomStarts{0, 2, 5};
   nvMolKit::AsyncDeviceVector<int> atomStartsDevice;
   atomStartsDevice.setFromVector(atomStarts);
@@ -1553,25 +1555,27 @@ TEST(BFGSPrecisionStateTest, ModesAllocateMatchingStateAndHessianWidths) {
     EXPECT_EQ(
       minimizer.resolveBackend(atomStarts),
       mode == nvMolKit::PrecisionMode::FULL ? nvMolKit::BfgsBackend::PER_MOLECULE : nvMolKit::BfgsBackend::BATCHED);
-    EXPECT_EQ(minimizer.singleWorkspace_.lineSearchDir.size() != 0, singlePrecision);
-    EXPECT_EQ(minimizer.singleWorkspace_.scratchPositions.size() != 0, singlePrecision);
-    EXPECT_EQ(minimizer.singleWorkspace_.positions.size() != 0, singlePrecision);
-    EXPECT_EQ(minimizer.singleWorkspace_.grad.size() != 0, singlePrecision);
-    EXPECT_EQ(minimizer.singleWorkspace_.energy.size() != 0, singlePrecision);
-    EXPECT_EQ(minimizer.singleWorkspace_.scratchGrad.size() != 0, singlePrecision);
-    EXPECT_EQ(minimizer.singleWorkspace_.hessDGrad.size() != 0, singlePrecision);
-    EXPECT_EQ(minimizer.singleWorkspace_.gradScales.size() != 0, singlePrecision);
-    EXPECT_EQ(minimizer.singleWorkspace_.lineSearchLambdas.size() != 0, singlePrecision);
-    EXPECT_EQ(minimizer.singleWorkspace_.lineSearchSlope.size() != 0, singlePrecision);
-    EXPECT_EQ(minimizer.singleWorkspace_.lineSearchMaxSteps.size() != 0, singlePrecision);
-    EXPECT_EQ(minimizer.singleWorkspace_.lineSearchStoredEnergy.size() != 0, singlePrecision);
-    EXPECT_EQ(minimizer.fullWorkspace_.lineSearchDir.size() != 0, !singlePrecision);
-    EXPECT_EQ(minimizer.fullWorkspace_.scratchGrad.size() != 0, !singlePrecision);
-    EXPECT_EQ(minimizer.fullWorkspace_.hessDGrad.size() != 0, !singlePrecision);
-    EXPECT_EQ(minimizer.fullWorkspace_.gradScales.size() != 0, !singlePrecision);
-    EXPECT_EQ(minimizer.singleWorkspace_.inverseHessian.size() != 0, singlePrecision);
-    EXPECT_EQ(minimizer.fullWorkspace_.inverseHessian.size() != 0, !singlePrecision);
-    EXPECT_EQ(minimizer.fullWorkspace_.scratchPositions.size() != 0, !singlePrecision);
+    EXPECT_EQ(std::holds_alternative<nvMolKit::SingleBfgsWorkspace>(minimizer.workspace_), singlePrecision);
+    std::visit(
+      [](const auto& workspace) {
+        EXPECT_NE(workspace.lineSearchDir.size(), 0);
+        EXPECT_NE(workspace.scratchPositions.size(), 0);
+        EXPECT_NE(workspace.scratchGrad.size(), 0);
+        EXPECT_NE(workspace.hessDGrad.size(), 0);
+        EXPECT_NE(workspace.gradScales.size(), 0);
+        EXPECT_NE(workspace.lineSearchLambdas.size(), 0);
+        EXPECT_NE(workspace.lineSearchSlope.size(), 0);
+        EXPECT_NE(workspace.lineSearchMaxSteps.size(), 0);
+        EXPECT_NE(workspace.lineSearchStoredEnergy.size(), 0);
+        EXPECT_NE(workspace.inverseHessian.size(), 0);
+      },
+      minimizer.workspace_);
+    if (singlePrecision) {
+      const auto& workspace = std::get<nvMolKit::SingleBfgsWorkspace>(minimizer.workspace_);
+      EXPECT_NE(workspace.positions.size(), 0);
+      EXPECT_NE(workspace.grad.size(), 0);
+      EXPECT_NE(workspace.energy.size(), 0);
+    }
   }
 }
 

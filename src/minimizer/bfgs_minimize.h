@@ -17,6 +17,7 @@
 #define NVMOLKIT_BFGS_MINIMIZE_H
 
 #include <functional>
+#include <variant>
 #include <vector>
 
 #include "src/minimizer/bfgs_types.h"
@@ -92,8 +93,9 @@ template <typename real, typename reduceT, typename storageT> struct BfgsWorkspa
   }
 };
 
-using FullBfgsWorkspace   = BfgsWorkspace<double, double, double>;
-using SingleBfgsWorkspace = BfgsWorkspace<float, float, float>;
+using FullBfgsWorkspace    = BfgsWorkspace<double, double, double>;
+using SingleBfgsWorkspace  = BfgsWorkspace<float, float, float>;
+using BfgsWorkspaceVariant = std::variant<FullBfgsWorkspace, SingleBfgsWorkspace>;
 
 //! BFGS Batch Minimizer
 //!
@@ -238,8 +240,7 @@ struct BfgsBatchMinimizer {
 
   // Precision-dependent working state. Public coordinates, gradients, and
   // energies remain double precision at the API boundary.
-  FullBfgsWorkspace          fullWorkspace_;
-  SingleBfgsWorkspace        singleWorkspace_;
+  BfgsWorkspaceVariant       workspace_;
   AsyncDeviceVector<int16_t> statuses_;
 
   // Precision-independent line-search status and public energy output.
@@ -300,6 +301,11 @@ struct BfgsBatchMinimizer {
   cudaStream_t stream_ = nullptr;
 
  private:
+  FullBfgsWorkspace&         fullWorkspace() { return std::get<FullBfgsWorkspace>(workspace_); }
+  const FullBfgsWorkspace&   fullWorkspace() const { return std::get<FullBfgsWorkspace>(workspace_); }
+  SingleBfgsWorkspace&       singleWorkspace() { return std::get<SingleBfgsWorkspace>(workspace_); }
+  const SingleBfgsWorkspace& singleWorkspace() const { return std::get<SingleBfgsWorkspace>(workspace_); }
+
   template <typename DeviceBuffers>
   bool minimizeWithMMFFImpl(int                     numIters,
                             double                  gradTol,
