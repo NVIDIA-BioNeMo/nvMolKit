@@ -37,7 +37,7 @@ def auto_subsample(
     """
     if workload_size <= 0:
         raise ValueError("workload_size must be positive")
-    target = min(max_size, max(min_size, int(round(fraction * workload_size))))
+    target = min(max_size, max(min_size, round(fraction * workload_size)))
     target = min(target, workload_size)
     rng = random.Random(seed)
     indices = list(range(workload_size))
@@ -86,6 +86,6 @@ def shrink(indices: Sequence[int], factor: float = 0.5, *, min_size: int = 1) ->
     """
     if factor <= 0.0 or factor >= 1.0:
         raise ValueError("factor must be in (0, 1)")
-    new_size = max(min_size, int(round(len(indices) * factor)))
+    new_size = max(min_size, round(len(indices) * factor))
     new_size = min(new_size, len(indices))
     return list(indices[:new_size])
