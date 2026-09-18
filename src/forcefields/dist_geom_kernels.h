@@ -391,7 +391,7 @@ cudaError_t launchBlockPerMolEnergyKernel(int                                   
                                           const EnergyForceContribsDevicePtrSingle& terms,
                                           const BatchedIndicesDevicePtr&            systemIndices,
                                           const float*                              coords,
-                                          double*                                   energies,
+                                          float*                                    energies,
                                           int                                       dimension,
                                           float                                     chiralWeight,
                                           float                                     fourthDimWeight,
@@ -411,7 +411,7 @@ cudaError_t launchBlockPerMolEnergyKernelETK(int                                
                                              const Energy3DForceContribsDevicePtrSingle& terms,
                                              const BatchedIndices3DDevicePtr&            systemIndices,
                                              const float*                                coords,
-                                             double*                                     energies,
+                                             float*                                      energies,
                                              const uint8_t*                              activeThisStage = nullptr,
                                              cudaStream_t                                stream          = 0);
 cudaError_t launchBlockPerMolGradKernelETK(int                                         numMols,
@@ -425,7 +425,7 @@ cudaError_t launchPlanarEnergyKernelETK(int                                     
                                         const Energy3DForceContribsDevicePtrSingle& terms,
                                         const BatchedIndices3DDevicePtr&            systemIndices,
                                         const float*                                coords,
-                                        double*                                     energies,
+                                        float*                                      energies,
                                         const uint8_t*                              activeThisStage = nullptr,
                                         cudaStream_t                                stream          = 0);
 }  // namespace DistGeom

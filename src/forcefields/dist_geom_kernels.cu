@@ -1264,7 +1264,7 @@ cudaError_t launchBlockPerMolEnergyKernel(int                                   
                                           const EnergyForceContribsDevicePtrSingle& terms,
                                           const BatchedIndicesDevicePtr&            systemIndices,
                                           const float*                              coords,
-                                          double*                                   energies,
+                                          float*                                    energies,
                                           const int                                 dimension,
                                           const float                               chiralWeight,
                                           const float                               fourthDimWeight,
@@ -1459,7 +1459,7 @@ cudaError_t launchBlockPerMolEnergyKernelETK(int                                
                                              const Energy3DForceContribsDevicePtrSingle& terms,
                                              const BatchedIndices3DDevicePtr&            systemIndices,
                                              const float*                                coords,
-                                             double*                                     energies,
+                                             float*                                      energies,
                                              const uint8_t*                              activeThisStage,
                                              cudaStream_t                                stream) {
   return launchBlockPerMolEnergyKernelETKImpl<float, float>(numMols,
@@ -1495,7 +1495,7 @@ template <typename reduceT, typename Terms>
 __global__ void planarEnergyKernelETK(const Terms*                     terms,
                                       const BatchedIndices3DDevicePtr* indices,
                                       const float*                     coords,
-                                      double*                          energies,
+                                      float*                           energies,
                                       const uint8_t*                   activeThisStage) {
   const int molIdx = blockIdx.x;
   const int tid    = threadIdx.x;
@@ -1536,14 +1536,14 @@ __global__ void planarEnergyKernelETK(const Terms*                     terms,
   __shared__ typename BlockReduce::TempStorage tempStorage;
   const reduceT                                sum = BlockReduce(tempStorage).Sum(static_cast<reduceT>(energy));
   if (tid == 0)
-    energies[molIdx] = static_cast<double>(sum);
+    energies[molIdx] = static_cast<float>(sum);
 }
 
 cudaError_t launchPlanarEnergyKernelETK(int                                         numMols,
                                         const Energy3DForceContribsDevicePtrSingle& terms,
                                         const BatchedIndices3DDevicePtr&            indices,
                                         const float*                                coords,
-                                        double*                                     energies,
+                                        float*                                      energies,
                                         const uint8_t*                              activeThisStage,
                                         cudaStream_t                                stream) {
   const AsyncDevicePtr<Energy3DForceContribsDevicePtrSingle> devTerms(terms, stream);

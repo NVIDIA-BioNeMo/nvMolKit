@@ -58,15 +58,13 @@ class DGBatchedForcefield final : public BatchedForcefield, public SinglePrecisi
                                const double*  positions,
                                const uint8_t* activeSystemMask = nullptr,
                                cudaStream_t   stream           = nullptr) override;
-  cudaError_t computeEnergy(double*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
+  cudaError_t computeEnergy(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
   cudaError_t computeGradients(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
 
  private:
   std::variant<DistGeom::BatchedMolecularDeviceBuffers, DistGeom::BatchedMolecularDeviceBuffersSingle> systemDevice_;
   AsyncDeviceVector<int>              atomStartsDevice_;
-  FullForcefieldConversionWorkspace   fullConversion_;
   SingleForcefieldConversionWorkspace singleConversion_;
-  bool                                singlePrecision_ = false;
   double                              chiralWeight_    = 1.0;
   double                              fourthDimWeight_ = 0.1;
 };

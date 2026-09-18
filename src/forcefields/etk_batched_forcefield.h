@@ -56,7 +56,7 @@ class ETKBatchedForcefield final : public BatchedForcefield, public SinglePrecis
                                const double*  positions,
                                const uint8_t* activeSystemMask = nullptr,
                                cudaStream_t   stream           = nullptr) override;
-  cudaError_t computeEnergy(double*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
+  cudaError_t computeEnergy(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
   cudaError_t computeGradients(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
 
   //! \brief Computes the planar ETK subset used by the post-minimization check.
@@ -80,10 +80,8 @@ class ETKBatchedForcefield final : public BatchedForcefield, public SinglePrecis
   std::variant<DistGeom::BatchedMolecular3DDeviceBuffers, DistGeom::BatchedMolecular3DDeviceBuffersSingle>
                                       systemDevice_;
   AsyncDeviceVector<int>              atomStartsDevice_;
-  FullForcefieldConversionWorkspace   fullConversion_;
   SingleForcefieldConversionWorkspace singleConversion_;
-  bool                                singlePrecision_ = false;
-  DistGeom::ETKTerm                   term_            = DistGeom::ETKTerm::ALL;
+  DistGeom::ETKTerm                   term_ = DistGeom::ETKTerm::ALL;
 };
 
 }  // namespace nvMolKit
