@@ -995,10 +995,10 @@ def load_smiles_file(filepath: Path, max_count: int = NUM_SMILES, max_atoms: int
     mols = []
     with open(filepath) as f:
         for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
+            stripped_line = line.strip()
+            if not stripped_line or stripped_line.startswith("#"):
                 continue
-            smiles = line.split()[0] if " " in line or "\t" in line else line
+            smiles = stripped_line.split()[0] if " " in stripped_line or "\t" in stripped_line else stripped_line
             mol = Chem.MolFromSmiles(smiles)
             if mol is not None and mol.GetNumAtoms() <= max_atoms:
                 mols.append(mol)
@@ -1017,13 +1017,13 @@ def load_smarts_file(filepath: Path) -> tuple[list[Chem.Mol], list[str]]:
     smarts_strings = []
     with open(filepath) as f:
         for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
+            stripped_line = line.strip()
+            if not stripped_line or stripped_line.startswith("#"):
                 continue
-            mol = Chem.MolFromSmarts(line)
+            mol = Chem.MolFromSmarts(stripped_line)
             if mol is not None:
                 queries.append(mol)
-                smarts_strings.append(line)
+                smarts_strings.append(stripped_line)
     return queries, smarts_strings
 
 

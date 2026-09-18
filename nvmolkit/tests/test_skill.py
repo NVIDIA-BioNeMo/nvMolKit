@@ -56,6 +56,7 @@ def test_skill_snippet_runs(snippet_idx: int, snippet: str, tmp_path: Path) -> N
         capture_output=True,
         text=True,
         timeout=300,
+        check=False,
     )
     assert result.returncode == 0, (
         f"Skill snippet {snippet_idx} failed:\n"

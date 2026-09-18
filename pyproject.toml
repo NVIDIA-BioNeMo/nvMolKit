@@ -168,6 +168,7 @@ select = [
     "PERF",  # Performance anti-pattern checks
     "PIE",   # Miscellaneous correctness checks
     "PLE",   # Pylint errors
+    "PLW",   # Pylint warnings
     "RET",   # Return statement checks
     "RUF",   # Ruff-specific checks
     "SIM",   # Simplification checks
@@ -176,8 +177,10 @@ select = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["D104"]
-"nvmolkit/tests/test_*.py" = ["D103"]
 "benchmarks/*.py" = ["F841", "D103"]
+"benchmarks/mcs_bench.py" = ["PLW0603"]
+"benchmarks/substruct_bench.py" = ["PLW0603"]
+"nvmolkit/tests/test_*.py" = ["D103"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
