@@ -26,8 +26,8 @@ if TYPE_CHECKING:
 
 __all__ = ["EmbedMolecules"]
 
-from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions, PrecisionMode
 from nvmolkit import _embedMolecules  # type: ignore
+from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions, PrecisionMode
 
 
 @overload

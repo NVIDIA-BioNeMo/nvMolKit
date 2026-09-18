@@ -25,6 +25,7 @@ from rdkit.Chem.rdDistGeom import EmbedParameters
 import nvmolkit.embedMolecules as embed
 from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions, PrecisionMode
 
+
 @pytest.fixture
 def embed_test_mols(num_mols=5):
     """Load molecules from MMFF94_dative.sdf for embedding tests.
