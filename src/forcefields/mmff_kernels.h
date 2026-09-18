@@ -470,7 +470,7 @@ cudaError_t launchBlockPerMolEnergyKernel(int                                   
                                           const EnergyForceContribsDevicePtrSingle& terms,
                                           const BatchedIndicesDevicePtr&            sytemIndices,
                                           const float*                              coords,
-                                          double*                                   energies,
+                                          float*                                    energies,
                                           bool                                      hasConstraints,
                                           cudaStream_t                              stream           = nullptr,
                                           const uint8_t*                            activeSystemMask = nullptr);

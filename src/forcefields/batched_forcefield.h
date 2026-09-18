@@ -148,12 +148,12 @@ class BatchedForcefield {
   ForceFieldType            type_;
 };
 
-//! Interface for force fields that accept single-precision coordinates and gradients.
+//! Interface for force fields that evaluate coordinates, energies, and gradients in single precision.
 class SinglePrecisionBatchedForcefield {
  public:
   virtual ~SinglePrecisionBatchedForcefield() = default;
 
-  virtual cudaError_t computeEnergy(double*        energyOuts,
+  virtual cudaError_t computeEnergy(float*         energyOuts,
                                     const float*   positions,
                                     const uint8_t* activeSystemMask = nullptr,
                                     cudaStream_t   stream           = nullptr)    = 0;

@@ -14,14 +14,15 @@ namespace nvMolKit {
 template <typename storageT> struct ForcefieldConversionWorkspace {
   AsyncDeviceVector<storageT> positions;
   AsyncDeviceVector<storageT> gradients;
+  AsyncDeviceVector<storageT> energies;
 
   void setStream(cudaStream_t stream) {
     positions.setStream(stream);
     gradients.setStream(stream);
+    energies.setStream(stream);
   }
 };
 
-using FullForcefieldConversionWorkspace   = ForcefieldConversionWorkspace<double>;
 using SingleForcefieldConversionWorkspace = ForcefieldConversionWorkspace<float>;
 
 }  // namespace nvMolKit

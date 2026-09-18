@@ -1011,6 +1011,45 @@ TEST_P(MMffPrecisionTestFixture, CombinedGradients) {
   EXPECT_THAT(gotGrad, ::testing::Pointwise(::testing::FloatNear(gradientTolerance(1e-4)), wantGradients));
 }
 
+TEST_F(MMffGpuTestFixture, SinglePrecisionInterfaceKeepsEnergyAndGradientNative) {
+  nvMolKit::MMFFBatchedForcefield    forcefield(systemHost, {}, nullptr, nvMolKit::PrecisionMode::SINGLE);
+  std::vector<float>                 positions(systemHost.positions.begin(), systemHost.positions.end());
+  nvMolKit::AsyncDeviceVector<float> positionsDevice;
+  nvMolKit::AsyncDeviceVector<float> energyDevice;
+  nvMolKit::AsyncDeviceVector<float> gradientDevice;
+  positionsDevice.setFromVector(positions);
+  energyDevice.resize(1);
+  gradientDevice.resize(positions.size());
+
+  CHECK_CUDA_RETURN(forcefield.computeEnergy(energyDevice.data(), positionsDevice.data()));
+  CHECK_CUDA_RETURN(forcefield.computeGradients(gradientDevice.data(), positionsDevice.data()));
+
+  std::vector<float> energy(1);
+  std::vector<float> gradient(positions.size());
+  energyDevice.copyToHost(energy);
+  gradientDevice.copyToHost(gradient);
+  CHECK_CUDA_RETURN(cudaDeviceSynchronize());
+
+  const double expectedEnergy   = getCombinedEnergyViaForcefield(systemHost, nvMolKit::PrecisionMode::FULL);
+  const auto   expectedGradient = getCombinedGradientViaForcefield(systemHost, nvMolKit::PrecisionMode::FULL);
+  EXPECT_NEAR(energy.front(), expectedEnergy, 2.0e-3);
+  EXPECT_THAT(gradient, ::testing::Pointwise(::testing::FloatNear(2.0e-2), expectedGradient));
+}
+
+TEST_F(MMffGpuTestFixture, FullPrecisionInstanceRejectsSinglePrecisionInterface) {
+  nvMolKit::MMFFBatchedForcefield    forcefield(systemHost, {}, nullptr, nvMolKit::PrecisionMode::FULL);
+  std::vector<float>                 positions(systemHost.positions.begin(), systemHost.positions.end());
+  nvMolKit::AsyncDeviceVector<float> positionsDevice;
+  nvMolKit::AsyncDeviceVector<float> energyDevice;
+  nvMolKit::AsyncDeviceVector<float> gradientDevice;
+  positionsDevice.setFromVector(positions);
+  energyDevice.resize(1);
+  gradientDevice.resize(positions.size());
+
+  EXPECT_EQ(forcefield.computeEnergy(energyDevice.data(), positionsDevice.data()), cudaErrorInvalidValue);
+  EXPECT_EQ(forcefield.computeGradients(gradientDevice.data(), positionsDevice.data()), cudaErrorInvalidValue);
+}
+
 TEST_P(MMffPrecisionTestFixture, CombinedKernelsHonorActiveSystemMask) {
   BatchedMolecularSystemHost batchedSystem;
   addMoleculeToBatch(systemHost.contribs, systemHost.positions, batchedSystem);

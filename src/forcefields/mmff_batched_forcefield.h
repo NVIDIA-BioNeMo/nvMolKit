@@ -53,7 +53,7 @@ class MMFFBatchedForcefield final : public BatchedForcefield, public SinglePreci
                                const double*  positions,
                                const uint8_t* activeSystemMask = nullptr,
                                cudaStream_t   stream           = nullptr) override;
-  cudaError_t computeEnergy(double*        energyOuts,
+  cudaError_t computeEnergy(float*         energyOuts,
                             const float*   positions,
                             const uint8_t* activeSystemMask = nullptr,
                             cudaStream_t   stream           = nullptr) override;
@@ -64,9 +64,7 @@ class MMFFBatchedForcefield final : public BatchedForcefield, public SinglePreci
 
  private:
   std::variant<MMFF::BatchedMolecularDeviceBuffers, MMFF::BatchedMolecularDeviceBuffersSingle> systemDevice_;
-  FullForcefieldConversionWorkspace                                                            fullConversion_;
   SingleForcefieldConversionWorkspace                                                          singleConversion_;
-  bool                                                                                         singlePrecision_ = false;
 };
 
 }  // namespace nvMolKit

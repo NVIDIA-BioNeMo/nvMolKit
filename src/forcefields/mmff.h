@@ -369,7 +369,7 @@ struct BatchedMolecularDeviceBuffersT {
   //! Each molecule has an energy buffer to add to and reduce to energyOuts.
   nvMolKit::AsyncDeviceVector<double>                        energyBuffer;
   //! Size n_molecules
-  nvMolKit::AsyncDeviceVector<double>                        energyOuts;
+  nvMolKit::AsyncDeviceVector<CoordinateScalar>              energyOuts;
 };
 
 using BatchedMolecularDeviceBuffers       = BatchedMolecularDeviceBuffersT<double, double, float>;
@@ -431,7 +431,7 @@ cudaError_t computeEnergyBlockPerMol(BatchedMolecularDeviceBuffers& molSystemDev
                                      const double*                  coords = nullptr,
                                      cudaStream_t                   stream = nullptr);
 cudaError_t computeEnergyBlockPerMol(BatchedMolecularDeviceBuffersSingle& molSystemDevice,
-                                     double*                              energyOuts,
+                                     float*                               energyOuts,
                                      const float*                         coords,
                                      const uint8_t*                       activeSystemMask = nullptr,
                                      cudaStream_t                         stream           = nullptr);
