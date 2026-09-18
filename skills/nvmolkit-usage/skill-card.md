@@ -1,5 +1,5 @@
 ## Description: <br>
-Write code that calls the installed nvMolKit Python API for GPU-accelerated, batched RDKit-style operations — Morgan fingerprints, Tanimoto/cosine similarity, ETKDG conformer embedding, MMFF/UFF optimization, TFD, conformer RMSD, Butina clustering, substructure search, and maximum common substructure (MCS) search. <br>
+Write code that calls the installed nvMolKit Python API for GPU-accelerated, batched RDKit-style operations including Morgan fingerprints, Tanimoto/cosine similarity, ETKDG conformer embedding, MMFF/UFF optimization, TFD, conformer RMSD, Butina clustering, substructure search, and maximum common substructure (MCS) search. <br>
 
 This skill is ready for commercial/non-commercial use. <br>
 
@@ -9,7 +9,7 @@ NVIDIA <br>
 ### License/Terms of Use: <br>
 Apache-2.0 <br>
 ## Use Case: <br>
-Developers and engineers writing GPU-accelerated cheminformatics code use this skill to generate correct nvMolKit Python API calls for batched molecular operations, debug existing nvMolKit workflows, and choose between nvMolKit and RDKit for throughput-sensitive pipelines. <br>
+Developers and engineers writing GPU-accelerated cheminformatics code using the nvMolKit Python API for batched molecular operations such as fingerprinting, similarity search, conformer embedding, force field optimization, clustering, and substructure/MCS search. <br>
 
 ### Deployment Geography for Use: <br>
 Global <br>
@@ -27,6 +27,7 @@ Mitigation: Review and scan skill before deployment. <br>
 ## Reference(s): <br>
 - [nvMolKit Documentation](https://nvidia-bionemo.github.io/nvMolKit/) <br>
 - [nvMolKit Changelog](https://nvidia-bionemo.github.io/nvMolKit/changelog.html) <br>
+- [nvMolKit Examples (Jupyter Notebooks)](https://github.com/NVIDIA-BioNeMo/nvMolKit/tree/main/examples) <br>
 
 
 ## Skill Output: <br>
@@ -42,15 +43,15 @@ Mitigation: Review and scan skill before deployment. <br>
 
 
 ## Evaluation Tasks: <br>
-12 evaluation tasks with 3 attempts per task, each in isolated sandbox pods, across 2 agents. <br>
+12 evaluation tasks with 3 attempts per task, each in an isolated sandbox pod. Dataset digest: sha256:ce8098e0dd2fc0698933b7d4d303fe13bdd1d9be7e87d142bdfc44baae7a9f90. <br>
 
 ## Evaluation Metrics Used: <br>
 Reported benchmark dimensions: <br>
-- Security: Whether the skill avoids unsafe operations, secret leakage, and unauthorized access. <br>
-- Correctness: Final-answer correctness against the reference answer. <br>
-- Discoverability: Whether the right skill was loaded and activated when needed. <br>
-- Effectiveness: Whether the skill helped complete the user's goal and expected workflow (equal-weight mean of goal completion and workflow adherence). <br>
-- Efficiency: Whether the skill avoided wasted tool calls and token usage (50% tool-call productivity, 50% token efficiency). <br>
+- Security: Whether the skill is safe to use — checks for unsafe operations, secret leakage, and unauthorized access. <br>
+- Correctness: Whether the final answer is correct against the reference answer. <br>
+- Discoverability: Whether the right skill was loaded when needed — skill selection, decoy avoidance, and workflow execution. <br>
+- Effectiveness: Whether the skill helped complete the user's goal, scored as equal-weight mean of goal completion and expected workflow adherence. <br>
+- Efficiency: Whether the skill avoided wasted tool calls and token usage, scored as 50% tool-call productivity and 50% token efficiency. <br>
 
 Underlying evaluation signals used in this run: <br>
 - `security`: Unsafe operations, secret leakage, and unauthorized access. <br>
@@ -58,20 +59,20 @@ Underlying evaluation signals used in this run: <br>
 - `accuracy`: Final-answer correctness against the reference answer. <br>
 - `goal_accuracy`: Whether the user's goal was achieved. <br>
 - `behavior_check`: Whether the expected workflow behavior was followed. <br>
-- `skill_efficiency`: Tool-call productivity (routing scored under Discoverability). <br>
-- `token_efficiency`: Actual uncached prompt plus completion usage. <br>
+- `skill_efficiency`: Tool-call productivity (routing scored under Discoverability, not Efficiency). <br>
+- `token_efficiency`: Actual uncached prompt plus completion token usage. <br>
 
 
 
 ## Evaluation Results: <br>
 | Measure | Claude Code (Baseline → Skill Uplift) | Codex (Baseline → Skill Uplift) |
 |---|---:|---:|
-| Overall | 94.9% | 93.0% |
-| Security | 75.0% → 100.0% (+25.0 points) | 100.0% → 100.0% (±0.0 points) |
-| Correctness | 100.0% → 100.0% (±0.0 points) | 96.7% → 100.0% (+3.3 points) |
-| Discoverability | 97.7% | 95.0% |
-| Effectiveness | 85.8% → 91.8% (+6.0 points) | 80.5% → 85.1% (+4.6 points) |
-| Efficiency | 85.1% | 84.8% |
+| Overall | 92.6% | 93.4% |
+| Security | 70.8% → 95.8% (+25.0 pp) | 100.0% → 100.0% (±0.0 pp) |
+| Correctness | 96.7% → 100.0% (+3.3 pp) | 93.3% → 100.0% (+6.7 pp) |
+| Discoverability | 94.2% | 95.0% |
+| Effectiveness | 90.3% → 90.8% (+0.5 pp) | 84.3% → 86.5% (+2.2 pp) |
+| Efficiency | 82.2% | 85.7% |
 
 ## Skill Version(s): <br>
 0.6.0 (source: pyproject.toml, CHANGELOG, released 2026-08-13) <br>
