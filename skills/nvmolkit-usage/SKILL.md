@@ -12,8 +12,9 @@ description: >-
   source.
 license: Apache-2.0
 metadata:
+  author: Kevin Boyd (@scal444)
   owner: Kevin Boyd (@scal444)
-  risk_tier: skill
+  risk-tier: skill
 ---
 
 # nvMolKit usage
@@ -46,7 +47,9 @@ When helping with installation, make the user choose a PyTorch CUDA backend that
 - pip: send the user to the [PyTorch install selector](https://pytorch.org/get-started/locally/) or [previous-versions page](https://pytorch.org/get-started/previous-versions/) to install `torch` for a CUDA 12.x backend before installing nvMolKit.
 - uv: install nvMolKit with an explicit backend, e.g. `uv pip install --torch-backend=cu128 nvmolkit`.
 
-## Verify the install before writing real code
+## Instructions
+
+### Verify the install before writing real code
 
 Run this once to confirm nvMolKit is importable and a GPU op works end to end:
 
@@ -202,7 +205,7 @@ autoselect execution settings; an empty `gpuIds` list uses the current device.
 `MCSConfig` supports `to_dict()` / `from_dict()` and can also be persisted with
 `nvmolkit.autotune.save()` / `load()`.
 
-## Recipes
+## Examples
 
 ### Morgan fingerprints + bulk Tanimoto similarity
 
