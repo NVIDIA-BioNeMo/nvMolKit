@@ -32,6 +32,7 @@ from nvmolkit.types import (
     PrecisionMode,
 )
 
+
 @pytest.fixture
 def uff_test_mols(num_mols=4):
     sdf_path = os.path.join(
