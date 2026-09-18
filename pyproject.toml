@@ -150,7 +150,6 @@ ignore = [
     "D100",    # Checks for undocumented public module definitions.
     "E501",    # Checks for lines that exceed the specified maximum character length.
     "E741",    # Checks for the use of the characters 'l', 'O', or 'I' as variable names.
-    "PERF203", # Preserve per-conformer exception isolation in benchmark energy collection.
     "RET505",  # Preserve elif chains after terminating branches.
     "RUF005",  # Checks for uses of the + operator to concatenate collections.
 ]
@@ -178,8 +177,6 @@ select = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["D104"]
 "benchmarks/*.py" = ["F841", "D103"]
-"benchmarks/mcs_bench.py" = ["PLW0603"]
-"benchmarks/substruct_bench.py" = ["PLW0603"]
 "nvmolkit/tests/test_*.py" = ["D103"]
 
 [tool.ruff.lint.pydocstyle]

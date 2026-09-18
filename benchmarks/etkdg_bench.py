@@ -74,7 +74,7 @@ def _mmff_energies(mol: Chem.Mol) -> list[float | None]:
         try:
             ff = AllChem.MMFFGetMoleculeForceField(mol, props, confId=conf.GetId())
             energies.append(float(ff.CalcEnergy()) if ff is not None else None)
-        except Exception:
+        except Exception:  # noqa: PERF203 - isolate failures to the individual conformer
             energies.append(None)
     return energies
 
