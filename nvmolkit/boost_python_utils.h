@@ -80,7 +80,9 @@ inline std::vector<bool> extractBoolList(const boost::python::list& values,
   std::vector<bool> result;
   result.reserve(expectedSize);
   for (int i = 0; i < expectedSize; ++i) {
-    result.push_back(boost::python::extract<bool>(values[i]));
+    // A named extractor avoids GCC's -Wmaybe-uninitialized false positive in Boost.Python.
+    const boost::python::extract<bool> value(values[i]);
+    result.push_back(value());
   }
   return result;
 }
