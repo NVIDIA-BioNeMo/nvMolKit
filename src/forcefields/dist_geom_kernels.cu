@@ -1072,7 +1072,7 @@ template <int dimension, typename real, typename reduceT, typename Terms>
 __global__ void combinedEnergiesKernel(const Terms*                   terms,
                                        const BatchedIndicesDevicePtr* systemIndices,
                                        const real*                    coords,
-                                       double*                        energies,
+                                       real*                          energies,
                                        const real                     chiralWeight,
                                        const real                     fourthDimWeight,
                                        const uint8_t*                 activeThisStage) {
@@ -1096,7 +1096,7 @@ __global__ void combinedEnergiesKernel(const Terms*                   terms,
   const reduceT blockEnergy = BlockReduce(tempStorage).Sum(static_cast<reduceT>(threadEnergy));
 
   if (tid == 0) {
-    energies[molIdx] = static_cast<double>(blockEnergy);
+    energies[molIdx] = static_cast<real>(blockEnergy);
   }
 }
 
@@ -1154,7 +1154,7 @@ cudaError_t launchBlockPerMolEnergyKernelImpl(int                            num
                                               const Terms&                   terms,
                                               const BatchedIndicesDevicePtr& systemIndices,
                                               const real*                    coords,
-                                              double*                        energies,
+                                              real*                          energies,
                                               const int                      dimension,
                                               const real                     chiralWeight,
                                               const real                     fourthDimWeight,
@@ -1279,7 +1279,7 @@ template <typename real, typename reduceT, typename Terms>
 __global__ void combinedEnergiesKernelETK(const Terms*                     terms,
                                           const BatchedIndices3DDevicePtr* systemIndices,
                                           const real*                      coords,
-                                          double*                          energies,
+                                          real*                            energies,
                                           const uint8_t*                   activeThisStage) {
   const int molIdx = blockIdx.x;
   const int tid    = threadIdx.x;
@@ -1300,7 +1300,7 @@ __global__ void combinedEnergiesKernelETK(const Terms*                     terms
   const reduceT blockEnergy  = BlockReduce(tempStorage).Sum(static_cast<reduceT>(threadEnergy));
 
   if (tid == 0) {
-    energies[molIdx] = static_cast<double>(blockEnergy);
+    energies[molIdx] = static_cast<real>(blockEnergy);
   }
 }
 
@@ -1309,7 +1309,7 @@ cudaError_t launchBlockPerMolEnergyKernelETKImpl(int                            
                                                  const Terms&                     terms,
                                                  const BatchedIndices3DDevicePtr& systemIndices,
                                                  const real*                      coords,
-                                                 double*                          energies,
+                                                 real*                            energies,
                                                  const uint8_t*                   activeThisStage,
                                                  cudaStream_t                     stream) {
   const AsyncDevicePtr<Terms>                     devTerms(terms, stream);
