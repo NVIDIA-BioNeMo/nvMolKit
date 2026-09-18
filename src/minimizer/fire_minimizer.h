@@ -16,6 +16,7 @@
 #ifndef NVMOLKIT_FIRE_MINIMIZER_H
 #define NVMOLKIT_FIRE_MINIMIZER_H
 
+#include <variant>
 #include <vector>
 
 #include "src/minimizer/bfgs_types.h"
@@ -88,8 +89,9 @@ template <typename real, typename reduceT, typename storageT> struct FireWorkspa
   }
 };
 
-using FullFireWorkspace   = FireWorkspace<double, double, double>;
-using SingleFireWorkspace = FireWorkspace<float, float, float>;
+using FullFireWorkspace    = FireWorkspace<double, double, double>;
+using SingleFireWorkspace  = FireWorkspace<float, float, float>;
+using FireWorkspaceVariant = std::variant<FullFireWorkspace, SingleFireWorkspace>;
 
 //! \brief Batched FIRE 2.0 minimizer.
 //!
@@ -240,8 +242,7 @@ class FireBatchMinimizer final : public BatchMinimizer {
   FireBackend   backend_                 = FireBackend::BATCHED;
   PrecisionMode precision_;
 
-  FullFireWorkspace   fullWorkspace_;
-  SingleFireWorkspace singleWorkspace_;
+  FireWorkspaceVariant workspace_;
 
   AsyncDeviceVector<int>     numStepsWithPositivePower_;
   AsyncDeviceVector<uint8_t> statuses_;
@@ -252,7 +253,8 @@ class FireBatchMinimizer final : public BatchMinimizer {
   AsyncDeviceVector<int>     activeSystemIndices_;
   AsyncDeviceVector<int>     allSystemIndices_;
 
-  std::vector<double> hostMasses_;
+  std::vector<double>       hostMasses_;
+  AsyncDeviceVector<double> massInputConversion_;
 
   AsyncDeviceVector<double>    debugPowers_;
   std::vector<FireDebugOutput> debugOutputs_;
@@ -282,6 +284,11 @@ class FireBatchMinimizer final : public BatchMinimizer {
   AsyncDeviceVector<int>    activeMolIdsDevice_;   //!< Device copy of @c activeMolIds_.
   PinnedHostVector<uint8_t> activeHost_;           //!< Pinned scratch for caller-supplied active mask.
   PinnedHostVector<uint8_t> convergenceHost_;      //!< Pinned scratch for status readback.
+
+  FullFireWorkspace&         fullWorkspace() { return std::get<FullFireWorkspace>(workspace_); }
+  const FullFireWorkspace&   fullWorkspace() const { return std::get<FullFireWorkspace>(workspace_); }
+  SingleFireWorkspace&       singleWorkspace() { return std::get<SingleFireWorkspace>(workspace_); }
+  const SingleFireWorkspace& singleWorkspace() const { return std::get<SingleFireWorkspace>(workspace_); }
 };
 
 }  // namespace nvMolKit
