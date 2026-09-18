@@ -145,6 +145,7 @@ include = ["nvmolkit/**/*.py", "benchmarks/**/*.py", "setup.py"]
 
 [tool.ruff.lint]
 ignore = [
+    "B905",    # Allow zip() to truncate to the shortest input.
     "C901",    # Checks for functions with a high McCabe complexity.
     "D100",    # Checks for undocumented public module definitions.
     "E501",    # Checks for lines that exceed the specified maximum character length.
@@ -155,6 +156,7 @@ ignore = [
 select = [
     "A",     # Builtin shadowing
     "ASYNC", # Async correctness checks
+    "B",     # Bugbear correctness checks
     "C",     # C-prefixed convention checks
     "D",     # Documentation formatting
     "DTZ",   # Datetime timezone checks

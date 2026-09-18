@@ -330,19 +330,19 @@ def run_benchmarks(
                 result["rdkit_molecules_processed"] = None
 
             if not skip_nvmolkit:
-                timing = time_it(lambda: bench_nvmol_gpu_list(mols), runs=runs, warmups=warmups)
+                timing = time_it(lambda mols=mols: bench_nvmol_gpu_list(mols), runs=runs, warmups=warmups)
                 t, s = timing.mean_ms, timing.std_ms
                 result["nvmol_gpu_list_time_ms"] = t
                 result["nvmol_gpu_list_std_ms"] = s
                 print(f"  nvMolKit (GPU list):  {t:8.2f} ms (+/- {s:.2f})")
 
-                timing = time_it(lambda: bench_nvmol_gpu_numpy(mols), runs=runs, warmups=warmups)
+                timing = time_it(lambda mols=mols: bench_nvmol_gpu_numpy(mols), runs=runs, warmups=warmups)
                 t, s = timing.mean_ms, timing.std_ms
                 result["nvmol_gpu_numpy_time_ms"] = t
                 result["nvmol_gpu_numpy_std_ms"] = s
                 print(f"  nvMolKit (GPU numpy): {t:8.2f} ms (+/- {s:.2f})")
 
-                timing = time_it(lambda: bench_nvmol_gpu_tensor(mols), runs=runs, warmups=warmups)
+                timing = time_it(lambda mols=mols: bench_nvmol_gpu_tensor(mols), runs=runs, warmups=warmups)
                 t, s = timing.mean_ms, timing.std_ms
                 result["nvmol_gpu_tensor_time_ms"] = t
                 result["nvmol_gpu_tensor_std_ms"] = s
