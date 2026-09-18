@@ -53,7 +53,7 @@ def _require_optuna():
     """Import optuna or raise an :class:`ImportError` with install instructions."""
     if not is_optuna_available():
         raise ImportError(OPTUNA_INSTALL_HINT)
-    import optuna  # noqa: PLC0415
+    import optuna
 
     return optuna
 
