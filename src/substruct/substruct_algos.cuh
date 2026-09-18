@@ -304,7 +304,7 @@ __device__ void gsiBFSSearchGPU(const TargetMoleculeView&                       
                                 bool                                                  countOnly        = false,
                                 DeviceTimingsData*                                    timings          = nullptr,
                                 uint8_t*                                              overflowFlag     = nullptr) {
-  long long int t_start;
+  [[maybe_unused]] long long int t_start;
   DEVICE_TIMING_START(timings, 0, t_start);
 
   const int tid      = threadIdx.x;
@@ -474,8 +474,8 @@ __device__ void gsiBFSSearchGPU(const TargetMoleculeView&                       
     }
     __syncthreads();
 
-    __shared__ int debugValidTotal;
-    __shared__ int debugCheckedTotal;
+    [[maybe_unused]] __shared__ int debugValidTotal;
+    [[maybe_unused]] __shared__ int debugCheckedTotal;
     if constexpr (kDebugGSI) {
       if (tid == 0) {
         debugValidTotal   = 0;
