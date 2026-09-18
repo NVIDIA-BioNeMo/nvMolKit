@@ -150,6 +150,7 @@ ignore = [
     "D100",    # Checks for undocumented public module definitions.
     "E501",    # Checks for lines that exceed the specified maximum character length.
     "E741",    # Checks for the use of the characters 'l', 'O', or 'I' as variable names.
+    "PERF203", # Preserve per-conformer exception isolation in benchmark energy collection.
     "RET505",  # Preserve elif chains after terminating branches.
     "RUF005",  # Checks for uses of the + operator to concatenate collections.
 ]
@@ -164,6 +165,7 @@ select = [
     "F",     # Pyflakes correctness checks
     "I",     # Import sorting
     "LOG",   # Logging checks
+    "PERF",  # Performance anti-pattern checks
     "PIE",   # Miscellaneous correctness checks
     "PLE",   # Pylint errors
     "RET",   # Return statement checks
