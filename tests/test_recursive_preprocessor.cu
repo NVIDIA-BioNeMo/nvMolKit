@@ -178,6 +178,71 @@ TEST(RecursivePreprocessorTest, PaintsBitsForSimpleRecursivePattern) {
   EXPECT_FALSE(hasRecursiveBit(1, 1));
 }
 
+TEST(RecursivePreprocessorTest, DeduplicatesRepeatedPatterns) {
+  auto query = makeMolFromSmarts("[$(*-N),$(*-O),$(*-N)]");
+  ASSERT_NE(query, nullptr);
+
+  std::vector<const RDKit::ROMol*> queries = {query.get()};
+  std::vector<int>                 emptySortOrder;
+  MoleculesHost                    queriesHost = nvMolKit::buildQueryBatchParallel(queries, emptySortOrder, 1);
+
+  ASSERT_EQ(queriesHost.recursivePatterns.size(), 1);
+  EXPECT_EQ(queriesHost.recursivePatterns[0].size(), 3);
+
+  RecursivePatternPreprocessor preprocessor;
+  preprocessor.buildPatterns(queriesHost);
+
+  const LeafSubpatterns& leafSubpatterns = preprocessor.leafSubpatterns();
+  EXPECT_EQ(leafSubpatterns.patternsHost.numMolecules(), 2);
+  ASSERT_EQ(leafSubpatterns.perQueryPatterns.size(), 1);
+  ASSERT_EQ(leafSubpatterns.perQueryPatterns[0][0].size(), 2);
+
+  std::vector<uint32_t> masks;
+  for (const auto& entry : leafSubpatterns.perQueryPatterns[0][0]) {
+    masks.push_back(entry.patternMask);
+  }
+  std::sort(masks.begin(), masks.end());
+  EXPECT_EQ(masks, (std::vector<uint32_t>{0x2u, 0x5u}));
+
+  EXPECT_EQ(leafSubpatterns.getPatternIndex(0, 0), leafSubpatterns.getPatternIndex(0, 2));
+  EXPECT_NE(leafSubpatterns.getPatternIndex(0, 0), leafSubpatterns.getPatternIndex(0, 1));
+}
+
+TEST(RecursivePreprocessorTest, DeduplicatesRepeatedNestedPatternsByDepth) {
+  auto query = makeMolFromSmarts("[$([C;$(*-N)]),$([C;$(*-O)]),$([C;$(*-N)])]");
+  ASSERT_NE(query, nullptr);
+
+  std::vector<const RDKit::ROMol*> queries = {query.get()};
+  std::vector<int>                 emptySortOrder;
+  MoleculesHost                    queriesHost = nvMolKit::buildQueryBatchParallel(queries, emptySortOrder, 1);
+
+  ASSERT_EQ(queriesHost.recursivePatterns.size(), 1);
+  EXPECT_EQ(queriesHost.recursivePatterns[0].size(), 6);
+  EXPECT_EQ(queriesHost.recursivePatterns[0].maxDepth, 2);
+
+  RecursivePatternPreprocessor preprocessor;
+  preprocessor.buildPatterns(queriesHost);
+
+  const LeafSubpatterns& leafSubpatterns = preprocessor.leafSubpatterns();
+  EXPECT_EQ(leafSubpatterns.patternsHost.numMolecules(), 4);
+  ASSERT_EQ(leafSubpatterns.perQueryPatterns.size(), 1);
+  ASSERT_EQ(leafSubpatterns.perQueryPatterns[0][0].size(), 2);
+  ASSERT_EQ(leafSubpatterns.perQueryPatterns[0][1].size(), 2);
+
+  std::vector<uint32_t> leafMasks;
+  std::vector<uint32_t> parentMasks;
+  for (const auto& entry : leafSubpatterns.perQueryPatterns[0][0]) {
+    leafMasks.push_back(entry.patternMask);
+  }
+  for (const auto& entry : leafSubpatterns.perQueryPatterns[0][1]) {
+    parentMasks.push_back(entry.patternMask);
+  }
+  std::sort(leafMasks.begin(), leafMasks.end());
+  std::sort(parentMasks.begin(), parentMasks.end());
+  EXPECT_EQ(leafMasks, (std::vector<uint32_t>{0x10u, 0x28u}));
+  EXPECT_EQ(parentMasks, (std::vector<uint32_t>{0x2u, 0x5u}));
+}
+
 /**
  * @brief Leaf subpattern with more atoms than the caller's MaxQueryAtoms
  *        template tier should not overflow the shared memory label matrix.

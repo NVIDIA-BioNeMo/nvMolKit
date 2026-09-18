@@ -13,9 +13,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <GraphMol/SmilesParse/SmartsWrite.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 #include "src/substruct/molecules_device.cuh"
@@ -43,13 +46,17 @@ void LeafSubpatterns::buildAllPatterns(const MoleculesHost& queriesHost) {
       continue;
     }
 
+    std::unordered_map<std::string, int> uniquePatternIndices;
     for (const auto& entry : recursiveInfo.patterns) {
       if (entry.queryMol == nullptr) {
         continue;
       }
 
       LeafSubpatternKey key{queryIdx, entry.patternId};
-      if (patternIndexMap.find(key) != patternIndexMap.end()) {
+      const std::string patternKey = std::to_string(entry.depth) + ':' + RDKit::MolToSmarts(*entry.queryMol);
+      const auto        uniqueIt   = uniquePatternIndices.find(patternKey);
+      if (uniqueIt != uniquePatternIndices.end()) {
+        patternIndexMap[key] = uniqueIt->second;
         continue;
       }
 
@@ -86,6 +93,7 @@ void LeafSubpatterns::buildAllPatterns(const MoleculesHost& queriesHost) {
       }
 
       patternIndexMap[key] = molIdx;
+      uniquePatternIndices.emplace(patternKey, molIdx);
     }
   }
 
@@ -112,6 +120,7 @@ void LeafSubpatterns::buildAllPatterns(const MoleculesHost& queriesHost) {
 
     perQueryMaxDepth[queryIdx] = recursiveInfo.maxDepth;
 
+    std::array<std::unordered_map<int, size_t>, kMaxSmartsNestingDepth + 1> entryIndicesByPattern;
     for (const auto& entry : recursiveInfo.patterns) {
       if (entry.queryMol == nullptr) {
         continue;
@@ -126,14 +135,23 @@ void LeafSubpatterns::buildAllPatterns(const MoleculesHost& queriesHost) {
         continue;
       }
 
+      auto&      entries      = perQueryPatterns[queryIdx][entry.depth];
+      auto&      entryIndices = entryIndicesByPattern[entry.depth];
+      const auto existing     = entryIndices.find(patternMolIdx);
+      if (existing != entryIndices.end()) {
+        entries[existing->second].patternMask |= 1u << entry.patternId;
+        continue;
+      }
+
       BatchedPatternEntry batchEntry;
       batchEntry.mainQueryIdx    = queryIdx;
-      batchEntry.patternId       = entry.patternId;
+      batchEntry.patternMask     = 1u << entry.patternId;
       batchEntry.patternMolIdx   = patternMolIdx;
       batchEntry.depth           = entry.depth;
       batchEntry.localIdInParent = entry.localIdInParent;
 
-      perQueryPatterns[queryIdx][entry.depth].push_back(batchEntry);
+      entryIndices.emplace(patternMolIdx, entries.size());
+      entries.push_back(batchEntry);
     }
   }
 
@@ -315,9 +333,9 @@ void RecursivePatternPreprocessor::preprocessMiniBatch(
   cudaCheckError(cudaGetLastError());
 }
 
-void preprocessRecursiveSmarts(SubstructTemplateConfig           templateConfig,
-                               const MoleculesDevice&            targetsDevice,
-                               const MoleculesHost&              queriesHost,
+void preprocessRecursiveSmarts(SubstructTemplateConfig templateConfig,
+                               const MoleculesDevice&  targetsDevice,
+                               const MoleculesHost& /*queriesHost*/,
                                const LeafSubpatterns&            leafSubpatterns,
                                MiniBatchResultsDevice&           miniBatchResults,
                                const int                         numQueries,
@@ -343,40 +361,19 @@ void preprocessRecursiveSmarts(SubstructTemplateConfig           templateConfig,
 
   const int firstQueryInMiniBatch = miniBatchPairOffset % numQueries;
   const int numUniqueQueries      = std::min(miniBatchSize, numQueries);
-  const int recursivePatternsSize = static_cast<int>(queriesHost.recursivePatterns.size());
-
-  int maxDepth = 0;
+  int       maxDepth              = 0;
   for (int i = 0; i < numUniqueQueries; ++i) {
     const int queryIdx = (firstQueryInMiniBatch + i) % numQueries;
 
-    if (queryIdx >= recursivePatternsSize) {
+    if (queryIdx >= static_cast<int>(leafSubpatterns.perQueryPatterns.size())) {
       continue;
     }
 
-    const auto& recursiveInfo = queriesHost.recursivePatterns[queryIdx];
-    if (recursiveInfo.empty()) {
-      continue;
-    }
-
-    maxDepth = std::max(maxDepth, recursiveInfo.maxDepth);
-
-    for (const auto& entry : recursiveInfo.patterns) {
-      if (entry.queryMol == nullptr) {
-        continue;
-      }
-
-      const int patternMolIdx = leafSubpatterns.getPatternIndex(queryIdx, entry.patternId);
-      if (patternMolIdx < 0) {
-        throw std::runtime_error("Pattern not found in pre-built LeafSubpatterns: queryIdx=" +
-                                 std::to_string(queryIdx) + ", patternId=" + std::to_string(entry.patternId));
-      }
-
-      BatchedPatternEntry& batchEntry = patternEntriesHost.emplace_back();
-      batchEntry.mainQueryIdx         = queryIdx;
-      batchEntry.patternId            = entry.patternId;
-      batchEntry.patternMolIdx        = patternMolIdx;
-      batchEntry.depth                = entry.depth;
-      batchEntry.localIdInParent      = entry.localIdInParent;
+    const int queryMaxDepth = leafSubpatterns.perQueryMaxDepth[queryIdx];
+    maxDepth                = std::max(maxDepth, queryMaxDepth);
+    for (int depth = 0; depth <= std::min(queryMaxDepth, kMaxSmartsNestingDepth); ++depth) {
+      const auto& entries = leafSubpatterns.perQueryPatterns[queryIdx][depth];
+      patternEntriesHost.insert(patternEntriesHost.end(), entries.begin(), entries.end());
     }
   }
 
