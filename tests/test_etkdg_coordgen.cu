@@ -59,17 +59,19 @@ void createContext(ETKDGContext& context, const std::vector<const RDKit::ROMol*>
 
 TEST(EtkdgCoordGenTest, TestGenerateInitialCoords) {
   // Set up test parameters
-  auto                                       defaultParams      = RDKit::DGeomHelpers::ETKDGv3;
+  auto                                       params             = RDKit::DGeomHelpers::ETKDGv3;
   // Set up test data
   std::string                                testDataFolderPath = getTestDataFolderPath();
   std::vector<std::unique_ptr<RDKit::ROMol>> molsPtrs;
   getMols(testDataFolderPath + "/MMFF94_dative.sdf", molsPtrs, /*count=*/10);
-  std::vector<const RDKit::ROMol*> mols;
+  std::vector<const RDKit::ROMol*>         mols;
+  std::vector<nvMolKit::detail::EmbedArgs> eargs;
   for (auto& molPtr : molsPtrs) {
     molPtr->clearConformers();
+    auto& embedArgs = eargs.emplace_back();
+    ASSERT_TRUE(nvMolKit::DGeomHelpers::prepareEmbedderArgs(*molPtr, params, embedArgs));
     mols.push_back(molPtr.get());
   }
-  auto params  = RDKit::DGeomHelpers::ETKDGv3;
   auto context = std::make_unique<nvMolKit::detail::ETKDGContext>();
   createContext(*context, mols);
 
@@ -80,7 +82,7 @@ TEST(EtkdgCoordGenTest, TestGenerateInitialCoords) {
     {0, 0, 0, 0, 0, 0, 0, 0, 1, 1}
   };
 
-  auto stage = std::make_unique<ETKDGCoordGenStage>(params, mols);
+  auto stage = std::make_unique<ETKDGCoordGenStage>(params, eargs);
   stages.push_back(std::move(prevStage));
   stages.push_back(std::move(stage));
   ETKDGDriver driver(std::move(context), std::move(stages));

@@ -38,11 +38,11 @@ size_t computeConsolidatedBufferBytes(int maxBatchSize) {
   };
 
   // Fixed-width buffers (based on maxBatchSize) - consolidated for single memcpy
-  addBlock(sizeof(int) * static_cast<size_t>(maxBatchSize));      // pairIndices
-  addBlock(sizeof(int) * static_cast<size_t>(maxBatchSize + 1));  // miniBatchPairMatchStarts
-  addBlock(sizeof(int) * static_cast<size_t>(maxBatchSize));      // matchCounts
-  addBlock(sizeof(int) * static_cast<size_t>(maxBatchSize));      // reportedCounts
-  addBlock(sizeof(uint8_t) * static_cast<size_t>(maxBatchSize));  // overflowFlags
+  addBlock(sizeof(int) * static_cast<size_t>(maxBatchSize));        // pairIndices
+  addBlock(sizeof(int) * (static_cast<size_t>(maxBatchSize) + 1));  // miniBatchPairMatchStarts
+  addBlock(sizeof(int) * static_cast<size_t>(maxBatchSize));        // matchCounts
+  addBlock(sizeof(int) * static_cast<size_t>(maxBatchSize));        // reportedCounts
+  addBlock(sizeof(uint8_t) * static_cast<size_t>(maxBatchSize));    // overflowFlags
 
   for (int i = 0; i <= kMaxSmartsNestingDepth; ++i) {
     addBlock(sizeof(int) * static_cast<size_t>(maxBatchSize));  // matchGlobalPairIndicesHost[i]
@@ -112,7 +112,7 @@ std::unique_ptr<PinnedHostBuffer> PinnedHostBufferPool::createBuffer(int maxBatc
   buffer->consolidated.basePtr      = reinterpret_cast<std::byte*>(buffer->pairIndices.data());
   buffer->consolidated.maxBatchSize = maxBatchSize;
 
-  buffer->miniBatchPairMatchStarts = allocator.allocate<int>(static_cast<size_t>(maxBatchSize + 1));
+  buffer->miniBatchPairMatchStarts = allocator.allocate<int>(static_cast<size_t>(maxBatchSize) + 1);
   buffer->matchCounts              = allocator.allocate<int>(static_cast<size_t>(maxBatchSize));
   buffer->reportedCounts           = allocator.allocate<int>(static_cast<size_t>(maxBatchSize));
   buffer->overflowFlags            = allocator.allocate<uint8_t>(static_cast<size_t>(maxBatchSize));

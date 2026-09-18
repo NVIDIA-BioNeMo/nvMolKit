@@ -67,7 +67,6 @@ TemplateConfigProperties getTemplateConfigProperties(SubstructTemplateConfig con
     case SubstructTemplateConfig::Config_T128_Q64_B6:
       return {128, 64, 6, 128 * 64, 128 * 64 / 32};
     case SubstructTemplateConfig::Config_T128_Q64_B8:
-      return {128, 64, 8, 128 * 64, 128 * 64 / 32};
     default:
       return {128, 64, 8, 128 * 64, 128 * 64 / 32};  // fallback to max
   }

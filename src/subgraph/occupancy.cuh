@@ -27,18 +27,21 @@ namespace nvMolKit {
 /**
  * @brief Per-SM shared memory budget assumed when choosing minBlocksPerSM.
  *
- * Hopper and datacenter Blackwell (sm_90/100/103) have 228 KB per SM; everything
- * else is modelled as A100's 164 KB, deliberately including the architectures
- * with less (Turing 64 KB, Volta 96 KB, consumer Ampere/Ada/Blackwell 100 KB).
+ * Hopper and datacenter Blackwell (sm_90/100/103) have 228 KB per SM and Rubin
+ * (sm_107) has 328 KB; everything else is modelled as A100's 164 KB,
+ * deliberately including the architectures with less (Turing 64 KB, Volta 96
+ * KB, consumer Ampere/Ada/Blackwell 100 KB).
  * ptxas does not validate .minnctapersm against shared memory, so on those an
  * unreachable ask costs nothing at runtime -- occupancy just lands where shared
  * memory puts it -- but it keeps the register cap as tight as the tuned
- * configuration allows. Modelling the 228 KB parts does matter: the smaller
+ * configuration allows. Modelling the 228/328 KB parts does matter: the smaller
  * assumed budget under-asks for the largest shapes there, and the relaxed
  * register cap can drop real occupancy below what shared memory allows.
  */
 constexpr std::size_t sharedBudgetPerSMBytes() {
-#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900) && (__CUDA_ARCH__ < 1200)
+#if defined(__CUDA_ARCH__) && (__CUDA_ARCH__ == 1070)
+  return 328 * 1024;
+#elif defined(__CUDA_ARCH__) && (__CUDA_ARCH__ >= 900) && (__CUDA_ARCH__ < 1200)
   return 228 * 1024;
 #else
   return 164 * 1024;
@@ -55,8 +58,8 @@ constexpr std::size_t sharedBudgetPerSMBytes() {
 constexpr int maxThreadsPerSM() {
 #if !defined(__CUDA_ARCH__)
   return 2048;  // Host pass; the value is never used.
-#elif __CUDA_ARCH__ == 750
-  return 1024;  // Turing
+#elif __CUDA_ARCH__ == 750 || __CUDA_ARCH__ == 1070
+  return 1024;  // Turing and Rubin
 #elif (__CUDA_ARCH__ >= 860 && __CUDA_ARCH__ < 900) || __CUDA_ARCH__ >= 1200
   return 1536;  // Consumer Ampere/Ada, Orin, consumer Blackwell
 #else

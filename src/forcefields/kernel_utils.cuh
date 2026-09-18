@@ -31,56 +31,54 @@ __device__ __forceinline__ int mark_warp_uniform(const int input) {
   return __shfl_sync(0xffffffff, input, 0);
 }
 
-__device__ __forceinline__ double distanceSquared(const double* pos,
-                                                  const int     idx1,
-                                                  const int     idx2,
-                                                  const int     dim = 3) {
-  const double dx   = pos[dim * idx1 + 0] - pos[dim * idx2 + 0];
-  const double dy   = pos[dim * idx1 + 1] - pos[dim * idx2 + 1];
-  const double dz   = pos[dim * idx1 + 2] - pos[dim * idx2 + 2];
-  double       dist = dx * dx + dy * dy + dz * dz;
+template <typename Scalar>
+__device__ __forceinline__ Scalar
+distanceSquared(const Scalar* pos, const int idx1, const int idx2, const int dim = 3) {
+  const Scalar dx   = pos[dim * idx1 + 0] - pos[dim * idx2 + 0];
+  const Scalar dy   = pos[dim * idx1 + 1] - pos[dim * idx2 + 1];
+  const Scalar dz   = pos[dim * idx1 + 2] - pos[dim * idx2 + 2];
+  Scalar       dist = dx * dx + dy * dy + dz * dz;
   if (dim == 4) {
-    const double dw = pos[dim * idx1 + 3] - pos[dim * idx2 + 3];
+    const Scalar dw = pos[dim * idx1 + 3] - pos[dim * idx2 + 3];
     dist += dw * dw;
   }
   return dist;
 }
 
-__device__ __forceinline__ double distanceSquaredPosIdx(const double* pos,
-                                                        const int     posIdx1,
-                                                        const int     posIdx2,
-                                                        const int     dim) {
-  const double dx   = pos[posIdx1 + 0] - pos[posIdx2 + 0];
-  const double dy   = pos[posIdx1 + 1] - pos[posIdx2 + 1];
-  const double dz   = pos[posIdx1 + 2] - pos[posIdx2 + 2];
-  double       dist = dx * dx + dy * dy + dz * dz;
+template <typename Scalar>
+__device__ __forceinline__ Scalar
+distanceSquaredPosIdx(const Scalar* pos, const int posIdx1, const int posIdx2, const int dim) {
+  const Scalar dx   = pos[posIdx1 + 0] - pos[posIdx2 + 0];
+  const Scalar dy   = pos[posIdx1 + 1] - pos[posIdx2 + 1];
+  const Scalar dz   = pos[posIdx1 + 2] - pos[posIdx2 + 2];
+  Scalar       dist = dx * dx + dy * dy + dz * dz;
   if (dim == 4) {
-    const double dw = pos[posIdx1 + 3] - pos[posIdx2 + 3];
+    const Scalar dw = pos[posIdx1 + 3] - pos[posIdx2 + 3];
     dist += dw * dw;
   }
   return dist;
 }
 
-template <int fixedDimension, typename floatType = double>
-__device__ __forceinline__ floatType distanceSquaredPosIdx(const double* pos, const int posIdx1, const int posIdx2) {
-  const floatType dx   = pos[posIdx1 + 0] - pos[posIdx2 + 0];
-  const floatType dy   = pos[posIdx1 + 1] - pos[posIdx2 + 1];
-  const floatType dz   = pos[posIdx1 + 2] - pos[posIdx2 + 2];
-  floatType       dist = dx * dx + dy * dy + dz * dz;
+template <int fixedDimension, typename Scalar>
+__device__ __forceinline__ Scalar distanceSquaredPosIdx(const Scalar* pos, const int posIdx1, const int posIdx2) {
+  const Scalar dx   = pos[posIdx1 + 0] - pos[posIdx2 + 0];
+  const Scalar dy   = pos[posIdx1 + 1] - pos[posIdx2 + 1];
+  const Scalar dz   = pos[posIdx1 + 2] - pos[posIdx2 + 2];
+  Scalar       dist = dx * dx + dy * dy + dz * dz;
   if constexpr (fixedDimension == 4) {
-    const floatType dw = pos[posIdx1 + 3] - pos[posIdx2 + 3];
+    const Scalar dw = pos[posIdx1 + 3] - pos[posIdx2 + 3];
     dist += dw * dw;
   }
   return dist;
 }
 
 template <typename floatTypeIn = double, typename floatTypeOut = double>
-__device__ __forceinline__ double distanceSquaredWithComponents(const floatTypeIn* pos,
-                                                                const int          idx1,
-                                                                const int          idx2,
-                                                                floatTypeOut&      dx,
-                                                                floatTypeOut&      dy,
-                                                                floatTypeOut&      dz) {
+__device__ __forceinline__ floatTypeOut distanceSquaredWithComponents(const floatTypeIn* pos,
+                                                                      const int          idx1,
+                                                                      const int          idx2,
+                                                                      floatTypeOut&      dx,
+                                                                      floatTypeOut&      dy,
+                                                                      floatTypeOut&      dz) {
   dx = pos[3 * idx1 + 0] - pos[3 * idx2 + 0];
   dy = pos[3 * idx1 + 1] - pos[3 * idx2 + 1];
   dz = pos[3 * idx1 + 2] - pos[3 * idx2 + 2];
@@ -117,6 +115,10 @@ __device__ __forceinline__ T dotProduct(const T& x1, const T& y1, const T& z1, c
 
 __device__ __forceinline__ void clipToOne(double& x) {
   x = fmax(-1.0, fmin(1.0, x));
+}
+
+__device__ __forceinline__ void clipToOne(float& x) {
+  x = fmaxf(-1.0f, fminf(1.0f, x));
 }
 
 __device__ __forceinline__ bool isDoubleZero(const double val) {

@@ -68,17 +68,16 @@ def EmbedMolecules(
 
     nvMolKit implements a subset of features specified in the EmbedParameters class. The following features are restricted:
 
-        - useRandomCoords must be True
         - Bounds matrices are not supported (setBoundsMat)
         - Custom Coulomb potentials are not supported (SetCPCI)
         - Coordinate constraints are not supported (SetCoordMap)
         - embedFragmentsSeparately is not supported. All fragments will be embedded together.
+        - Eigenvalue-based initialization supports at most 256 atoms per molecule.
 
     Args:
         molecules: List of RDKit molecules to embed. Molecules should be prepared
                   (sanitized, explicit hydrogens added if needed).
-        params: RDKit EmbedParameters object with embedding settings. Must have
-               useRandomCoords=True for ETKDG.
+        params: RDKit EmbedParameters object with embedding settings.
         confsPerMolecule: Number of conformers to generate per molecule (default: 1)
         maxIterations: Maximum ETKDG iterations, -1 for automatic calculation (default: -1)
         hardwareOptions: HardwareOptions with hardware settings. If None, uses defaults.
@@ -112,7 +111,6 @@ def EmbedMolecules(
         >>>
         >>> # Set up embedding parameters
         >>> params = ETKDGv3()
-        >>> params.useRandomCoords = True  # Required for nvMolKit ETKDG
         >>>
         >>> # Configure hardware options
         >>> hardware_opts = HardwareOptions(
@@ -130,7 +128,6 @@ def EmbedMolecules(
     Note:
         - In ``RDKIT_CONFORMERS`` mode (default), input molecules are modified in-place with
           generated conformers. In ``DEVICE`` mode, RDKit conformers are not touched.
-        - params.useRandomCoords must be True for ETKDG algorithm
         - If gpuIds is empty, all available GPUs (0 to N-1) will be used automatically
     """
     if not molecules:
@@ -141,9 +138,6 @@ def EmbedMolecules(
     for i, mol in enumerate(molecules):
         if mol is None:
             raise ValueError(f"Molecule at index {i} is None")
-
-    if not params.useRandomCoords:
-        raise ValueError("ETKDG requires useRandomCoords=True in EmbedParameters")
 
     if hardwareOptions is None:
         hardwareOptions = HardwareOptions()

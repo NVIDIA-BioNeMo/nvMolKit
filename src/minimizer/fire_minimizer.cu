@@ -171,20 +171,18 @@ __global__ void firePreKickKernel(const cuda::std::span<const int>    atomStarts
       debugPowers[sysIdx] = powerShared;
     }
 
-    double newDt     = dtIn;
-    double newAlpha  = alphaIn;
-    int    newNsteps = nstepIn;
+    double    newDt     = dtIn;
+    double    newAlpha  = alphaIn;
+    const int newNsteps = powerShared >= 0.0 ? nstepIn + 1 : 0;
 
     if (powerShared >= 0.0) {
-      newNsteps = nstepIn + 1;
       if (newNsteps > params.nMinForIncrease) {
         newDt    = fmin(dtIn * params.dtIncrementFactor, params.maxDt);
         newAlpha = alphaIn * params.alphaDecrementFactor;
       }
     } else {
-      newNsteps = 0;
-      newAlpha  = params.alphaStart;
-      newDt     = fmax(dtIn * params.dtDecrementFactor, params.minDt);
+      newAlpha = params.alphaStart;
+      newDt    = fmax(dtIn * params.dtDecrementFactor, params.minDt);
     }
 
     sharedDt               = newDt;

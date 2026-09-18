@@ -17,11 +17,16 @@
 
 #include <GraphMol/PeriodicTable.h>
 
+#include <array>
 #include <RDGeneral/hash/hash.hpp>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
 namespace nvMolKit {
 
 constexpr int kNumAtomInvariantMaxFeatures = 6;
+constexpr int kMaxMorganGpuAtoms           = 128;
 
 void MorganInvariantsGenerator::ComputeInvariants(const std::vector<const RDKit::ROMol*>& mols, size_t maxAtoms) {
   const size_t nMols = mols.size();
@@ -50,12 +55,28 @@ void MorganInvariantsGenerator::ComputeInvariantsInto(const std::vector<const RD
   if (nMols == 0 || maxAtoms == 0) {
     return;
   }
-
-  const gboost::hash<std::vector<uint32_t>> vectHasher;
-
-  const size_t                molBondStride = maxAtoms * kMaxBondsPerAtom;
-  const size_t                molAtomStride = maxAtoms;
-  std::vector<std::uint32_t>  atomInvariantComponents(kNumAtomInvariantMaxFeatures);
+  const size_t                                       molBondStride = maxAtoms * kMaxBondsPerAtom;
+  const size_t                                       molAtomStride = maxAtoms;
+  std::array<std::uint8_t, kMaxMorganGpuAtoms>       bondCountsStorage;
+  std::array<std::uint8_t, kMaxMorganGpuAtoms>       neighboringHydrogenCountsStorage;
+  std::array<const RDKit::Atom*, kMaxMorganGpuAtoms> atomsStorage;
+  std::array<std::uint8_t, kMaxMorganGpuAtoms>       isHydrogenStorage;
+  std::vector<std::uint8_t>                          countOverflowStorage;
+  std::vector<const RDKit::Atom*>                    atomOverflowStorage;
+  std::vector<std::uint8_t>                          hydrogenOverflowStorage;
+  auto*                                              bondCounts = bondCountsStorage.data();
+  auto* neighboringHydrogenCounts                               = neighboringHydrogenCountsStorage.data();
+  auto* atoms                                                   = atomsStorage.data();
+  auto* isHydrogen                                              = isHydrogenStorage.data();
+  if (maxAtoms > kMaxMorganGpuAtoms) {
+    countOverflowStorage.resize(2 * maxAtoms);
+    atomOverflowStorage.resize(maxAtoms);
+    hydrogenOverflowStorage.resize(maxAtoms);
+    bondCounts                = countOverflowStorage.data();
+    neighboringHydrogenCounts = countOverflowStorage.data() + maxAtoms;
+    atoms                     = atomOverflowStorage.data();
+    isHydrogen                = hydrogenOverflowStorage.data();
+  }
   const RDKit::PeriodicTable* periodicTable = RDKit::PeriodicTable::getTable();
 
   // Initialize outputs
@@ -70,55 +91,81 @@ void MorganInvariantsGenerator::ComputeInvariantsInto(const std::vector<const RD
       continue;
     }
 
-    // bondInvariantsOut will be filled during atom neighbor iteration below to avoid getBondWithIdx calls
+    const size_t numAtoms = mol.getNumAtoms();
+    std::fill_n(bondCounts, numAtoms, std::uint8_t{0});
+    std::fill_n(neighboringHydrogenCounts, numAtoms, std::uint8_t{0});
 
-    const size_t           numAtoms = std::min<size_t>(mol.getNumAtoms(), maxAtoms);
+    bool hasGraphHydrogens = false;
+    for (const RDKit::Atom* atom : mol.atoms()) {
+      const size_t atomIdx = atom->getIdx();
+      atoms[atomIdx]       = atom;
+      isHydrogen[atomIdx]  = atom->getAtomicNum() == 1;
+      hasGraphHydrogens |= isHydrogen[atomIdx];
+    }
+
+    // Visit each bond once and populate both endpoint adjacency lists. The old
+    // atom-centric traversal fetched every bond twice (once from each endpoint)
+    // and recomputed its invariant twice.
+    const size_t molBondOffset = molIdx * molBondStride;
+    const auto   recordBond    = [&](const RDKit::Bond* bond) {
+      const auto bondIdx   = static_cast<std::uint32_t>(bond->getIdx());
+      const auto beginIdx  = static_cast<size_t>(bond->getBeginAtomIdx());
+      const auto endIdx    = static_cast<size_t>(bond->getEndAtomIdx());
+      const auto beginSlot = bondCounts[beginIdx]++;
+      const auto endSlot   = bondCounts[endIdx]++;
+
+      if (beginSlot >= kMaxBondsPerAtom || endSlot >= kMaxBondsPerAtom) {
+        throw std::runtime_error("Morgan fingerprint supports at most " + std::to_string(kMaxBondsPerAtom) +
+                                 " bonds per atom");
+      }
+
+      const size_t beginOffset                            = molBondOffset + beginIdx * kMaxBondsPerAtom + beginSlot;
+      const size_t endOffset                              = molBondOffset + endIdx * kMaxBondsPerAtom + endSlot;
+      bondAtomIndicesOut[beginOffset]                     = static_cast<std::int16_t>(bondIdx);
+      bondOtherAtomIndicesOut[beginOffset]                = static_cast<std::int16_t>(endIdx);
+      bondAtomIndicesOut[endOffset]                       = static_cast<std::int16_t>(bondIdx);
+      bondOtherAtomIndicesOut[endOffset]                  = static_cast<std::int16_t>(beginIdx);
+      bondInvariantsOut[molAtomStride * molIdx + bondIdx] = static_cast<std::uint32_t>(bond->getBondType());
+    };
+
+    if (hasGraphHydrogens) {
+      for (const RDKit::Bond* bond : mol.bonds()) {
+        recordBond(bond);
+        const auto beginIdx = static_cast<size_t>(bond->getBeginAtomIdx());
+        const auto endIdx   = static_cast<size_t>(bond->getEndAtomIdx());
+        neighboringHydrogenCounts[beginIdx] += isHydrogen[endIdx];
+        neighboringHydrogenCounts[endIdx] += isHydrogen[beginIdx];
+      }
+    } else {
+      for (const RDKit::Bond* bond : mol.bonds()) {
+        recordBond(bond);
+      }
+    }
+
     const RDKit::RingInfo* ringInfo = mol.getRingInfo();
     for (size_t atomIdx = 0; atomIdx < numAtoms; ++atomIdx) {
-      const RDKit::Atom* tAtom = mol.getAtomWithIdx(atomIdx);
+      const RDKit::Atom* tAtom = atoms[atomIdx];
 
-      const int deltaMass = static_cast<int>(tAtom->getMass() - periodicTable->getAtomicWeight(tAtom->getAtomicNum()));
-
-      atomInvariantComponents.resize(kNumAtomInvariantMaxFeatures - 1);
-      const bool               isInRing = ringInfo->numAtomRings(tAtom->getIdx()) > 0;
-      // Compute degree and neighbor Hs while recording bond indices; also fill bondInvariantsOut.
-      RDKit::ROMol::OEDGE_ITER beg;
-      RDKit::ROMol::OEDGE_ITER end;
-      boost::tie(beg, end)     = mol.getAtomBonds(tAtom);
-      size_t       startIdx    = molIdx * molBondStride + kMaxBondsPerAtom * atomIdx;
-      unsigned int degreeCount = 0;
-      unsigned int neighborHs  = 0;
-      while (beg != end) {
-        const RDKit::Bond* bond           = mol[*beg];
-        const auto         bondIdxLocal   = static_cast<std::uint32_t>(bond->getIdx());
-        bondAtomIndicesOut[startIdx]      = static_cast<int16_t>(bondIdxLocal);
-        const unsigned otherIdx           = bond->getOtherAtomIdx(atomIdx);
-        bondOtherAtomIndicesOut[startIdx] = static_cast<int16_t>(otherIdx);
-        if (bondIdxLocal < maxAtoms) {
-          bondInvariantsOut[molAtomStride * molIdx + bondIdxLocal] = static_cast<uint32_t>(bond->getBondType());
-        }
-        const RDKit::Atom* otherAtom = bond->getOtherAtom(tAtom);
-        if (otherAtom->getAtomicNum() == 1) {
-          ++neighborHs;
-        }
-        ++degreeCount;
-        ++startIdx;
-        ++beg;
+      int deltaMass = 0;
+      if (tAtom->getIsotope() != 0) {
+        deltaMass = static_cast<int>(tAtom->getMass() - periodicTable->getAtomicWeight(tAtom->getAtomicNum()));
       }
 
       const auto explicitImplicitHs  = static_cast<unsigned int>(tAtom->getNumExplicitHs() + tAtom->getNumImplicitHs());
-      const unsigned int totalDegree = explicitImplicitHs + degreeCount;
-      const unsigned int totalHsIncludingNeighbors = explicitImplicitHs + neighborHs;
+      const unsigned int totalDegree = explicitImplicitHs + bondCounts[atomIdx];
+      const unsigned int totalHsIncludingNeighbors = explicitImplicitHs + neighboringHydrogenCounts[atomIdx];
 
-      atomInvariantComponents[0] = tAtom->getAtomicNum();
-      atomInvariantComponents[1] = totalDegree;
-      atomInvariantComponents[2] = totalHsIncludingNeighbors;
-      atomInvariantComponents[3] = tAtom->getFormalCharge();
-      atomInvariantComponents[4] = deltaMass;
-      if (isInRing) {
-        atomInvariantComponents.push_back(1);
-      }
-      atomInvariantsOut[molAtomStride * molIdx + atomIdx] = vectHasher(atomInvariantComponents);
+      const bool isInRing = ringInfo->numAtomRings(tAtom->getIdx()) > 0;
+      const std::array<std::uint32_t, kNumAtomInvariantMaxFeatures> atomInvariantComponents = {
+        static_cast<std::uint32_t>(tAtom->getAtomicNum()),
+        totalDegree,
+        totalHsIncludingNeighbors,
+        static_cast<std::uint32_t>(tAtom->getFormalCharge()),
+        static_cast<std::uint32_t>(deltaMass),
+        1U};
+      const auto numComponents = isInRing ? atomInvariantComponents.size() : atomInvariantComponents.size() - 1;
+      atomInvariantsOut[molAtomStride * molIdx + atomIdx] =
+        gboost::hash_range(atomInvariantComponents.begin(), atomInvariantComponents.begin() + numComponents);
     }
   }
 }

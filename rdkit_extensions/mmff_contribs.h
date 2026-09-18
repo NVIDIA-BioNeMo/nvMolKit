@@ -1,5 +1,5 @@
-#ifndef __NVMOLKIT_MMFFCONTRIBS_H__
-#define __NVMOLKIT_MMFFCONTRIBS_H__
+#ifndef NVMOLKIT_MMFFCONTRIBS_H
+#define NVMOLKIT_MMFFCONTRIBS_H
 
 #include <ForceField/Contrib.h>
 #include <ForceField/ForceField.h>

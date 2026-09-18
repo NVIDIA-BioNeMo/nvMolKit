@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,6 +15,9 @@
 
 #ifndef NVMOLKIT_COORD_GEN_H
 #define NVMOLKIT_COORD_GEN_H
+
+#include <cuda_runtime_api.h>
+#include <DistGeom/BoundsMatrix.h>
 
 #include <memory>
 #include <vector>
@@ -38,18 +41,29 @@ namespace detail {
 
 class InitialCoordinateGenerator {
  public:
-  InitialCoordinateGenerator();
+  explicit InitialCoordinateGenerator(cudaStream_t stream = nullptr);
   ~InitialCoordinateGenerator();
   //! One-time setup of bounds matrices
   void computeBoundsMatrices(const std::vector<const RDKit::ROMol*>&                mols,
                              const RDKit::DGeomHelpers::EmbedParameters&            params,
-                             std::vector<ForceFields::CrystalFF::CrystalFFDetails>& etkdgDetails);
+                             std::vector<ForceFields::CrystalFF::CrystalFFDetails>& etkdgDetails,
+                             const std::vector<int>&                                attemptIds           = {},
+                             const std::vector<int>&                                coordinateDimensions = {});
+
+  //! Use bounds matrices already prepared by the ETKDG driver.
+  void setBoundsMatrices(const std::vector<::DistGeom::BoundsMatPtr>& boundsMatrices,
+                         const RDKit::DGeomHelpers::EmbedParameters&  params,
+                         const std::vector<int>&                      attemptIds           = {},
+                         const std::vector<int>&                      coordinateDimensions = {});
 
   //! Check if the bounds matrices are set up for n molecules.
   int numSystemsPrepared();
 
   //! Compute initial coordinates. If active is not null, only the active systems will compute coordinates.
-  void computeInitialCoordinates(double* deviceCoords, const int* deviceAtomStarts, const uint8_t* active = nullptr);
+  void computeInitialCoordinates(double*        deviceCoords,
+                                 const int*     deviceAtomStarts,
+                                 int            coordinateDim,
+                                 const uint8_t* active = nullptr);
   //! Returns successful minimizations from the last call to computeInitialCoordinates. Inactive systems will show
   //! false.
 

@@ -1,41 +1,33 @@
 ---
-Checks: '
-  abseil-*,
-  bugprone-*,
-   -bugprone-narrowing-conversions,
-   -bugprone-implicit-widening-of-multiplication-result,
-   -bugprone-unchecked-optional-access,
-  clang-analyzer-*,
-   -clang-analyzer-optin.cplusplus.VirtualCall
-  clang-diagnostic-*,
-  cppcoreguidelines-*,
-    -cppcoreguidelines-avoid-c-arrays,
-    -cppcoreguidelines-pro-bounds-constant-array-index,
-    -cppcoreguidelines-pro-bounds-pointer-arithmetic,
-    -cppcoreguidelines-pro-type-reinterpret-cast,
-    -cppcoreguidelines-macro-usage,
-    -cppcoreguidelines-narrowing-conversions
-  hicpp-*,
-     -hicpp-avoid-c-arrays,
-  llvm-*,
-   -llvm-include-order,
-  misc-*,
-   -misc-non-private-member-variables-in-classes,
-   -misc-unused-parameters,
-   -misc-include-cleaner,
-  modernize-*,
-   -modernize-avoid-c-arrays,
-   -modernize-concat-nested-namespaces,
-   -modernize-use-trailing-return-type,
-  mpi-*,
-  openmp-*,
-    -openmp-use-default-none
-  performance-*,
-  readability-*,
-  -readability-function-cognitive-complexity'
+Checks:
+  # Start from an explicit, stable set instead of clang-tidy's defaults.
+  - '-*'
+  - clang-analyzer-*
+  # This diagnoses well-defined constructor/destructor dispatch; invalid
+  # pure-virtual calls remain checked.
+  - '-clang-analyzer-optin.cplusplus.VirtualCall'
+  - bugprone-*
+  # Enforcing strong parameter types would be a broad API/readability change.
+  - '-bugprone-easily-swappable-parameters'
+  # Existing intentional size calculations need separate overflow triage.
+  - '-bugprone-implicit-widening-of-multiplication-result'
+  # CUDA runtime APIs conventionally accept typed allocation and buffer
+  # pointers without explicit casts to void pointers.
+  - '-bugprone-multi-level-implicit-pointer-conversion'
+  # Existing intentional numeric conversions need separate range analysis.
+  - '-bugprone-narrowing-conversions'
+  # This is expensive flow-sensitive analysis that cannot model project
+  # invariants outside the local function.
+  - '-bugprone-unchecked-optional-access'
+  - performance-*
+  # Enum representation is an ABI and data-layout decision, not a blanket
+  # optimization; smaller underlying types can also add conversion overhead.
+  - '-performance-enum-size'
+WarningsAsErrors: '*'
+HeaderFilterRegex: '.*/(src|rdkit_extensions)/.*'
 FormatStyle: none
 CheckOptions:
-  bugprone-easily-swappable-parameters.MinimumLength: 4
-  readability-magic-numbers.IgnorePowersOf2IntegerValues: true
-  cppcoreguidelines-avoid-magic-numbers.IgnorePowersOf2IntegerValues: true
+  # int8_t is used as a small integer (including negative sentinels), not as a
+  # character type; unsigned conversion would change its meaning.
+  bugprone-signed-char-misuse.CharTypedefsToIgnore: int8_t
 ...

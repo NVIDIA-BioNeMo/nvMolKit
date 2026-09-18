@@ -134,6 +134,75 @@ std::string serializeBv(const ExplicitBitVect& bv) {
   return serialized;
 }
 
+void expectDirectInvariantsMatchRDKit(const std::string& smiles,
+                                      bool               keepGraphHydrogens = false,
+                                      size_t             maxAtoms           = 128) {
+  RDKit::SmilesParserParams parseParams;
+  parseParams.removeHs = !keepGraphHydrogens;
+  const std::unique_ptr<RDKit::ROMol> mol(RDKit::SmilesToMol(smiles, parseParams));
+  ASSERT_NE(mol, nullptr) << smiles;
+
+  nvMolKit::MorganInvariantsGenerator generator;
+  generator.ComputeInvariants({mol.get()}, maxAtoms);
+  const auto& actual = generator.GetInvariants();
+
+  RDKit::MorganFingerprint::MorganAtomInvGenerator  atomGenerator(/*includeRingMembership=*/true);
+  RDKit::MorganFingerprint::MorganBondInvGenerator  bondGenerator(/*useBondTypes=*/true, /*useChirality=*/false);
+  const std::unique_ptr<std::vector<std::uint32_t>> expectedAtoms(atomGenerator.getAtomInvariants(*mol));
+  const std::unique_ptr<std::vector<std::uint32_t>> expectedBonds(bondGenerator.getBondInvariants(*mol));
+
+  ASSERT_EQ(expectedAtoms->size(), mol->getNumAtoms());
+  ASSERT_EQ(expectedBonds->size(), mol->getNumBonds());
+  for (size_t atomIdx = 0; atomIdx < mol->getNumAtoms(); ++atomIdx) {
+    EXPECT_EQ(actual.atomInvariants[atomIdx], (*expectedAtoms)[atomIdx]) << "atom " << atomIdx << " in " << smiles;
+  }
+  for (size_t bondIdx = 0; bondIdx < mol->getNumBonds(); ++bondIdx) {
+    EXPECT_EQ(actual.bondInvariants[bondIdx], (*expectedBonds)[bondIdx]) << "bond " << bondIdx << " in " << smiles;
+  }
+  for (const RDKit::Atom* atom : mol->atoms()) {
+    std::set<std::pair<std::int16_t, std::int16_t>> expectedAdjacency;
+    for (const RDKit::Bond* bond : mol->atomBonds(atom)) {
+      expectedAdjacency.emplace(static_cast<std::int16_t>(bond->getIdx()),
+                                static_cast<std::int16_t>(bond->getOtherAtomIdx(atom->getIdx())));
+    }
+
+    std::set<std::pair<std::int16_t, std::int16_t>> actualAdjacency;
+    const size_t                                    adjacencyOffset = atom->getIdx() * nvMolKit::kMaxBondsPerAtom;
+    for (size_t slot = 0; slot < atom->getDegree(); ++slot) {
+      actualAdjacency.emplace(actual.bondAtomIndices[adjacencyOffset + slot],
+                              actual.bondOtherAtomIndices[adjacencyOffset + slot]);
+    }
+    EXPECT_EQ(actualAdjacency, expectedAdjacency) << "atom " << atom->getIdx() << " in " << smiles;
+    if (atom->getDegree() < nvMolKit::kMaxBondsPerAtom) {
+      EXPECT_EQ(actual.bondAtomIndices[adjacencyOffset + atom->getDegree()], -1);
+    }
+  }
+}
+
+TEST(MorganInvariantTest, RingsMatchRDKit) {
+  expectDirectInvariantsMatchRDKit("C1CCCCC1");
+  expectDirectInvariantsMatchRDKit("c1ccccc1");
+}
+
+TEST(MorganInvariantTest, GraphHydrogensMatchRDKit) {
+  expectDirectInvariantsMatchRDKit("[H]C([H])([H])[H]", /*keepGraphHydrogens=*/true);
+}
+
+TEST(MorganInvariantTest, AtomExplicitHydrogenPropertiesMatchRDKit) {
+  expectDirectInvariantsMatchRDKit("[nH]1cccc1");
+  expectDirectInvariantsMatchRDKit("[NH2+]C");
+}
+
+TEST(MorganInvariantTest, IsotopesAndChargesMatchRDKit) {
+  expectDirectInvariantsMatchRDKit("[13CH3][NH3+]");
+  expectDirectInvariantsMatchRDKit("[18F]C(=O)[O-]");
+}
+
+TEST(MorganInvariantTest, DisconnectedAndIsolatedAtomsMatchRDKit) {
+  expectDirectInvariantsMatchRDKit("C.[Cl-].[Na+]");
+  expectDirectInvariantsMatchRDKit("[He]");
+}
+
 class MorganFingerprintTestFixture : public ::testing::TestWithParam<std::tuple<int, int>> {};
 
 // Stream operator for explicitbitvect
@@ -429,6 +498,35 @@ TEST(MorganFingerprintGpuTest, GpuBufferSameResult) {
     for (size_t bitId = 0; bitId < fpSize; bitId++) {
       ASSERT_EQ(refResults[i]->getBit(bitId), gpuResultsHost[i][bitId])
         << "on element " << i << " with smiles " << smiles[i] << ", bit " << bitId;
+    }
+  }
+}
+
+TEST(MorganFingerprintGpuTest, HighDegreeMoleculeUsesCpuFallback) {
+  constexpr unsigned int              radius = 2;
+  constexpr unsigned int              fpSize = 1024;
+  const std::unique_ptr<RDKit::ROMol> regularMol(RDKit::SmilesToMol("CCO"));
+  const std::unique_ptr<RDKit::ROMol> highDegreeMol(RDKit::SmilesToMol("[Fe](C)(C)(C)(C)(C)(C)(C)(C)C"));
+  ASSERT_NE(regularMol, nullptr);
+  ASSERT_NE(highDegreeMol, nullptr);
+  ASSERT_GT(highDegreeMol->getAtomWithIdx(0)->getDegree(), nvMolKit::kMaxBondsPerAtom);
+
+  auto                                generator = nvMolKit::MorganFingerprintGenerator(radius, fpSize);
+  nvMolKit::FingerprintComputeOptions options;
+  options.backend = nvMolKit::FingerprintComputeBackend::GPU;
+
+  const std::vector<const RDKit::ROMol*> mols      = {regularMol.get(), highDegreeMol.get()};
+  auto                                   gpuResult = generator.GetFingerprintsGpuBuffer<fpSize>(mols, nullptr, options);
+  std::vector<nvMolKit::FlatBitVect<fpSize>> actual(gpuResult.size());
+  gpuResult.copyToHost(actual);
+
+  auto refGenerator = std::unique_ptr<RDKit::FingerprintGenerator<std::uint32_t>>(
+    RDKit::MorganFingerprint::getMorganGenerator<
+      std::uint32_t>(radius, false, false, true, false, nullptr, nullptr, fpSize, {1, 2, 4, 8}, false, false));
+  for (size_t molIdx = 0; molIdx < mols.size(); ++molIdx) {
+    const std::unique_ptr<ExplicitBitVect> expected(refGenerator->getFingerprint(*mols[molIdx]));
+    for (size_t bitId = 0; bitId < fpSize; ++bitId) {
+      EXPECT_EQ(actual[molIdx][bitId], expected->getBit(bitId)) << "molecule " << molIdx << ", bit " << bitId;
     }
   }
 }

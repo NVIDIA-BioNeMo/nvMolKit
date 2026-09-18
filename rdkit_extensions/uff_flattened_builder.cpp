@@ -14,6 +14,7 @@
 #include <GraphMol/Substruct/SubstructMatch.h>
 #include <RDGeneral/Invariant.h>
 
+#include <array>
 #include <cmath>
 #include <tuple>
 #include <vector>
@@ -336,7 +337,7 @@ void addNonbonded(const ROMol& mol,
                   const int confId,
                   const AtomicParamVect& params,
                   nvMolKit::UFF::EnergyForceContribsHost& contribs,
-                  boost::shared_array<std::uint8_t> neighborMatrix,
+                  boost::shared_array<std::uint8_t>& neighborMatrix,
                   const double vdwThresh,
                   const bool ignoreInterfragInteractions) {
   PRECONDITION(mol.getNumAtoms() == params.size(), "bad parameters");
@@ -479,19 +480,17 @@ void addInversions(const ROMol& mol, const AtomicParamVect& params, nvMolKit::UF
     }
 
     boost::tie(nbrIdx, endNbrs) = mol.getAtomNeighbors(atom[1]);
-    unsigned int neighborSlot = 0;
-    bool         isBoundToSP2O = false;
-    for (; nbrIdx != endNbrs; ++nbrIdx) {
+    constexpr std::array<unsigned int, 3> neighborSlots{0, 2, 3};
+    bool                                  isBoundToSP2O = false;
+    for (const unsigned int neighborSlot : neighborSlots) {
+      PRECONDITION(nbrIdx != endNbrs, "atom has fewer neighbors than its degree");
       atom[neighborSlot] = mol[*nbrIdx];
       idx[neighborSlot]  = atom[neighborSlot]->getIdx();
       if (!isBoundToSP2O) {
         isBoundToSP2O = (at2AtomicNum == 6) && (atom[neighborSlot]->getAtomicNum() == 8) &&
                         (atom[neighborSlot]->getHybridization() == Atom::SP2);
       }
-      if (!neighborSlot) {
-        ++neighborSlot;
-      }
-      ++neighborSlot;
+      ++nbrIdx;
     }
 
     const auto [forceConstant, C0, C1, C2] =

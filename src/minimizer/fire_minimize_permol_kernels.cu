@@ -16,7 +16,7 @@
 #include <cub/cub.cuh>
 
 #include "src/forcefields/mmff_kernels.h"
-#include "src/forcefields/mmff_kernels_device.cuh"
+#include "src/forcefields/mmff_kernels_device_dispatch.cuh"
 #include "src/minimizer/fire_minimize_permol_kernels.h"
 #include "src/utils/device_vector.h"
 
@@ -153,19 +153,17 @@ __launch_bounds__(kFirePerMolBlockSize)
     }
 
     if (tid == 0 && !isFirstStep) {
-      double newDt     = sharedDt;
-      double newAlpha  = sharedAlpha;
-      int    newNsteps = sharedNsteps;
+      double    newDt     = sharedDt;
+      double    newAlpha  = sharedAlpha;
+      const int newNsteps = powerShared >= 0.0 ? sharedNsteps + 1 : 0;
       if (powerShared >= 0.0) {
-        newNsteps = sharedNsteps + 1;
         if (newNsteps > params.nMinForIncrease) {
           newDt    = fmin(sharedDt * params.dtIncrementFactor, params.maxDt);
           newAlpha = sharedAlpha * params.alphaDecrementFactor;
         }
       } else {
-        newNsteps = 0;
-        newAlpha  = params.alphaStart;
-        newDt     = fmax(sharedDt * params.dtDecrementFactor, params.minDt);
+        newAlpha = params.alphaStart;
+        newDt    = fmax(sharedDt * params.dtDecrementFactor, params.minDt);
       }
       sharedDt     = newDt;
       sharedAlpha  = newAlpha;

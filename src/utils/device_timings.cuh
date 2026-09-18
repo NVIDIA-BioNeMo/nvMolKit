@@ -51,21 +51,21 @@ struct DeviceTimingsData {
   do {                                                       \
     if constexpr (nvMolKit::enableDeviceTimings) {           \
       if (blockIdx.x == 0 && threadIdx.x == 0) {             \
-        start_var = clock64();                               \
+        (start_var) = clock64();                             \
       }                                                      \
       __threadfence_block();                                 \
     }                                                        \
   } while (0)
 
-#define DEVICE_TIMING_END(timings_ptr, section, start_var)       \
-  do {                                                           \
-    if constexpr (nvMolKit::enableDeviceTimings) {               \
-      if (blockIdx.x == 0 && threadIdx.x == 0) {                 \
-        (timings_ptr)->totals[section] += clock64() - start_var; \
-        (timings_ptr)->counts[section] += 1;                     \
-      }                                                          \
-      __threadfence_block();                                     \
-    }                                                            \
+#define DEVICE_TIMING_END(timings_ptr, section, start_var)           \
+  do {                                                               \
+    if constexpr (nvMolKit::enableDeviceTimings) {                   \
+      if (blockIdx.x == 0 && threadIdx.x == 0) {                     \
+        (timings_ptr)->totals[(section)] += clock64() - (start_var); \
+        (timings_ptr)->counts[(section)] += 1;                       \
+      }                                                              \
+      __threadfence_block();                                         \
+    }                                                                \
   } while (0)
 
 // ============================================================================

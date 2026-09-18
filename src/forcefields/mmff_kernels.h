@@ -309,115 +309,128 @@ cudaError_t launchReduceEnergiesKernel(int            numBlocks,
                                        cudaStream_t   stream          = 0);
 
 //! Pointer versions of contrib structs for kernel launches
-struct BondStretchContribTermsDevicePtr {
+template <typename Scalar> struct BondStretchContribTermsDevicePtrT {
   int*    idx1 = nullptr;
   int*    idx2 = nullptr;
-  double* r0   = nullptr;
-  double* kb   = nullptr;
+  Scalar* r0   = nullptr;
+  Scalar* kb   = nullptr;
 };
 
-struct AngleBendTermsDevicePtr {
+template <typename Scalar> struct AngleBendTermsDevicePtrT {
   int*          idx1     = nullptr;
   int*          idx2     = nullptr;
   int*          idx3     = nullptr;
-  double*       theta0   = nullptr;
-  double*       ka       = nullptr;
+  Scalar*       theta0   = nullptr;
+  Scalar*       ka       = nullptr;
   std::uint8_t* isLinear = nullptr;
 };
 
-struct BendStretchTermsDevicePtr {
+template <typename Scalar> struct BendStretchTermsDevicePtrT {
   int*    idx1        = nullptr;
   int*    idx2        = nullptr;
   int*    idx3        = nullptr;
-  double* theta0      = nullptr;
-  double* restLen1    = nullptr;
-  double* restLen2    = nullptr;
-  double* forceConst1 = nullptr;
-  double* forceConst2 = nullptr;
+  Scalar* theta0      = nullptr;
+  Scalar* restLen1    = nullptr;
+  Scalar* restLen2    = nullptr;
+  Scalar* forceConst1 = nullptr;
+  Scalar* forceConst2 = nullptr;
 };
 
-struct OutOfPlaneTermsDevicePtr {
+template <typename Scalar> struct OutOfPlaneTermsDevicePtrT {
   int*    idx1 = nullptr;
   int*    idx2 = nullptr;
   int*    idx3 = nullptr;
   int*    idx4 = nullptr;
-  double* koop = nullptr;
+  Scalar* koop = nullptr;
 };
 
-struct TorsionContribTermsDevicePtr {
-  int*   idx1 = nullptr;
-  int*   idx2 = nullptr;
-  int*   idx3 = nullptr;
-  int*   idx4 = nullptr;
-  float* V1   = nullptr;
-  float* V2   = nullptr;
-  float* V3   = nullptr;
+template <typename Scalar> struct TorsionContribTermsDevicePtrT {
+  int*    idx1 = nullptr;
+  int*    idx2 = nullptr;
+  int*    idx3 = nullptr;
+  int*    idx4 = nullptr;
+  Scalar* V1   = nullptr;
+  Scalar* V2   = nullptr;
+  Scalar* V3   = nullptr;
 };
 
-struct VdwTermsDevicePtr {
+template <typename Scalar> struct VdwTermsDevicePtrT {
   int*    idx1      = nullptr;
   int*    idx2      = nullptr;
-  double* R_ij_star = nullptr;
-  double* wellDepth = nullptr;
+  Scalar* R_ij_star = nullptr;
+  Scalar* wellDepth = nullptr;
 };
 
-struct EleTermsDevicePtr {
+template <typename Scalar> struct EleTermsDevicePtrT {
   int*     idx1       = nullptr;
   int*     idx2       = nullptr;
-  double*  chargeTerm = nullptr;
+  Scalar*  chargeTerm = nullptr;
   uint8_t* dielModel  = nullptr;
   uint8_t* is1_4      = nullptr;
 };
 
-struct DistanceConstraintTermsDevicePtr {
+template <typename Scalar> struct DistanceConstraintTermsDevicePtrT {
   int*    idx1          = nullptr;
   int*    idx2          = nullptr;
-  double* minLen        = nullptr;
-  double* maxLen        = nullptr;
-  double* forceConstant = nullptr;
+  Scalar* minLen        = nullptr;
+  Scalar* maxLen        = nullptr;
+  Scalar* forceConstant = nullptr;
 };
 
-struct PositionConstraintTermsDevicePtr {
+template <typename Scalar> struct PositionConstraintTermsDevicePtrT {
   int*    idx           = nullptr;
-  double* refX          = nullptr;
-  double* refY          = nullptr;
-  double* refZ          = nullptr;
-  double* maxDispl      = nullptr;
-  double* forceConstant = nullptr;
+  Scalar* refX          = nullptr;
+  Scalar* refY          = nullptr;
+  Scalar* refZ          = nullptr;
+  Scalar* maxDispl      = nullptr;
+  Scalar* forceConstant = nullptr;
 };
 
-struct AngleConstraintTermsDevicePtr {
+template <typename Scalar> struct AngleConstraintTermsDevicePtrT {
   int*    idx1          = nullptr;
   int*    idx2          = nullptr;
   int*    idx3          = nullptr;
-  double* minAngleDeg   = nullptr;
-  double* maxAngleDeg   = nullptr;
-  double* forceConstant = nullptr;
+  Scalar* minAngleDeg   = nullptr;
+  Scalar* maxAngleDeg   = nullptr;
+  Scalar* forceConstant = nullptr;
 };
 
-struct TorsionConstraintTermsDevicePtr {
+template <typename Scalar> struct TorsionConstraintTermsDevicePtrT {
   int*    idx1           = nullptr;
   int*    idx2           = nullptr;
   int*    idx3           = nullptr;
   int*    idx4           = nullptr;
-  double* minDihedralDeg = nullptr;
-  double* maxDihedralDeg = nullptr;
-  double* forceConstant  = nullptr;
+  Scalar* minDihedralDeg = nullptr;
+  Scalar* maxDihedralDeg = nullptr;
+  Scalar* forceConstant  = nullptr;
 };
 
-struct EnergyForceContribsDevicePtr {
-  BondStretchContribTermsDevicePtr bondTerms;
-  AngleBendTermsDevicePtr          angleTerms;
-  BendStretchTermsDevicePtr        bendTerms;
-  OutOfPlaneTermsDevicePtr         oopTerms;
-  TorsionContribTermsDevicePtr     torsionTerms;
-  VdwTermsDevicePtr                vdwTerms;
-  EleTermsDevicePtr                eleTerms;
-  DistanceConstraintTermsDevicePtr distanceConstraintTerms;
-  PositionConstraintTermsDevicePtr positionConstraintTerms;
-  AngleConstraintTermsDevicePtr    angleConstraintTerms;
-  TorsionConstraintTermsDevicePtr  torsionConstraintTerms;
+template <typename Scalar, typename TorsionScalar = float> struct EnergyForceContribsDevicePtrT {
+  BondStretchContribTermsDevicePtrT<Scalar>    bondTerms;
+  AngleBendTermsDevicePtrT<Scalar>             angleTerms;
+  BendStretchTermsDevicePtrT<Scalar>           bendTerms;
+  OutOfPlaneTermsDevicePtrT<Scalar>            oopTerms;
+  TorsionContribTermsDevicePtrT<TorsionScalar> torsionTerms;
+  VdwTermsDevicePtrT<Scalar>                   vdwTerms;
+  EleTermsDevicePtrT<Scalar>                   eleTerms;
+  DistanceConstraintTermsDevicePtrT<Scalar>    distanceConstraintTerms;
+  PositionConstraintTermsDevicePtrT<Scalar>    positionConstraintTerms;
+  AngleConstraintTermsDevicePtrT<Scalar>       angleConstraintTerms;
+  TorsionConstraintTermsDevicePtrT<Scalar>     torsionConstraintTerms;
 };
+
+using BondStretchContribTermsDevicePtr = BondStretchContribTermsDevicePtrT<double>;
+using AngleBendTermsDevicePtr          = AngleBendTermsDevicePtrT<double>;
+using BendStretchTermsDevicePtr        = BendStretchTermsDevicePtrT<double>;
+using OutOfPlaneTermsDevicePtr         = OutOfPlaneTermsDevicePtrT<double>;
+using TorsionContribTermsDevicePtr     = TorsionContribTermsDevicePtrT<float>;
+using VdwTermsDevicePtr                = VdwTermsDevicePtrT<double>;
+using EleTermsDevicePtr                = EleTermsDevicePtrT<double>;
+using DistanceConstraintTermsDevicePtr = DistanceConstraintTermsDevicePtrT<double>;
+using PositionConstraintTermsDevicePtr = PositionConstraintTermsDevicePtrT<double>;
+using AngleConstraintTermsDevicePtr    = AngleConstraintTermsDevicePtrT<double>;
+using TorsionConstraintTermsDevicePtr  = TorsionConstraintTermsDevicePtrT<double>;
+using EnergyForceContribsDevicePtr     = EnergyForceContribsDevicePtrT<double, float>;
 
 struct BatchedIndicesDevicePtr {
   int* atomStarts                   = nullptr;

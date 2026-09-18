@@ -115,9 +115,7 @@ std::vector<std::uint32_t> getAtomInvariantsWithRadius(const RDKit::ROMol& mol, 
 //! Get reference atoms for torsion based on neighbor symmetry
 std::vector<const RDKit::Atom*> getIndexForTorsion(const std::vector<const RDKit::Atom*>& neighbors,
                                                    const std::vector<std::uint32_t>&      inv) {
-  if (neighbors.size() == 1) {
-    return neighbors;
-  } else if (doMatch(inv, neighbors)) {
+  if (doMatch(inv, neighbors)) {
     // All symmetric neighbors - return all
     return neighbors;
   } else if (neighbors.size() == 3) {
@@ -607,7 +605,7 @@ static TFDSystemHost buildTFDSystemImpl(const RDKit::ROMol& mol, const TFDComput
   desc.torsStart     = torsStart;
   desc.numTorsions   = numTorsions;
   desc.tfdOutStart   = tfdOutStart;
-  system.molDescriptors.push_back(std::move(desc));
+  system.molDescriptors.push_back(desc);
 
   system.dihedralWorkStarts.push_back(system.dihedralWorkStarts.back() + numDihedrals);
   system.tfdWorkStarts.push_back(system.tfdWorkStarts.back() + numTFDOutputs);
@@ -782,6 +780,8 @@ TFDSystemHost buildTFDSystem(const std::vector<const RDKit::ROMol*>& mols, const
   // ---- Pass 2: fill the system in parallel ----
   // Each thread writes to its own contiguous block of molecules, avoiding false sharing
   // on adjacent cache lines. static schedule with a chunk size ensures spatial locality.
+  // Used by the OpenMP pragma below.
+  // NOLINTNEXTLINE(clang-analyzer-deadcode.DeadStores)
   const int chunkSize = std::max(1, N / (omp_get_max_threads() * 4));
 #pragma omp parallel for schedule(static, chunkSize)
   for (int i = 0; i < N; ++i) {

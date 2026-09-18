@@ -49,6 +49,10 @@ elseif(NVMOLKIT_CUDA_TARGET_MODE STREQUAL "full")
           "CUDA >= 12.9 detected, enabling Blackwell (103-real) and (120 + PTX) for forward compatibility"
       )
     endif()
+    if(_cuda_version_num GREATER_EQUAL 1304)
+      list(INSERT _nvmolkit_cuda_arch_list -1 "107-real")
+      message(STATUS "CUDA >= 13.4 detected, enabling Rubin (107-real) arch")
+    endif()
   endif()
 
   set(CMAKE_CUDA_ARCHITECTURES "${_nvmolkit_cuda_arch_list}")
@@ -130,6 +134,7 @@ if(CMAKE_CUDA_ARCHITECTURES STREQUAL "native")
           90
           100
           103
+          107
           120)
     if(_native_cc STREQUAL "${cc}")
       target_compile_definitions(nvmolkit_cuda_caps
@@ -148,6 +153,7 @@ else()
           90
           100
           103
+          107
           120)
     string(REPLACE ";" " " _cuda_arch_str "${CMAKE_CUDA_ARCHITECTURES}")
     string(REGEX MATCH "(^| )${cc}(-real)?( |$)" _match "${_cuda_arch_str}")

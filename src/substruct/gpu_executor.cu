@@ -78,7 +78,7 @@ size_t ConsolidatedDeviceBuffer::miniBatchPairMatchStartsOffset() const {
 
 size_t ConsolidatedDeviceBuffer::matchCountsOffset() const {
   size_t offset = miniBatchPairMatchStartsOffset();
-  offset += sizeof(int) * static_cast<size_t>(maxBatchSize_ + 1);
+  offset += sizeof(int) * (static_cast<size_t>(maxBatchSize_) + 1);
   return alignOffset(offset);
 }
 

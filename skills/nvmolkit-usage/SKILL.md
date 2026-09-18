@@ -234,7 +234,6 @@ from nvmolkit.embedMolecules import EmbedMolecules
 
 mols = [AddHs(MolFromSmiles(smi)) for smi in ["C1CCCCC1", "C1CCCCC2CCCCC12", "COO"]]
 params = ETKDGv3()
-params.useRandomCoords = True
 
 EmbedMolecules(mols, params, confsPerMolecule=10, maxIterations=-1)
 
@@ -242,7 +241,7 @@ for mol in mols:
     print(mol.GetNumConformers())
 ```
 
-Inputs are `list[Mol]`, sanitized and with hydrogens added (`AddHs`). Conformers are added in-place. `params.useRandomCoords` must be `True` - nvMolKit's ETKDG only supports random-coord initialization. A handful of niche `EmbedParameters` options are not supported (bounds matrices, custom CPCI, coord maps, separate-fragment embedding); the Features section of the docs site lists the full restrictions.
+Inputs are `list[Mol]`, sanitized and with hydrogens added (`AddHs`). Conformers are added in-place. A handful of niche `EmbedParameters` options are not supported (bounds matrices, custom CPCI, coord maps, separate-fragment embedding); the Features section of the docs site lists the full restrictions.
 
 ### MMFF94 minimization of a batch of conformers
 
@@ -253,7 +252,7 @@ from nvmolkit.embedMolecules import EmbedMolecules
 from nvmolkit.mmffOptimization import MMFFOptimizeMoleculesConfs
 
 mols = [AddHs(MolFromSmiles(smi)) for smi in ["CCO", "CCN", "c1ccccc1"]]
-params = ETKDGv3(); params.useRandomCoords = True
+params = ETKDGv3()
 EmbedMolecules(mols, params, confsPerMolecule=5)
 
 energies = MMFFOptimizeMoleculesConfs(mols, maxIters=500)

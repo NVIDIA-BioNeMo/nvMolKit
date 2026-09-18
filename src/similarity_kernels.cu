@@ -32,7 +32,7 @@ namespace {
 //! taking into account compile-time targets.
 bool supportsTensorOps(const int major, const int minor) {
   // BMMA m16n8k256 .b1 {.and,.xor}.popc is supported on sm_80+ per PTX ISA, including Blackwell.
-  // We explicitly support Ampere/Ada (8.x), Hopper (9.0), and Blackwell sm_100 / sm_120.
+  // We explicitly support Ampere/Ada (8.x), Hopper (9.0), Blackwell sm_100/103/120, and Rubin sm_107.
   if (major != 8 && major != 9 && major != 10 && major != 12) {
     return false;
   }
@@ -58,6 +58,9 @@ bool supportsTensorOps(const int major, const int minor) {
     return true;
   }
   if (NVMOLKIT_CUDA_CC_103 && major == 10 && minor == 3) {
+    return true;
+  }
+  if (NVMOLKIT_CUDA_CC_107 && major == 10 && minor == 7) {
     return true;
   }
   if (NVMOLKIT_CUDA_CC_120 && major == 12 && minor == 0) {
