@@ -41,10 +41,10 @@ from nvmolkit._substructure import getSubstructMatches as _getSubstructMatches
 from nvmolkit._substructure import hasSubstructMatch as _hasSubstructMatch
 
 __all__ = [
-    "SubstructSearchConfig",
     "SubstructMatchResults",
-    "getSubstructMatches",
+    "SubstructSearchConfig",
     "countSubstructMatches",
+    "getSubstructMatches",
     "hasSubstructMatch",
 ]
 
