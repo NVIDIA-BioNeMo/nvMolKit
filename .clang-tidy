@@ -46,9 +46,9 @@ Checks:
   - '-cppcoreguidelines-pro-bounds-constant-array-index'
   - '-cppcoreguidelines-pro-bounds-pointer-arithmetic'
   - '-cppcoreguidelines-pro-type-member-init'
-  # Generic ranges are consumed rather than forwarded.
+  # pushBatch accepts lvalue or rvalue containers and moves their elements.
   - '-cppcoreguidelines-missing-std-forward'
-  # RDKit establishes the concrete query type before these downcasts.
+  # Query descriptors are checked before casting to the matching RDKit type.
   - '-cppcoreguidelines-pro-type-static-cast-downcast'
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*/(src|rdkit_extensions)/.*'
