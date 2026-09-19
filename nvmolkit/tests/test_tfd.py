@@ -111,7 +111,7 @@ class TestGetTFDMatrix:
         """Test that invalid maxDev raises error."""
         mol = simple_mol_with_conformers
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             tfd.GetTFDMatrix(mol, maxDev="invalid")
 
 
@@ -449,12 +449,12 @@ class TestEdgeCases:
 
     def test_invalid_molecule_raises(self):
         """Test that None molecule raises error."""
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             tfd.GetTFDMatrix(None)
 
     def test_invalid_molecule_in_batch_raises(self, simple_mol_with_conformers):
         """Test that None in batch raises error."""
         mols = [simple_mol_with_conformers, None]
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError):
             tfd.GetTFDMatrices(mols)

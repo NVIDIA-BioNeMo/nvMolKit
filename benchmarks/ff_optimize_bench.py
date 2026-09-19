@@ -587,7 +587,7 @@ def main() -> None:
         applied_num_gpus = args.num_gpus
 
     csv_rows: list[dict[str, object]] = []
-    for name, (avg_ms, std_ms, energies) in results.items():
+    for name, (avg_ms, std_ms, _energies) in results.items():
         is_nv = name == "nvmolkit"
         is_rdkit = name == "rdkit"
         batch_size = applied_batch_size if is_nv else "N/A"
