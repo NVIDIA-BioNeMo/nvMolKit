@@ -29,6 +29,7 @@ Similarity Calculations
    similarity.crossTanimotoSimilarityMemoryConstrained
    similarity.crossCosineSimilarity
    similarity.crossCosineSimilarityMemoryConstrained
+   similarity.aap_similarity
 
 
 ETKDG Conformer Generation
@@ -72,8 +73,8 @@ UFF Optimization
    batchedForcefield.UFFBatchedForcefield
    batchedForcefield.UFFBatchElement
 
-Butina Clustering
------------------
+Clustering
+----------
 
 .. autosummary::
    :toctree: generated/
@@ -81,6 +82,7 @@ Butina Clustering
 
    clustering.butina
    clustering.fused_butina
+   clustering.aap_dise
 
 .. autosummary::
    :toctree: generated/
@@ -88,6 +90,8 @@ Butina Clustering
 
    clustering.ButinaOutputMode
    clustering.ButinaDeviceResult
+   clustering.DISEOutputMode
+   clustering.DISEDeviceResult
 
 Maximum Common Substructure (MCS)
 ---------------------------------

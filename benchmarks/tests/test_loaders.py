@@ -5,6 +5,7 @@
 
 import os
 
+import pytest
 from bench_utils import loaders, molprep
 from rdkit import Chem
 
@@ -19,6 +20,46 @@ def test_load_smiles_can_return_candidate_buffer(tmp_path, monkeypatch):
 
     assert len(trimmed) == 3
     assert len(buffered) == 4
+
+
+def test_load_csv_preserves_selected_properties(tmp_path, monkeypatch):
+    csv_path = tmp_path / "mols.csv"
+    csv_path.write_text("smiles,score,ignored\nCC,1.5,x\nCCC,2.5,y\n")
+    monkeypatch.setattr(loaders, "_process_map_batches", lambda fn, values, **_kwargs: [fn(value) for value in values])
+
+    molecules = loaders.load_csv(str(csv_path), property_columns=["score"], seed=42)
+
+    assert sorted(molecule.GetProp("score") for molecule in molecules) == ["1.5", "2.5"]
+    assert all(not molecule.HasProp("ignored") for molecule in molecules)
+
+
+def test_load_csv_uses_shared_reservoir_sampling(tmp_path, monkeypatch):
+    csv_path = tmp_path / "mols.csv"
+    csv_path.write_text("smiles,score\n" + "\n".join(f"{'C' * size},{size}" for size in range(1, 11)))
+    monkeypatch.setattr(loaders, "_process_map_batches", lambda fn, values, **_kwargs: [fn(value) for value in values])
+
+    first = loaders.load_csv(str(csv_path), property_columns=["score"], max_count=3, seed=7)
+    second = loaders.load_csv(str(csv_path), property_columns=["score"], max_count=3, seed=7)
+
+    assert len(first) == 3
+    assert sorted(molecule.GetProp("score") for molecule in first) == sorted(
+        molecule.GetProp("score") for molecule in second
+    )
+
+
+@pytest.mark.parametrize(
+    "header, row, missing_column",
+    [
+        ("smiles,score\n", "CC\n", "score"),
+        ("score,smiles\n", "1.5\n", "smiles"),
+    ],
+)
+def test_load_csv_rejects_ragged_required_values(tmp_path, header, row, missing_column):
+    csv_path = tmp_path / "mols.csv"
+    csv_path.write_text(header + row)
+
+    with pytest.raises(ValueError, match=rf"CSV row 2 is missing required values for: {missing_column}"):
+        loaders.load_csv(str(csv_path), property_columns=["score"])
 
 
 def test_process_map_batches_reports_completed_batches_and_preserves_order(monkeypatch):
