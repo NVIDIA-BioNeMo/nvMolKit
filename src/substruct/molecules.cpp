@@ -230,12 +230,13 @@ int getQueryBondEffectiveType(const RDKit::Bond* bond) {
           if (childDesc == "BondOrder") {
             const auto* eqQuery   = static_cast<const RDKit::BOND_EQUALS_QUERY*>((*it).get());
             int         childType = eqQuery->getVal();
-            if (childType == 1)
+            if (childType == 1) {
               hasSingle = true;
-            else if (childType == 2)
+            } else if (childType == 2) {
               hasDouble = true;
-            else if (childType == 7 || childType == 12)
+            } else if (childType == 7 || childType == 12) {
               hasAromatic = true;
+            }
           } else if (childDesc == "BondIsAromatic") {
             hasAromatic = true;
           }
@@ -1159,10 +1160,12 @@ uint8_t processQueryTree(const RDKit::Atom::QUERYATOM_QUERY* query,
       const auto* rangeQuery = static_cast<const RDKit::ATOM_RANGE_QUERY*>(query);
       int         minVal     = rangeQuery->getLower();
       int         maxVal     = rangeQuery->getUpper();
-      if (minVal < 0)
+      if (minVal < 0) {
         minVal = 0;
-      if (maxVal > 255)
+      }
+      if (maxVal > 255) {
         maxVal = 255;
+      }
       result = builder.addCompare(BoolOp::Range, field, static_cast<uint8_t>(minVal), static_cast<uint8_t>(maxVal));
     }
 
@@ -1766,7 +1769,7 @@ int collectRecursivePatterns(const RDKit::Atom::QUERYATOM_QUERY* query,
     }
 
     const auto* recursiveQuery = static_cast<const RDKit::RecursiveStructureQuery*>(query);
-    auto        queryMol       = recursiveQuery->getQueryMol();
+    const auto* queryMol       = recursiveQuery->getQueryMol();
 
     if (queryMol != nullptr) {
       const int thisPatternIdx = static_cast<int>(patterns.size());
@@ -1951,8 +1954,9 @@ RecursivePatternInfo extractRecursivePatterns(const RDKit::ROMol* mol) {
  */
 void mergeBatch(MoleculesHost& dest, const MoleculesHost& src) {
   ScopedNvtxRange range("mergeBatch");
-  if (src.numMolecules() == 0)
+  if (src.numMolecules() == 0) {
     return;
+  }
 
   const int atomOffset     = static_cast<int>(dest.atomDataPacked.size());
   const int instrOffset    = static_cast<int>(dest.queryInstructions.size());

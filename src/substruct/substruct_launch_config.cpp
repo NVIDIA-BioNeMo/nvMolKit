@@ -115,56 +115,72 @@ SubstructTemplateConfig selectTemplateConfig(int maxTargetAtoms, int maxQueryAto
   // Map to config enum
   if (targetTier == 32) {
     if (queryTier == 16) {
-      if (bondConfig == 4)
+      if (bondConfig == 4) {
         return SubstructTemplateConfig::Config_T32_Q16_B4;
-      if (bondConfig == 6)
+      }
+      if (bondConfig == 6) {
         return SubstructTemplateConfig::Config_T32_Q16_B6;
+      }
       return SubstructTemplateConfig::Config_T32_Q16_B8;
     } else {  // queryTier == 32
-      if (bondConfig == 4)
+      if (bondConfig == 4) {
         return SubstructTemplateConfig::Config_T32_Q32_B4;
-      if (bondConfig == 6)
+      }
+      if (bondConfig == 6) {
         return SubstructTemplateConfig::Config_T32_Q32_B6;
+      }
       return SubstructTemplateConfig::Config_T32_Q32_B8;
     }
   } else if (targetTier == 64) {
     if (queryTier == 16) {
-      if (bondConfig == 4)
+      if (bondConfig == 4) {
         return SubstructTemplateConfig::Config_T64_Q16_B4;
-      if (bondConfig == 6)
+      }
+      if (bondConfig == 6) {
         return SubstructTemplateConfig::Config_T64_Q16_B6;
+      }
       return SubstructTemplateConfig::Config_T64_Q16_B8;
     } else if (queryTier == 32) {
-      if (bondConfig == 4)
+      if (bondConfig == 4) {
         return SubstructTemplateConfig::Config_T64_Q32_B4;
-      if (bondConfig == 6)
+      }
+      if (bondConfig == 6) {
         return SubstructTemplateConfig::Config_T64_Q32_B6;
+      }
       return SubstructTemplateConfig::Config_T64_Q32_B8;
     } else {  // queryTier == 64
-      if (bondConfig == 4)
+      if (bondConfig == 4) {
         return SubstructTemplateConfig::Config_T64_Q64_B4;
-      if (bondConfig == 6)
+      }
+      if (bondConfig == 6) {
         return SubstructTemplateConfig::Config_T64_Q64_B6;
+      }
       return SubstructTemplateConfig::Config_T64_Q64_B8;
     }
   } else {  // targetTier == 128
     if (queryTier == 16) {
-      if (bondConfig == 4)
+      if (bondConfig == 4) {
         return SubstructTemplateConfig::Config_T128_Q16_B4;
-      if (bondConfig == 6)
+      }
+      if (bondConfig == 6) {
         return SubstructTemplateConfig::Config_T128_Q16_B6;
+      }
       return SubstructTemplateConfig::Config_T128_Q16_B8;
     } else if (queryTier == 32) {
-      if (bondConfig == 4)
+      if (bondConfig == 4) {
         return SubstructTemplateConfig::Config_T128_Q32_B4;
-      if (bondConfig == 6)
+      }
+      if (bondConfig == 6) {
         return SubstructTemplateConfig::Config_T128_Q32_B6;
+      }
       return SubstructTemplateConfig::Config_T128_Q32_B8;
     } else {  // queryTier == 64
-      if (bondConfig == 4)
+      if (bondConfig == 4) {
         return SubstructTemplateConfig::Config_T128_Q64_B4;
-      if (bondConfig == 6)
+      }
+      if (bondConfig == 6) {
         return SubstructTemplateConfig::Config_T128_Q64_B6;
+      }
       return SubstructTemplateConfig::Config_T128_Q64_B8;
     }
   }

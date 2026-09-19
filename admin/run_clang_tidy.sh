@@ -82,8 +82,9 @@ cmake "${cmake_args[@]}"
   -config-file "${ROOT}/.clang-tidy" \
   -p "${BUILD_DIR}" \
   -j "${JOBS}" \
+  -header-filter "^${ROOT}/src/" \
   "${FIX_ARGS[@]}" \
-  '.*\.cpp$'
+  "^${ROOT}/src/.*\.cpp$"
 
 PYTHON="${PYTHON_BINARY:-$(find_tool python3 python)}"
 if [[ -z "${PYTHON}" ]]; then
@@ -109,7 +110,7 @@ CUDA_TIDY_BUILD_DIR="${BUILD_DIR}/clang_tidy_cuda"
   -p "${CUDA_TIDY_BUILD_DIR}" \
   -j "${JOBS}" \
   -extra-arg=--cuda-host-only \
-  -header-filter "^${ROOT}/(src|rdkit_extensions)/" \
-  -line-filter "[{\"name\":\"^${ROOT}/(src|rdkit_extensions)/\"}]" \
+  -header-filter "^${ROOT}/src/" \
+  -line-filter "[{\"name\":\"^${ROOT}/src/\"}]" \
   "${FIX_ARGS[@]}" \
   '.*\.cu$'

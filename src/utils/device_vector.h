@@ -263,7 +263,7 @@ template <typename T> cuda::std::span<T> toSpan(AsyncDeviceVector<T>& vec) {
   return cuda::std::span<T>(vec.data(), vec.size());
 }
 
-template <typename T> const cuda::std::span<T> toSpan(const AsyncDeviceVector<T>& vec) {
+template <typename T> cuda::std::span<T> toSpan(const AsyncDeviceVector<T>& vec) {
   assert(vec.size() > 0);
   return cuda::std::span<T>(vec.data(), vec.size());
 }
