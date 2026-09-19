@@ -24,8 +24,7 @@ Checks:
   # optimization; smaller underlying types can also add conversion overhead.
   - '-performance-enum-size'
   - cppcoreguidelines-*
-  # CUDA, C, and RDKit interfaces require arrays, macros, raw ownership,
-  # representation casts, varargs, and enums with established conversion rules.
+  # Required for CUDA, C, and RDKit interoperability.
   - '-cppcoreguidelines-avoid-c-arrays'
   - '-cppcoreguidelines-macro-to-enum'
   - '-cppcoreguidelines-macro-usage'
@@ -34,14 +33,12 @@ Checks:
   - '-cppcoreguidelines-pro-type-reinterpret-cast'
   - '-cppcoreguidelines-pro-type-vararg'
   - '-cppcoreguidelines-use-enum-class'
-  # These enforce broad style or class-design policies rather than finding
-  # correctness defects in this project.
+  # Broad style and class-design policies.
   - '-cppcoreguidelines-avoid-const-or-ref-data-members'
   - '-cppcoreguidelines-explicit-virtual-functions'
   - '-cppcoreguidelines-non-private-member-variables-in-classes'
   - '-cppcoreguidelines-special-member-functions'
-  # These are too noisy across existing numerical and performance-critical code
-  # to provide a useful correctness signal without separate focused cleanup.
+  # Too noisy in existing numerical and performance-critical code.
   - '-cppcoreguidelines-avoid-magic-numbers'
   - '-cppcoreguidelines-init-variables'
   - '-cppcoreguidelines-narrowing-conversions'
@@ -49,11 +46,9 @@ Checks:
   - '-cppcoreguidelines-pro-bounds-constant-array-index'
   - '-cppcoreguidelines-pro-bounds-pointer-arithmetic'
   - '-cppcoreguidelines-pro-type-member-init'
-  # Forwarding references are also used to accept generic ranges whose elements
-  # are consumed directly rather than forwarding the range itself.
+  # Generic ranges are consumed rather than forwarded.
   - '-cppcoreguidelines-missing-std-forward'
-  # RDKit query descriptors establish the concrete query type before these
-  # downcasts; dynamic_cast would add redundant RTTI checks.
+  # RDKit establishes the concrete query type before these downcasts.
   - '-cppcoreguidelines-pro-type-static-cast-downcast'
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*/(src|rdkit_extensions)/.*'
