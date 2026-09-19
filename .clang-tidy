@@ -23,6 +23,34 @@ Checks:
   # Enum representation is an ABI and data-layout decision, not a blanket
   # optimization; smaller underlying types can also add conversion overhead.
   - '-performance-enum-size'
+  - cppcoreguidelines-*
+  # Required for CUDA, C, and RDKit interoperability.
+  - '-cppcoreguidelines-avoid-c-arrays'
+  - '-cppcoreguidelines-macro-to-enum'
+  - '-cppcoreguidelines-macro-usage'
+  - '-cppcoreguidelines-owning-memory'
+  - '-cppcoreguidelines-pro-bounds-array-to-pointer-decay'
+  - '-cppcoreguidelines-pro-type-reinterpret-cast'
+  - '-cppcoreguidelines-pro-type-union-access'
+  - '-cppcoreguidelines-pro-type-vararg'
+  - '-cppcoreguidelines-use-enum-class'
+  # Broad style and class-design policies.
+  - '-cppcoreguidelines-avoid-const-or-ref-data-members'
+  - '-cppcoreguidelines-explicit-virtual-functions'
+  - '-cppcoreguidelines-non-private-member-variables-in-classes'
+  - '-cppcoreguidelines-special-member-functions'
+  # Too noisy in existing numerical and performance-critical code.
+  - '-cppcoreguidelines-avoid-magic-numbers'
+  - '-cppcoreguidelines-init-variables'
+  - '-cppcoreguidelines-narrowing-conversions'
+  - '-cppcoreguidelines-pro-bounds-avoid-unchecked-container-access'
+  - '-cppcoreguidelines-pro-bounds-constant-array-index'
+  - '-cppcoreguidelines-pro-bounds-pointer-arithmetic'
+  - '-cppcoreguidelines-pro-type-member-init'
+  # pushBatch accepts lvalue or rvalue containers and moves their elements.
+  - '-cppcoreguidelines-missing-std-forward'
+  # Query descriptors are checked before casting to the matching RDKit type.
+  - '-cppcoreguidelines-pro-type-static-cast-downcast'
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*/(src|rdkit_extensions)/.*'
 FormatStyle: none
