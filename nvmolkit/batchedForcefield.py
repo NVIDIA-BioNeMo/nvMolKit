@@ -87,8 +87,6 @@ from nvmolkit import _batchedForcefield  # type: ignore
 from nvmolkit._mmff_bridge import default_rdkit_mmff_properties, make_internal_mmff_properties
 from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions, HardwareOptions
 
-from nvmolkit import _batchedForcefield  # type: ignore
-
 if TYPE_CHECKING:
     from rdkit.Chem import Mol
     from rdkit.ForceField.rdForceField import MMFFMolProperties as RDKitMMFFMolProperties
@@ -456,8 +454,7 @@ class _BatchedForcefieldBase:
 
 
 class MMFFBatchedForcefield(_BatchedForcefieldBase):
-    """Evaluate MMFF energies and gradients, or run BFGS minimization, for a
-    batch of molecules with all their conformers.
+    """Evaluate MMFF energies and gradients or run BFGS minimization for molecule batches.
 
     Properties and constraints are per-molecule and are shared across all
     conformers of that molecule.  Results are nested as
@@ -515,6 +512,7 @@ class MMFFBatchedForcefield(_BatchedForcefieldBase):
         )
 
     def __getitem__(self, idx: int) -> MMFFBatchElement:
+        """Return the force-field element at ``idx``."""
         return super().__getitem__(idx)
 
     def _normalize_properties(
@@ -632,8 +630,7 @@ class MMFFBatchedForcefield(_BatchedForcefieldBase):
 
 
 class UFFBatchedForcefield(_BatchedForcefieldBase):
-    """Evaluate UFF energies and gradients, or run BFGS minimization, for a
-    batch of molecules with all their conformers.
+    """Evaluate UFF energies and gradients or run BFGS minimization for molecule batches.
 
     Constraints are per-molecule and are shared across all conformers of
     that molecule.  Results are nested as ``list[list[...]]`` — outer
@@ -679,6 +676,7 @@ class UFFBatchedForcefield(_BatchedForcefieldBase):
         self._vdw_thresholds = _normalize_scalar_or_list(vdwThreshold, len(molecules), "vdwThreshold")
 
     def __getitem__(self, idx: int) -> UFFBatchElement:
+        """Return the force-field element at ``idx``."""
         return super().__getitem__(idx)
 
     def _build_native(self):

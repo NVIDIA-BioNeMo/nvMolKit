@@ -143,8 +143,8 @@ jobs:
           set -xeuo pipefail
           bash admin/run_include_check.sh -d
 
-  ruff-format:
-    name: ruff-format
+  ruff:
+    name: ruff
     runs-on: ubuntu-24.04
     timeout-minutes: 30
 
@@ -164,7 +164,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install ruff==0.15.8
 
-      - name: Run ruff format check
+      - name: Run Ruff checks
         shell: bash
         run: |
           set -xeuo pipefail
