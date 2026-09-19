@@ -104,7 +104,7 @@ template <std::size_t NBits> struct FlatBitVectStorage {
 //! In-memory bitvect.
 template <std::size_t NBits> class FlatBitVect {
  public:
-  using StorageType                          = typename detail::FlatBitVectStorage<NBits>::StorageType;
+  using StorageType                          = detail::FlatBitVectStorage<NBits>::StorageType;
   constexpr static std::size_t kNBits        = detail::FlatBitVectStorage<NBits>::kNBits;
   constexpr static std::size_t kStorageBytes = detail::FlatBitVectStorage<NBits>::kStorageBytes;
   constexpr static std::size_t kStorageBits  = detail::FlatBitVectStorage<NBits>::kStorageBits;

@@ -191,8 +191,9 @@ RDKitFallbackQueue::RDKitFallbackQueue(const std::vector<const RDKit::ROMol*>* t
       maxMatches_(maxMatches) {}
 
 void RDKitFallbackQueue::enqueue(const std::vector<RDKitFallbackEntry>& entries) {
-  if (entries.empty())
+  if (entries.empty()) {
     return;
+  }
   queue_.pushBatch(entries);
 }
 
