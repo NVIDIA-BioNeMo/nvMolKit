@@ -145,29 +145,31 @@ include = ["nvmolkit/**/*.py", "benchmarks/**/*.py", "setup.py"]
 
 [tool.ruff.lint]
 ignore = [
-    "C901",    # Checks for functions with a high McCabe complexity. 
+    "C901",    # Checks for functions with a high McCabe complexity.
     "D100",    # Checks for undocumented public module definitions.
     "E501",    # Checks for lines that exceed the specified maximum character length.
     "E741",    # Checks for the use of the characters 'l', 'O', or 'I' as variable names.
     "RUF005",  # Checks for uses of the + operator to concatenate collections.
 ]
 select = [
-    "C",   # Pylint conventions
+    "A",   # Builtin shadowing
+    "C",   # C-prefixed convention checks
     "D",   # Documentation formatting
-    "E",   # style stuff, whitespaces
-    "F",   # important pyflakes lints
-    "I",   # import sorting
-    "RUF", # Some Ruff-specific lints, unused noqas, etc.
-    "W",   # Pylint warnings
+    "DTZ", # Datetime timezone checks
+    "E",   # Style and whitespace checks
+    "F",   # Pyflakes correctness checks
+    "I",   # Import sorting
+    "LOG", # Logging checks
+    "PIE", # Miscellaneous correctness checks
+    "PLE", # Pylint errors
+    "RUF", # Ruff-specific checks
+    "W",   # Pycodestyle warnings
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["D104"]
 "nvmolkit/tests/test_*.py" = ["D103"]
 "benchmarks/*.py" = ["F841", "D103"]
-
-[tool.ruff.lint.isort]
-lines-after-imports = 1
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

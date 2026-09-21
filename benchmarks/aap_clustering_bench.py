@@ -1,9 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Benchmark Atom-Atom Path (AAP) similarity and directed sphere exclusion
-(DISE) clustering implementations.
-"""
+"""Benchmark Atom-Atom Path similarity and directed sphere exclusion clustering."""
 
 import argparse
 import importlib
@@ -113,8 +111,7 @@ def _remap_clusters_by_size(labels, num_clusters):
 
 
 def _ligand_clustering_cpu_cluster(molecules, threshold, max_path_length, reference):
-    """Run exact CPU Atom-Atom Path (AAP) primitives with directed sphere
-    exclusion (DISE).
+    """Run exact CPU AAP primitives with directed sphere exclusion.
 
     The timed region starts with pre-parsed RDKit molecules and includes the
     descriptor and exact Hungarian AAP computations.
@@ -177,8 +174,7 @@ def _priority_order(molecules, sort_tag, descending=False):
 def _rdkit_aap_dise_cluster(
     molecules, threshold, max_path_length, sort_tag, sort_descending, reference, phase_timings=None
 ):
-    """Run the complete RDKit Atom-Atom Path (AAP) and directed sphere
-    exclusion (DISE) workflow.
+    """Run the complete RDKit AAP and directed sphere exclusion workflow.
 
     The timed region includes priority cleanup, sorting, centroid selection
     with ``LeaderPicker``, and nearest-centroid assignment.

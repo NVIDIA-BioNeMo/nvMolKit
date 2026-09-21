@@ -37,7 +37,6 @@ import argparse
 import multiprocessing
 import os
 import pickle
-import sys
 import time
 from functools import partial
 

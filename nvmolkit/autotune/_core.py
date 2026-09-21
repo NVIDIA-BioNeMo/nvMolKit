@@ -53,7 +53,7 @@ def _require_optuna():
     """Import optuna or raise an :class:`ImportError` with install instructions."""
     if not is_optuna_available():
         raise ImportError(OPTUNA_INSTALL_HINT)
-    import optuna  # noqa: PLC0415
+    import optuna
 
     return optuna
 
@@ -348,7 +348,7 @@ def collect_int_from_space(spec: Any) -> int:
         high_int = int(high)
         if low_int <= 0 or high_int <= 0:
             raise ValueError(f"Log-uniform range {spec!r} requires strictly positive bounds.")
-        midpoint = int(round(math.sqrt(low_int * high_int)))
+        midpoint = round(math.sqrt(low_int * high_int))
         return max(low_int, min(high_int, midpoint))
     if isinstance(spec, tuple) and len(spec) == 3 and all(isinstance(v, int) for v in spec):
         low, high, step = (int(v) for v in spec)

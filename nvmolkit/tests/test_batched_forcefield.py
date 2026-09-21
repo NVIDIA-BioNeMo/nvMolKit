@@ -165,9 +165,10 @@ def assert_energy_and_gradient_close(got_energy, want_energy, got_grad, want_gra
 
 
 def _assert_batched_compute_matches_rdkit_mmff(mol_specs):
-    """Build a single MMFFBatchedForcefield from ``mol_specs`` and verify that
-    per-mol ``compute_energy``/``compute_gradients`` match RDKit's single-mol FF
-    for each mol, with its configured properties and (optionally) constraint.
+    """Verify batched MMFF energies and gradients against RDKit.
+
+    Build a single MMFFBatchedForcefield from ``mol_specs`` and compare each
+    molecule using its configured properties and optional constraint.
 
     When any mol has a constraint configured, additionally verify that the
     constraint has an observable effect on that mol's energy AND gradient — as
@@ -266,8 +267,11 @@ def _assert_batched_compute_matches_rdkit_mmff(mol_specs):
 
 
 def test_mmff_batched_forcefield_properties_match_rdkit():
-    """Batch of mols with varied per-mol property configurations (default, MMFF variant,
-    dielectric model, term toggles, fragmented+interfrag)."""
+    """Test varied per-molecule property configurations.
+
+    Cover defaults, MMFF variants, dielectric models, term toggles, and
+    fragmented molecules with interfragment interactions.
+    """
     _assert_batched_compute_matches_rdkit_mmff(
         [
             {"factory": load_reference_mol},
@@ -296,9 +300,11 @@ def test_mmff_batched_forcefield_properties_match_rdkit():
 
 
 def test_mmff_batched_forcefield_reads_externally_configured_properties():
-    """Configure RDKit MMFF properties via raw ``rdForceFieldHelpers.MMFFGetMoleculeProperties``
-    plus direct ``SetMMFF*Term``/``SetMMFFDielectricConstant`` calls — no nvmolkit helpers
-    in the path — then hand the object to ``MMFFBatchedForcefield``.
+    """Test externally configured RDKit MMFF properties.
+
+    Configure properties via raw ``rdForceFieldHelpers.MMFFGetMoleculeProperties``
+    plus direct ``SetMMFF*Term``/``SetMMFFDielectricConstant`` calls, with no
+    nvmolkit helpers in the path, then pass the object to ``MMFFBatchedForcefield``.
 
     Needed because of our workaround for RDKit bug https://github.com/rdkit/rdkit/issues/9253
     """
@@ -327,8 +333,11 @@ def test_mmff_batched_forcefield_reads_externally_configured_properties():
 
 
 def test_mmff_batched_forcefield_constraints_match_rdkit():
-    """Batch of mols with all 5 MMFF constraint types applied (one per mol), some also
-    carrying non-default property settings to exercise the properties+constraints path."""
+    """Test all five MMFF constraint types against RDKit.
+
+    Apply one constraint type per molecule, with some molecules also carrying
+    non-default property settings to exercise the properties-plus-constraints path.
+    """
     _assert_batched_compute_matches_rdkit_mmff(
         [
             {
@@ -515,8 +524,11 @@ def _build_constrained_mmff_batch(specs=_MMFF_BATCH_CONSTRAINT_SPECS, hardwareOp
 
 
 def _assert_batched_minimize_matches_rdkit(specs, mols, opt_energies, converged, make_ref_ff):
-    """Compare nvMolKit minimize() result to RDKit minimize per (mol, conformer), with each
-    mol carrying a different constraint from `specs`."""
+    """Compare nvMolKit and RDKit minimization results.
+
+    Compare each molecule and conformer while each molecule carries a different
+    constraint from ``specs``.
+    """
     for mol_idx, (mol, spec) in enumerate(zip(mols, specs)):
         assert len(opt_energies[mol_idx]) == mol.GetNumConformers()
         assert all(converged[mol_idx]), f"Mol {mol_idx} failed to converge"
@@ -531,9 +543,11 @@ def _assert_batched_minimize_matches_rdkit(specs, mols, opt_energies, converged,
 
 
 def test_mmff_batched_minimize_with_constraints_batch_matches_rdkit():
-    """Batch minimize with different constraint types on different-size mols
-    and different conformer counts, comparing each (mol, conformer) energy
-    to RDKit's minimize with the same constraint."""
+    """Test constrained batch minimization against RDKit.
+
+    Use different constraint types, molecule sizes, and conformer counts, then
+    compare each molecule and conformer energy to RDKit with the same constraint.
+    """
     mols, _, ff = _build_constrained_mmff_batch()
     opt_energies, converged = ff.minimize(maxIters=500)
 
@@ -544,9 +558,11 @@ def test_mmff_batched_minimize_with_constraints_batch_matches_rdkit():
 
 
 def test_mmff_batched_minimize_respects_maxiters_and_forcetol():
-    """maxIters and forceTol must be plumbed through: a single-iteration minimize
-    should not converge and should leave energies closer to the starting point
-    than a generous-iteration minimize."""
+    """Test that maxIters and forceTol are passed through.
+
+    A single-iteration minimization should not converge and should leave energies
+    closer to the starting point than a generous-iteration minimization.
+    """
     perturbed_mols = [
         perturb_conformers(make_embedded_mol("CCCO", num_confs=2)),
         perturb_conformers(make_embedded_mol("c1ccccc1CCO", num_confs=2)),
