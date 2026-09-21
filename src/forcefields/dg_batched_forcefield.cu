@@ -39,7 +39,6 @@ DGBatchedForcefield::DGBatchedForcefield(const DistGeom::BatchedMolecularSystemH
       chiralWeight_(chiralWeight),
       fourthDimWeight_(fourthDimWeight) {
   atomStartsDevice_.setStream(stream);
-  singleConversion_.setStream(stream);
   if (usesSinglePrecision(precision)) {
     auto& buffers = systemDevice_.emplace<DistGeom::BatchedMolecularDeviceBuffersSingle>();
     DistGeom::setStreams(buffers, stream);
@@ -60,6 +59,8 @@ cudaError_t DGBatchedForcefield::computeEnergy(double*        energyOuts,
                                                const uint8_t* activeSystemMask,
                                                cudaStream_t   stream) {
   if (std::holds_alternative<DistGeom::BatchedMolecularDeviceBuffersSingle>(systemDevice_)) {
+    singleConversion_.positions.setStream(stream);
+    singleConversion_.energies.setStream(stream);
     singleConversion_.positions.resize(totalPositions());
     singleConversion_.energies.resize(numMolecules());
     auto err = detail::convertDeviceArray(singleConversion_.positions.data(), positions, totalPositions(), stream);
@@ -88,6 +89,8 @@ cudaError_t DGBatchedForcefield::computeGradients(double*        grad,
                                                   const uint8_t* activeSystemMask,
                                                   cudaStream_t   stream) {
   if (std::holds_alternative<DistGeom::BatchedMolecularDeviceBuffersSingle>(systemDevice_)) {
+    singleConversion_.positions.setStream(stream);
+    singleConversion_.gradients.setStream(stream);
     singleConversion_.positions.resize(totalPositions());
     singleConversion_.gradients.resize(totalPositions());
     auto err = detail::convertDeviceArray(singleConversion_.positions.data(), positions, totalPositions(), stream);

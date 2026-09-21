@@ -38,7 +38,6 @@ ETKBatchedForcefield::ETKBatchedForcefield(const DistGeom::BatchedMolecularSyste
     : BatchedForcefield(ForceFieldType::ETK, 4, atomStartsHost, nullptr, std::move(metadata)),
       term_(useBasicKnowledge ? DistGeom::ETKTerm::ALL : DistGeom::ETKTerm::PLAIN) {
   atomStartsDevice_.setStream(stream);
-  singleConversion_.setStream(stream);
   if (usesSinglePrecision(precision)) {
     auto& buffers = systemDevice_.emplace<DistGeom::BatchedMolecular3DDeviceBuffersSingle>();
     DistGeom::setStreams(buffers, stream);
@@ -58,6 +57,8 @@ cudaError_t ETKBatchedForcefield::computeEnergy(double*        energyOuts,
                                                 const uint8_t* activeSystemMask,
                                                 cudaStream_t   stream) {
   if (std::holds_alternative<DistGeom::BatchedMolecular3DDeviceBuffersSingle>(systemDevice_)) {
+    singleConversion_.positions.setStream(stream);
+    singleConversion_.energies.setStream(stream);
     singleConversion_.positions.resize(totalPositions());
     singleConversion_.energies.resize(numMolecules());
     auto err = detail::convertDeviceArray(singleConversion_.positions.data(), positions, totalPositions(), stream);
@@ -85,6 +86,8 @@ cudaError_t ETKBatchedForcefield::computeGradients(double*        grad,
                                                    const uint8_t* activeSystemMask,
                                                    cudaStream_t   stream) {
   if (std::holds_alternative<DistGeom::BatchedMolecular3DDeviceBuffersSingle>(systemDevice_)) {
+    singleConversion_.positions.setStream(stream);
+    singleConversion_.gradients.setStream(stream);
     singleConversion_.positions.resize(totalPositions());
     singleConversion_.gradients.resize(totalPositions());
     auto err = detail::convertDeviceArray(singleConversion_.positions.data(), positions, totalPositions(), stream);
@@ -114,6 +117,8 @@ cudaError_t ETKBatchedForcefield::computePlanarEnergy(double*        energyOuts,
                                                       const uint8_t* activeSystemMask,
                                                       cudaStream_t   stream) {
   if (std::holds_alternative<DistGeom::BatchedMolecular3DDeviceBuffersSingle>(systemDevice_)) {
+    singleConversion_.positions.setStream(stream);
+    singleConversion_.energies.setStream(stream);
     singleConversion_.positions.resize(totalPositions());
     singleConversion_.energies.resize(numMolecules());
     const auto err =
