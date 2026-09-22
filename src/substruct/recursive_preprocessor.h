@@ -298,7 +298,6 @@ class RecursivePatternPreprocessor {
  * depth level for pipeline synchronization.
  *
  * @param targetsDevice Device-resident target molecules
- * @param queriesHost Host-side query data (contains recursivePatterns per query)
  * @param leafSubpatterns Pre-built leaf subpattern molecules (device-resident)
  * @param miniBatchResults The mini-batch results buffer where recursiveMatchBits will be written
  * @param numQueries Total number of queries (for computing pair indices)
@@ -313,7 +312,6 @@ class RecursivePatternPreprocessor {
  */
 void preprocessRecursiveSmarts(SubstructTemplateConfig           templateConfig,
                                const MoleculesDevice&            targetsDevice,
-                               const MoleculesHost&              queriesHost,
                                const LeafSubpatterns&            leafSubpatterns,
                                MiniBatchResultsDevice&           miniBatchResults,
                                int                               numQueries,

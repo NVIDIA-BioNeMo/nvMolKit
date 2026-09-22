@@ -344,7 +344,6 @@ std::vector<std::vector<uint8_t>> computeGpuLabelMatrix(const RDKit::ROMol& targ
     std::vector<BatchedPatternEntry> scratchPatternEntries;
     preprocessRecursiveSmarts(SubstructTemplateConfig::Config_T128_Q64_B8,
                               targetDevice,
-                              queryHost,
                               leafSubpatterns,
                               miniBatchResults,
                               1,

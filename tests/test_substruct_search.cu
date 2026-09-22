@@ -1499,6 +1499,36 @@ TEST_P(RecursiveSubstructureSearchTest, NestedRecursiveBatchProcessing) {
   }
 }
 
+TEST_P(RecursiveSubstructureSearchTest, RepeatedRecursivePatternsMatchRDKit) {
+  std::vector<std::unique_ptr<RDKit::ROMol>> targetMols;
+  std::vector<std::unique_ptr<RDKit::ROMol>> queryMols;
+
+  const std::vector<std::string> targets = {"NCCCN", "OCCCO", "NCCCO", "NCCCC", "CCCCC", "NCCCNCCCN"};
+  parseMolecules(targets, {"[$(*-N)]C[$(*-N)]"}, targetMols, queryMols);
+
+  SubstructSearchResults results;
+  getSubstructMatches(getRawPtrs(targetMols), getRawPtrs(queryMols), results, algorithm(), stream_.stream());
+
+  for (size_t t = 0; t < targets.size(); ++t) {
+    expectMatchesRDKit(results, *targetMols[t], *queryMols[0], static_cast<int>(t), 0, targets[t]);
+  }
+}
+
+TEST_P(RecursiveSubstructureSearchTest, RepeatedNestedRecursivePatternsMatchRDKit) {
+  std::vector<std::unique_ptr<RDKit::ROMol>> targetMols;
+  std::vector<std::unique_ptr<RDKit::ROMol>> queryMols;
+
+  const std::vector<std::string> targets = {"NCCCN", "OCCCO", "NCCCO", "NCCCC", "CCCCC", "NCCCNCCCN"};
+  parseMolecules(targets, {"[$([C;$(*-N)])]C[$([C;$(*-N)])]"}, targetMols, queryMols);
+
+  SubstructSearchResults results;
+  getSubstructMatches(getRawPtrs(targetMols), getRawPtrs(queryMols), results, algorithm(), stream_.stream());
+
+  for (size_t t = 0; t < targets.size(); ++t) {
+    expectMatchesRDKit(results, *targetMols[t], *queryMols[0], static_cast<int>(t), 0, targets[t]);
+  }
+}
+
 TEST_P(RecursiveSubstructureSearchTest, AmideRecursiveQueryMatchesSmallTargets) {
   std::vector<std::unique_ptr<RDKit::ROMol>> targetMols;
   std::vector<std::unique_ptr<RDKit::ROMol>> queryMols;
