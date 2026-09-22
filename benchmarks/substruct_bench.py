@@ -99,7 +99,7 @@ _worker_params = None
 
 def _rdkit_worker_init(query_binaries: list[bytes], max_matches: int):
     """Initialize worker process with shared query data."""
-    global _worker_queries, _worker_params
+    global _worker_queries, _worker_params  # noqa: PLW0603 - process-local worker cache
     _worker_queries = [Chem.Mol(qb) for qb in query_binaries]
     _worker_params = Chem.SubstructMatchParameters()
     _worker_params.uniquify = False

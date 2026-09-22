@@ -411,8 +411,8 @@ def test_mmff_batched_forcefield_multi_conformer_matches_rdkit():
 @pytest.mark.parametrize(
     "ff_factory",
     [
-        pytest.param(lambda mols: MMFFBatchedForcefield(mols), id="mmff"),
-        pytest.param(lambda mols: UFFBatchedForcefield(mols), id="uff"),
+        pytest.param(MMFFBatchedForcefield, id="mmff"),
+        pytest.param(UFFBatchedForcefield, id="uff"),
     ],
 )
 def test_batched_forcefield_metadata_and_element_view(ff_factory):
@@ -429,8 +429,8 @@ def test_batched_forcefield_metadata_and_element_view(ff_factory):
 @pytest.mark.parametrize(
     "ff_factory",
     [
-        pytest.param(lambda mols: MMFFBatchedForcefield(mols), id="mmff"),
-        pytest.param(lambda mols: UFFBatchedForcefield(mols), id="uff"),
+        pytest.param(MMFFBatchedForcefield, id="mmff"),
+        pytest.param(UFFBatchedForcefield, id="uff"),
     ],
 )
 def test_batched_forcefield_lazy_build_and_rebuild(ff_factory):
@@ -459,8 +459,8 @@ def test_batched_forcefield_lazy_build_and_rebuild(ff_factory):
 @pytest.mark.parametrize(
     "ff_factory",
     [
-        pytest.param(lambda mols: MMFFBatchedForcefield(mols), id="mmff"),
-        pytest.param(lambda mols: UFFBatchedForcefield(mols), id="uff"),
+        pytest.param(MMFFBatchedForcefield, id="mmff"),
+        pytest.param(UFFBatchedForcefield, id="uff"),
     ],
 )
 @pytest.mark.parametrize(

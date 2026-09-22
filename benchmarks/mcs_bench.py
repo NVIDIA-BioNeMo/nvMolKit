@@ -179,7 +179,7 @@ def _rdkit_params(config_row: dict) -> rdFMCS.MCSParameters:
 
 
 def _rdkit_worker_init(mol_binaries: list[bytes], params: rdFMCS.MCSParameters) -> None:
-    global _worker_mols, _worker_params
+    global _worker_mols, _worker_params  # noqa: PLW0603 - process-local worker cache
     _worker_mols = [Chem.Mol(binary) for binary in mol_binaries]
     _worker_params = params
 
