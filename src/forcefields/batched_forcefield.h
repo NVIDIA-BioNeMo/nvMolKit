@@ -148,6 +148,21 @@ class BatchedForcefield {
   ForceFieldType            type_;
 };
 
+//! Interface for force fields that evaluate coordinates, energies, and gradients in single precision.
+class SinglePrecisionBatchedForcefield {
+ public:
+  virtual ~SinglePrecisionBatchedForcefield() = default;
+
+  virtual cudaError_t computeEnergy(float*         energyOuts,
+                                    const float*   positions,
+                                    const uint8_t* activeSystemMask = nullptr,
+                                    cudaStream_t   stream           = nullptr)    = 0;
+  virtual cudaError_t computeGradients(float*         grad,
+                                       const float*   positions,
+                                       const uint8_t* activeSystemMask = nullptr,
+                                       cudaStream_t   stream           = nullptr) = 0;
+};
+
 }  // namespace nvMolKit
 
 #endif  // NVMOLKIT_BATCHED_FORCEFIELD_H
