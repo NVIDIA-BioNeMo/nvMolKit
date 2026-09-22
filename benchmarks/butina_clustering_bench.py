@@ -273,7 +273,7 @@ if __name__ == "__main__":
                 if "fused" in runs:
                     print(f"Running fused_butina size {size} cutoff {cutoff}")
                     fused_result = time_it(
-                        lambda: fused_butina(
+                        lambda fps_mat=fps_mat, cutoff=cutoff: fused_butina(
                             fps_mat,
                             cutoff=cutoff,
                             metric="tanimoto",
@@ -297,7 +297,9 @@ if __name__ == "__main__":
                                 f"reordering {nvmol_reordering}"
                             )
                             nvmolkit_cluster_only_result = time_it(
-                                lambda: bench_nvmol_inner(dist_mat, cutoff, max_nl, nvmol_reordering),
+                                lambda dist_mat=dist_mat, cutoff=cutoff, max_nl=max_nl, nvmol_reordering=nvmol_reordering: (
+                                    bench_nvmol_inner(dist_mat, cutoff, max_nl, nvmol_reordering)
+                                ),
                                 gpu_sync=True,
                                 runs=n_runs,
                             )
@@ -308,7 +310,9 @@ if __name__ == "__main__":
                             if nvmol_reordering:
                                 print(f"Running nvmolkit_with_tanimoto size {size} cutoff {cutoff} max_nl {max_nl}")
                                 nvmolkit_with_tanimoto_result = time_it(
-                                    lambda: bench_nvmol_with_tanimoto(fps_mat, cutoff, max_nl),
+                                    lambda fps_mat=fps_mat, cutoff=cutoff, max_nl=max_nl: bench_nvmol_with_tanimoto(
+                                        fps_mat, cutoff, max_nl
+                                    ),
                                     gpu_sync=True,
                                     runs=n_runs,
                                 )

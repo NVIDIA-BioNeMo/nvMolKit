@@ -74,7 +74,7 @@ def _mmff_energies(mol: Chem.Mol) -> list[float | None]:
         try:
             ff = AllChem.MMFFGetMoleculeForceField(mol, props, confId=conf.GetId())
             energies.append(float(ff.CalcEnergy()) if ff is not None else None)
-        except Exception:
+        except Exception:  # noqa: PERF203 - isolate failures to the individual conformer
             energies.append(None)
     return energies
 
@@ -546,7 +546,7 @@ def main() -> None:
         rdkit_throughput_per_s = throughput_per_s(
             rdkit_processed_count * args.confs_per_mol, results["rdkit"][0].mean_ms
         )
-    for name, (timing, run_mols) in results.items():
+    for name, (timing, _run_mols) in results.items():
         speedup = ""
         if rdkit_throughput_per_s is not None and name != "rdkit" and timing.mean_ms > 0:
             method_throughput = throughput_per_s(len(mols) * args.confs_per_mol, timing.mean_ms)

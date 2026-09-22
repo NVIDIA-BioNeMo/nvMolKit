@@ -214,13 +214,10 @@ def _all_pairs(num_mols: int, upper_triangle: bool, include_diagonal: bool) -> t
     if upper_triangle:
         for i in range(num_mols):
             begin = i if include_diagonal else i + 1
-            for j in range(begin, num_mols):
-                pairs.append((i, j))
+            pairs.extend((i, j) for j in range(begin, num_mols))
     else:
         for i in range(num_mols):
-            for j in range(num_mols):
-                if include_diagonal or i != j:
-                    pairs.append((i, j))
+            pairs.extend((i, j) for j in range(num_mols) if include_diagonal or i != j)
     return tuple(pairs)
 
 

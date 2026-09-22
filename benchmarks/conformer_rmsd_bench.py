@@ -232,7 +232,7 @@ def run(
         gpu_pairs_per_s: float | None = None
         if not no_nvmolkit:
             print("  nvMolKit GPU (batched):")
-            result = time_it(lambda: bench_gpu_batch(mols), runs=5, warmups=2, gpu_sync=True)
+            result = time_it(lambda mols=mols: bench_gpu_batch(mols), runs=5, warmups=2, gpu_sync=True)
             gpu_time_s = result.median_s
             gpu_std_s = result.std_ms / 1000.0
             gpu_pairs_per_s = total_pairs / gpu_time_s
