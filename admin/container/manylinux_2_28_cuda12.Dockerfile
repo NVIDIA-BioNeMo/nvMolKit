@@ -16,7 +16,7 @@
 # Then bump MANYLINUX_CUDA_IMAGE in .github/workflows/pip-build.yml.
 #
 # Image contents:
-#   - PyPA manylinux_2_28 x86_64 base, RHEL 8 with /opt/python/cp310..cp314
+#   - PyPA manylinux_2_28 x86_64 base, RHEL 8 with /opt/python/cp311..cp314
 #   - CUDA Toolkit 12.9 (gcc-14 compatible; required because the manylinux
 #     image ships gcc-toolset-14 which kuelumbus/rdkit-pypi uses)
 #   - patchelf + zip/unzip (auditwheel + ad-hoc post-processing)
@@ -38,7 +38,7 @@ FROM quay.io/pypa/manylinux_2_28_x86_64
 # uses to build its PyPI wheel. Earlier 12.x patches reject gcc 14 with
 # "unsupported GNU version" via crt/host_config.h.
 ARG CUDA_VERSION=12-9
-ARG SUPPORTED_PYTHON_TAGS="cp310-cp310 cp311-cp311 cp312-cp312 cp313-cp313 cp314-cp314"
+ARG SUPPORTED_PYTHON_TAGS="cp311-cp311 cp312-cp312 cp313-cp313 cp314-cp314"
 
 RUN dnf -y install dnf-plugins-core \
     && dnf config-manager --add-repo https://developer.download.nvidia.com/compute/cuda/repos/rhel8/x86_64/cuda-rhel8.repo \

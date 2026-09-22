@@ -114,20 +114,20 @@ sudo apt-get install clang-15 clang-format-15 clang-tidy-15
 
 ##### CUDA Installation
 
-Install NVIDIA CUDA Toolkit (version 12.5 or later) following [NVIDIA's official installation guide](https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=22.04&target_type=deb_network).
+Install NVIDIA CUDA Toolkit (version 12.6 or later) following [NVIDIA's official installation guide](https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=22.04&target_type=deb_network).
 
 ##### CMake
 
-nvMolKit requires CMake >= 3.26. Update if needed, for example on Ubuntu:
+nvMolKit requires CMake >= 3.30. Update if needed, for example on Ubuntu:
 
 ```bash
 # Remove old CMake
 sudo apt remove --purge --auto-remove cmake
 
-# Install CMake 3.30.1
-wget https://github.com/Kitware/CMake/releases/download/v3.30.1/cmake-3.30.1-linux-x86_64.sh
-chmod +x cmake-3.30.1-linux-x86_64.sh
-sudo ./cmake-3.30.1-linux-x86_64.sh --prefix=/usr/local --skip-license
+# Install CMake 3.30.9
+wget https://github.com/Kitware/CMake/releases/download/v3.30.9/cmake-3.30.9-linux-x86_64.sh
+chmod +x cmake-3.30.9-linux-x86_64.sh
+sudo ./cmake-3.30.9-linux-x86_64.sh --prefix=/usr/local --skip-license
 
 # Verify installation
 cmake --version
@@ -178,10 +178,11 @@ pip install pytest
 (cd nvmolkit/tests && pytest -v .)
 ```
 
-#### Docker containers
+#### Docker container
 
-Materials for building docker containers are in [`admin/container`](admin/container). [HPCCM](https://github.com/NVIDIA/hpc-container-maker)
-builds docker files from yaml configs. See the [README](admin/container/hpccm_build.py) for config definitions.
+The maintained container definition is
+[`admin/container/manylinux_2_28_cuda12.Dockerfile`](admin/container/manylinux_2_28_cuda12.Dockerfile).
+It provides the CUDA 12.9 and GCC 14 environment used by the GitHub Actions pip-wheel workflow.
 
 
 ## Developer Guide

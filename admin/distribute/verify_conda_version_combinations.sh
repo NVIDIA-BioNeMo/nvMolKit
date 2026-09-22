@@ -49,7 +49,7 @@ mkdir -p "$LOG_DIR"
 SUMMARY_LOG="$LOG_DIR/summary.log"
 printf 'Verification Summary - %s\n' "$(date)" >"$SUMMARY_LOG"
 
-PYTHON_VERSIONS=("3.10" "3.11" "3.12" "3.13")
+PYTHON_VERSIONS=("3.11" "3.12" "3.13" "3.14")
 RDKIT_VERSIONS=("2025.09.1" "2025.09.2" "2025.09.3" "2025.09.4" "2025.09.5" "2025.09.6" "2026.03.1" "2026.03.2" "2026.03.3" "2026.03.4" "2026.03.5")
 
 for PYTHON_VERSION in "${PYTHON_VERSIONS[@]}"; do
