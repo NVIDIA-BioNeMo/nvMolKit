@@ -333,9 +333,8 @@ void RecursivePatternPreprocessor::preprocessMiniBatch(
   cudaCheckError(cudaGetLastError());
 }
 
-void preprocessRecursiveSmarts(SubstructTemplateConfig templateConfig,
-                               const MoleculesDevice&  targetsDevice,
-                               const MoleculesHost& /*queriesHost*/,
+void preprocessRecursiveSmarts(SubstructTemplateConfig           templateConfig,
+                               const MoleculesDevice&            targetsDevice,
                                const LeafSubpatterns&            leafSubpatterns,
                                MiniBatchResultsDevice&           miniBatchResults,
                                const int                         numQueries,
