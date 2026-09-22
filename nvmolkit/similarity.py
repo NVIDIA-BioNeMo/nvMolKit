@@ -13,18 +13,69 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""GPU-accelerated similarity calculations between fingerprints.
+"""GPU-accelerated molecular and fingerprint similarity calculations.
 
 This module provides GPU-accelerated implementations of common RDKit operations
-found in the DataStructs module, including similarity calculations between fingerprints.
+found in the DataStructs module, along with molecular similarity methods.
 """
 
 import numpy as np
 import torch
 
-from nvmolkit import _DataStructs
+from nvmolkit import _clustering, _DataStructs
 from nvmolkit._fingerprint_inputs import _prepare_packed_fingerprints
-from nvmolkit.types import ArrayInput, AsyncGpuResult
+from nvmolkit.types import ArrayInput, AsyncGpuResult, _resolve_cuda_stream
+
+
+def aap_similarity(
+    left,
+    right,
+    *,
+    max_path_length: int = 7,
+    histogram_bins: int = 2048,
+    sinkhorn_iterations: int = 8,
+    sinkhorn_temperature: float = 0.104,
+    stream: torch.cuda.Stream | None = None,
+) -> float:
+    """Compute directed approximate Atom-Atom Path (AAP) molecular similarity.
+
+    Rooted paths are hashed into per-atom histograms and compatible atoms are
+    assigned with fixed-iteration Sinkhorn normalization on the GPU. The score
+    is directed: swapping ``left`` and ``right`` can change the result.
+
+    Molecules may currently contain at most 64 RDKit atoms, including explicit
+    hydrogens, and must not be empty. Supported bond types are single, double,
+    triple, and aromatic. Rooted-path descriptors are constructed on the CPU.
+    This function synchronizes ``stream`` before returning the Python scalar.
+
+    Args:
+        left: Centroid-side RDKit molecule.
+        right: Candidate-side RDKit molecule.
+        max_path_length: Maximum rooted path length in bonds.
+        histogram_bins: Number of hashed path bins, at most 32767.
+        sinkhorn_iterations: Number of Sinkhorn normalization iterations.
+        sinkhorn_temperature: Sinkhorn temperature, at least the smallest
+            positive normal single-precision value.
+        stream: CUDA stream to use. If None, uses the current stream.
+
+    Returns:
+        Similarity in the interval ``[0, 1]``.
+
+    Note:
+        For method details, see `Gobbi et al. (2015)
+        <https://doi.org/10.1186/s13321-015-0056-8>`_.
+    """
+    active_stream = _resolve_cuda_stream(stream)
+    return _clustering.aap_similarity(
+        left,
+        right,
+        max_path_length,
+        histogram_bins,
+        sinkhorn_iterations,
+        sinkhorn_temperature,
+        active_stream.cuda_stream,
+    )
+
 
 # --------------------------------
 # Tanimoto similarity

@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <GraphMol/ROMol.h>
+
 #include <boost/python.hpp>
 #include <boost/python/manage_new_object.hpp>
 #include <cstddef>
@@ -21,6 +23,8 @@
 #include <string>
 
 #include "nvmolkit/array_helpers.h"
+#include "nvmolkit/boost_python_utils.h"
+#include "src/aap.h"
 #include "src/butina.h"
 #include "src/utils/device.h"
 
@@ -41,9 +45,118 @@ boost::python::object wrapButinaResult(nvMolKit::ButinaResult& result, const int
   return boost::python::make_tuple(toOwnedPyArray(clusterArray), toOwnedPyArray(centroidArray));
 }
 
+boost::python::tuple wrapAapClusteringResult(const nvMolKit::AapClusteringResult& result,
+                                             const bool                           deviceOutput,
+                                             cudaStream_t                         stream) {
+  if (!deviceOutput) {
+    return boost::python::make_tuple(nvMolKit::vectorToList(result.clusterIds),
+                                     nvMolKit::vectorToList(result.centroids),
+                                     nvMolKit::vectorToList(result.clusterSizes));
+  }
+
+  nvMolKit::AsyncDeviceVector<int>          clusterIds(result.clusterIds.size(), stream);
+  nvMolKit::AsyncDeviceVector<int>          centroids(result.centroids.size(), stream);
+  nvMolKit::AsyncDeviceVector<std::int64_t> clusterSizes(result.clusterSizes.size(), stream);
+  clusterIds.copyFromHost(result.clusterIds);
+  centroids.copyFromHost(result.centroids);
+  clusterSizes.copyFromHost(result.clusterSizes);
+  // The source vectors are pageable and go out of scope when this binding
+  // returns, so complete these small staging copies before releasing them.
+  nvMolKit::checkReturnCode<true>(cudaStreamSynchronize(stream), __FILE__, __LINE__);
+
+  return boost::python::make_tuple(
+    toOwnedPyArray(nvMolKit::makePyArray(clusterIds)),
+    toOwnedPyArray(nvMolKit::makePyArray(centroids)),
+    toOwnedPyArray(nvMolKit::makePyArray(clusterSizes, "i8", boost::python::make_tuple(clusterSizes.size()))));
+}
+
 }  // namespace
 
 BOOST_PYTHON_MODULE(_clustering) {
+  boost::python::def(
+    "aap_similarity",
+    +[](const RDKit::ROMol& left,
+        const RDKit::ROMol& right,
+        const int           maxPathLength,
+        const int           histogramBins,
+        const int           sinkhornIterations,
+        const float         sinkhornTemperature,
+        std::uintptr_t      streamPtr) {
+      auto streamOpt = nvMolKit::acquireExternalStream(streamPtr);
+      if (!streamOpt) {
+        throw std::invalid_argument("Invalid CUDA stream");
+      }
+      const nvMolKit::AapOptions options{maxPathLength, histogramBins, sinkhornIterations, sinkhornTemperature};
+      return nvMolKit::aapSimilarityGpu(left, right, options, *streamOpt);
+    },
+    (boost::python::arg("left"),
+     boost::python::arg("right"),
+     boost::python::arg("max_path_length")      = 7,
+     boost::python::arg("histogram_bins")       = 2048,
+     boost::python::arg("sinkhorn_iterations")  = 8,
+     boost::python::arg("sinkhorn_temperature") = 0.104F,
+     boost::python::arg("stream")               = 0));
+
+  boost::python::def(
+    "aap_similarity_clustering",
+    +[](const boost::python::list& molecules,
+        const float                threshold,
+        const int                  maxPathLength,
+        const int                  histogramBins,
+        const int                  sinkhornIterations,
+        const float                sinkhornTemperature,
+        const bool                 deviceOutput,
+        std::uintptr_t             streamPtr) {
+      auto streamOpt = nvMolKit::acquireExternalStream(streamPtr);
+      if (!streamOpt) {
+        throw std::invalid_argument("Invalid CUDA stream");
+      }
+      const auto                             extracted = nvMolKit::extractMolecules(molecules);
+      const std::vector<const RDKit::ROMol*> mols(extracted.begin(), extracted.end());
+      const nvMolKit::AapOptions options{maxPathLength, histogramBins, sinkhornIterations, sinkhornTemperature};
+      return wrapAapClusteringResult(nvMolKit::aapSimilarityClustering(mols, threshold, options, *streamOpt),
+                                     deviceOutput,
+                                     *streamOpt);
+    },
+    (boost::python::arg("molecules"),
+     boost::python::arg("threshold")            = 0.217F,
+     boost::python::arg("max_path_length")      = 7,
+     boost::python::arg("histogram_bins")       = 2048,
+     boost::python::arg("sinkhorn_iterations")  = 8,
+     boost::python::arg("sinkhorn_temperature") = 0.104F,
+     boost::python::arg("device_output")        = true,
+     boost::python::arg("stream")               = 0));
+
+  boost::python::def(
+    "aap_dise_clustering",
+    +[](const boost::python::list& molecules,
+        const float                threshold,
+        const int                  maxPathLength,
+        const int                  histogramBins,
+        const int                  sinkhornIterations,
+        const float                sinkhornTemperature,
+        const bool                 deviceOutput,
+        std::uintptr_t             streamPtr) {
+      auto streamOpt = nvMolKit::acquireExternalStream(streamPtr);
+      if (!streamOpt) {
+        throw std::invalid_argument("Invalid CUDA stream");
+      }
+      const auto                             extracted = nvMolKit::extractMolecules(molecules);
+      const std::vector<const RDKit::ROMol*> mols(extracted.begin(), extracted.end());
+      const nvMolKit::AapOptions options{maxPathLength, histogramBins, sinkhornIterations, sinkhornTemperature};
+      return wrapAapClusteringResult(nvMolKit::aapDiseClustering(mols, threshold, options, *streamOpt),
+                                     deviceOutput,
+                                     *streamOpt);
+    },
+    (boost::python::arg("molecules"),
+     boost::python::arg("threshold")            = 0.217F,
+     boost::python::arg("max_path_length")      = 7,
+     boost::python::arg("histogram_bins")       = 2048,
+     boost::python::arg("sinkhorn_iterations")  = 8,
+     boost::python::arg("sinkhorn_temperature") = 0.104F,
+     boost::python::arg("device_output")        = true,
+     boost::python::arg("stream")               = 0));
+
   boost::python::def(
     "butina",
     +[](const boost::python::dict& distanceMatrix,

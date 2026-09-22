@@ -126,6 +126,12 @@ target_link_libraries(
   PUBLIC device_vector
   PRIVATE cuda_error_check cub_helpers nvtx)
 
+add_library(aap aap.cu)
+target_link_libraries(
+  aap
+  PUBLIC device_vector
+  PRIVATE ${RDKit_LIBS} cuda_error_check pinned_host_allocator)
+
 add_library(conformer_rmsd conformer_rmsd.cu)
 target_link_libraries(
   conformer_rmsd
