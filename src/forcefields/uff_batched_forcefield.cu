@@ -19,12 +19,6 @@
 
 namespace nvMolKit {
 namespace {
-void allocateEnergyScratch(const UFF::BatchedMolecularSystemHost& molSystemHost,
-                           UFF::BatchedMolecularDeviceBuffers&    systemDevice) {
-  systemDevice.energyBuffer.resize(molSystemHost.indices.energyBufferStarts.back());
-  systemDevice.energyBuffer.zero();
-}
-
 template <typename Buffers, typename storageT>
 cudaError_t launchEnergy(Buffers&        buffers,
                          int             numMols,
@@ -74,7 +68,6 @@ UFFBatchedForcefield::UFFBatchedForcefield(const UFF::BatchedMolecularSystemHost
     auto& buffers = systemDevice_.emplace<UFF::BatchedMolecularDeviceBuffers>();
     UFF::setStreams(buffers, stream);
     UFF::sendContribsAndIndicesToDevice(molSystemHost, buffers);
-    allocateEnergyScratch(molSystemHost, buffers);
     setAtomStartsDevice(buffers.indices.atomStarts.data());
   }
 }
