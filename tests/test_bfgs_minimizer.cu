@@ -1534,70 +1534,82 @@ TEST_P(BFGSMinimizerBackendTest, ReuseMinimizer_VariedSizes) {
 
 INSTANTIATE_TEST_SUITE_P(BFGSMinimizer4DTest, BFGSMinimizerTest4DTest, ::testing::Values(false, true));
 
-TEST(BFGSPrecisionStateTest, ModesOwnExactlyOneMatchingWorkspace) {
+class BFGSPrecisionStateTest : public ::testing::TestWithParam<nvMolKit::PrecisionMode> {};
+
+class BFGSMinimizerHarmonicPrecisionTest : public BFGSMinimizerHarmonicTestFixture,
+                                           public ::testing::WithParamInterface<nvMolKit::PrecisionMode> {};
+
+std::string precisionModeParamName(const ::testing::TestParamInfo<nvMolKit::PrecisionMode>& info) {
+  return info.param == nvMolKit::PrecisionMode::SINGLE ? "Single" : "Full";
+}
+
+TEST_P(BFGSPrecisionStateTest, OwnsExactlyOneMatchingWorkspace) {
   const std::vector<int>           atomStarts{0, 2, 5};
   nvMolKit::AsyncDeviceVector<int> atomStartsDevice;
   atomStartsDevice.setFromVector(atomStarts);
 
-  for (const auto mode : {nvMolKit::PrecisionMode::FULL, nvMolKit::PrecisionMode::SINGLE}) {
-    const nvMolKit::PrecisionMode precision{mode};
-    const bool                    singlePrecision = nvMolKit::usesSinglePrecision(precision);
-    nvMolKit::BfgsBatchMinimizer  minimizer(3,
-                                           nvMolKit::DebugLevel::NONE,
-                                           true,
-                                           nullptr,
-                                           nvMolKit::BfgsBackend::HYBRID,
-                                           precision);
-    minimizer
-      .initialize(atomStarts, atomStartsDevice.data(), nullptr, nullptr, nullptr, nvMolKit::BfgsBackend::BATCHED);
+  const auto                   mode            = GetParam();
+  const bool                   singlePrecision = nvMolKit::usesSinglePrecision(mode);
+  nvMolKit::BfgsBatchMinimizer minimizer(3,
+                                         nvMolKit::DebugLevel::NONE,
+                                         true,
+                                         nullptr,
+                                         nvMolKit::BfgsBackend::HYBRID,
+                                         mode);
+  minimizer.initialize(atomStarts, atomStartsDevice.data(), nullptr, nullptr, nullptr, nvMolKit::BfgsBackend::BATCHED);
 
-    SCOPED_TRACE(nvMolKit::precisionModeName(mode));
-    EXPECT_EQ(
-      minimizer.resolveBackend(atomStarts),
-      mode == nvMolKit::PrecisionMode::FULL ? nvMolKit::BfgsBackend::PER_MOLECULE : nvMolKit::BfgsBackend::BATCHED);
-    EXPECT_EQ(std::holds_alternative<nvMolKit::SingleBfgsWorkspace>(minimizer.workspace_), singlePrecision);
-    std::visit(
-      [](const auto& workspace) {
-        EXPECT_NE(workspace.lineSearchDir.size(), 0);
-        EXPECT_NE(workspace.scratchPositions.size(), 0);
-        EXPECT_NE(workspace.scratchGrad.size(), 0);
-        EXPECT_NE(workspace.hessDGrad.size(), 0);
-        EXPECT_NE(workspace.gradScales.size(), 0);
-        EXPECT_NE(workspace.lineSearchLambdas.size(), 0);
-        EXPECT_NE(workspace.lineSearchSlope.size(), 0);
-        EXPECT_NE(workspace.lineSearchMaxSteps.size(), 0);
-        EXPECT_NE(workspace.lineSearchStoredEnergy.size(), 0);
-        EXPECT_NE(workspace.inverseHessian.size(), 0);
-      },
-      minimizer.workspace_);
-    if (singlePrecision) {
-      const auto& workspace = std::get<nvMolKit::SingleBfgsWorkspace>(minimizer.workspace_);
-      EXPECT_NE(workspace.positions.size(), 0);
-      EXPECT_NE(workspace.grad.size(), 0);
-      EXPECT_NE(workspace.energy.size(), 0);
-    }
+  EXPECT_EQ(
+    minimizer.resolveBackend(atomStarts),
+    mode == nvMolKit::PrecisionMode::FULL ? nvMolKit::BfgsBackend::PER_MOLECULE : nvMolKit::BfgsBackend::BATCHED);
+  EXPECT_EQ(std::holds_alternative<nvMolKit::SingleBfgsWorkspace>(minimizer.workspace_), singlePrecision);
+  std::visit(
+    [](const auto& workspace) {
+      EXPECT_NE(workspace.lineSearchDir.size(), 0);
+      EXPECT_NE(workspace.scratchPositions.size(), 0);
+      EXPECT_NE(workspace.scratchGrad.size(), 0);
+      EXPECT_NE(workspace.hessDGrad.size(), 0);
+      EXPECT_NE(workspace.gradScales.size(), 0);
+      EXPECT_NE(workspace.lineSearchLambdas.size(), 0);
+      EXPECT_NE(workspace.lineSearchSlope.size(), 0);
+      EXPECT_NE(workspace.lineSearchMaxSteps.size(), 0);
+      EXPECT_NE(workspace.lineSearchStoredEnergy.size(), 0);
+      EXPECT_NE(workspace.inverseHessian.size(), 0);
+    },
+    minimizer.workspace_);
+  if (singlePrecision) {
+    const auto& workspace = std::get<nvMolKit::SingleBfgsWorkspace>(minimizer.workspace_);
+    EXPECT_NE(workspace.positions.size(), 0);
+    EXPECT_NE(workspace.grad.size(), 0);
+    EXPECT_NE(workspace.energy.size(), 0);
   }
 }
 
-TEST_F(BFGSMinimizerHarmonicTestFixture, PrecisionModesExecuteNumerically) {
-  for (const auto mode : {nvMolKit::PrecisionMode::FULL, nvMolKit::PrecisionMode::SINGLE}) {
-    SCOPED_TRACE(nvMolKit::precisionModeName(mode));
-    setUpSystems(/*computeLastDim=*/true, /*seed=*/42);
-    auto                         forcefield = makeForcefield();
-    nvMolKit::BfgsBatchMinimizer minimizer(dim_,
-                                           nvMolKit::DebugLevel::NONE,
-                                           false,
-                                           nullptr,
-                                           nvMolKit::BfgsBackend::BATCHED,
-                                           {mode});
-    EXPECT_NO_THROW(
-      minimizer.minimize(400, 1e-5, forcefield, positionsDevice_, gradDevice_, energyOutsDevice_, nullptr));
-    const auto positions = getPositionsFromDevice();
-    verifyPositions(positions, mode == nvMolKit::PrecisionMode::SINGLE ? 0.2 : 0.1);
-    const auto statuses = getStatusesFromDevice(minimizer);
-    EXPECT_THAT(statuses, ::testing::Each(0));
-  }
+TEST_P(BFGSMinimizerHarmonicPrecisionTest, ExecutesNumerically) {
+  const auto mode = GetParam();
+  setUpSystems(/*computeLastDim=*/true, /*seed=*/42);
+  auto                         forcefield = makeForcefield();
+  nvMolKit::BfgsBatchMinimizer minimizer(dim_,
+                                         nvMolKit::DebugLevel::NONE,
+                                         false,
+                                         nullptr,
+                                         nvMolKit::BfgsBackend::BATCHED,
+                                         mode);
+  EXPECT_NO_THROW(minimizer.minimize(400, 1e-5, forcefield, positionsDevice_, gradDevice_, energyOutsDevice_, nullptr));
+  const auto positions = getPositionsFromDevice();
+  verifyPositions(positions, mode == nvMolKit::PrecisionMode::SINGLE ? 0.2 : 0.1);
+  const auto statuses = getStatusesFromDevice(minimizer);
+  EXPECT_THAT(statuses, ::testing::Each(0));
 }
+
+INSTANTIATE_TEST_SUITE_P(PrecisionModes,
+                         BFGSPrecisionStateTest,
+                         ::testing::Values(nvMolKit::PrecisionMode::FULL, nvMolKit::PrecisionMode::SINGLE),
+                         precisionModeParamName);
+
+INSTANTIATE_TEST_SUITE_P(PrecisionModes,
+                         BFGSMinimizerHarmonicPrecisionTest,
+                         ::testing::Values(nvMolKit::PrecisionMode::FULL, nvMolKit::PrecisionMode::SINGLE),
+                         precisionModeParamName);
 
 INSTANTIATE_TEST_SUITE_P(
   BFGSBackends,
