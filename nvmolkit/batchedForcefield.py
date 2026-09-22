@@ -83,6 +83,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, overload
 
+from nvmolkit import _batchedForcefield  # type: ignore
 from nvmolkit._mmff_bridge import default_rdkit_mmff_properties, make_internal_mmff_properties
 from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions, HardwareOptions, PrecisionMode
 
