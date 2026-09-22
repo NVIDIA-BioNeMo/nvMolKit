@@ -65,7 +65,7 @@ jobs:
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
-            -DNVMOLKIT_EXTRA_DEV_FLAGS=OFF \
+            -DNVMOLKIT_EXTRA_DEV_FLAGS=ON \
             -DNVMOLKIT_BUILD_BENCHMARKS=ON \
             -DNVMOLKIT_BUILD_PYTHON_BINDINGS=ON \
             -DNVMOLKIT_BUILD_TESTS=ON \

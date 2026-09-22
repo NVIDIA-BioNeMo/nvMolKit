@@ -100,7 +100,7 @@ def resolve_num_gpus(fixed_gpu_ids: list[int]) -> int:
     if fixed_gpu_ids:
         return max(1, len(fixed_gpu_ids))
     try:
-        import torch  # noqa: PLC0415
+        import torch
 
         return max(1, int(torch.cuda.device_count()))
     except Exception:

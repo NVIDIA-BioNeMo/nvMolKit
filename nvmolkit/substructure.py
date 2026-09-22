@@ -41,10 +41,10 @@ from nvmolkit._substructure import getSubstructMatches as _getSubstructMatches
 from nvmolkit._substructure import hasSubstructMatch as _hasSubstructMatch
 
 __all__ = [
-    "SubstructSearchConfig",
     "SubstructMatchResults",
-    "getSubstructMatches",
+    "SubstructSearchConfig",
     "countSubstructMatches",
+    "getSubstructMatches",
     "hasSubstructMatch",
 ]
 
@@ -79,6 +79,7 @@ class SubstructSearchConfig:
         gpuIds: list[int] | None = None,
         algorithm: str = "dfs",
     ) -> None:
+        """Initialize a substructure-search configuration."""
         native = _NativeSubstructSearchConfig()
         native.batchSize = int(batchSize)
         native.workerThreads = int(workerThreads)
@@ -198,9 +199,11 @@ class SubstructMatchResults:
     shape: tuple[int, int]
 
     def __len__(self) -> int:
+        """Return the number of target molecules."""
         return self.shape[0]
 
     def __getitem__(self, target_idx: int) -> _SubstructTargetView:
+        """Return the match view for one target molecule."""
         return _SubstructTargetView(self, target_idx)
 
     def get_pair(self, target_idx: int, query_idx: int) -> list[np.ndarray]:

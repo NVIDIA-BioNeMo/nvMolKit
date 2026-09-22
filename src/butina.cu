@@ -118,6 +118,8 @@ __global__ void butinaKernelCountClusterSizeWithNeighborlist(const cuda::std::sp
   // Coalesced write of neighborlist using loop for variable sizes
   __syncthreads();  // for sharedNeighborlist final value
   for (int i = tid; i < NeighborlistMaxSize; i += blockSizeCount) {
+    // CUDA thread indices are nonnegative; the analyzer does not model that built-in invariant.
+    // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
     neighborList[pointIdx * NeighborlistMaxSize + i] = (i < neighborlistIndex) ? sharedNeighborlist[i] : -1;
   }
 
@@ -222,7 +224,7 @@ __global__ void attemptAssignClustersFromNeighborlist(const cuda::std::span<int>
   }
 
   // At this point, we have a valid cluster. Assign it.
-  int clusterVal;
+  int clusterVal = 0;
   if (tid == 0) {
     clusterVal         = atomicAdd(nextClusterIdx, 1);
     clusters[pointIdx] = clusterVal;

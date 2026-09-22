@@ -55,18 +55,20 @@ template <std::size_t NBits> struct FlatBitVectStorage {
       bits[i] = other.bits[i];
     }
   }
-  CUDA_CALLABLE_MEMBER FlatBitVectStorage(FlatBitVectStorage&& other) {
+  CUDA_CALLABLE_MEMBER FlatBitVectStorage(FlatBitVectStorage&& other) noexcept {
     for (std::size_t i = 0; i < kStorageCount; ++i) {
       bits[i] = other.bits[i];
     }
   }
+  // Element-by-element copying is safe when both operands are the same object.
+  // NOLINTNEXTLINE(bugprone-unhandled-self-assignment)
   CUDA_CALLABLE_MEMBER FlatBitVectStorage& operator=(const FlatBitVectStorage& other) {
     for (std::size_t i = 0; i < kStorageCount; ++i) {
       bits[i] = other.bits[i];
     }
     return *this;
   }
-  CUDA_CALLABLE_MEMBER FlatBitVectStorage& operator=(FlatBitVectStorage&& other) {
+  CUDA_CALLABLE_MEMBER FlatBitVectStorage& operator=(FlatBitVectStorage&& other) noexcept {
     for (std::size_t i = 0; i < kStorageCount; ++i) {
       bits[i] = other.bits[i];
     }
@@ -363,6 +365,8 @@ template <std::size_t Rows, std::size_t Cols> class BitMatrix2DView {
 }  // namespace nvMolKit
 
 namespace std {
+// Specializing std::hash for a user-defined type is permitted by the standard.
+// NOLINTNEXTLINE(bugprone-std-namespace-modification)
 template <std::size_t NBits> struct hash<nvMolKit::FlatBitVect<NBits>> {
   std::size_t operator()(const nvMolKit::FlatBitVect<NBits>& fbv) const noexcept {
     std::size_t           result        = 0;

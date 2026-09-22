@@ -174,7 +174,7 @@ Examples:
     # === Warmup ===
     if args.warmup > 0:
         with nvtx.annotate("Warmup", color="red"):
-            first_mols = list(configs.values())[0]
+            first_mols = next(iter(configs.values()))
             warmup_mols = first_mols[: min(5, len(first_mols))]
             print(f"\nWarmup ({args.warmup} iteration(s)) with {len(warmup_mols)} molecules...")
             for _ in range(args.warmup):

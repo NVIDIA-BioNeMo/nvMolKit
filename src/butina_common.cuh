@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <cuda/std/span>
+#include <type_traits>
 #include <utility>
 
 #include "src/utils/cuda_error_check.h"
@@ -54,7 +55,9 @@ static __global__ void setConditionalLoopGraphCondition(cudaGraphConditionalHand
  */
 class ConditionalLoopGraph {
  public:
-  template <typename CaptureBody> explicit ConditionalLoopGraph(CaptureBody&& captureBody) {
+  template <typename CaptureBody>
+    requires(!std::is_same_v<std::remove_cvref_t<CaptureBody>, ConditionalLoopGraph>)
+  explicit ConditionalLoopGraph(CaptureBody&& captureBody) {
     cudaCheckError(cudaGraphCreate(&graph_, 0));
     cudaCheckError(cudaGraphConditionalHandleCreate(&handle_, graph_, 1, cudaGraphCondAssignDefault));
 

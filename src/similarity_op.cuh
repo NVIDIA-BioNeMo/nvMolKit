@@ -25,7 +25,7 @@
 
 namespace nvMolKit {
 
-template <bool _IsTensorOp, FingerprintSimilarityMetric Metric> struct SimilarityOp {
+template <bool IsTensorOp, FingerprintSimilarityMetric Metric> struct SimilarityOp {
   __device__ void operator()(uint32_t d_and[4], uint32_t d_xor[4], uint32_t d_and_not[4]) {}
 };
 

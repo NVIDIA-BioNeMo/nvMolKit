@@ -88,14 +88,14 @@ void launchMorganFingerprintKernelBatch(const MorganGPUBuffersBatch&            
 
 }  // namespace nvMolKit
 
-#define DEFINE_EXTERN_TEMPLATE(fpSize)                                       \
-  extern template void nvMolKit::launchMorganFingerprintKernelBatch<fpSize>( \
-    const nvMolKit::MorganGPUBuffersBatch&  buffers,                         \
-    AsyncDeviceVector<FlatBitVect<fpSize>>& outputAccumulator,               \
-    size_t                                  maxRadius,                       \
-    int                                     maxAtoms,                        \
-    int                                     nMolecules,                      \
-    cudaStream_t                            stream);
+#define DEFINE_EXTERN_TEMPLATE(fpSize)                                         \
+  extern template void nvMolKit::launchMorganFingerprintKernelBatch<(fpSize)>( \
+    const nvMolKit::MorganGPUBuffersBatch&    buffers,                         \
+    AsyncDeviceVector<FlatBitVect<(fpSize)>>& outputAccumulator,               \
+    size_t                                    maxRadius,                       \
+    int                                       maxAtoms,                        \
+    int                                       nMolecules,                      \
+    cudaStream_t                              stream);
 DEFINE_EXTERN_TEMPLATE(128)
 DEFINE_EXTERN_TEMPLATE(256)
 DEFINE_EXTERN_TEMPLATE(512)
