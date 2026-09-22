@@ -51,6 +51,27 @@ Checks:
   - '-cppcoreguidelines-missing-std-forward'
   # Query descriptors are checked before casting to the matching RDKit type.
   - '-cppcoreguidelines-pro-type-static-cast-downcast'
+  - misc-*
+  # Include cleanup is a separate dependency-maintenance policy and can be
+  # noisy when clang-tidy analyzes CUDA and third-party headers.
+  - '-misc-include-cleaner'
+  # Adding const to every non-mutated local is a broad style policy with a
+  # large mechanical delta and little correctness value.
+  - '-misc-const-correctness'
+  # Top-level const on CUDA handle typedefs is intentional and does not claim
+  # that the pointed-to runtime object is const.
+  - '-misc-misplaced-const'
+  # Recursive traversal is the natural implementation for RDKit query trees.
+  - '-misc-no-recursion'
+  # Public aggregate-style data structures intentionally expose state.
+  - '-misc-non-private-member-variables-in-classes'
+  # CUDA callbacks and interface implementations can require unused
+  # parameters; compiler warnings already diagnose accidental cases.
+  - '-misc-unused-parameters'
+  # Internal-linkage organization is a style and API-maintenance concern, not
+  # a correctness check; enforcing it would cause a broad source reorganization.
+  - '-misc-use-anonymous-namespace'
+  - '-misc-use-internal-linkage'
 WarningsAsErrors: '*'
 HeaderFilterRegex: '.*/(src|rdkit_extensions)/.*'
 FormatStyle: none
