@@ -78,10 +78,12 @@ double TFDCpuGenerator::computeTFDPair(const float*              anglesI,
     torsIdx++;
   };
 
-  for (const auto& t : torsionList.nonRingTorsions)
+  for (const auto& t : torsionList.nonRingTorsions) {
     processTorsion(t, false);
-  for (const auto& t : torsionList.ringTorsions)
+  }
+  for (const auto& t : torsionList.ringTorsions) {
     processTorsion(t, true);
+  }
 
   return (sumWeights > 1e-10) ? (sumWeightedDev / sumWeights) : 0.0;
 }
@@ -89,10 +91,12 @@ double TFDCpuGenerator::computeTFDPair(const float*              anglesI,
 std::vector<float> TFDCpuGenerator::computeDihedralAngles(const RDKit::ROMol& mol, const TorsionList& torsionList) {
   int numConformers = mol.getNumConformers();
   int totalQuartets = 0;
-  for (const auto& t : torsionList.nonRingTorsions)
+  for (const auto& t : torsionList.nonRingTorsions) {
     totalQuartets += static_cast<int>(t.atomQuartets.size());
-  for (const auto& t : torsionList.ringTorsions)
+  }
+  for (const auto& t : torsionList.ringTorsions) {
     totalQuartets += static_cast<int>(t.atomQuartets.size());
+  }
 
   if (totalQuartets == 0 || numConformers == 0) {
     return {};
@@ -103,12 +107,16 @@ std::vector<float> TFDCpuGenerator::computeDihedralAngles(const RDKit::ROMol& mo
   // Collect all quartets into a flat list for indexed access
   std::vector<const std::array<int, 4>*> allQuartets;
   allQuartets.reserve(totalQuartets);
-  for (const auto& t : torsionList.nonRingTorsions)
-    for (const auto& q : t.atomQuartets)
+  for (const auto& t : torsionList.nonRingTorsions) {
+    for (const auto& q : t.atomQuartets) {
       allQuartets.push_back(&q);
-  for (const auto& t : torsionList.ringTorsions)
-    for (const auto& q : t.atomQuartets)
+    }
+  }
+  for (const auto& t : torsionList.ringTorsions) {
+    for (const auto& q : t.atomQuartets) {
       allQuartets.push_back(&q);
+    }
+  }
 
   int numAtoms = mol.getNumAtoms();
   int confIdx  = 0;

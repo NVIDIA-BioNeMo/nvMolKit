@@ -23,6 +23,23 @@ Checks:
   # Enum representation is an ABI and data-layout decision, not a blanket
   # optimization; smaller underlying types can also add conversion overhead.
   - '-performance-enum-size'
+  - readability-ambiguous-smartptr-reset-call
+  - readability-avoid-return-with-void-value
+  - readability-avoid-unconditional-preprocessor-if
+  - readability-braces-around-statements
+  - readability-const-return-type
+  - readability-container-contains
+  - readability-container-data-pointer
+  - readability-container-size-empty
+  - readability-delete-null-pointer
+  - readability-duplicate-include
+  - readability-inconsistent-ifelse-braces
+  - readability-misleading-indentation
+  - readability-misplaced-array-index
+  - readability-qualified-auto
+  - readability-redundant-casting
+  - readability-reference-to-constructed-temporary
+  - readability-uniqueptr-delete-release
   - cppcoreguidelines-*
   # Required for CUDA, C, and RDKit interoperability.
   - '-cppcoreguidelines-avoid-c-arrays'
@@ -73,7 +90,7 @@ Checks:
   - '-misc-use-anonymous-namespace'
   - '-misc-use-internal-linkage'
 WarningsAsErrors: '*'
-HeaderFilterRegex: '.*/(src|rdkit_extensions)/.*'
+HeaderFilterRegex: '.*/src/.*'
 FormatStyle: none
 CheckOptions:
   # int8_t is used as a small integer (including negative sentinels), not as a

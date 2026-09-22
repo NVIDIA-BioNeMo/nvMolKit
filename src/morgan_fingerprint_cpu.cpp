@@ -227,7 +227,7 @@ std::vector<MorganAtomEnv> getEnvironments(const RDKit::ROMol&               mol
     for (const auto& iter : allNeighborhoodsThisRound) {
       // if we haven't seen this exact environment before, add it to the
       // result
-      if (neighborhoods.count(std::get<0>(iter)) == 0) {
+      if (!neighborhoods.contains(std::get<0>(iter))) {
         if (!onlyNonzeroInvariants || (*atomInvariants)[std::get<2>(iter)] != 0) {
           if (includeAtoms[std::get<2>(iter)]) {
             result.emplace_back(std::get<1>(iter), std::get<2>(iter), layer + 1);
