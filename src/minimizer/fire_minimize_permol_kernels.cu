@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include <cub/cub.cuh>
+#include <type_traits>
 
 #include "src/forcefields/mmff_kernels.h"
 #include "src/forcefields/mmff_kernels_device_dispatch.cuh"
@@ -119,7 +120,11 @@ __launch_bounds__(kFirePerMolBlockSize)
       molGrad[i] = storageT{0};
     }
     __syncthreads();
-    MMFF::molGrad<kFirePerMolBlockSize, false>(*terms, *systemIndices, molCoords, molGrad, molIdx, tid);
+    if constexpr (std::is_same_v<storageT, float>) {
+      MMFF::fp32::molGrad<kFirePerMolBlockSize, false>(*terms, *systemIndices, molCoords, molGrad, molIdx, tid);
+    } else {
+      MMFF::fp64::molGrad<kFirePerMolBlockSize, false>(*terms, *systemIndices, molCoords, molGrad, molIdx, tid);
+    }
     __syncthreads();
 
     storageT power  = 0;
@@ -184,7 +189,11 @@ __launch_bounds__(kFirePerMolBlockSize)
         molGrad[i] = storageT{0};
       }
       __syncthreads();
-      MMFF::molGrad<kFirePerMolBlockSize, false>(*terms, *systemIndices, molCoords, molGrad, molIdx, tid);
+      if constexpr (std::is_same_v<storageT, float>) {
+        MMFF::fp32::molGrad<kFirePerMolBlockSize, false>(*terms, *systemIndices, molCoords, molGrad, molIdx, tid);
+      } else {
+        MMFF::fp64::molGrad<kFirePerMolBlockSize, false>(*terms, *systemIndices, molCoords, molGrad, molIdx, tid);
+      }
       __syncthreads();
     }
 
@@ -277,8 +286,14 @@ __launch_bounds__(kFirePerMolBlockSize)
   }
   __syncthreads();
 
-  const storageT finalThreadEnergy =
-    MMFF::molEnergy<kFirePerMolBlockSize, false>(*terms, *systemIndices, molCoords, molIdx, tid);
+  storageT finalThreadEnergy;
+  if constexpr (std::is_same_v<storageT, float>) {
+    finalThreadEnergy =
+      MMFF::fp32::molEnergy<kFirePerMolBlockSize, false>(*terms, *systemIndices, molCoords, molIdx, tid);
+  } else {
+    finalThreadEnergy =
+      MMFF::fp64::molEnergy<kFirePerMolBlockSize, false>(*terms, *systemIndices, molCoords, molIdx, tid);
+  }
   const storageT finalEnergy = BlockReduce(tempStorage).Sum(finalThreadEnergy);
   if (tid == 0) {
     energyOuts[molIdx] = finalEnergy;
