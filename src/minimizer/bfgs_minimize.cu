@@ -13,8 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
 #include <cub/cub.cuh>
 #include <numeric>
+#include <type_traits>
 
 #include "src/forcefields/batched_forcefield.h"
 #include "src/forcefields/dist_geom.h"
@@ -25,6 +27,7 @@
 #include "src/minimizer/bfgs_minimize.h"
 #include "src/minimizer/bfgs_minimize_permol_kernels.h"
 #include "src/utils/cub_helpers.cuh"
+#include "src/utils/device_convert.cuh"
 #include "src/utils/device_vector.h"
 #include "src/utils/nvtx.h"
 #include "versions.h"
@@ -34,6 +37,18 @@ constexpr double FUNCTOL = 1e-4;  //!< Default tolerance for function convergenc
 constexpr double MOVETOL = 1e-7;  //!< Default tolerance for x changes in the minimizer
 
 namespace {
+template <typename real> __device__ __forceinline__ real bfgsSqrt(real value) {
+  if constexpr (cuda::std::is_same_v<real, float>)
+    return sqrtf(value);
+  else
+    return sqrt(value);
+}
+template <typename real> __device__ __forceinline__ real bfgsAbs(real value) {
+  if constexpr (cuda::std::is_same_v<real, float>)
+    return fabsf(value);
+  else
+    return fabs(value);
+}
 BfgsBackend resolveBackend(BfgsBackend backend, const std::vector<int>& atomStartsHost) {
   if (backend != BfgsBackend::HYBRID) {
     return backend;
@@ -45,6 +60,7 @@ BfgsBackend resolveBackend(BfgsBackend backend, const std::vector<int>& atomStar
   }
   return BfgsBackend::PER_MOLECULE;
 }
+
 }  // namespace
 
 // TODO - consolidate this to device vector code. We don't want CUDA in the device vector
@@ -77,16 +93,17 @@ template <typename T> void setAll(AsyncDeviceVector<T>& vec, const T& value) {
 }
 
 // Scale direction vector, get slope and test values.
-__global__ void initializeLineSearchKernel(const int16_t* statuses,
-                                           const double*  oldPositions,
-                                           const double*  grads,
-                                           const int*     atomStarts,
-                                           const double*  maxSteps,
-                                           double*        dirs,
-                                           double*        slopes,
-                                           double*        lambdaMins,
-                                           const int*     activeSystemIndices,
-                                           const int      DIM) {
+template <typename real, typename reduceT, typename storageT>
+__global__ void initializeLineSearchKernel(const int16_t*  statuses,
+                                           const storageT* oldPositions,
+                                           const storageT* grads,
+                                           const int*      atomStarts,
+                                           const storageT* maxSteps,
+                                           storageT*       dirs,
+                                           storageT*       slopes,
+                                           storageT*       lambdaMins,
+                                           const int*      activeSystemIndices,
+                                           const int       DIM) {
   const int  sysIdx        = activeSystemIndices[blockIdx.x];
   const int  idxInSys      = threadIdx.x;
   const bool isFirstThread = threadIdx.x == 0;
@@ -95,41 +112,43 @@ __global__ void initializeLineSearchKernel(const int16_t* statuses,
     return;
   }
 
-  const int     numTerms  = DIM * (atomStarts[sysIdx + 1] - atomStarts[sysIdx]);
-  const double* posStart  = &oldPositions[atomStarts[sysIdx] * DIM];
-  const double* gradStart = &grads[atomStarts[sysIdx] * DIM];
-  double*       dirStart  = &dirs[atomStarts[sysIdx] * DIM];
+  const int       numTerms  = DIM * (atomStarts[sysIdx + 1] - atomStarts[sysIdx]);
+  const storageT* posStart  = &oldPositions[atomStarts[sysIdx] * DIM];
+  const storageT* gradStart = &grads[atomStarts[sysIdx] * DIM];
+  storageT*       dirStart  = &dirs[atomStarts[sysIdx] * DIM];
 
-  using BlockReduce = cub::BlockReduce<double, 128>;
-  __shared__ BlockReduce::TempStorage tempStorage;
-  __shared__ double                   dirSum[1];
+  using BlockReduce = cub::BlockReduce<reduceT, 128>;
+  __shared__ typename BlockReduce::TempStorage tempStorage;
+  __shared__ reduceT                           dirSum[1];
 
   // ---------------------------------
   //  Scale direction vector if needed
   // ---------------------------------
-  double sumSquaredLocal = 0.0;
+  reduceT sumSquaredLocal = 0;
   for (int i = idxInSys; i < numTerms; i += blockDim.x) {
-    double dx2 = dirStart[i] * dirStart[i];
-    sumSquaredLocal += dx2;
+    const real dx = static_cast<real>(dirStart[i]);
+    sumSquaredLocal += static_cast<reduceT>(dx * dx);
   }
-  double blockSum = BlockReduce(tempStorage).Sum(sumSquaredLocal);
+  reduceT blockSum = BlockReduce(tempStorage).Sum(sumSquaredLocal);
   if (isFirstThread) {
-    dirSum[0] = sqrt(blockSum);
+    dirSum[0] = bfgsSqrt(blockSum);
   }
   __syncthreads();
   if (dirSum[0] > maxSteps[sysIdx]) {
     for (int i = idxInSys; i < numTerms; i += blockDim.x) {
-      dirStart[i] *= maxSteps[sysIdx] / dirSum[0];
+      const real scaled =
+        static_cast<real>(dirStart[i]) * (static_cast<real>(maxSteps[sysIdx]) / static_cast<real>(dirSum[0]));
+      dirStart[i] = static_cast<storageT>(scaled);
     }
   }
 
   // -------------------------
   // Set slope, check validity
   // -------------------------
-  double localSum = 0.0;
+  reduceT localSum = 0;
   // Each thread computes its partial sum
   for (int i = idxInSys; i < numTerms; i += blockDim.x) {
-    localSum += dirStart[i] * gradStart[i];
+    localSum += static_cast<reduceT>(static_cast<real>(dirStart[i]) * static_cast<real>(gradStart[i]));
   }
 
   // Perform block-wide reduction to compute the total sum
@@ -138,91 +157,95 @@ __global__ void initializeLineSearchKernel(const int16_t* statuses,
   // The first thread in the block writes the result
 
   if (isFirstThread) {
-    slopes[sysIdx] = blockSum;
+    slopes[sysIdx] = static_cast<storageT>(blockSum);
   }
 
   // ----------------------
   // Compute initial lambda
   // ----------------------
-  double localMax = 0.0;
+  reduceT localMax = 0;
   // Each thread computes its local maximum
   for (int i = idxInSys; i < numTerms; i += blockDim.x) {
-    double temp = fabs(dirStart[i]) / fmax(fabs(posStart[i]), 1.0);
+    const real temp = bfgsAbs(static_cast<real>(dirStart[i])) / max(bfgsAbs(static_cast<real>(posStart[i])), real{1});
     if (temp > localMax) {
       localMax = temp;
     }
   }
   // Perform block-wide reduction to find the maximum
-  double blockMax = BlockReduce(tempStorage).Reduce(localMax, cubMax());
+  reduceT blockMax = BlockReduce(tempStorage).Reduce(localMax, cubMax());
 
   // The first thread in the block writes the result
   if (isFirstThread) {
-    lambdaMins[sysIdx] = MOVETOL / blockMax;
+    lambdaMins[sysIdx] = static_cast<storageT>(static_cast<reduceT>(MOVETOL) / blockMax);
   }
 }
 
+template <typename storageT>
 __global__ void setLineStatusAndEnergyFromGlobalKernel(const int numSystems,
                                                        const int16_t* __restrict__ statuses,
                                                        int16_t* __restrict__ lineSearchStatus,
-                                                       const double* __restrict__ srcEnergies,
-                                                       double* __restrict__ destEnergies,
-                                                       double* __restrict__ lineSearchLambdas) {
+                                                       const storageT* __restrict__ srcEnergies,
+                                                       storageT* __restrict__ destEnergies,
+                                                       storageT* __restrict__ lineSearchLambdas) {
   const int sysIdx = threadIdx.x + blockIdx.x * blockDim.x;
   if (sysIdx < numSystems) {
     const int16_t status      = statuses[sysIdx];
     lineSearchStatus[sysIdx]  = status == 0 ? 0 : -2;
-    destEnergies[sysIdx]      = srcEnergies[sysIdx];
-    lineSearchLambdas[sysIdx] = 1.0;
+    destEnergies[sysIdx]      = static_cast<storageT>(srcEnergies[sysIdx]);
+    lineSearchLambdas[sysIdx] = storageT{1};
   }
 }
 
-void BfgsBatchMinimizer::doLineSearchSetup(const double* srcEnergies) {
-  const int numblocks = (numSystems_ + 128 - 1) / 128;
-  setLineStatusAndEnergyFromGlobalKernel<<<numblocks, 128, 0, stream_>>>(numSystems_,
-                                                                         statuses_.data(),
-                                                                         lineSearchStatus_.data(),
-                                                                         srcEnergies,
-                                                                         lineSearchStoredEnergy_.data(),
-                                                                         lineSearchLambdas_.data());
-
+template <typename real> void BfgsBatchMinimizerT<real>::doLineSearchSetup(const real* srcEnergies) {
+  const int     numblocks      = (numSystems_ + 128 - 1) / 128;
   constexpr int blockSizeSetup = 128;
-  initializeLineSearchKernel<<<numUnfinishedSystems_, blockSizeSetup, 0, stream_>>>(statuses_.data(),
-                                                                                    positionsDevice,
-                                                                                    gradDevice,
-                                                                                    atomStartsDevice,
-                                                                                    lineSearchMaxSteps_.data(),
-                                                                                    lineSearchDir_.data(),
-                                                                                    lineSearchSlope_.data(),
-                                                                                    lineSearchLambdaMins_.data(),
-                                                                                    activeSystemIndices_.data(),
-                                                                                    dataDim_);
+  setLineStatusAndEnergyFromGlobalKernel<real><<<numblocks, 128, 0, stream_>>>(numSystems_,
+                                                                               statuses_.data(),
+                                                                               lineSearchStatus_.data(),
+                                                                               srcEnergies,
+                                                                               lineSearchStoredEnergy_.data(),
+                                                                               lineSearchLambdas_.data());
+  initializeLineSearchKernel<real, real, real>
+    <<<numUnfinishedSystems_, blockSizeSetup, 0, stream_>>>(statuses_.data(),
+                                                            positionsDevice,
+                                                            gradDevice,
+                                                            atomStartsDevice,
+                                                            lineSearchMaxSteps_.data(),
+                                                            lineSearchDir_.data(),
+                                                            lineSearchSlope_.data(),
+                                                            lineSearchLambdaMins_.data(),
+                                                            activeSystemIndices_.data(),
+                                                            dataDim_);
   cudaCheckError(cudaGetLastError());
 }
 
-__global__ void lineSearchPerturbKernel(const int*    atomStarts,
-                                        const double* refPos,
-                                        const double* dirs,
-                                        const double* lambdas,
-                                        const double* lambdaMins,
-                                        double*       positions,
-                                        int16_t*      statuses,
-                                        const int*    activeSystemIndices,
-                                        const int     DIM) {
-  const int     sysIdx        = activeSystemIndices[blockIdx.x];
-  const int     idxInSys      = threadIdx.x;
-  const int     numTerms      = DIM * (atomStarts[sysIdx + 1] - atomStarts[sysIdx]);
-  const double* dirStart      = &dirs[atomStarts[sysIdx] * DIM];
-  const double* oldPosStart   = &refPos[atomStarts[sysIdx] * DIM];
-  double*       posStart      = &positions[atomStarts[sysIdx] * DIM];
-  const bool    isFirstThread = threadIdx.x == 0;
+template <typename real, typename storageT>
+__global__ void lineSearchPerturbKernel(const int*      atomStarts,
+                                        const storageT* refPos,
+                                        const storageT* dirs,
+                                        const storageT* lambdas,
+                                        const storageT* lambdaMins,
+                                        storageT*       statePositions,
+                                        storageT*       evalPositions,
+                                        int16_t*        statuses,
+                                        const int*      activeSystemIndices,
+                                        const int       DIM) {
+  const int       sysIdx        = activeSystemIndices[blockIdx.x];
+  const int       idxInSys      = threadIdx.x;
+  const int       numTerms      = DIM * (atomStarts[sysIdx + 1] - atomStarts[sysIdx]);
+  const storageT* dirStart      = &dirs[atomStarts[sysIdx] * DIM];
+  const storageT* oldPosStart   = &refPos[atomStarts[sysIdx] * DIM];
+  storageT*       statePosStart = &statePositions[atomStarts[sysIdx] * DIM];
+  storageT*       evalPosStart  = &evalPositions[atomStarts[sysIdx] * DIM];
+  const bool      isFirstThread = threadIdx.x == 0;
 
   const int16_t status = statuses[sysIdx];
   if (status != -2) {
     // Case where we've already converged or failed.
     return;
   }
-  const double lambda    = lambdas[sysIdx];
-  const double lambdaMin = lambdaMins[sysIdx];
+  const real lambda    = static_cast<real>(lambdas[sysIdx]);
+  const real lambdaMin = static_cast<real>(lambdaMins[sysIdx]);
 
   if (lambda < lambdaMin) {
     if (isFirstThread) {
@@ -232,32 +255,36 @@ __global__ void lineSearchPerturbKernel(const int*    atomStarts,
   }
 
   for (int i = idxInSys; i < numTerms; i += blockDim.x) {
-    posStart[i] = oldPosStart[i] + lambda * dirStart[i];
+    const real value = static_cast<real>(oldPosStart[i]) + lambda * static_cast<real>(dirStart[i]);
+    statePosStart[i] = static_cast<storageT>(value);
+    evalPosStart[i]  = static_cast<storageT>(value);
   }
 }
 
-void BfgsBatchMinimizer::doLineSearchPerturb() {
-  lineSearchPerturbKernel<<<numUnfinishedSystems_, 128, 0, stream_>>>(atomStartsDevice,
-                                                                      positionsDevice,
-                                                                      lineSearchDir_.data(),
-                                                                      lineSearchLambdas_.data(),
-                                                                      lineSearchLambdaMins_.data(),
-                                                                      scratchPositions_.data(),
-                                                                      lineSearchStatus_.data(),
-                                                                      activeSystemIndices_.data(),
-                                                                      dataDim_);
+template <typename real> void BfgsBatchMinimizerT<real>::doLineSearchPerturb() {
+  lineSearchPerturbKernel<real, real><<<numUnfinishedSystems_, 128, 0, stream_>>>(atomStartsDevice,
+                                                                                  positionsDevice,
+                                                                                  lineSearchDir_.data(),
+                                                                                  lineSearchLambdas_.data(),
+                                                                                  lineSearchLambdaMins_.data(),
+                                                                                  scratchPositions_.data(),
+                                                                                  scratchPositions_.data(),
+                                                                                  lineSearchStatus_.data(),
+                                                                                  activeSystemIndices_.data(),
+                                                                                  dataDim_);
   cudaCheckError(cudaGetLastError());
 }
 
-__global__ void lineSearchPostEnergyKernel(const int     numSystems,
-                                           const bool    isFirstIter,
-                                           const double* prevE,  // oldval
-                                           const double* newE,   // newval
-                                           const double* slopes,
-                                           double*       eScratch,  // val2
-                                           double*       lambdas,
-                                           double*       lambda2s,
-                                           int16_t*      statuses) {
+template <typename real, typename storageT>
+__global__ void lineSearchPostEnergyKernel(const int       numSystems,
+                                           const bool      isFirstIter,
+                                           const storageT* prevE,  // oldval
+                                           const storageT* newE,   // newval
+                                           const storageT* slopes,
+                                           storageT*       eScratch,  // val2
+                                           storageT*       lambdas,
+                                           storageT*       lambda2s,
+                                           int16_t*        statuses) {
   const int sysIdx = threadIdx.x + blockIdx.x * blockDim.x;
 
   if (sysIdx >= numSystems) {
@@ -268,73 +295,76 @@ __global__ void lineSearchPostEnergyKernel(const int     numSystems,
     return;
   }
 
-  const double slope  = slopes[sysIdx];
-  const double newVal = newE[sysIdx];
-  const double oldVal = prevE[sysIdx];
-  const double lambda = lambdas[sysIdx];
-  if (newVal - oldVal <= FUNCTOL * lambda * slope) {
+  const real slope  = static_cast<real>(slopes[sysIdx]);
+  const real newVal = static_cast<real>(newE[sysIdx]);
+  const real oldVal = static_cast<real>(prevE[sysIdx]);
+  const real lambda = static_cast<real>(lambdas[sysIdx]);
+  if (newVal - oldVal <= static_cast<real>(FUNCTOL) * lambda * slope) {
     // we're converged on the function:
     statuses[sysIdx] = 0;
     return;
   }
   // if we made it this far, we need to backtrack:
-  double tmpLambda;
+  real tmpLambda;
   if (isFirstIter) {
     // it's the first step:
-    tmpLambda = -slope / (2.0 * (newVal - oldVal - slope));
+    tmpLambda = -slope / (real{2} * (newVal - oldVal - slope));
   } else {
-    const double val2    = eScratch[sysIdx];
-    const double lambda2 = lambda2s[sysIdx];
-    double       rhs1    = newVal - oldVal - lambda * slope;
-    double       rhs2    = val2 - oldVal - lambda2 * slope;
-    double       a       = (rhs1 / (lambda * lambda) - rhs2 / (lambda2 * lambda2)) / (lambda - lambda2);
-    double       b = (-lambda2 * rhs1 / (lambda * lambda) + lambda * rhs2 / (lambda2 * lambda2)) / (lambda - lambda2);
-    if (a == 0.0) {
-      tmpLambda = -slope / (2.0 * b);
+    const real val2    = static_cast<real>(eScratch[sysIdx]);
+    const real lambda2 = static_cast<real>(lambda2s[sysIdx]);
+    real       rhs1    = newVal - oldVal - lambda * slope;
+    real       rhs2    = val2 - oldVal - lambda2 * slope;
+    real       a       = (rhs1 / (lambda * lambda) - rhs2 / (lambda2 * lambda2)) / (lambda - lambda2);
+    real       b = (-lambda2 * rhs1 / (lambda * lambda) + lambda * rhs2 / (lambda2 * lambda2)) / (lambda - lambda2);
+    if (a == real{0}) {
+      tmpLambda = -slope / (real{2} * b);
     } else {
-      double disc = b * b - 3 * a * slope;
-      if (disc < 0.0) {
-        tmpLambda = 0.5 * lambda;
-      } else if (b <= 0.0) {
-        tmpLambda = (-b + sqrt(disc)) / (3.0 * a);
+      real disc = b * b - real{3} * a * slope;
+      if (disc < real{0}) {
+        tmpLambda = real{0.5} * lambda;
+      } else if (b <= real{0}) {
+        tmpLambda = (-b + bfgsSqrt(disc)) / (real{3} * a);
       } else {
-        tmpLambda = -slope / (b + sqrt(disc));
+        tmpLambda = -slope / (b + bfgsSqrt(disc));
       }
     }
-    if (tmpLambda > 0.5 * lambda) {
-      tmpLambda = 0.5 * lambda;
+    if (tmpLambda > real{0.5} * lambda) {
+      tmpLambda = real{0.5} * lambda;
     }
   }
-  lambda2s[sysIdx] = lambda;
-  eScratch[sysIdx] = newVal;
-  lambdas[sysIdx]  = max(tmpLambda, 0.1 * lambda);
+  lambda2s[sysIdx] = static_cast<storageT>(lambda);
+  eScratch[sysIdx] = static_cast<storageT>(newVal);
+  lambdas[sysIdx]  = static_cast<storageT>(max(tmpLambda, real{0.1} * lambda));
 }
 
-void BfgsBatchMinimizer::doLineSearchPostEnergy(const int iter) {
+template <typename real> void BfgsBatchMinimizerT<real>::doLineSearchPostEnergy(const int iter) {
   const int numBlocks = (numSystems_ + 127) / 128;
-  lineSearchPostEnergyKernel<<<numBlocks, 128, 0, stream_>>>(numSystems_,
-                                                             iter == 0,
-                                                             lineSearchStoredEnergy_.data(),
-                                                             energyOutsDevice,
-                                                             lineSearchSlope_.data(),
-                                                             lineSearchEnergyScratch_.data(),
-                                                             lineSearchLambdas_.data(),
-                                                             lineSearchLambdas2_.data(),
-                                                             lineSearchStatus_.data());
+  lineSearchPostEnergyKernel<real, real><<<numBlocks, 128, 0, stream_>>>(numSystems_,
+                                                                         iter == 0,
+                                                                         lineSearchStoredEnergy_.data(),
+                                                                         energyOutsDevice,
+                                                                         lineSearchSlope_.data(),
+                                                                         lineSearchEnergyScratch_.data(),
+                                                                         lineSearchLambdas_.data(),
+                                                                         lineSearchLambdas2_.data(),
+                                                                         lineSearchStatus_.data());
   cudaCheckError(cudaGetLastError());
 }
 
-__global__ void lineSearchPostLoopKernel(const int*    atomStarts,
-                                         int16_t*      statuses,
-                                         const double* oldPos,
-                                         double*       pos,
-                                         const int*    activeSystemIndices,
-                                         const int     DIM) {
-  const int     sysIdx      = activeSystemIndices[blockIdx.x];
-  const int     idxInSys    = threadIdx.x;
-  const int     numTerms    = DIM * (atomStarts[sysIdx + 1] - atomStarts[sysIdx]);
-  const double* oldPosStart = &oldPos[atomStarts[sysIdx] * DIM];
-  double*       posStart    = &pos[atomStarts[sysIdx] * DIM];
+template <typename storageT>
+__global__ void lineSearchPostLoopKernel(const int*      atomStarts,
+                                         int16_t*        statuses,
+                                         const storageT* oldPos,
+                                         storageT*       statePos,
+                                         storageT*       evalPos,
+                                         const int*      activeSystemIndices,
+                                         const int       DIM) {
+  const int       sysIdx      = activeSystemIndices[blockIdx.x];
+  const int       idxInSys    = threadIdx.x;
+  const int       numTerms    = DIM * (atomStarts[sysIdx + 1] - atomStarts[sysIdx]);
+  const storageT* oldPosStart = &oldPos[atomStarts[sysIdx] * DIM];
+  storageT*       stateStart  = &statePos[atomStarts[sysIdx] * DIM];
+  storageT*       evalStart   = &evalPos[atomStarts[sysIdx] * DIM];
 
   // Special handling of statuses needed here, to reproduce RDKit behavior which has either early returns
   // or loop breaks depending on the status. Note that "-2" is not a status in the RDKit code, but for us
@@ -350,18 +380,20 @@ __global__ void lineSearchPostLoopKernel(const int*    atomStarts,
   }
   if (needUpdatePositions) {
     for (int i = idxInSys; i < numTerms; i += blockDim.x) {
-      posStart[i] = oldPosStart[i];
+      stateStart[i] = static_cast<storageT>(oldPosStart[i]);
+      evalStart[i]  = oldPosStart[i];
     }
   }
 }
 
-void BfgsBatchMinimizer::doLineSearchPostLoop() {
-  lineSearchPostLoopKernel<<<numUnfinishedSystems_, 128, 0, stream_>>>(atomStartsDevice,
-                                                                       lineSearchStatus_.data(),
-                                                                       positionsDevice,
-                                                                       scratchPositions_.data(),
-                                                                       activeSystemIndices_.data(),
-                                                                       dataDim_);
+template <typename real> void BfgsBatchMinimizerT<real>::doLineSearchPostLoop() {
+  lineSearchPostLoopKernel<real><<<numUnfinishedSystems_, 128, 0, stream_>>>(atomStartsDevice,
+                                                                             lineSearchStatus_.data(),
+                                                                             positionsDevice,
+                                                                             scratchPositions_.data(),
+                                                                             scratchPositions_.data(),
+                                                                             activeSystemIndices_.data(),
+                                                                             dataDim_);
   cudaCheckError(cudaGetLastError());
 }
 
@@ -373,11 +405,12 @@ struct EqualsZeroFunctor {
   __host__ __device__ int operator()(const int16_t& x) const { return x == 0; }
 };
 
-BfgsBatchMinimizer::BfgsBatchMinimizer(const int    dataDim,
-                                       DebugLevel   debugLevel,
-                                       bool         scaleGrads,
-                                       cudaStream_t stream,
-                                       BfgsBackend  backend)
+template <typename real>
+BfgsBatchMinimizerT<real>::BfgsBatchMinimizerT(const int    dataDim,
+                                               DebugLevel   debugLevel,
+                                               bool         scaleGrads,
+                                               cudaStream_t stream,
+                                               BfgsBackend  backend)
     : countFinished_(0, stream) {
   debugLevel_ = debugLevel;
   dataDim_    = dataDim;
@@ -408,45 +441,44 @@ BfgsBatchMinimizer::BfgsBatchMinimizer(const int    dataDim,
     countFinished_.setStream(stream_);
     lineSearchStoredEnergy_.setStream(stream_);
     lineSearchEnergyScratch_.setStream(stream_);
-    lineSearchEnergyOut_.setStream(stream_);
-
-    finalEnergies_.setStream(stream_);
 
     hessianStarts_.setStream(stream_);
     scratchGrad_.setStream(stream_);
     gradScales_.setStream(stream_);
     inverseHessian_.setStream(stream_);
     hessDGrad_.setStream(stream_);
+    ownedPositions_.setStream(stream_);
+    ownedGrad_.setStream(stream_);
+    ownedEnergies_.setStream(stream_);
     scratchBuffersDevice_.setStream(stream_);
     activeMolIdsDevice_.setStream(stream_);
   }
-  // Allocate device array for per-molecule backend (also needed for HYBRID which might use it)
-  if (backend_ == BfgsBackend::PER_MOLECULE || backend_ == BfgsBackend::HYBRID) {
-    scratchBuffersDevice_.resize(5);
-  }
 }
-BfgsBatchMinimizer::~BfgsBatchMinimizer() = default;
+template <typename real> BfgsBatchMinimizerT<real>::~BfgsBatchMinimizerT() = default;
 
-BfgsBackend BfgsBatchMinimizer::resolveBackend(const std::vector<int>& atomStartsHost) const {
+template <typename real>
+BfgsBackend BfgsBatchMinimizerT<real>::resolveBackend(const std::vector<int>& atomStartsHost) const {
   return nvMolKit::resolveBackend(backend_, atomStartsHost);
 }
 
-void BfgsBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
-                                    const int*              atomStarts,
-                                    double*                 positions,
-                                    double*                 grad,
-                                    double*                 energyOuts,
-                                    BfgsBackend             effectiveBackend,
-                                    const uint8_t*          activeThisStage) {
+template <typename real>
+void BfgsBatchMinimizerT<real>::initialize(const std::vector<int>& atomStartsHost,
+                                           const int*              atomStarts,
+                                           double*                 positions,
+                                           double*                 grad,
+                                           double*                 energyOuts,
+                                           BfgsBackend             effectiveBackend,
+                                           const uint8_t*          activeThisStage) {
   atomStartsDevice = atomStarts;
-  positionsDevice  = positions;
-  gradDevice       = grad;
-  energyOutsDevice = energyOuts;
+  if constexpr (std::is_same_v<real, double>) {
+    positionsDevice  = positions;
+    gradDevice       = grad;
+    energyOutsDevice = energyOuts;
+  }
 
   const int numSystems = atomStartsHost.size() - 1;
   activeHost_.resize(numSystems);
   convergenceHost_.resize(numSystems);
-  scratchBufferPointersHost_.resize(5);
 
   statuses_.resize(numSystems);
   if (activeThisStage) {
@@ -511,13 +543,6 @@ void BfgsBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
     }
   }
 
-  activeSystemIndices_.resize(numSystems_);
-  allSystemIndices_.resize(numSystems_);
-  systemIndicesHost_.resize(numSystems_);
-  std::iota(systemIndicesHost_.begin(), systemIndicesHost_.end(), 0);
-  allSystemIndices_.setFromVector(systemIndicesHost_);
-  activeSystemIndices_.setFromVector(systemIndicesHost_);
-
   hessianStartsHost_.clear();
   hessianStartsHost_.reserve(numSystems + 1);
   hessianStartsHost_.push_back(0);
@@ -532,16 +557,41 @@ void BfgsBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
   inverseHessian_.resize(hessianStartsHost_.back());
   inverseHessian_.zero();
 
-  hessDGrad_.resize(atomStartsHost.back() * dataDim_);
+  const int numStateTerms = atomStartsHost.back() * dataDim_;
+  scratchPositions_.resize(numStateTerms);
+  scratchPositions_.zero();
+  lineSearchDir_.resize(numStateTerms);
+  scratchGrad_.resize(numStateTerms);
+  hessDGrad_.resize(numStateTerms);
   hessDGrad_.zero();
 
-  scratchPositions_.resize(atomStartsHost.back() * dataDim_);
-  scratchPositions_.zero();
-  scratchGrad_.resize(atomStartsHost.back() * dataDim_);
-  gradScales_.resize(numSystems);
+  if (effectiveBackend == BfgsBackend::PER_MOLECULE) {
+    return;
+  }
 
-  lineSearchDir_.resize(atomStartsHost.back() * dataDim_);
+  activeSystemIndices_.resize(numSystems_);
+  allSystemIndices_.resize(numSystems_);
+  systemIndicesHost_.resize(numSystems_);
+  std::iota(systemIndicesHost_.begin(), systemIndicesHost_.end(), 0);
+  allSystemIndices_.setFromVector(systemIndicesHost_);
+  activeSystemIndices_.setFromVector(systemIndicesHost_);
+
   lineSearchStatus_.resize(numSystems);
+  if constexpr (!std::is_same_v<real, double>) {
+    ownedEnergies_.resize(numSystems);
+    ownedPositions_.resize(numStateTerms);
+    ownedGrad_.resize(numStateTerms);
+    if (positions != nullptr) {
+      cudaCheckError(detail::convertDeviceArray(ownedPositions_.data(), positions, numStateTerms, stream_));
+    } else {
+      ownedPositions_.zero();
+    }
+    ownedGrad_.zero();
+    positionsDevice  = ownedPositions_.data();
+    gradDevice       = ownedGrad_.data();
+    energyOutsDevice = ownedEnergies_.data();
+  }
+  gradScales_.resize(numSystems);
   lineSearchLambdaMins_.resize(numSystems);
   lineSearchLambdas_.resize(numSystems);
   lineSearchLambdas2_.resize(numSystems);
@@ -578,9 +628,10 @@ void BfgsBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
   }
 }
 
+template <typename storageT>
 __global__ void populateHessianIdentityKernel(const int* hessianStarts,
                                               const int* atomStarts,
-                                              double*    inverseHessian,
+                                              storageT*  inverseHessian,
                                               const int  DIM) {
   const int sysIdx        = blockIdx.x;
   const int idxInSys      = threadIdx.x;
@@ -591,12 +642,12 @@ __global__ void populateHessianIdentityKernel(const int* hessianStarts,
 
   for (int i = idxInSys; i < rowLength; i += blockDim.x) {
     if (i < numTerms) {
-      inverseHessian[writeStartIdx + i * rowLength + i] = 1.0;
+      inverseHessian[writeStartIdx + i * rowLength + i] = static_cast<storageT>(1.0);
     }
   }
 }
 
-void BfgsBatchMinimizer::setHessianToIdentity() {
+template <typename real> void BfgsBatchMinimizerT<real>::setHessianToIdentity() {
   constexpr int blockDim  = 128;
   const int     numBlocks = hessianStarts_.size() - 1;
   inverseHessian_.zero();
@@ -607,55 +658,59 @@ void BfgsBatchMinimizer::setHessianToIdentity() {
   cudaCheckError(cudaGetLastError());
 }
 
-__global__ void setMaxStepKernel(const int* atomStarts, const double* positions, double* maxSteps, const int DIM) {
+template <typename real, typename reduceT, typename storageT>
+__global__ void setMaxStepKernel(const int* atomStarts, const storageT* positions, storageT* maxSteps, const int DIM) {
   const int  sysIdx        = blockIdx.x;
   const int  idxInSys      = threadIdx.x;
   const bool isFirstThread = threadIdx.x == 0;
 
-  const int     numTerms = DIM * (atomStarts[sysIdx + 1] - atomStarts[sysIdx]);
-  const double* posStart = &positions[atomStarts[sysIdx] * DIM];
+  const int       numTerms = DIM * (atomStarts[sysIdx + 1] - atomStarts[sysIdx]);
+  const storageT* posStart = &positions[atomStarts[sysIdx] * DIM];
 
-  double sumSquaredPos = 0.0;
+  reduceT sumSquaredPos = 0;
   for (int i = idxInSys; i < numTerms; i += blockDim.x) {
-    double dx2 = posStart[i] * posStart[i];
-    sumSquaredPos += dx2;
+    const real x = static_cast<real>(posStart[i]);
+    sumSquaredPos += static_cast<reduceT>(x * x);
   }
 
-  using BlockReduce = cub::BlockReduce<double, 128>;
-  __shared__ BlockReduce::TempStorage tempStorage;
+  using BlockReduce = cub::BlockReduce<reduceT, 128>;
+  __shared__ typename BlockReduce::TempStorage tempStorage;
 
-  const double squaredSum = BlockReduce(tempStorage).Sum(sumSquaredPos);
+  const reduceT squaredSum = BlockReduce(tempStorage).Sum(sumSquaredPos);
   if (isFirstThread) {
-    constexpr double maxStepFactor = 100.0;
-    maxSteps[sysIdx]               = maxStepFactor * max(sqrt(squaredSum), static_cast<double>(numTerms));
+    constexpr real maxStepFactor = real{100};
+    maxSteps[sysIdx] =
+      static_cast<storageT>(maxStepFactor * max(static_cast<real>(bfgsSqrt(squaredSum)), static_cast<real>(numTerms)));
   }
 }
 
-void BfgsBatchMinimizer::setMaxStep() {
-  setMaxStepKernel<<<numSystems_, 128, 0, stream_>>>(atomStartsDevice,
-                                                     positionsDevice,
-                                                     lineSearchMaxSteps_.data(),
-                                                     dataDim_);
+template <typename real> void BfgsBatchMinimizerT<real>::setMaxStep() {
+  setMaxStepKernel<real, real, real>
+    <<<numSystems_, 128, 0, stream_>>>(atomStartsDevice, positionsDevice, lineSearchMaxSteps_.data(), dataDim_);
   cudaCheckError(cudaGetLastError());
 }
 
 namespace {
 
-__global__ void copyAndNegate(const int numElements, const double* src, double* dst) {
+template <typename sourceT, typename storageT>
+__global__ void copyAndNegate(const int numElements, const sourceT* src, storageT* dst) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < numElements) {
-    dst[idx] = -src[idx];
+    dst[idx] = static_cast<storageT>(-src[idx]);
   }
 }
 
-void prepareScratchBuffers(AsyncDeviceVector<double>&  grad,
-                           AsyncDeviceVector<double>&  lineSearchDir,
-                           AsyncDeviceVector<double>&  scratchPositions,
-                           AsyncDeviceVector<double>&  hessDGrad,
-                           AsyncDeviceVector<double>&  scratchGrad,
-                           AsyncDeviceVector<double*>& scratchBuffersDevice,
-                           PinnedHostVector<double*>&  scratchBufferPointersHost,
-                           cudaStream_t                stream) {
+template <typename storageT>
+void prepareScratchBuffers(AsyncDeviceVector<storageT>&  grad,
+                           AsyncDeviceVector<storageT>&  lineSearchDir,
+                           AsyncDeviceVector<storageT>&  scratchPositions,
+                           AsyncDeviceVector<storageT>&  hessDGrad,
+                           AsyncDeviceVector<storageT>&  scratchGrad,
+                           AsyncDeviceVector<storageT*>& scratchBuffersDevice,
+                           PinnedHostVector<storageT*>&  scratchBufferPointersHost,
+                           cudaStream_t                  stream) {
+  scratchBuffersDevice.resize(5);
+  scratchBufferPointersHost.resize(5);
   scratchBufferPointersHost[0] = grad.data();
   scratchBufferPointersHost[1] = lineSearchDir.data();
   scratchBufferPointersHost[2] = scratchPositions.data();
@@ -664,7 +719,7 @@ void prepareScratchBuffers(AsyncDeviceVector<double>&  grad,
 
   cudaCheckError(cudaMemcpyAsync(scratchBuffersDevice.data(),
                                  scratchBufferPointersHost.data(),
-                                 5 * sizeof(double*),
+                                 5 * sizeof(storageT*),
                                  cudaMemcpyHostToDevice,
                                  stream));
 }
@@ -687,7 +742,7 @@ bool checkConvergence(const std::vector<int>&     activeMolIds,
 
 }  // namespace
 
-int BfgsBatchMinimizer::lineSearchCountFinished() const {
+template <typename real> int BfgsBatchMinimizerT<real>::lineSearchCountFinished() const {
   size_t temp_storage_bytes = countTempStorage_.size();
   cub::DeviceReduce::TransformReduce(countTempStorage_.data(),
                                      temp_storage_bytes,
@@ -704,7 +759,7 @@ int BfgsBatchMinimizer::lineSearchCountFinished() const {
   return finishedHost;
 }
 
-int BfgsBatchMinimizer::compactAndCountConverged() const {
+template <typename real> int BfgsBatchMinimizerT<real>::compactAndCountConverged() const {
   const ScopedNvtxRange bfgsCompactAndCountConverged("BfgsBatchMinimizer::compactAndCountConverged");
   size_t                temp_storage_bytes = countTempStorage_.size();
 
@@ -729,15 +784,16 @@ int BfgsBatchMinimizer::compactAndCountConverged() const {
   return numSystems_ - unfinishedHost;
 }
 
-__global__ void setDirectionKernel(const int*    atomStarts,
-                                   const double* positionsFromLineSearch,
-                                   const double* grads,
-                                   double*       xis,
-                                   double*       positions,
-                                   double*       dGrads,
-                                   int16_t*      statuses,
-                                   const int*    activeSystemIndices,
-                                   const int     DIM) {
+template <typename real, typename reduceT, typename storageT>
+__global__ void setDirectionKernel(const int*      atomStarts,
+                                   const storageT* positionsFromLineSearch,
+                                   const storageT* grads,
+                                   storageT*       xis,
+                                   storageT*       positions,
+                                   storageT*       dGrads,
+                                   int16_t*        statuses,
+                                   const int*      activeSystemIndices,
+                                   const int       DIM) {
   const int sysIdx          = activeSystemIndices[blockIdx.x];
   const int idxWithinSystem = threadIdx.x;
   const int numTerms        = DIM * (atomStarts[sysIdx + 1] - atomStarts[sysIdx]);
@@ -747,45 +803,46 @@ __global__ void setDirectionKernel(const int*    atomStarts,
     return;
   }
 
-  double*       localXi            = &xis[startIdx];
-  double*       localPos           = &positions[startIdx];
-  const double* localPosLineSearch = &positionsFromLineSearch[startIdx];
-  const double* localGrad          = &grads[startIdx];
-  double*       localDGrad         = &dGrads[startIdx];
+  storageT*       localXi            = &xis[startIdx];
+  storageT*       localPos           = &positions[startIdx];
+  const storageT* localPosLineSearch = &positionsFromLineSearch[startIdx];
+  const storageT* localGrad          = &grads[startIdx];
+  storageT*       localDGrad         = &dGrads[startIdx];
 
-  double localMax = 0.0;
+  reduceT localMax = 0;
   for (int i = idxWithinSystem; i < numTerms; i += blockDim.x) {
-    localXi[i]    = localPosLineSearch[i] - localPos[i];
+    const real xi = static_cast<real>(localPosLineSearch[i]) - static_cast<real>(localPos[i]);
+    localXi[i]    = static_cast<storageT>(xi);
     localPos[i]   = localPosLineSearch[i];
-    localDGrad[i] = localGrad[i];
+    localDGrad[i] = static_cast<storageT>(localGrad[i]);
 
-    double temp = fabs(localXi[i]) / fmax(fabs(localPos[i]), 1.0);
+    const real temp = bfgsAbs(xi) / max(bfgsAbs(static_cast<real>(localPos[i])), real{1});
     // TODO we could have a better thread distribution pattern for the local Max.
     if (temp > localMax) {
       localMax = temp;
     }
   }
 
-  __shared__ cub::BlockReduce<double, 128>::TempStorage tempStorage;
-  double           blockMax = cub::BlockReduce<double, 128>(tempStorage).Reduce(localMax, cubMax());
-  constexpr double TOLX     = 4. * 3e-8;
+  __shared__ typename cub::BlockReduce<reduceT, 128>::TempStorage tempStorage;
+  const reduceT     blockMax = cub::BlockReduce<reduceT, 128>(tempStorage).Reduce(localMax, cubMax());
+  constexpr reduceT TOLX     = static_cast<reduceT>(4. * 3e-8);
   if (idxWithinSystem == 0 && blockMax < TOLX) {
     // Converged
     statuses[sysIdx] = 0;
   }
 }
 
-void BfgsBatchMinimizer::setDirection() {
+template <typename real> void BfgsBatchMinimizerT<real>::setDirection() {
   const ScopedNvtxRange bfgsSetDirection("BfgsBatchMinimizer::setDirection");
-  setDirectionKernel<<<numUnfinishedSystems_, 128, 0, stream_>>>(atomStartsDevice,
-                                                                 scratchPositions_.data(),
-                                                                 gradDevice,
-                                                                 lineSearchDir_.data(),
-                                                                 positionsDevice,
-                                                                 scratchGrad_.data(),
-                                                                 statuses_.data(),
-                                                                 activeSystemIndices_.data(),
-                                                                 dataDim_);
+  setDirectionKernel<real, real, real><<<numUnfinishedSystems_, 128, 0, stream_>>>(atomStartsDevice,
+                                                                                   scratchPositions_.data(),
+                                                                                   gradDevice,
+                                                                                   lineSearchDir_.data(),
+                                                                                   positionsDevice,
+                                                                                   scratchGrad_.data(),
+                                                                                   statuses_.data(),
+                                                                                   activeSystemIndices_.data(),
+                                                                                   dataDim_);
   cudaCheckError(cudaGetLastError());
 }
 
@@ -794,11 +851,11 @@ void BfgsBatchMinimizer::setDirection() {
 // gradient components; commit 5b1d04d23 (RDKit 2025.09) switched to |grad|.
 // Follow whichever rule the linked RDKit uses so weighted MMFF/UFF minimization
 // trajectories agree with the host reference.
-template <bool scaleGrads>
+template <bool scaleGrads, typename real, typename reduceT, typename storageT>
 __global__ void scaleGradKernel(const int16_t* statuses,
                                 const int*     atomStarts,
-                                double*        grads,
-                                double*        gradScales,
+                                storageT*      grads,
+                                storageT*      gradScales,
                                 const int*     activeSystemIndices,
                                 const int      DIM) {
   constexpr bool kRdkitHasGradScaleFix =
@@ -811,25 +868,26 @@ __global__ void scaleGradKernel(const int16_t* statuses,
     return;
   }
 
-  double* localGrad = &grads[atomStarts[sysIdx] * DIM];
+  storageT* localGrad = &grads[atomStarts[sysIdx] * DIM];
 
-  double            maxGrad   = kRdkitHasGradScaleFix ? 0.0 : -1e8;
-  double            gradScale = scaleGrads ? 0.1 : 1.0;
-  __shared__ double distributedMax[1];
+  reduceT            maxGrad   = kRdkitHasGradScaleFix ? reduceT{0} : reduceT{-1e8};
+  real               gradScale = scaleGrads ? real{0.1} : real{1};
+  __shared__ reduceT distributedMax[1];
   if (idxWithinSystem == 0) {
     distributedMax[0] = -1.0;  // See note at start at function, this will work for now.
   }
 
   for (int i = idxWithinSystem; i < numTerms; i += blockDim.x) {
-    localGrad[i] *= gradScale;
-    const double cmp = kRdkitHasGradScaleFix ? fabs(localGrad[i]) : localGrad[i];
+    const real scaled = static_cast<real>(localGrad[i]) * gradScale;
+    localGrad[i]      = scaled;
+    const real cmp    = kRdkitHasGradScaleFix ? bfgsAbs(scaled) : scaled;
     if (cmp > maxGrad) {
       maxGrad = cmp;
     }
   }
 
-  __shared__ cub::BlockReduce<double, 128>::TempStorage tempStorage;
-  double blockMax = cub::BlockReduce<double, 128>(tempStorage).Reduce(maxGrad, cubMax());
+  __shared__ typename cub::BlockReduce<reduceT, 128>::TempStorage tempStorage;
+  const reduceT blockMax = cub::BlockReduce<reduceT, 128>(tempStorage).Reduce(maxGrad, cubMax());
 
   if (idxWithinSystem == 0) {
     distributedMax[0] = blockMax;
@@ -842,44 +900,45 @@ __global__ void scaleGradKernel(const int16_t* statuses,
       gradScale *= .5;
     }
     for (int i = idxWithinSystem; i < numTerms; i += blockDim.x) {
-      localGrad[i] *= gradScale;
+      localGrad[i] = static_cast<real>(localGrad[i]) * gradScale;
     }
   }
   if (idxWithinSystem == 0) {
-    gradScales[sysIdx] = gradScale;
+    gradScales[sysIdx] = static_cast<storageT>(gradScale);
   }
 }
 
-void BfgsBatchMinimizer::scaleGrad(const bool preLoop) {
+template <typename real> void BfgsBatchMinimizerT<real>::scaleGrad(const bool preLoop) {
   const int  numSystems          = preLoop ? numSystems_ : numUnfinishedSystems_;
   const int* activeSystemIndices = preLoop ? nullptr : activeSystemIndices_.data();
   if (scaleGrads_) {
-    scaleGradKernel<true><<<numSystems, 128, 0, stream_>>>(statuses_.data(),
-                                                           atomStartsDevice,
-                                                           gradDevice,
-                                                           gradScales_.data(),
-                                                           activeSystemIndices,
-                                                           dataDim_);
+    scaleGradKernel<true, real, real, real><<<numSystems, 128, 0, stream_>>>(statuses_.data(),
+                                                                             atomStartsDevice,
+                                                                             gradDevice,
+                                                                             gradScales_.data(),
+                                                                             activeSystemIndices,
+                                                                             dataDim_);
   } else {
-    scaleGradKernel<false><<<numSystems, 128, 0, stream_>>>(statuses_.data(),
-                                                            atomStartsDevice,
-                                                            gradDevice,
-                                                            gradScales_.data(),
-                                                            activeSystemIndices,
-                                                            dataDim_);
+    scaleGradKernel<false, real, real, real><<<numSystems, 128, 0, stream_>>>(statuses_.data(),
+                                                                              atomStartsDevice,
+                                                                              gradDevice,
+                                                                              gradScales_.data(),
+                                                                              activeSystemIndices,
+                                                                              dataDim_);
   }
 }
 
-__global__ void updateDGradKernel(const double  gradTol,
-                                  const int*    atomStarts,
-                                  const double* energies,
-                                  const double* gradScales,
-                                  const double* grads,
-                                  const double* positions,
-                                  double*       dGrads,
-                                  int16_t*      statuses,
-                                  const int*    activeSystemIndices,
-                                  const int     DIM) {
+template <typename real, typename reduceT, typename storageT>
+__global__ void updateDGradKernel(const storageT  gradTol,
+                                  const int*      atomStarts,
+                                  const storageT* energies,
+                                  const storageT* gradScales,
+                                  const storageT* grads,
+                                  const storageT* positions,
+                                  storageT*       dGrads,
+                                  int16_t*        statuses,
+                                  const int*      activeSystemIndices,
+                                  const int       DIM) {
   const int sysIdx          = activeSystemIndices[blockIdx.x];
   const int idxWithinSystem = threadIdx.x;
   const int numTerms        = DIM * (atomStarts[sysIdx + 1] - atomStarts[sysIdx]);
@@ -889,23 +948,24 @@ __global__ void updateDGradKernel(const double  gradTol,
     return;
   }
 
-  const double* localGrad = &grads[startIdx];
+  const storageT* localGrad = &grads[startIdx];
 
-  const double* localPos   = &positions[startIdx];
-  double*       localDGrad = &dGrads[startIdx];
+  const storageT* localPos   = &positions[startIdx];
+  storageT*       localDGrad = &dGrads[startIdx];
 
-  double localMax = 0.0;
+  reduceT localMax = 0;
 
   for (int i = idxWithinSystem; i < numTerms; i += blockDim.x) {
-    localDGrad[i] = localGrad[i] - localDGrad[i];
-    double temp   = fabs(localGrad[i]) * fmax(fabs(localPos[i]), 1.0);
+    const real gradValue = static_cast<real>(localGrad[i]);
+    localDGrad[i]        = static_cast<storageT>(gradValue - static_cast<real>(localDGrad[i]));
+    const real temp      = bfgsAbs(gradValue) * max(bfgsAbs(static_cast<real>(localPos[i])), real{1});
     // TODO we could have a better thread distribution pattern for the local Max.
     if (temp > localMax) {
       localMax = temp;
     }
   }
-  __shared__ cub::BlockReduce<double, 128>::TempStorage tempStorage;
-  double blockMax = cub::BlockReduce<double, 128>(tempStorage).Reduce(localMax, cubMax());
+  __shared__ typename cub::BlockReduce<reduceT, 128>::TempStorage tempStorage;
+  reduceT blockMax = cub::BlockReduce<reduceT, 128>(tempStorage).Reduce(localMax, cubMax());
 
   if (idxWithinSystem == 0) {
     // rdkit/rdkit#9298 (merged RDKit 2026.03) fixed the signed-energy denominator bug:
@@ -913,58 +973,86 @@ __global__ void updateDGradKernel(const double  gradTol,
     // Use |energy| when linked against a fixed RDKit; keep signed otherwise for parity.
     constexpr bool kRdkitHasGradDenomFix =
       RDKIT_VERSION_MAJOR > 2026 || (RDKIT_VERSION_MAJOR == 2026 && RDKIT_VERSION_MINOR >= 3);
-    const double energyMag = kRdkitHasGradDenomFix ? fabs(energies[sysIdx]) : energies[sysIdx];
-    const double term      = max(energyMag * gradScales[sysIdx], 1.0);
+    const real energyValue = static_cast<real>(energies[sysIdx]);
+    const real energyMag   = kRdkitHasGradDenomFix ? bfgsAbs(energyValue) : energyValue;
+    const real term        = max(energyMag * static_cast<real>(gradScales[sysIdx]), real{1});
     blockMax /= term;
-    if (blockMax < gradTol) {
+    if (blockMax < static_cast<reduceT>(gradTol)) {
       // Converged
       statuses[sysIdx] = 0;
     }
   }
 }
 
-void BfgsBatchMinimizer::updateDGrad() {
+template <typename real> void BfgsBatchMinimizerT<real>::updateDGrad() {
   const ScopedNvtxRange bfgsUpdateDGrad("BfgsBatchMinimizer::updateDGrad");
-  updateDGradKernel<<<numUnfinishedSystems_, 128, 0, stream_>>>(gradTol_,
-                                                                atomStartsDevice,
-                                                                energyOutsDevice,
-                                                                gradScales_.data(),
-                                                                gradDevice,
-                                                                positionsDevice,
-                                                                scratchGrad_.data(),
-                                                                statuses_.data(),
-                                                                activeSystemIndices_.data(),
-                                                                dataDim_);
+  updateDGradKernel<real, real, real><<<numUnfinishedSystems_, 128, 0, stream_>>>(static_cast<real>(gradTol_),
+                                                                                  atomStartsDevice,
+                                                                                  energyOutsDevice,
+                                                                                  gradScales_.data(),
+                                                                                  gradDevice,
+                                                                                  positionsDevice,
+                                                                                  scratchGrad_.data(),
+                                                                                  statuses_.data(),
+                                                                                  activeSystemIndices_.data(),
+                                                                                  dataDim_);
   cudaCheckError(cudaGetLastError());
 }
 
-void BfgsBatchMinimizer::updateHessian() {
-  const ScopedNvtxRange bfgsUpdateHessian("BfgsBatchMinimizer::updateHessian");
-  // Determine if any active system exceeds the shared-memory-optimized limit
-  bool                  largeMol = hasLargeSystem_;
-  nvMolKit::updateInverseHessianBFGSBatch(numUnfinishedSystems_,
-                                          statuses_.data(),
-                                          hessianStarts_.data(),
-                                          atomStartsDevice,
-                                          inverseHessian_.data(),
-                                          scratchGrad_.data(),
-                                          lineSearchDir_.data(),
-                                          hessDGrad_.data(),
-                                          gradDevice,
-                                          dataDim_,
+template <typename storageT>
+void updateHessianState(int             numUnfinishedSystems,
+                        const int16_t*  statuses,
+                        const int*      hessianStarts,
+                        const int*      atomStarts,
+                        storageT*       inverseHessian,
+                        storageT*       dGrads,
+                        storageT*       dirs,
+                        storageT*       hessDGrads,
+                        const storageT* grads,
+                        int             dataDim,
+                        bool            largeMol,
+                        const int*      activeSystemIndices,
+                        cudaStream_t    stream) {
+  nvMolKit::updateInverseHessianBFGSBatch(numUnfinishedSystems,
+                                          statuses,
+                                          hessianStarts,
+                                          atomStarts,
+                                          inverseHessian,
+                                          dGrads,
+                                          dirs,
+                                          hessDGrads,
+                                          grads,
+                                          dataDim,
                                           largeMol,
-                                          activeSystemIndices_.data(),
-                                          stream_);
+                                          activeSystemIndices,
+                                          stream);
 }
 
-void BfgsBatchMinimizer::collectDebugData() {
+template <typename real> void BfgsBatchMinimizerT<real>::updateHessian() {
+  const ScopedNvtxRange bfgsUpdateHessian("BfgsBatchMinimizer::updateHessian");
+  updateHessianState(numUnfinishedSystems_,
+                     statuses_.data(),
+                     hessianStarts_.data(),
+                     atomStartsDevice,
+                     inverseHessian_.data(),
+                     scratchGrad_.data(),
+                     lineSearchDir_.data(),
+                     hessDGrad_.data(),
+                     gradDevice,
+                     dataDim_,
+                     hasLargeSystem_,
+                     activeSystemIndices_.data(),
+                     stream_);
+}
+
+template <typename real> void BfgsBatchMinimizerT<real>::collectDebugData() {
   if (debugLevel_ != DebugLevel::STEPWISE) {
     return;
   }
 
   // Copy energies and statuses to host for debugging.
   std::vector<int16_t> statusesHost(numSystems_);
-  std::vector<double>  energiesHost(numSystems_);
+  std::vector<real>    energiesHost(numSystems_);
   cudaCheckError(cudaMemcpyAsync(statusesHost.data(),
                                  statuses_.data(),
                                  numSystems_ * sizeof(int16_t),
@@ -972,68 +1060,54 @@ void BfgsBatchMinimizer::collectDebugData() {
                                  stream_));
   cudaCheckError(cudaMemcpyAsync(energiesHost.data(),
                                  energyOutsDevice,
-                                 numSystems_ * sizeof(double),
+                                 numSystems_ * sizeof(real),
                                  cudaMemcpyDeviceToHost,
                                  stream_));
   cudaCheckError(cudaStreamSynchronize(stream_));
 
   stepwiseStatuses.push_back(std::move(statusesHost));
-  stepwiseEnergies.push_back(std::move(energiesHost));
+  stepwiseEnergies.emplace_back(energiesHost.begin(), energiesHost.end());
 }
 
-bool BfgsBatchMinimizer::minimize(const int                  numIters,
-                                  const double               gradTol,
-                                  const std::vector<int>&    atomStartsHost,
-                                  const int*                 atomStarts,
-                                  AsyncDeviceVector<double>& positions,
-                                  AsyncDeviceVector<double>& grad,
-                                  AsyncDeviceVector<double>& energyOuts,
-                                  EnergyFunctor              eFunc,
-                                  GradFunctor                gFunc,
-                                  const uint8_t*             activeThisStage) {
-  gradTol_             = gradTol;
-  const int numSystems = atomStartsHost.size() - 1;
-
-  if (backend_ == BfgsBackend::PER_MOLECULE) {
-    throw std::runtime_error(
-      "PER_MOLECULE backend is only supported through the forcefield-specific entry points. "
-      "Use minimizeWithMMFF(), minimizeWithETK(), minimizeWithDG(), or switch to BATCHED backend.");
-  }
+template <typename real>
+template <typename EnergyEvaluator, typename GradientEvaluator>
+bool BfgsBatchMinimizerT<real>::minimizeBatched(const int         numIters,
+                                                const double      gradTol,
+                                                EnergyEvaluator   evaluateEnergy,
+                                                GradientEvaluator evaluateGradient) {
+  gradTol_                = gradTol;
+  const int numSystems    = numSystems_;
+  const int numStateTerms = numAtomsTotal_ * dataDim_;
 
   {
     const ScopedNvtxRange bfgsFullInitialize("BfgsBatchMinimizer::fullInitialize");
-    initialize(atomStartsHost,
-               atomStarts,
-               positions.data(),
-               grad.data(),
-               energyOuts.data(),
-               BfgsBackend::BATCHED,
-               activeThisStage);
-
     setHessianToIdentity();
 
-    energyOuts.zero();
-    eFunc(nullptr);
-    grad.zero();
-    gFunc();
+    cudaCheckError(cudaMemsetAsync(energyOutsDevice, 0, numSystems * sizeof(real), stream_));
+    evaluateEnergy(positionsDevice);
+    cudaCheckError(cudaMemsetAsync(gradDevice, 0, numStateTerms * sizeof(real), stream_));
+    evaluateGradient();
     scaleGrad(/*preLoop=*/true);
 
     collectDebugData();
-    copyAndInvert(grad, lineSearchDir_);
+    constexpr int copyBlockSize = 128;
+    const int     copyBlocks    = (numStateTerms + copyBlockSize - 1) / copyBlockSize;
+    copyAndNegate<<<copyBlocks, copyBlockSize, 0, stream_>>>(numStateTerms, gradDevice, lineSearchDir_.data());
+    cudaCheckError(cudaGetLastError());
     setMaxStep();
   }
 
   for (int currIter = 0; currIter < numIters && compactAndCountConverged() < numSystems; currIter++) {
     {
       const ScopedNvtxRange bfgsLineSearch("BfgsBatchMinimizer::lineSearch");
-      doLineSearchSetup(energyOuts.data());
+      doLineSearchSetup(energyOutsDevice);
 
       int              lineSearchIter         = 0;
       constexpr double MAX_ITER_LINEAR_SEARCH = 1000;
       while (lineSearchIter < MAX_ITER_LINEAR_SEARCH && lineSearchCountFinished() < numSystems) {
         doLineSearchPerturb();
-        energyOuts.zero();
-        eFunc(scratchPositions_.data());
+        cudaCheckError(cudaMemsetAsync(energyOutsDevice, 0, numSystems * sizeof(real), stream_));
+        evaluateEnergy(scratchPositions_.data());
         doLineSearchPostEnergy(lineSearchIter);
         lineSearchIter++;
       }
@@ -1043,8 +1117,8 @@ bool BfgsBatchMinimizer::minimize(const int                  numIters,
 
     {
       const ScopedNvtxRange bfgsGetAndScaleGrad("BfgsBatchMinimizer::getAndScaleGrad");
-      grad.zero();
-      gFunc();
+      cudaCheckError(cudaMemsetAsync(gradDevice, 0, numStateTerms * sizeof(real), stream_));
+      evaluateGradient();
       scaleGrad(/*preLoop=*/false);
     }
 
@@ -1053,47 +1127,83 @@ bool BfgsBatchMinimizer::minimize(const int                  numIters,
     collectDebugData();
   }
 
-  energyOuts.zero();
-  eFunc(nullptr);
+  cudaCheckError(cudaMemsetAsync(energyOutsDevice, 0, numSystems * sizeof(real), stream_));
+  evaluateEnergy(positionsDevice);
   return compactAndCountConverged() == numSystems ? 0 : 1;
 }
 
-bool BfgsBatchMinimizer::minimize(const int                  numIters,
-                                  const double               gradTol,
-                                  BatchedForcefield&         ff,
-                                  AsyncDeviceVector<double>& positions,
-                                  AsyncDeviceVector<double>& grad,
-                                  AsyncDeviceVector<double>& energyOuts,
-                                  const uint8_t*             activeSystemMask) {
+template <typename real>
+bool BfgsBatchMinimizerT<real>::minimize(const int                  numIters,
+                                         const double               gradTol,
+                                         BatchedForcefield&         ff,
+                                         AsyncDeviceVector<double>& positions,
+                                         AsyncDeviceVector<double>& grad,
+                                         AsyncDeviceVector<double>& energyOuts,
+                                         const uint8_t*             activeSystemMask) {
   const auto& atomStartsHost = ff.atomStartsHost();
 
   if (resolveBackend(atomStartsHost) != BfgsBackend::BATCHED) {
     throw std::runtime_error("BatchedForcefield minimization is only supported on the BATCHED backend");
   }
 
-  auto eFunc = [&](const double* evalPositions) {
-    const double* positionsToEvaluate = evalPositions != nullptr ? evalPositions : positions.data();
-    ff.computeEnergy(energyOuts.data(), positionsToEvaluate, activeSystemMask, stream_);
-  };
-  auto gFunc = [&]() { ff.computeGradients(grad.data(), positions.data(), activeSystemMask, stream_); };
+  initialize(atomStartsHost,
+             ff.atomStartsDevice(),
+             positions.data(),
+             grad.data(),
+             energyOuts.data(),
+             BfgsBackend::BATCHED,
+             activeSystemMask);
 
-  return minimize(numIters,
-                  gradTol,
-                  atomStartsHost,
-                  ff.atomStartsDevice(),
-                  positions,
-                  grad,
-                  energyOuts,
-                  eFunc,
-                  gFunc,
-                  activeSystemMask);
+  if constexpr (std::is_same_v<real, double>) {
+    auto evaluateEnergy = [&](const double* evalPositions) {
+      cudaCheckError(ff.computeEnergy(energyOutsDevice, evalPositions, activeSystemMask, stream_));
+    };
+    auto evaluateGradient = [&]() {
+      cudaCheckError(ff.computeGradients(gradDevice, positionsDevice, activeSystemMask, stream_));
+    };
+    return minimizeBatched(numIters, gradTol, evaluateEnergy, evaluateGradient);
+  } else {
+    bool  needsAnotherCycle         = false;
+    auto* singlePrecisionForcefield = dynamic_cast<SinglePrecisionBatchedForcefield*>(&ff);
+    if (singlePrecisionForcefield != nullptr && usesSinglePrecision(singlePrecisionForcefield->precision())) {
+      auto evaluateEnergy = [&](const real* evalPositions) {
+        cudaCheckError(
+          singlePrecisionForcefield->computeEnergy(energyOutsDevice, evalPositions, activeSystemMask, stream_));
+      };
+      auto evaluateGradient = [&]() {
+        cudaCheckError(
+          singlePrecisionForcefield->computeGradients(gradDevice, positionsDevice, activeSystemMask, stream_));
+      };
+      needsAnotherCycle = minimizeBatched(numIters, gradTol, evaluateEnergy, evaluateGradient);
+    } else {
+      // Forcefield only evaluates in double precision: round-trip through the caller's buffers.
+      auto evaluateEnergy = [&](const real* evalPositions) {
+        cudaCheckError(detail::convertDeviceArray(positions.data(), evalPositions, positions.size(), stream_));
+        energyOuts.zero();
+        cudaCheckError(ff.computeEnergy(energyOuts.data(), positions.data(), activeSystemMask, stream_));
+        cudaCheckError(detail::convertDeviceArray(energyOutsDevice, energyOuts.data(), energyOuts.size(), stream_));
+      };
+      auto evaluateGradient = [&]() {
+        cudaCheckError(detail::convertDeviceArray(positions.data(), positionsDevice, positions.size(), stream_));
+        grad.zero();
+        cudaCheckError(ff.computeGradients(grad.data(), positions.data(), activeSystemMask, stream_));
+        cudaCheckError(detail::convertDeviceArray(gradDevice, grad.data(), grad.size(), stream_));
+      };
+      needsAnotherCycle = minimizeBatched(numIters, gradTol, evaluateEnergy, evaluateGradient);
+    }
+    cudaCheckError(detail::convertDeviceArray(energyOuts.data(), energyOutsDevice, energyOuts.size(), stream_));
+    cudaCheckError(detail::convertDeviceArray(positions.data(), positionsDevice, positions.size(), stream_));
+    cudaCheckError(detail::convertDeviceArray(grad.data(), gradDevice, grad.size(), stream_));
+    return needsAnotherCycle;
+  }
 }
 
-bool BfgsBatchMinimizer::minimizeWithMMFF(const int                            numIters,
-                                          const double                         gradTol,
-                                          const std::vector<int>&              atomStartsHost,
-                                          MMFF::BatchedMolecularDeviceBuffers& systemDevice,
-                                          const uint8_t*                       activeThisStage) {
+template <typename real>
+bool BfgsBatchMinimizerT<real>::minimizeWithMMFF(const int               numIters,
+                                                 const double            gradTol,
+                                                 const std::vector<int>& atomStartsHost,
+                                                 MMFFDeviceBuffers&      systemDevice,
+                                                 const uint8_t*          activeThisStage) {
   const int         numSystems       = atomStartsHost.size() - 1;
   const BfgsBackend effectiveBackend = resolveBackend(atomStartsHost);
 
@@ -1103,13 +1213,11 @@ bool BfgsBatchMinimizer::minimizeWithMMFF(const int                            n
 
   initialize(atomStartsHost,
              systemDevice.indices.atomStarts.data(),
-             systemDevice.positions.data(),
-             systemDevice.grad.data(),
-             systemDevice.energyOuts.data(),
+             nullptr,
+             nullptr,
+             nullptr,
              effectiveBackend,
              activeThisStage);
-
-  setHessianToIdentity();
 
   const ScopedNvtxRange bfgsPerMolecule("BfgsBatchMinimizer::perMoleculeMinimize");
 
@@ -1125,24 +1233,24 @@ bool BfgsBatchMinimizer::minimizeWithMMFF(const int                            n
   auto terms         = MMFF::toEnergyForceContribsDevicePtr(systemDevice);
   auto systemIndices = MMFF::toBatchedIndicesDevicePtr(systemDevice);
 
-  cudaError_t err = launchBfgsMinimizePerMolKernel(static_cast<int>(activeMolIds_.size()),
-                                                   activeMolIdsDevice_.data(),
-                                                   maxAtomsInBatch_,
-                                                   systemDevice.indices.atomStarts.data(),
-                                                   hessianStarts_.data(),
-                                                   numIters,
-                                                   gradTol,
-                                                   scaleGrads_,
-                                                   terms,
-                                                   systemIndices,
-                                                   systemDevice.positions.data(),
-                                                   systemDevice.grad.data(),
-                                                   inverseHessian_.data(),
-                                                   scratchBuffersDevice_.data(),
-                                                   systemDevice.energyOuts.data(),
-                                                   MMFF::batchHasConstraints(systemDevice.contribs),
-                                                   statuses_.data(),
-                                                   stream_);
+  const cudaError_t err = launchBfgsMinimizePerMolKernel(static_cast<int>(activeMolIds_.size()),
+                                                         activeMolIdsDevice_.data(),
+                                                         maxAtomsInBatch_,
+                                                         systemDevice.indices.atomStarts.data(),
+                                                         hessianStarts_.data(),
+                                                         numIters,
+                                                         gradTol,
+                                                         scaleGrads_,
+                                                         terms,
+                                                         systemIndices,
+                                                         systemDevice.positions.data(),
+                                                         systemDevice.grad.data(),
+                                                         inverseHessian_.data(),
+                                                         scratchBuffersDevice_.data(),
+                                                         systemDevice.energyOuts.data(),
+                                                         MMFF::batchHasConstraints(systemDevice.contribs),
+                                                         statuses_.data(),
+                                                         stream_);
 
   if (err != cudaSuccess) {
     throw std::runtime_error(std::string("Per-molecule BFGS kernel failed: ") + cudaGetErrorString(err));
@@ -1151,13 +1259,16 @@ bool BfgsBatchMinimizer::minimizeWithMMFF(const int                            n
   return checkConvergence(activeMolIds_, statuses_, convergenceHost_, numSystems, stream_);
 }
 
-bool BfgsBatchMinimizer::minimizeWithETK(const int                                  numIters,
-                                         const double                               gradTol,
-                                         const std::vector<int>&                    atomStartsHost,
-                                         const AsyncDeviceVector<int>&              atomStarts,
-                                         AsyncDeviceVector<double>&                 positions,
-                                         DistGeom::BatchedMolecular3DDeviceBuffers& systemDevice,
-                                         const uint8_t*                             activeThisStage) {
+template <typename real>
+bool BfgsBatchMinimizerT<real>::minimizeWithETK(const int                                  numIters,
+                                                const double                               gradTol,
+                                                const std::vector<int>&                    atomStartsHost,
+                                                const AsyncDeviceVector<int>&              atomStarts,
+                                                AsyncDeviceVector<double>&                 positions,
+                                                DistGeom::BatchedMolecular3DDeviceBuffers& systemDevice,
+                                                const uint8_t*                             activeThisStage)
+  requires std::is_same_v<real, double>
+{
   const int         numSystems       = atomStartsHost.size() - 1;
   const BfgsBackend effectiveBackend = resolveBackend(atomStartsHost);
 
@@ -1189,23 +1300,23 @@ bool BfgsBatchMinimizer::minimizeWithETK(const int                              
   auto terms         = DistGeom::toEnergy3DForceContribsDevicePtr(systemDevice);
   auto systemIndices = DistGeom::toBatchedIndices3DDevicePtr(systemDevice, atomStarts.data());
 
-  cudaError_t err = launchBfgsMinimizePerMolKernelETK(static_cast<int>(activeMolIds_.size()),
-                                                      activeMolIdsDevice_.data(),
-                                                      maxAtomsInBatch_,
-                                                      atomStarts.data(),
-                                                      hessianStarts_.data(),
-                                                      numIters,
-                                                      gradTol,
-                                                      scaleGrads_,
-                                                      terms,
-                                                      systemIndices,
-                                                      positions.data(),
-                                                      systemDevice.grad.data(),
-                                                      inverseHessian_.data(),
-                                                      scratchBuffersDevice_.data(),
-                                                      systemDevice.energyOuts.data(),
-                                                      statuses_.data(),
-                                                      stream_);
+  const cudaError_t err = launchBfgsMinimizePerMolKernelETK(static_cast<int>(activeMolIds_.size()),
+                                                            activeMolIdsDevice_.data(),
+                                                            maxAtomsInBatch_,
+                                                            atomStarts.data(),
+                                                            hessianStarts_.data(),
+                                                            numIters,
+                                                            gradTol,
+                                                            scaleGrads_,
+                                                            terms,
+                                                            systemIndices,
+                                                            positions.data(),
+                                                            systemDevice.grad.data(),
+                                                            inverseHessian_.data(),
+                                                            scratchBuffersDevice_.data(),
+                                                            systemDevice.energyOuts.data(),
+                                                            statuses_.data(),
+                                                            stream_);
 
   if (err != cudaSuccess) {
     throw std::runtime_error(std::string("Per-molecule BFGS ETK kernel failed: ") + cudaGetErrorString(err));
@@ -1214,15 +1325,18 @@ bool BfgsBatchMinimizer::minimizeWithETK(const int                              
   return checkConvergence(activeMolIds_, statuses_, convergenceHost_, numSystems, stream_);
 }
 
-bool BfgsBatchMinimizer::minimizeWithDG(const int                                numIters,
-                                        const double                             gradTol,
-                                        const std::vector<int>&                  atomStartsHost,
-                                        const AsyncDeviceVector<int>&            atomStarts,
-                                        AsyncDeviceVector<double>&               positions,
-                                        DistGeom::BatchedMolecularDeviceBuffers& systemDevice,
-                                        double                                   chiralWeight,
-                                        double                                   fourthDimWeight,
-                                        const uint8_t*                           activeThisStage) {
+template <typename real>
+bool BfgsBatchMinimizerT<real>::minimizeWithDG(const int                                numIters,
+                                               const double                             gradTol,
+                                               const std::vector<int>&                  atomStartsHost,
+                                               const AsyncDeviceVector<int>&            atomStarts,
+                                               AsyncDeviceVector<double>&               positions,
+                                               DistGeom::BatchedMolecularDeviceBuffers& systemDevice,
+                                               double                                   chiralWeight,
+                                               double                                   fourthDimWeight,
+                                               const uint8_t*                           activeThisStage)
+  requires std::is_same_v<real, double>
+{
   const int numSystems = atomStartsHost.size() - 1;
 
   if (dataDim_ != 4) {
@@ -1259,25 +1373,25 @@ bool BfgsBatchMinimizer::minimizeWithDG(const int                               
   auto terms         = DistGeom::toEnergyForceContribsDevicePtr(systemDevice);
   auto systemIndices = DistGeom::toBatchedIndicesDevicePtr(systemDevice, atomStarts.data());
 
-  cudaError_t err = launchBfgsMinimizePerMolKernelDG(static_cast<int>(activeMolIds_.size()),
-                                                     activeMolIdsDevice_.data(),
-                                                     maxAtomsInBatch_,
-                                                     atomStarts.data(),
-                                                     hessianStarts_.data(),
-                                                     numIters,
-                                                     gradTol,
-                                                     scaleGrads_,
-                                                     terms,
-                                                     systemIndices,
-                                                     positions.data(),
-                                                     systemDevice.grad.data(),
-                                                     inverseHessian_.data(),
-                                                     scratchBuffersDevice_.data(),
-                                                     systemDevice.energyOuts.data(),
-                                                     chiralWeight,
-                                                     fourthDimWeight,
-                                                     statuses_.data(),
-                                                     stream_);
+  const cudaError_t err = launchBfgsMinimizePerMolKernelDG(static_cast<int>(activeMolIds_.size()),
+                                                           activeMolIdsDevice_.data(),
+                                                           maxAtomsInBatch_,
+                                                           atomStarts.data(),
+                                                           hessianStarts_.data(),
+                                                           numIters,
+                                                           gradTol,
+                                                           scaleGrads_,
+                                                           terms,
+                                                           systemIndices,
+                                                           positions.data(),
+                                                           systemDevice.grad.data(),
+                                                           inverseHessian_.data(),
+                                                           scratchBuffersDevice_.data(),
+                                                           systemDevice.energyOuts.data(),
+                                                           chiralWeight,
+                                                           fourthDimWeight,
+                                                           statuses_.data(),
+                                                           stream_);
 
   if (err != cudaSuccess) {
     throw std::runtime_error(std::string("Per-molecule BFGS DG kernel failed: ") + cudaGetErrorString(err));
@@ -1286,7 +1400,8 @@ bool BfgsBatchMinimizer::minimizeWithDG(const int                               
   return checkConvergence(activeMolIds_, statuses_, convergenceHost_, numSystems, stream_);
 }
 
-void copyAndInvert(const AsyncDeviceVector<double>& src, AsyncDeviceVector<double>& dst) {
+template <typename sourceT, typename storageT>
+void copyAndInvertImpl(const AsyncDeviceVector<sourceT>& src, AsyncDeviceVector<storageT>& dst) {
   const size_t numElements = src.size();
   cudaStream_t stream      = dst.stream();
   if (numElements == 0) {
@@ -1301,4 +1416,14 @@ void copyAndInvert(const AsyncDeviceVector<double>& src, AsyncDeviceVector<doubl
   copyAndNegate<<<numBlocks, blockSize, 0, stream>>>(numElements, src.data(), dst.data());
   cudaCheckError(cudaGetLastError());
 }
+void copyAndInvert(const AsyncDeviceVector<double>& src, AsyncDeviceVector<double>& dst) {
+  copyAndInvertImpl(src, dst);
+}
+void copyAndInvert(const AsyncDeviceVector<float>& src, AsyncDeviceVector<float>& dst) {
+  copyAndInvertImpl(src, dst);
+}
+
+template struct BfgsBatchMinimizerT<double>;
+template struct BfgsBatchMinimizerT<float>;
+
 }  // namespace nvMolKit

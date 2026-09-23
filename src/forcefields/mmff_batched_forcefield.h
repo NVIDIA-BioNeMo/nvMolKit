@@ -49,18 +49,19 @@ class MMFFBatchedForcefield final : public BatchedForcefield, public SinglePreci
                             cudaStream_t   stream           = nullptr) override;
 
   //! \brief Computes MMFF gradients through the generic batched-forcefield API.
-  cudaError_t computeGradients(double*        grad,
-                               const double*  positions,
-                               const uint8_t* activeSystemMask = nullptr,
-                               cudaStream_t   stream           = nullptr) override;
-  cudaError_t computeEnergy(float*         energyOuts,
-                            const float*   positions,
-                            const uint8_t* activeSystemMask = nullptr,
-                            cudaStream_t   stream           = nullptr) override;
-  cudaError_t computeGradients(float*         grad,
-                               const float*   positions,
-                               const uint8_t* activeSystemMask = nullptr,
-                               cudaStream_t   stream           = nullptr) override;
+  cudaError_t   computeGradients(double*        grad,
+                                 const double*  positions,
+                                 const uint8_t* activeSystemMask = nullptr,
+                                 cudaStream_t   stream           = nullptr) override;
+  cudaError_t   computeEnergy(float*         energyOuts,
+                              const float*   positions,
+                              const uint8_t* activeSystemMask = nullptr,
+                              cudaStream_t   stream           = nullptr) override;
+  cudaError_t   computeGradients(float*         grad,
+                                 const float*   positions,
+                                 const uint8_t* activeSystemMask = nullptr,
+                                 cudaStream_t   stream           = nullptr) override;
+  PrecisionMode precision() const override;
 
  private:
   std::variant<MMFF::BatchedMolecularDeviceBuffers, MMFF::BatchedMolecularDeviceBuffersSingle> systemDevice_;

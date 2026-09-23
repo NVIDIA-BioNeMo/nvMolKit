@@ -73,6 +73,11 @@ MMFFBatchedForcefield::MMFFBatchedForcefield(const MMFF::BatchedMolecularSystemH
   }
 }
 
+PrecisionMode MMFFBatchedForcefield::precision() const {
+  return std::holds_alternative<MMFF::BatchedMolecularDeviceBuffersSingle>(systemDevice_) ? PrecisionMode::SINGLE :
+                                                                                            PrecisionMode::FULL;
+}
+
 cudaError_t MMFFBatchedForcefield::computeEnergy(float*         energyOuts,
                                                  const float*   positions,
                                                  const uint8_t* activeSystemMask,

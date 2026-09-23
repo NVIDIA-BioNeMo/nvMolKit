@@ -46,6 +46,24 @@ cudaError_t launchBfgsMinimizePerMolKernel(int                                  
                                            bool                                      hasConstraints,
                                            int16_t*                                  statuses = nullptr,
                                            cudaStream_t                              stream   = nullptr);
+cudaError_t launchBfgsMinimizePerMolKernel(int                                             numMols,
+                                           const int*                                      molIds,
+                                           int                                             maxAtoms,
+                                           const int*                                      atomStarts,
+                                           const int*                                      hessianStarts,
+                                           int                                             numIters,
+                                           double                                          gradTol,
+                                           bool                                            scaleGrads,
+                                           const MMFF::EnergyForceContribsDevicePtrSingle& terms,
+                                           const MMFF::BatchedIndicesDevicePtr&            systemIndices,
+                                           float*                                          positions,
+                                           float*                                          grad,
+                                           float*                                          inverseHessian,
+                                           float**                                         scratchBuffers,
+                                           float*                                          energyOuts,
+                                           bool                                            hasConstraints,
+                                           int16_t*                                        statuses = nullptr,
+                                           cudaStream_t                                    stream   = nullptr);
 
 /// Launch per-molecule BFGS minimization kernel - ETK specialization
 cudaError_t launchBfgsMinimizePerMolKernelETK(int                                             numMols,
