@@ -323,13 +323,12 @@ TEST_P(UFFValidationPrecisionTest, BatchMinimizerMatchesRDKitFinalEnergies) {
   energiesDevice.zero();
 
   nvMolKit::UFFBatchedForcefield forcefield(host, {}, nullptr, GetParam());
-  nvMolKit::BfgsBatchMinimizer   minimizer(3,
-                                         nvMolKit::DebugLevel::NONE,
-                                         true,
-                                         nullptr,
-                                         nvMolKit::BfgsBackend::BATCHED,
-                                         GetParam());
-  const bool needsMore = minimizer.minimize(1000, 1.0e-6, forcefield, positionsDevice, gradDevice, energiesDevice);
+  auto                           runMinimizer = [&](auto&& minimizer) {
+    return minimizer.minimize(1000, 1.0e-6, forcefield, positionsDevice, gradDevice, energiesDevice);
+  };
+  const bool needsMore = nvMolKit::usesSinglePrecision(GetParam()) ?
+                           runMinimizer(nvMolKit::BfgsBatchMinimizerSingle()) :
+                           runMinimizer(nvMolKit::BfgsBatchMinimizer());
   EXPECT_FALSE(needsMore);
 
   std::vector<double> gotFinalEnergies(mols.size(), 0.0);
