@@ -16,7 +16,7 @@
 #ifndef NVMOLKIT_FIRE_MINIMIZER_H
 #define NVMOLKIT_FIRE_MINIMIZER_H
 
-#include <variant>
+#include <memory>
 #include <vector>
 
 #include "src/minimizer/bfgs_types.h"
@@ -36,7 +36,8 @@ using FireSingleGradFunctor   = std::function<void()>;
 namespace MMFF {
 template <typename ParameterScalar, typename CoordinateScalar, typename TorsionScalar>
 struct BatchedMolecularDeviceBuffersT;
-using BatchedMolecularDeviceBuffers = BatchedMolecularDeviceBuffersT<double, double, float>;
+using BatchedMolecularDeviceBuffers       = BatchedMolecularDeviceBuffersT<double, double, float>;
+using BatchedMolecularDeviceBuffersSingle = BatchedMolecularDeviceBuffersT<float, float, float>;
 }  // namespace MMFF
 
 //! \brief Per-system per-iteration debug snapshot recorded when the minimizer is
@@ -89,9 +90,8 @@ template <typename real, typename reduceT, typename storageT> struct FireWorkspa
   }
 };
 
-using FullFireWorkspace    = FireWorkspace<double, double, double>;
-using SingleFireWorkspace  = FireWorkspace<float, float, float>;
-using FireWorkspaceVariant = std::variant<FullFireWorkspace, SingleFireWorkspace>;
+using FullFireWorkspace   = FireWorkspace<double, double, double>;
+using SingleFireWorkspace = FireWorkspace<float, float, float>;
 
 //! \brief Batched FIRE 2.0 minimizer.
 //!
@@ -169,6 +169,11 @@ class FireBatchMinimizer final : public BatchMinimizer {
                                                        const std::vector<int>&              atomStartsHost,
                                                        MMFF::BatchedMolecularDeviceBuffers& systemDevice,
                                                        const uint8_t*                       activeThisStage = nullptr);
+  bool                                minimizeWithMMFF(int                                        numIters,
+                                                       double                                     gradTol,
+                                                       const std::vector<int>&                    atomStartsHost,
+                                                       MMFF::BatchedMolecularDeviceBuffersSingle& systemDevice,
+                                                       const uint8_t*                             activeThisStage = nullptr);
   const std::vector<FireDebugOutput>& debugOutputs() const { return debugOutputs_; }
 
   //! \brief Cadence (in iterations) at which the minimize() loop reads the
@@ -193,11 +198,12 @@ class FireBatchMinimizer final : public BatchMinimizer {
   void resetContinuationCache();
 
  private:
-  template <typename DeviceBuffers>
+  template <typename DeviceBuffers, typename Workspace>
   bool minimizeWithMMFFImpl(int                     numIters,
                             double                  gradTol,
                             const std::vector<int>& atomStartsHost,
                             DeviceBuffers&          systemDevice,
+                            Workspace&              workspace,
                             const uint8_t*          activeThisStage);
   bool minimizeImpl(int                           numIters,
                     double                        gradTol,
@@ -242,7 +248,8 @@ class FireBatchMinimizer final : public BatchMinimizer {
   FireBackend   backend_                 = FireBackend::BATCHED;
   PrecisionMode precision_;
 
-  FireWorkspaceVariant workspace_;
+  std::unique_ptr<FullFireWorkspace>   fullWorkspace_;
+  std::unique_ptr<SingleFireWorkspace> singleWorkspace_;
 
   AsyncDeviceVector<int>     numStepsWithPositivePower_;
   AsyncDeviceVector<uint8_t> statuses_;
@@ -285,10 +292,10 @@ class FireBatchMinimizer final : public BatchMinimizer {
   PinnedHostVector<uint8_t> activeHost_;           //!< Pinned scratch for caller-supplied active mask.
   PinnedHostVector<uint8_t> convergenceHost_;      //!< Pinned scratch for status readback.
 
-  FullFireWorkspace&         fullWorkspace() { return std::get<FullFireWorkspace>(workspace_); }
-  const FullFireWorkspace&   fullWorkspace() const { return std::get<FullFireWorkspace>(workspace_); }
-  SingleFireWorkspace&       singleWorkspace() { return std::get<SingleFireWorkspace>(workspace_); }
-  const SingleFireWorkspace& singleWorkspace() const { return std::get<SingleFireWorkspace>(workspace_); }
+  FullFireWorkspace&         fullWorkspace() { return *fullWorkspace_; }
+  const FullFireWorkspace&   fullWorkspace() const { return *fullWorkspace_; }
+  SingleFireWorkspace&       singleWorkspace() { return *singleWorkspace_; }
+  const SingleFireWorkspace& singleWorkspace() const { return *singleWorkspace_; }
 };
 
 }  // namespace nvMolKit

@@ -1062,6 +1062,17 @@ TEST(FireMinimizer, HybridBackendSelectionAndPerMolInitialization) {
   }
 }
 
+TEST(FireMinimizer, SinglePrecisionPreservesPerMoleculeBackend) {
+  nvMolKit::FireBatchMinimizer minimizer(kDim,
+                                         nvMolKit::FireOptions{},
+                                         /*stream=*/nullptr,
+                                         /*debugMode=*/false,
+                                         nvMolKit::FireBackend::PER_MOLECULE,
+                                         nvMolKit::PrecisionMode::SINGLE);
+
+  EXPECT_EQ(minimizer.resolveBackend({0, 5, 10}), nvMolKit::FireBackend::PER_MOLECULE);
+}
+
 INSTANTIATE_TEST_SUITE_P(PrecisionModes,
                          FireMinimizerPrecisionTest,
                          ::testing::Values(nvMolKit::PrecisionMode::FULL, nvMolKit::PrecisionMode::SINGLE),

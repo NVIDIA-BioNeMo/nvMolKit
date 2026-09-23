@@ -62,6 +62,27 @@ cudaError_t launchFirePerMolKernel(int                                       num
                                    uint8_t*                                  statuses,
                                    cudaStream_t                              stream = nullptr);
 
+cudaError_t launchFirePerMolKernel(int                                             numMols,
+                                   const int*                                      molIds,
+                                   int                                             maxAtoms,
+                                   const int*                                      atomStarts,
+                                   const FireOptions&                              fireOptions,
+                                   int                                             numIters,
+                                   double                                          gradTol,
+                                   const MMFF::EnergyForceContribsDevicePtrSingle& terms,
+                                   const MMFF::BatchedIndicesDevicePtr&            systemIndices,
+                                   bool                                            hasConstraints,
+                                   float*                                          positions,
+                                   float*                                          grad,
+                                   float*                                          velocities,
+                                   float*                                          alphas,
+                                   float*                                          dts,
+                                   int*                                            nStepsPositive,
+                                   const float*                                    masses,
+                                   float*                                          energyOuts,
+                                   uint8_t*                                        statuses,
+                                   cudaStream_t                                    stream = nullptr);
+
 }  // namespace nvMolKit
 
 #endif  // NVMOLKIT_FIRE_MINIMIZE_PERMOL_KERNELS_H
