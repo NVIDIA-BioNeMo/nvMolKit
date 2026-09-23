@@ -19,8 +19,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <memory>
 #include <mutex>
+#include <type_traits>
 #include <unordered_map>
+#include <variant>
 
 #include "rdkit_extensions/conformer_pruning.h"
 #include "src/conformer/device_conformer_pruning.h"
@@ -274,12 +277,21 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
       cudaStream_t     streamPtr = streamsPerThread[omp_get_thread_num()].stream();
       const int        deviceId  = devicesPerThread[omp_get_thread_num()];
       const WithDevice dev(deviceId);
-      auto             minimizer = std::make_unique<BfgsBatchMinimizer>(4,  // dataDim for ETKDG (4D distance geometry)
-                                                            DebugLevel::NONE,
-                                                            true,  // scaleGrads
-                                                            streamPtr,
-                                                            backend,
-                                                            precision);
+      // The minimizer's working precision is fixed for the thread; minimize stages are built against it.
+      std::variant<std::unique_ptr<BfgsBatchMinimizer>, std::unique_ptr<BfgsBatchMinimizerSingle>> minimizer;
+      if (usesSinglePrecision(precision)) {
+        minimizer = std::make_unique<BfgsBatchMinimizerSingle>(4,  // dataDim for ETKDG (4D distance geometry)
+                                                               DebugLevel::NONE,
+                                                               true,  // scaleGrads
+                                                               streamPtr,
+                                                               backend);
+      } else {
+        minimizer = std::make_unique<BfgsBatchMinimizer>(4,  // dataDim for ETKDG (4D distance geometry)
+                                                         DebugLevel::NONE,
+                                                         true,  // scaleGrads
+                                                         streamPtr,
+                                                         backend);
+      }
       std::unordered_map<const RDKit::ROMol*, nvMolKit::DistGeom::EnergyForceContribsHost>   dgCache;
       std::unordered_map<const RDKit::ROMol*, nvMolKit::DistGeom::Energy3DForceContribsHost> etkCache;
       // Pinned reusable buffers for common copies.
@@ -347,21 +359,34 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
                                                                         std::move(coordinateDimensions)));
         }
 
-        // First minimize, then first round of chiral checks.
-        auto                           firstMinStage    = std::make_unique<detail::DistGeomMinimizeStage>(constMolPtrs,
-                                                                             batchEargs,
-                                                                             paramsCopy,
-                                                                             *context,
-                                                                             *minimizer,
-                                                                             1.0,
-                                                                             0.1,
-                                                                             400,
-                                                                             true,
-                                                                             "First Minimization",
-                                                                             streamPtr,
-                                                                             &dgCache);
-        detail::DistGeomMinimizeStage* firstMinStagePtr = firstMinStage.get();
-        stages.push_back(std::move(firstMinStage));
+        // First minimize, then first round of chiral checks. The fourth-dimension stage reuses the first
+        // stage's setup and is queued after the chiral checks.
+        std::unique_ptr<detail::ETKDGStage> fourthDimMinStage;
+        std::visit(
+          [&](auto& typedMinimizer) {
+            using Real         = typename std::decay_t<decltype(*typedMinimizer)>::Scalar;
+            auto firstMinStage = std::make_unique<detail::DistGeomMinimizeStageT<Real>>(constMolPtrs,
+                                                                                        batchEargs,
+                                                                                        paramsCopy,
+                                                                                        *context,
+                                                                                        *typedMinimizer,
+                                                                                        1.0,
+                                                                                        0.1,
+                                                                                        400,
+                                                                                        true,
+                                                                                        "First Minimization",
+                                                                                        streamPtr,
+                                                                                        &dgCache);
+            fourthDimMinStage =
+              std::make_unique<detail::DistGeomMinimizeWrapperStageT<Real>>(*firstMinStage,
+                                                                            0.2,
+                                                                            1.0,
+                                                                            200,
+                                                                            false,
+                                                                            "Fourth Dimension Minimization");
+            stages.push_back(std::move(firstMinStage));
+          },
+          minimizer);
         stages.push_back(std::make_unique<detail::ETKDGTetrahedralCheckStage>(*context, batchEargs, dim, streamPtr));
 
         // Only add first chiral check if enforceChirality is enabled
@@ -374,21 +399,21 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
         }
 
         // Second + 3rd minimize, then double bond checks.
-        stages.push_back(std::make_unique<detail::DistGeomMinimizeWrapperStage>(*firstMinStagePtr,
-                                                                                0.2,
-                                                                                1.0,
-                                                                                200,
-                                                                                false,
-                                                                                "Fourth Dimension Minimization"));
+        stages.push_back(std::move(fourthDimMinStage));
         // (ET)(K)DG: Add experimental torsion minimization stage only if needed to match RDKit's logic.
         if (paramsCopy.useExpTorsionAnglePrefs || paramsCopy.useBasicKnowledge) {
-          stages.push_back(std::make_unique<detail::ETKMinimizationStage>(constMolPtrs,
-                                                                          batchEargs,
-                                                                          paramsCopy,
-                                                                          *context,
-                                                                          *minimizer,
-                                                                          streamPtr,
-                                                                          &etkCache));
+          std::visit(
+            [&](auto& typedMinimizer) {
+              using Real = typename std::decay_t<decltype(*typedMinimizer)>::Scalar;
+              stages.push_back(std::make_unique<detail::ETKMinimizationStageT<Real>>(constMolPtrs,
+                                                                                     batchEargs,
+                                                                                     paramsCopy,
+                                                                                     *context,
+                                                                                     *typedMinimizer,
+                                                                                     streamPtr,
+                                                                                     &etkCache));
+            },
+            minimizer);
         }
 
         // Final chiral and stereochem checks

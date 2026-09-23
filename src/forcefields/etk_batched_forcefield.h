@@ -52,12 +52,17 @@ class ETKBatchedForcefield final : public BatchedForcefield, public SinglePrecis
                             cudaStream_t   stream           = nullptr) override;
 
   //! \brief Computes ETK gradients through the generic batched-forcefield API.
-  cudaError_t computeGradients(double*        grad,
-                               const double*  positions,
-                               const uint8_t* activeSystemMask = nullptr,
-                               cudaStream_t   stream           = nullptr) override;
-  cudaError_t computeEnergy(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
-  cudaError_t computeGradients(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
+  cudaError_t   computeGradients(double*        grad,
+                                 const double*  positions,
+                                 const uint8_t* activeSystemMask = nullptr,
+                                 cudaStream_t   stream           = nullptr) override;
+  cudaError_t   computeEnergy(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
+  cudaError_t   computeGradients(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
+  PrecisionMode precision() const override {
+    return std::holds_alternative<DistGeom::BatchedMolecular3DDeviceBuffersSingle>(systemDevice_) ?
+             PrecisionMode::SINGLE :
+             PrecisionMode::FULL;
+  }
 
   //! \brief Computes the planar ETK subset used by the post-minimization check.
   cudaError_t computePlanarEnergy(double*        energyOuts,

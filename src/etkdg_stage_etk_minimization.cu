@@ -105,12 +105,13 @@ void runPlanarToleranceCheck(const AsyncDeviceVector<Scalar>& planarEnergies,
 
 }  // namespace
 
-ETKMinimizationStage::ETKMinimizationStage(
+template <typename real>
+ETKMinimizationStageT<real>::ETKMinimizationStageT(
   const std::vector<const RDKit::ROMol*>&                                                 mols,
   const std::vector<EmbedArgs>&                                                           eargs,
   const RDKit::DGeomHelpers::EmbedParameters&                                             embedParam,
   const ETKDGContext&                                                                     ctx,
-  BfgsBatchMinimizer&                                                                     minimizer,
+  BfgsBatchMinimizerT<real>&                                                              minimizer,
   cudaStream_t                                                                            stream,
   std::unordered_map<const RDKit::ROMol*, nvMolKit::DistGeom::Energy3DForceContribsHost>* cache)
     : embedParam_(embedParam),
@@ -177,9 +178,9 @@ ETKMinimizationStage::ETKMinimizationStage(
   }
 }
 
-template <typename Scalar>
-void ETKMinimizationStage::setReferenceValues(const ETKDGContext&                                   ctx,
-                                              const DistGeom::Energy3DForceContribsDeviceT<Scalar>& contribs) {
+template <typename real>
+void ETKMinimizationStageT<real>::setReferenceValues(const ETKDGContext&                                 ctx,
+                                                     const DistGeom::Energy3DForceContribsDeviceT<real>& contribs) {
   const int numTerms12 = contribs.dist12Terms.idx1.size();
   const int numTerms13 = contribs.dist13Terms.idx1.size();
 
@@ -206,7 +207,7 @@ void ETKMinimizationStage::setReferenceValues(const ETKDGContext&               
   }
 }
 
-void ETKMinimizationStage::execute(ETKDGContext& ctx) {
+template <typename real> void ETKMinimizationStageT<real>::execute(ETKDGContext& ctx) {
   const auto effectiveBackend = minimizer_.resolveBackend(ctx.systemHost.atomStarts);
 
   // 1. Update reference positions for start of loop.
@@ -218,15 +219,16 @@ void ETKMinimizationStage::execute(ETKDGContext& ctx) {
                                     embedParam_.useBasicKnowledge,
                                     metadata_,
                                     stream_,
-                                    minimizer_.precision());
-    const int*           numImpropers = nullptr;
-    if (usesSinglePrecision(minimizer_.precision())) {
-      setReferenceValues(ctx, forcefield.singleContribs());
-      numImpropers = forcefield.singleContribs().improperTorsionTerms.numImpropers.data();
-    } else {
-      setReferenceValues(ctx, forcefield.contribs());
-      numImpropers = forcefield.contribs().improperTorsionTerms.numImpropers.data();
-    }
+                                    BfgsBatchMinimizerT<real>::kPrecision);
+    const auto&          contribs = [&]() -> const DistGeom::Energy3DForceContribsDeviceT<real>& {
+      if constexpr (std::is_same_v<real, double>) {
+        return forcefield.contribs();
+      } else {
+        return forcefield.singleContribs();
+      }
+    }();
+    setReferenceValues(ctx, contribs);
+    const int* numImpropers = contribs.improperTorsionTerms.numImpropers.data();
     grad_.resize(ctx.systemHost.positions.size());
     grad_.zero();
     energyOuts_.resize(ctx.systemHost.atomStarts.size() - 1);
@@ -295,9 +297,11 @@ void ETKMinimizationStage::execute(ETKDGContext& ctx) {
       }
     };
 
-    if (usesSinglePrecision(minimizer_.precision())) {
-      DistGeom::BatchedMolecular3DDeviceBuffersSingle device;
-      AsyncDeviceVector<float>                        positions;
+    typename BfgsBatchMinimizerT<real>::ETKDeviceBuffers device;
+    if constexpr (std::is_same_v<real, double>) {
+      minimizePerMolecule(device, ctx.systemDevice.positions);
+    } else {
+      AsyncDeviceVector<real> positions;
       positions.setStream(stream_);
       positions.resize(ctx.systemDevice.positions.size());
       cudaCheckError(nvMolKit::detail::convertDeviceArray(positions.data(),
@@ -309,12 +313,12 @@ void ETKMinimizationStage::execute(ETKDGContext& ctx) {
                                                           positions.data(),
                                                           positions.size(),
                                                           stream_));
-    } else {
-      DistGeom::BatchedMolecular3DDeviceBuffers device;
-      minimizePerMolecule(device, ctx.systemDevice.positions);
     }
   }
 }
+
+template class ETKMinimizationStageT<double>;
+template class ETKMinimizationStageT<float>;
 
 }  // namespace detail
 }  // namespace nvMolKit

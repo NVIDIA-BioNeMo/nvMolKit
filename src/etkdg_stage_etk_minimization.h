@@ -29,14 +29,15 @@ using ::nvMolKit::detail::ETKDGStage;
 namespace nvMolKit {
 namespace detail {
 
-class ETKMinimizationStage final : public ETKDGStage {
+//! \tparam real Working precision of the BFGS minimizer driving this stage.
+template <typename real> class ETKMinimizationStageT final : public ETKDGStage {
  public:
-  ETKMinimizationStage(
+  ETKMinimizationStageT(
     const std::vector<const RDKit::ROMol*>&                                                 mols,
     const std::vector<EmbedArgs>&                                                           eargs,
     const RDKit::DGeomHelpers::EmbedParameters&                                             embedParam,
     const ETKDGContext&                                                                     ctx,
-    BfgsBatchMinimizer&                                                                     minimizer,
+    BfgsBatchMinimizerT<real>&                                                              minimizer,
     cudaStream_t                                                                            stream = nullptr,
     std::unordered_map<const RDKit::ROMol*, nvMolKit::DistGeom::Energy3DForceContribsHost>* cache  = nullptr);
 
@@ -45,17 +46,22 @@ class ETKMinimizationStage final : public ETKDGStage {
 
  private:
   //! Re-sets the bounds for distance constraints based on the current positions.
-  template <typename Scalar>
-  void setReferenceValues(const ETKDGContext& ctx, const DistGeom::Energy3DForceContribsDeviceT<Scalar>& contribs);
+  void setReferenceValues(const ETKDGContext& ctx, const DistGeom::Energy3DForceContribsDeviceT<real>& contribs);
 
   BatchedForcefieldMetadata                        metadata_;
   nvMolKit::DistGeom::BatchedMolecularSystem3DHost molSystemHost;
   AsyncDeviceVector<double>                        grad_;
   AsyncDeviceVector<double>                        energyOuts_;
   const RDKit::DGeomHelpers::EmbedParameters&      embedParam_;
-  BfgsBatchMinimizer&                              minimizer_;
+  BfgsBatchMinimizerT<real>&                       minimizer_;
   cudaStream_t                                     stream_;
 };
+
+using ETKMinimizationStage       = ETKMinimizationStageT<double>;
+using ETKMinimizationStageSingle = ETKMinimizationStageT<float>;
+
+extern template class ETKMinimizationStageT<double>;
+extern template class ETKMinimizationStageT<float>;
 
 }  // namespace detail
 }  // namespace nvMolKit

@@ -34,7 +34,8 @@ namespace detail {
 constexpr double MAX_MINIMIZED_E_PER_ATOM = 0.05;  // Maximum energy per atom threshold
 
 /// Generic distance geometry minimization stage with configurable weights and parameters
-class DistGeomMinimizeStage : public ETKDGStage {
+/// \tparam real Working precision of the BFGS minimizer driving this stage.
+template <typename real> class DistGeomMinimizeStageT : public ETKDGStage {
  public:
   /**
    * @brief Construct a distance geometry minimization stage
@@ -52,12 +53,12 @@ class DistGeomMinimizeStage : public ETKDGStage {
    * @param stream CUDA stream
    * @param cache Optional cache for force field parameters
    */
-  DistGeomMinimizeStage(
+  DistGeomMinimizeStageT(
     const std::vector<const RDKit::ROMol*>&                                               mols,
     const std::vector<EmbedArgs>&                                                         eargs,
     const RDKit::DGeomHelpers::EmbedParameters&                                           embedParam,
     ETKDGContext&                                                                         ctx,
-    BfgsBatchMinimizer&                                                                   minimizer,
+    BfgsBatchMinimizerT<real>&                                                            minimizer,
     double                                                                                chiralWeight,
     double                                                                                fourthDimWeight,
     int                                                                                   maxIters,
@@ -74,33 +75,39 @@ class DistGeomMinimizeStage : public ETKDGStage {
     executeImpl(ctx, chiralWeight_, fourthDimWeight_, maxIters_, checkEnergy_);
   }
 
-  nvMolKit::DistGeom::BatchedMolecularSystemHost          molSystemHost;
-  nvMolKit::DistGeom::BatchedMolecularDeviceBuffers       molSystemDevice;
-  nvMolKit::DistGeom::BatchedMolecularDeviceBuffersSingle molSystemDeviceSingle;
-  BatchedForcefieldMetadata                               metadata_;
-  AsyncDeviceVector<double>                               grad_;
-  AsyncDeviceVector<double>                               energyOuts_;
-  AsyncDeviceVector<float>                                positionsSingle_;
-  const RDKit::DGeomHelpers::EmbedParameters&             embedParam_;
-  BfgsBatchMinimizer&                                     minimizer_;
-  double                                                  chiralWeight_;
-  double                                                  fourthDimWeight_;
-  int                                                     maxIters_;
-  bool                                                    checkEnergy_;
-  std::string                                             stageName_;
-  cudaStream_t                                            stream_;
+  nvMolKit::DistGeom::BatchedMolecularSystemHost           molSystemHost;
+  nvMolKit::DistGeom::BatchedMolecularDeviceBuffersT<real> molSystemDevice;
+  BatchedForcefieldMetadata                                metadata_;
+  AsyncDeviceVector<double>                                grad_;
+  AsyncDeviceVector<double>                                energyOuts_;
+  //! Working-precision copy of the context positions for the per-molecule path. Unused for double precision.
+  AsyncDeviceVector<real>                                  positionsScratch_;
+  const RDKit::DGeomHelpers::EmbedParameters&              embedParam_;
+  BfgsBatchMinimizerT<real>&                               minimizer_;
+  double                                                   chiralWeight_;
+  double                                                   fourthDimWeight_;
+  int                                                      maxIters_;
+  bool                                                     checkEnergy_;
+  std::string                                              stageName_;
+  cudaStream_t                                             stream_;
 };
+
+using DistGeomMinimizeStage       = DistGeomMinimizeStageT<double>;
+using DistGeomMinimizeStageSingle = DistGeomMinimizeStageT<float>;
+
+extern template class DistGeomMinimizeStageT<double>;
+extern template class DistGeomMinimizeStageT<float>;
 
 //! Wrapper stage for distance geometry minimization
 //! Uses same base parameter set as base stage, but overrides weights.
-class DistGeomMinimizeWrapperStage final : public ETKDGStage {
+template <typename real> class DistGeomMinimizeWrapperStageT final : public ETKDGStage {
  public:
-  DistGeomMinimizeWrapperStage(DistGeomMinimizeStage& baseStage,
-                               double                 chiralWeight,
-                               double                 fourthDimWeight,
-                               int                    maxIters,
-                               bool                   checkEnergy,
-                               const std::string&     stageName)
+  DistGeomMinimizeWrapperStageT(DistGeomMinimizeStageT<real>& baseStage,
+                                double                        chiralWeight,
+                                double                        fourthDimWeight,
+                                int                           maxIters,
+                                bool                          checkEnergy,
+                                const std::string&            stageName)
       : baseStage_(baseStage),
         chiralWeight_(chiralWeight),
         fourthDimWeight_(fourthDimWeight),
@@ -114,13 +121,15 @@ class DistGeomMinimizeWrapperStage final : public ETKDGStage {
   std::string name() const override { return stageName_; }
 
  private:
-  DistGeomMinimizeStage& baseStage_;
-  double                 chiralWeight_;
-  double                 fourthDimWeight_;
-  int                    maxIters_;
-  bool                   checkEnergy_;
-  std::string            stageName_;
+  DistGeomMinimizeStageT<real>& baseStage_;
+  double                        chiralWeight_;
+  double                        fourthDimWeight_;
+  int                           maxIters_;
+  bool                          checkEnergy_;
+  std::string                   stageName_;
 };
+
+using DistGeomMinimizeWrapperStage = DistGeomMinimizeWrapperStageT<double>;
 
 }  // namespace detail
 }  // namespace nvMolKit

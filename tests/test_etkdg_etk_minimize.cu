@@ -18,7 +18,10 @@
 
 #include <cmath>
 #include <filesystem>
+#include <memory>
 #include <random>
+#include <type_traits>
+#include <variant>
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -239,6 +242,41 @@ class ETKStageSingleMolTestFixture : public ::testing::TestWithParam<ETKStageTes
   RDKit::DGeomHelpers::EmbedParameters     embedParam_;
 };
 
+namespace {
+
+using AnyBfgsMinimizer =
+  std::variant<std::unique_ptr<nvMolKit::BfgsBatchMinimizer>, std::unique_ptr<nvMolKit::BfgsBatchMinimizerSingle>>;
+
+//! Builds an ETK minimization stage driven by a minimizer at @p precision, stored in @p minimizer.
+//! @p minimizer must outlive the returned stage.
+std::unique_ptr<ETKDGStage> makeETKStage(const nvMolKit::PrecisionMode                   precision,
+                                         const nvMolKit::BfgsBackend                     backend,
+                                         AnyBfgsMinimizer&                               minimizer,
+                                         const std::vector<const RDKit::ROMol*>&         mols,
+                                         const std::vector<nvMolKit::detail::EmbedArgs>& eargs,
+                                         const RDKit::DGeomHelpers::EmbedParameters&     params,
+                                         const ETKDGContext&                             context) {
+  if (nvMolKit::usesSinglePrecision(precision)) {
+    minimizer =
+      std::make_unique<nvMolKit::BfgsBatchMinimizerSingle>(4, nvMolKit::DebugLevel::NONE, true, nullptr, backend);
+  } else {
+    minimizer = std::make_unique<nvMolKit::BfgsBatchMinimizer>(4, nvMolKit::DebugLevel::NONE, true, nullptr, backend);
+  }
+  return std::visit(
+    [&](auto& typedMinimizer) -> std::unique_ptr<ETKDGStage> {
+      using Real = typename std::decay_t<decltype(*typedMinimizer)>::Scalar;
+      return std::make_unique<nvMolKit::detail::ETKMinimizationStageT<Real>>(mols,
+                                                                             eargs,
+                                                                             params,
+                                                                             context,
+                                                                             *typedMinimizer,
+                                                                             nullptr);
+    },
+    minimizer);
+}
+
+}  // namespace
+
 TEST_P(ETKStageSingleMolTestFixture, MinimizeCompare) {
   // Set up embed parameters from test parameter
   const auto [etkdgOption, backend, precision] = GetParam();
@@ -251,19 +289,12 @@ TEST_P(ETKStageSingleMolTestFixture, MinimizeCompare) {
   // Determine useBasicKnowledge from embedParam_
   const bool useBasicKnowledge = embedParam_.useBasicKnowledge;
 
-  // Create minimizer for the test
-  nvMolKit::BfgsBatchMinimizer bfgsMinimizer(4, nvMolKit::DebugLevel::NONE, true, nullptr, backend, precision);
-
   // Create FirstMinimizeStage
   std::vector<std::unique_ptr<ETKDGStage>> stages;
   std::vector<const RDKit::ROMol*>         molsPtrs;
   molsPtrs.push_back(molPtr_.get());
-  auto stage = std::make_unique<nvMolKit::detail::ETKMinimizationStage>(molsPtrs,
-                                                                        eargs_,
-                                                                        embedParam_,
-                                                                        context_,
-                                                                        bfgsMinimizer,
-                                                                        nullptr);
+  AnyBfgsMinimizer bfgsMinimizer;
+  auto             stage = makeETKStage(precision, backend, bfgsMinimizer, molsPtrs, eargs_, embedParam_, context_);
   stages.push_back(std::move(stage));
 
   // Create and run driver
@@ -321,15 +352,15 @@ TEST(ETKPrecisionModes, SupportedPrecisionsMinimizeBatchedSmallMolecules) {
     initTestComponentsCommon(mols, context, eargs, params);
     const std::vector<const RDKit::ROMol*> constMols(mols.begin(), mols.end());
     const auto initialEnergy = getGPUEnergy(constMols, context.systemDevice.positions, eargs, params.useBasicKnowledge);
-    nvMolKit::BfgsBatchMinimizer             minimizer(4,
-                                           nvMolKit::DebugLevel::NONE,
-                                           true,
-                                           nullptr,
-                                           nvMolKit::BfgsBackend::BATCHED,
-                                           precisions[precisionIdx]);
+    AnyBfgsMinimizer                         minimizer;
     std::vector<std::unique_ptr<ETKDGStage>> stages;
-    stages.push_back(
-      std::make_unique<nvMolKit::detail::ETKMinimizationStage>(constMols, eargs, params, context, minimizer, nullptr));
+    stages.push_back(makeETKStage(precisions[precisionIdx],
+                                  nvMolKit::BfgsBackend::BATCHED,
+                                  minimizer,
+                                  constMols,
+                                  eargs,
+                                  params,
+                                  context));
     nvMolKit::detail::ETKDGDriver driver(std::make_unique<ETKDGContext>(std::move(context)), std::move(stages));
     driver.run(1);
     const auto finalEnergy =
@@ -420,9 +451,6 @@ TEST_P(ETKStageMultiMolTestFixture, MinimizeCompare) {
   // Determine useBasicKnowledge from embedParam_
   const bool useBasicKnowledge = embedParam_.useBasicKnowledge;
 
-  // Create minimizer for the test
-  nvMolKit::BfgsBatchMinimizer bfgsMinimizer(4, nvMolKit::DebugLevel::NONE, true, nullptr, backend, precision);
-
   // Create FirstMinimizeStage
   std::vector<std::unique_ptr<ETKDGStage>> stages;
   std::vector<const RDKit::ROMol*>         molsPtrs;
@@ -431,12 +459,8 @@ TEST_P(ETKStageMultiMolTestFixture, MinimizeCompare) {
   }
   const int count = molsPtrs.size();
 
-  auto stage = std::make_unique<nvMolKit::detail::ETKMinimizationStage>(molsPtrs,
-                                                                        eargs_,
-                                                                        embedParam_,
-                                                                        context_,
-                                                                        bfgsMinimizer,
-                                                                        nullptr);
+  AnyBfgsMinimizer bfgsMinimizer;
+  auto             stage = makeETKStage(precision, backend, bfgsMinimizer, molsPtrs, eargs_, embedParam_, context_);
   stages.push_back(std::move(stage));
 
   // Create and run driver

@@ -54,12 +54,17 @@ class DGBatchedForcefield final : public BatchedForcefield, public SinglePrecisi
                             cudaStream_t   stream           = nullptr) override;
 
   //! \brief Computes DG gradients through the generic batched-forcefield API.
-  cudaError_t computeGradients(double*        grad,
-                               const double*  positions,
-                               const uint8_t* activeSystemMask = nullptr,
-                               cudaStream_t   stream           = nullptr) override;
-  cudaError_t computeEnergy(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
-  cudaError_t computeGradients(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
+  cudaError_t   computeGradients(double*        grad,
+                                 const double*  positions,
+                                 const uint8_t* activeSystemMask = nullptr,
+                                 cudaStream_t   stream           = nullptr) override;
+  cudaError_t   computeEnergy(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
+  cudaError_t   computeGradients(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
+  PrecisionMode precision() const override {
+    return std::holds_alternative<DistGeom::BatchedMolecularDeviceBuffersSingle>(systemDevice_) ?
+             PrecisionMode::SINGLE :
+             PrecisionMode::FULL;
+  }
 
  private:
   std::variant<DistGeom::BatchedMolecularDeviceBuffers, DistGeom::BatchedMolecularDeviceBuffersSingle> systemDevice_;
