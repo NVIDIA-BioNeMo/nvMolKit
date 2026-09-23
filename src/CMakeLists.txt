@@ -69,6 +69,18 @@ add_library(symmetricEigenSolver symmetric_eigensolver.cu)
 target_link_libraries(symmetricEigenSolver PRIVATE CUDA::cudart
                                                    cuda_error_check device)
 
+add_library(descriptors3d descriptors3d.cu)
+target_link_libraries(
+  descriptors3d
+  PUBLIC conformer_types device_vector
+  PRIVATE CUDA::cudart cuda_error_check)
+
+add_library(descriptors3d_mol descriptors3d_mol.cpp)
+target_link_libraries(
+  descriptors3d_mol
+  PUBLIC descriptors3d
+  PRIVATE conformer_coord_upload ${RDKit_LIBS} OpenMP::OpenMP_CXX)
+
 add_library(triangle_smooth triangle_smooth.cu)
 target_link_libraries(triangle_smooth PRIVATE ${RDKit_LIBS} device_vector)
 
@@ -142,6 +154,6 @@ add_library(conformer_rmsd_mol conformer_rmsd_mol.cpp)
 target_link_libraries(
   conformer_rmsd_mol
   PUBLIC device_vector conformer_rmsd
-  PRIVATE ${RDKit_LIBS})
+  PRIVATE conformer_coord_upload ${RDKit_LIBS})
 
 add_subdirectory(tfd)

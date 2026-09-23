@@ -69,11 +69,20 @@ autodoc_member_order = "bysource"
 autodoc_typehints_format = "short"
 
 
+class _NativePlaceholder(type):
+    """Placeholder for a native attribute; nested attributes (e.g. enum members) resolve to placeholders too."""
+
+    def __getattr__(cls, name):
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return _NativePlaceholder(name, (), {"__qualname__": f"{cls.__qualname__}.{name}"})
+
+    def __repr__(cls):
+        return cls.__qualname__
+
+
 class _NativeExtensionStub(ModuleType):
     """Provide importable placeholders for unavailable compiled bindings."""
-
-    class Placeholder:
-        pass
 
     def __init__(self, name):
         super().__init__(name)
@@ -81,7 +90,9 @@ class _NativeExtensionStub(ModuleType):
         self.__all__ = []
 
     def __getattr__(self, name):
-        return self.Placeholder
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return _NativePlaceholder(name, (), {"__qualname__": name})
 
 
 # API docs inspect the Python wrappers but do not execute GPU operations. Stub
@@ -92,6 +103,7 @@ for _module_name in (
     "_clustering",
     "_conformerRmsd",
     "_DataStructs",
+    "_descriptors3d",
     "_embedMolecules",
     "_Fingerprints",
     "_mcs",

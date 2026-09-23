@@ -15,13 +15,12 @@
 
 #include "src/conformer_rmsd_mol.h"
 
-#include <GraphMol/Conformer.h>
-
 #include <climits>
 #include <limits>
 #include <stdexcept>
 #include <string>
 
+#include "src/conformer/conformer_coord_upload.h"
 #include "src/utils/host_vector.h"
 
 namespace nvMolKit {
@@ -50,28 +49,10 @@ AsyncDeviceVector<double> conformerRmsdMatrixMol(const RDKit::ROMol& mol,
   }
   const int numPairs = static_cast<int>(numPairs64);
 
-  // Allocate device buffers before filling the host buffer so that the async
-  // GPU memory allocation can proceed while the CPU extracts coordinates.
-  AsyncDeviceVector<double> devCoords(numCoords, stream);
   AsyncDeviceVector<double> devRmsd(numPairs, stream);
-
-  // Extract coordinates into a flat pinned host buffer.
   // Layout: coords[conf * numAtoms * 3 + atom * 3 + xyz]
-  // Pinned memory allows the DMA engine to transfer directly without a staging
-  // copy; the destructor handles cleanup safely after all stream work is submitted.
-  PinnedHostVector<double> hostCoords(numCoords);
-  int                      confIdx = 0;
-  for (auto it = mol.beginConformers(); it != mol.endConformers(); ++it, ++confIdx) {
-    const RDKit::Conformer& conf = **it;
-    for (int a = 0; a < numAtoms; ++a) {
-      const auto& pos                                = conf.getAtomPos(a);
-      hostCoords[confIdx * numAtoms * 3 + a * 3 + 0] = pos.x;
-      hostCoords[confIdx * numAtoms * 3 + a * 3 + 1] = pos.y;
-      hostCoords[confIdx * numAtoms * 3 + a * 3 + 2] = pos.z;
-    }
-  }
-
-  hostCoords.copyToDevice(devCoords, stream);
+  const DeviceCoordResult   uploaded  = uploadConformerCoordinates({&mol}, stream);
+  const auto&               devCoords = uploaded.positions;
   if (!prealigned && alignToFirstConformer) {
     AsyncDeviceVector<double> devAlignedCoords(numCoords, stream);
     alignConformersToFirstGpu(toSpan(devCoords), toSpan(devAlignedCoords), numConfs, numAtoms, stream);
@@ -141,7 +122,6 @@ std::vector<AsyncDeviceVector<double>> conformerRmsdBatchMatrixMol(const std::ve
   const int totalConformers = needsFirstConformerAlignment ? conformerOffsetsVec[numMols] : 0;
 
   // --- Allocate device buffers first so GPU allocation overlaps CPU work below ---
-  AsyncDeviceVector<double> devCoords(totalCoords > 0 ? totalCoords : 1, stream);
   AsyncDeviceVector<int>    devNumConfs(numMols, stream);
   AsyncDeviceVector<int>    devNumAtoms(numMols, stream);
   AsyncDeviceVector<int>    devPairOffsets(numMols + 1, stream);
@@ -163,7 +143,6 @@ std::vector<AsyncDeviceVector<double>> conformerRmsdBatchMatrixMol(const std::ve
   AsyncDeviceVector<double*> devRmsdPtrs(numMols, stream);
 
   // --- Fill pinned host buffers (CPU work, overlaps with async device allocs) ---
-  PinnedHostVector<double>  hostCoords(totalCoords > 0 ? totalCoords : 1);
   PinnedHostVector<int>     numConfsArr(numMols);
   PinnedHostVector<int>     numAtomsArr(numMols);
   PinnedHostVector<int>     pairOffsetsArr(numMols + 1);
@@ -180,19 +159,6 @@ std::vector<AsyncDeviceVector<double>> conformerRmsdBatchMatrixMol(const std::ve
     }
     coordOffsetsArr[m] = coordOffsetsVec[m];
     hostRmsdPtrs[m]    = devRmsdVecs[m].data();
-
-    const int na      = numAtomsVec[m];
-    int       confIdx = 0;
-    for (auto it = mols[m]->beginConformers(); it != mols[m]->endConformers(); ++it, ++confIdx) {
-      const RDKit::Conformer& conf = **it;
-      for (int a = 0; a < na; ++a) {
-        const auto&  pos     = conf.getAtomPos(a);
-        const size_t base    = coordOffsetsVec[m] + static_cast<size_t>(confIdx) * na * 3 + static_cast<size_t>(a) * 3;
-        hostCoords[base + 0] = pos.x;
-        hostCoords[base + 1] = pos.y;
-        hostCoords[base + 2] = pos.z;
-      }
-    }
   }
   pairOffsetsArr[numMols] = pairOffsetsVec[numMols];
   if (needsFirstConformerAlignment) {
@@ -200,9 +166,9 @@ std::vector<AsyncDeviceVector<double>> conformerRmsdBatchMatrixMol(const std::ve
   }
 
   // --- Transfer to device and launch ---
-  if (totalCoords > 0) {
-    hostCoords.copyToDevice(devCoords, stream);
-  }
+  // Coordinates are packed molecule by molecule, conformer-major, so molecule m starts at coordOffsetsVec[m].
+  const DeviceCoordResult uploaded  = uploadConformerCoordinates(mols, stream);
+  const auto&             devCoords = uploaded.positions;
   numConfsArr.copyToDevice(devNumConfs, stream);
   numAtomsArr.copyToDevice(devNumAtoms, stream);
   pairOffsetsArr.copyToDevice(devPairOffsets, stream);
