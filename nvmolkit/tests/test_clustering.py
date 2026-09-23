@@ -20,6 +20,7 @@ from rdkit.ML.Cluster.Butina import ClusterData
 
 import nvmolkit.clustering as clustering
 from nvmolkit.clustering import ClusterDeviceResult, OutputMode, butina, fused_butina
+from nvmolkit.similarity import AAPMetric, CosineMetric, TanimotoMetric
 from nvmolkit.types import AsyncGpuResult
 
 
@@ -497,6 +498,22 @@ def test_fused_butina_invalid_metric():
     x = torch.randint(-(2**31 - 1), 2**31 - 1, (10, 32), dtype=torch.int32).cuda()
     with pytest.raises(ValueError, match="metric must be"):
         fused_butina(x, cutoff=0.5, metric="euclidean")
+
+
+@pytest.mark.parametrize("name, instance", [("tanimoto", TanimotoMetric()), ("cosine", CosineMetric())])
+def test_fused_butina_metric_objects_match_names(name, instance):
+    x = torch.randint(0, 2**31 - 1, (200, 8), dtype=torch.int32).cuda()
+
+    by_name = fused_butina(x, cutoff=0.6, metric=name, output=OutputMode.RDKIT)
+
+    assert fused_butina(x, cutoff=0.6, metric=instance, output=OutputMode.RDKIT) == by_name
+
+
+@pytest.mark.parametrize("metric", ["aap", AAPMetric()])
+def test_fused_butina_does_not_yet_support_aap(metric):
+    x = torch.zeros((2, 1), dtype=torch.int32).cuda()
+    with pytest.raises(NotImplementedError, match="AAPMetric"):
+        fused_butina(x, cutoff=0.5, metric=metric)
 
 
 def test_fused_butina_invalid_stream_type():

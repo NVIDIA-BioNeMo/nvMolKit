@@ -89,7 +89,7 @@ def bench_rdkit_with_tanimoto(rdkit_fps, threshold, runs=3):
 
 
 def _tanimoto_dist(fp1, fp2):
-    return 1.0 - DataStructs.TanimotoMetric(fp1, fp2)
+    return 1.0 - DataStructs.TanimotoSimilarity(fp1, fp2)
 
 
 def bench_rdkit_lowmem(rdkit_fps, threshold, runs=3):
