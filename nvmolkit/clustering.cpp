@@ -45,9 +45,9 @@ boost::python::object wrapButinaResult(nvMolKit::ButinaResult& result, const int
   return boost::python::make_tuple(toOwnedPyArray(clusterArray), toOwnedPyArray(centroidArray));
 }
 
-boost::python::tuple wrapAapClusteringResult(const nvMolKit::AapClusteringResult& result,
-                                             const bool                           deviceOutput,
-                                             cudaStream_t                         stream) {
+boost::python::tuple wrapClusteringResult(const nvMolKit::ClusteringResult& result,
+                                          const bool                        deviceOutput,
+                                          cudaStream_t                      stream) {
   if (!deviceOutput) {
     return boost::python::make_tuple(nvMolKit::vectorToList(result.clusterIds),
                                      nvMolKit::vectorToList(result.centroids),
@@ -114,9 +114,9 @@ BOOST_PYTHON_MODULE(_clustering) {
       const auto                             extracted = nvMolKit::extractMolecules(molecules);
       const std::vector<const RDKit::ROMol*> mols(extracted.begin(), extracted.end());
       const nvMolKit::AapOptions options{maxPathLength, histogramBins, sinkhornIterations, sinkhornTemperature};
-      return wrapAapClusteringResult(nvMolKit::aapSimilarityClustering(mols, threshold, options, *streamOpt),
-                                     deviceOutput,
-                                     *streamOpt);
+      return wrapClusteringResult(nvMolKit::aapSimilarityClustering(mols, threshold, options, *streamOpt),
+                                  deviceOutput,
+                                  *streamOpt);
     },
     (boost::python::arg("molecules"),
      boost::python::arg("threshold")            = 0.217F,
@@ -144,9 +144,9 @@ BOOST_PYTHON_MODULE(_clustering) {
       const auto                             extracted = nvMolKit::extractMolecules(molecules);
       const std::vector<const RDKit::ROMol*> mols(extracted.begin(), extracted.end());
       const nvMolKit::AapOptions options{maxPathLength, histogramBins, sinkhornIterations, sinkhornTemperature};
-      return wrapAapClusteringResult(nvMolKit::aapDiseClustering(mols, threshold, options, *streamOpt),
-                                     deviceOutput,
-                                     *streamOpt);
+      return wrapClusteringResult(nvMolKit::aapDiseClustering(mols, threshold, options, *streamOpt),
+                                  deviceOutput,
+                                  *streamOpt);
     },
     (boost::python::arg("molecules"),
      boost::python::arg("threshold")            = 0.217F,
