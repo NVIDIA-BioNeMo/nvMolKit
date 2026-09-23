@@ -250,7 +250,7 @@ If any input molecule is `None` or lacks MMFF/UFF atom types, the call raises `V
 import torch
 from rdkit import Chem
 from rdkit.Chem.rdDistGeom import EmbedMultipleConfs
-from nvmolkit.clustering import ButinaOutputMode, butina
+from nvmolkit.clustering import OutputMode, butina
 from nvmolkit.conformerRmsd import GetConformerRMSMatrixBatch
 
 mols = [Chem.AddHs(Chem.MolFromSmiles(smi)) for smi in ["CCCCCC", "c1ccccc1"]]
@@ -266,7 +266,7 @@ condensed = GetConformerRMSMatrixBatch(heavy_mols)
 # Butina expects a square distance matrix, so request square GPU tensors.
 square = GetConformerRMSMatrixBatch(heavy_mols, output_format="square")
 results = [
-    butina(distance_matrix, cutoff=0.5, output=ButinaOutputMode.DEVICE)
+    butina(distance_matrix, cutoff=0.5, output=OutputMode.DEVICE)
     for distance_matrix in square
 ]
 
@@ -277,8 +277,8 @@ for result in results:
 
 Both Butina functions return GPU-resident results by default:
 
-- The default, `output=ButinaOutputMode.DEVICE`, returns cluster IDs, centroids, and sizes.
-- `output=ButinaOutputMode.RDKIT` returns RDKit cluster tuples on the host. The first element of each cluster is its centroid.
+- The default, `output=OutputMode.DEVICE`, returns cluster IDs, centroids, and sizes.
+- `output=OutputMode.RDKIT` returns RDKit cluster tuples on the host. The first element of each cluster is its centroid.
 
 The device output fields are `AsyncGpuResult` objects. Use `.torch()` to access
 their CUDA tensors without a host copy or `.numpy()` to synchronize and copy a
@@ -293,15 +293,15 @@ clustering provides device and RDKit-style output modes:
 
 ```python
 from rdkit import Chem
-from nvmolkit.clustering import DISEOutputMode, aap_dise
+from nvmolkit.clustering import OutputMode, aap_dise
 
 molecules = [Chem.MolFromSmiles(smiles) for smiles in ["CCCC", "CCCO", "CCOC"]]
 device_result = aap_dise(molecules)
-rdkit_clusters = aap_dise(molecules, output=DISEOutputMode.RDKIT)
+rdkit_clusters = aap_dise(molecules, output=OutputMode.RDKIT)
 ```
 
 `device_result` has `cluster_ids`, `centroids`, and `cluster_sizes` fields;
-cluster IDs are zero-based and contiguous. `DISEOutputMode.RDKIT` describes
+cluster IDs are zero-based and contiguous. `OutputMode.RDKIT` describes
 the centroid-first RDKit cluster representation, not an RDKit implementation
 of the AAP+DISE algorithm. The current DISE control loop synchronizes before
 returning either mode; `DEVICE` describes the stable schema and where the
