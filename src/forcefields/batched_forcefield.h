@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "src/minimizer/bfgs_types.h"
+#include "src/precision/precision_mode.h"
 
 namespace nvMolKit {
 
@@ -152,6 +153,9 @@ class BatchedForcefield {
 class SinglePrecisionBatchedForcefield {
  public:
   virtual ~SinglePrecisionBatchedForcefield() = default;
+
+  //! Precision this instance was built to evaluate in. The float overloads are only valid for SINGLE.
+  virtual PrecisionMode precision() const = 0;
 
   virtual cudaError_t computeEnergy(float*         energyOuts,
                                     const float*   positions,

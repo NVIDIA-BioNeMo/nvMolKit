@@ -664,6 +664,34 @@ TEST_F(BFGSMinimizerTestFixture, SinglePrecisionE2EMinimizationUsesRelaxedTolera
               ::testing::Pointwise(::testing::DoubleNear(kSinglePrecisionEnergyTolerance), referenceEnergies));
 }
 
+TEST_F(BFGSMinimizerTestFixture, SinglePrecisionMinimizerAcceptsFullPrecisionForcefield) {
+  constexpr int numMols  = 1;
+  constexpr int maxIters = 50;
+  setUpMMFFSystems(numMols);
+
+  // A FULL forcefield still implements the float interface but rejects float evaluation, so the
+  // minimizer must fall back to evaluating through the double API.
+  nvMolKit::MMFFBatchedForcefield forcefield(systemHost);
+  ASSERT_EQ(forcefield.precision(), nvMolKit::PrecisionMode::FULL);
+  nvMolKit::BfgsBatchMinimizerSingle minimizer;
+  EXPECT_NO_THROW(
+    minimizer.minimize(maxIters, 1e-4, forcefield, systemDevice.positions, systemDevice.grad, systemDevice.energyOuts));
+
+  std::vector<double> referenceEnergies;
+  for (auto& mol : mols) {
+    RDKit::MMFF::MMFFOptimizeMolecule(*mol, maxIters, "MMFF94", 100.0);
+    auto                                     props = std::make_unique<RDKit::MMFF::MMFFMolProperties>(*mol);
+    std::unique_ptr<ForceFields::ForceField> rdkitForcefield(RDKit::MMFF::constructForceField(*mol, props.get()));
+    referenceEnergies.push_back(rdkitForcefield->calcEnergy());
+  }
+
+  std::vector<double> gotEnergies(systemDevice.energyOuts.size());
+  systemDevice.energyOuts.copyToHost(gotEnergies);
+  constexpr double kSinglePrecisionEnergyTolerance = 5e-3;
+  EXPECT_THAT(gotEnergies,
+              ::testing::Pointwise(::testing::DoubleNear(kSinglePrecisionEnergyTolerance), referenceEnergies));
+}
+
 TEST_P(BFGSMinimizerBackendTest, E2EMinimizationSingleSystemUnconvergedMatches) {
   const auto [backend, precision] = GetParam();
   nvMolKit::ScopedStream stream;

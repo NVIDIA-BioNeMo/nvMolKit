@@ -1163,8 +1163,9 @@ bool BfgsBatchMinimizerT<real>::minimize(const int                  numIters,
     };
     return minimizeBatched(numIters, gradTol, evaluateEnergy, evaluateGradient);
   } else {
-    bool needsAnotherCycle = false;
-    if (auto* singlePrecisionForcefield = dynamic_cast<SinglePrecisionBatchedForcefield*>(&ff)) {
+    bool  needsAnotherCycle         = false;
+    auto* singlePrecisionForcefield = dynamic_cast<SinglePrecisionBatchedForcefield*>(&ff);
+    if (singlePrecisionForcefield != nullptr && usesSinglePrecision(singlePrecisionForcefield->precision())) {
       auto evaluateEnergy = [&](const real* evalPositions) {
         cudaCheckError(
           singlePrecisionForcefield->computeEnergy(energyOutsDevice, evalPositions, activeSystemMask, stream_));
