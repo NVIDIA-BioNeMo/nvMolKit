@@ -1015,7 +1015,8 @@ bool FireBatchMinimizerT<real>::minimize(const int                  numIters,
   auto gFunc = [&]() { cudaCheckError(ff.computeGradients(grad.data(), positions.data(), activeSystemMask, stream_)); };
 
   if constexpr (!std::is_same_v<real, double>) {
-    if (auto* singlePrecisionForcefield = dynamic_cast<SinglePrecisionBatchedForcefield*>(&ff)) {
+    auto* singlePrecisionForcefield = dynamic_cast<SinglePrecisionBatchedForcefield*>(&ff);
+    if (singlePrecisionForcefield != nullptr && usesSinglePrecision(singlePrecisionForcefield->precision())) {
       const ScopedNvtxRange batchedRange("FireBatchMinimizer::minimize (batched)");
       initialize(atomStartsHost, nullptr, activeSystemMask, FireBackend::BATCHED);
       auto evaluateEnergy = [&](const real* evalPositions) {

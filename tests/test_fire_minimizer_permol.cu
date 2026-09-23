@@ -358,3 +358,39 @@ TEST(FireMinimizerPerMolMMFF, PublicWrapperSupportsSinglePrecision) {
     }
   }
 }
+
+TEST(FireMinimizerBatchedMMFF, SinglePrecisionMinimizerAcceptsFullPrecisionForcefield) {
+  PerMolFireFixture fixture;
+  fixture.setup(/*numMols=*/2);
+
+  // A FULL forcefield still implements the float interface but rejects float evaluation, so the
+  // minimizer must fall back to evaluating through the double API.
+  nvMolKit::MMFFBatchedForcefield forcefield(fixture.systemHost);
+  ASSERT_EQ(forcefield.precision(), nvMolKit::PrecisionMode::FULL);
+  cudaCheckError(
+    forcefield.computeEnergy(fixture.systemDevice.energyOuts.data(), fixture.systemDevice.positions.data()));
+  std::vector<double> startEnergies(fixture.systemDevice.energyOuts.size());
+  fixture.systemDevice.energyOuts.copyToHost(startEnergies);
+  cudaCheckError(cudaDeviceSynchronize());
+
+  nvMolKit::FireOptions options{};
+  options.stuckDetectionEnabled = false;
+  nvMolKit::FireBatchMinimizerSingle minimizer(/*dataDim=*/3, options);
+  EXPECT_NO_THROW(minimizer.minimize(/*numIters=*/200,
+                                     options.gradTol,
+                                     forcefield,
+                                     fixture.systemDevice.positions,
+                                     fixture.systemDevice.grad,
+                                     fixture.systemDevice.energyOuts));
+
+  fixture.systemDevice.energyOuts.zero();
+  cudaCheckError(
+    forcefield.computeEnergy(fixture.systemDevice.energyOuts.data(), fixture.systemDevice.positions.data()));
+  std::vector<double> finalEnergies(fixture.systemDevice.energyOuts.size());
+  fixture.systemDevice.energyOuts.copyToHost(finalEnergies);
+  cudaCheckError(cudaDeviceSynchronize());
+  for (size_t i = 0; i < finalEnergies.size(); ++i) {
+    EXPECT_TRUE(std::isfinite(finalEnergies[i])) << "system " << i;
+    EXPECT_LT(finalEnergies[i], startEnergies[i]) << "system " << i;
+  }
+}
