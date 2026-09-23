@@ -564,58 +564,52 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
       buffers.ensureCapacity(systemHost.positions.size(), batchConformers.size());
       std::copy(systemHost.positions.begin(), systemHost.positions.end(), buffers.initialPositions.begin());
 
-      FireBatchMinimizer fireMinimizer(
-        /*dataDim=*/3,
-        fireOptions,
-        streamPtr,
-        /*debugMode=*/false,
-        backend,
-        precision);
-      if (fireOptions.useMass) {
-        fireMinimizer.setMasses(massesPerAtom);
-      }
-      const auto effectiveBackend = fireMinimizer.resolveBackend(systemHost.indices.atomStarts);
-      setupBatchRange.pop();
-
-      const AsyncDeviceVector<double>* finalPositions = nullptr;
-      const AsyncDeviceVector<double>* finalEnergies  = nullptr;
-      AsyncDeviceVector<double>        positionsDevice;
-      AsyncDeviceVector<double>        gradDevice;
-      AsyncDeviceVector<double>        energyOutsDevice;
-
-      if (effectiveBackend == FireBackend::BATCHED) {
-        MMFFBatchedForcefield forcefield(systemHost, metadata, streamPtr, precision);
-        positionsDevice.setStream(streamPtr);
-        gradDevice.setStream(streamPtr);
-        energyOutsDevice.setStream(streamPtr);
-        positionsDevice.resize(systemHost.positions.size());
-        positionsDevice.copyFromHost(buffers.initialPositions.data(), systemHost.positions.size());
-        gradDevice.resize(systemHost.positions.size());
-        gradDevice.zero();
-        energyOutsDevice.resize(batchConformers.size());
-        energyOutsDevice.zero();
-
-        fireMinimizer
-          .minimize(maxIters, fireOptions.gradTol, forcefield, positionsDevice, gradDevice, energyOutsDevice);
-
-        forcefield.computeEnergy(energyOutsDevice.data(), positionsDevice.data(), nullptr, streamPtr);
-
-        finalPositions = &positionsDevice;
-        finalEnergies  = &energyOutsDevice;
-
-        if (!deviceOutput) {
-          ScopedNvtxRange finalizeBatchRange("OpenMP loop finalizing batch");
-          positionsDevice.copyToHost(buffers.positions.data(), positionsDevice.size());
-          energyOutsDevice.copyToHost(buffers.energies.data(), energyOutsDevice.size());
-          cudaStreamSynchronize(streamPtr);
+      auto minimizeBatch = [&](auto& fireMinimizer) {
+        if (fireOptions.useMass) {
+          fireMinimizer.setMasses(massesPerAtom);
         }
-      } else {
-        positionsDevice.setStream(streamPtr);
-        energyOutsDevice.setStream(streamPtr);
-        positionsDevice.resize(systemHost.positions.size());
-        positionsDevice.copyFromHost(buffers.initialPositions.data(), systemHost.positions.size());
+        const auto effectiveBackend = fireMinimizer.resolveBackend(systemHost.indices.atomStarts);
+        setupBatchRange.pop();
 
-        auto minimizePerMolecule = [&](auto& device) {
+        const AsyncDeviceVector<double>* finalPositions = nullptr;
+        const AsyncDeviceVector<double>* finalEnergies  = nullptr;
+        AsyncDeviceVector<double>        positionsDevice;
+        AsyncDeviceVector<double>        gradDevice;
+        AsyncDeviceVector<double>        energyOutsDevice;
+
+        if (effectiveBackend == FireBackend::BATCHED) {
+          MMFFBatchedForcefield forcefield(systemHost, metadata, streamPtr, precision);
+          positionsDevice.setStream(streamPtr);
+          gradDevice.setStream(streamPtr);
+          energyOutsDevice.setStream(streamPtr);
+          positionsDevice.resize(systemHost.positions.size());
+          positionsDevice.copyFromHost(buffers.initialPositions.data(), systemHost.positions.size());
+          gradDevice.resize(systemHost.positions.size());
+          gradDevice.zero();
+          energyOutsDevice.resize(batchConformers.size());
+          energyOutsDevice.zero();
+
+          fireMinimizer
+            .minimize(maxIters, fireOptions.gradTol, forcefield, positionsDevice, gradDevice, energyOutsDevice);
+
+          forcefield.computeEnergy(energyOutsDevice.data(), positionsDevice.data(), nullptr, streamPtr);
+
+          finalPositions = &positionsDevice;
+          finalEnergies  = &energyOutsDevice;
+
+          if (!deviceOutput) {
+            ScopedNvtxRange finalizeBatchRange("OpenMP loop finalizing batch");
+            positionsDevice.copyToHost(buffers.positions.data(), positionsDevice.size());
+            energyOutsDevice.copyToHost(buffers.energies.data(), energyOutsDevice.size());
+            cudaStreamSynchronize(streamPtr);
+          }
+        } else {
+          positionsDevice.setStream(streamPtr);
+          energyOutsDevice.setStream(streamPtr);
+          positionsDevice.resize(systemHost.positions.size());
+          positionsDevice.copyFromHost(buffers.initialPositions.data(), systemHost.positions.size());
+
+          typename std::decay_t<decltype(fireMinimizer)>::MMFFDeviceBuffers device;
           nvMolKit::MMFF::setStreams(device, streamPtr);
           nvMolKit::MMFF::sendContribsAndIndicesToDevice(systemHost, device);
           nvMolKit::MMFF::allocateIntermediateBuffers(systemHost, device);
@@ -632,44 +626,44 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
             copyDeviceValues(positionsDevice.data(), device.positions.data(), device.positions.size(), streamPtr));
           cudaCheckError(
             copyDeviceValues(energyOutsDevice.data(), device.energyOuts.data(), device.energyOuts.size(), streamPtr));
-        };
 
-        if (usesSinglePrecision(precision)) {
-          BatchedMolecularDeviceBuffersSingle device;
-          minimizePerMolecule(device);
+          finalPositions = &positionsDevice;
+          finalEnergies  = &energyOutsDevice;
+
+          if (!deviceOutput) {
+            ScopedNvtxRange finalizeBatchRange("OpenMP loop finalizing batch");
+            positionsDevice.copyToHost(buffers.positions.data(), positionsDevice.size());
+            energyOutsDevice.copyToHost(buffers.energies.data(), energyOutsDevice.size());
+            cudaStreamSynchronize(streamPtr);
+          }
+        }
+
+        if (deviceOutput) {
+          detail::appendBatch(batchConformers,
+                              *finalPositions,
+                              *finalEnergies,
+                              fireMinimizer.statuses(),
+                              deviceCollectors[threadId]);
         } else {
-          BatchedMolecularDeviceBuffers device;
-          minimizePerMolecule(device);
-        }
-
-        finalPositions = &positionsDevice;
-        finalEnergies  = &energyOutsDevice;
-
-        if (!deviceOutput) {
-          ScopedNvtxRange finalizeBatchRange("OpenMP loop finalizing batch");
-          positionsDevice.copyToHost(buffers.positions.data(), positionsDevice.size());
-          energyOutsDevice.copyToHost(buffers.energies.data(), energyOutsDevice.size());
+          std::vector<uint8_t> statusesHost(batchConformers.size());
+          fireMinimizer.statuses().copyToHost(statusesHost.data(), batchConformers.size());
           cudaStreamSynchronize(streamPtr);
-        }
-      }
 
-      if (deviceOutput) {
-        detail::appendBatch(batchConformers,
-                            *finalPositions,
-                            *finalEnergies,
-                            fireMinimizer.statuses(),
-                            deviceCollectors[threadId]);
+          writeBackResults(batchConformers, conformerAtomStarts, buffers, moleculeEnergies);
+
+          for (size_t i = 0; i < batchConformers.size(); ++i) {
+            const auto& confInfo                                 = batchConformers[i];
+            moleculeConverged[confInfo.molIdx][confInfo.confIdx] = static_cast<int8_t>(statusesHost[i] == 0);
+          }
+        }
+      };
+
+      if (usesSinglePrecision(precision)) {
+        FireBatchMinimizerSingle fireMinimizer(/*dataDim=*/3, fireOptions, streamPtr, /*debugMode=*/false, backend);
+        minimizeBatch(fireMinimizer);
       } else {
-        std::vector<uint8_t> statusesHost(batchConformers.size());
-        fireMinimizer.statuses().copyToHost(statusesHost.data(), batchConformers.size());
-        cudaStreamSynchronize(streamPtr);
-
-        writeBackResults(batchConformers, conformerAtomStarts, buffers, moleculeEnergies);
-
-        for (size_t i = 0; i < batchConformers.size(); ++i) {
-          const auto& confInfo                                 = batchConformers[i];
-          moleculeConverged[confInfo.molIdx][confInfo.confIdx] = static_cast<int8_t>(statusesHost[i] == 0);
-        }
+        FireBatchMinimizer fireMinimizer(/*dataDim=*/3, fireOptions, streamPtr, /*debugMode=*/false, backend);
+        minimizeBatch(fireMinimizer);
       }
 
     } catch (...) {

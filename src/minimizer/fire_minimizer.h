@@ -16,7 +16,7 @@
 #ifndef NVMOLKIT_FIRE_MINIMIZER_H
 #define NVMOLKIT_FIRE_MINIMIZER_H
 
-#include <memory>
+#include <type_traits>
 #include <vector>
 
 #include "src/minimizer/bfgs_types.h"
@@ -30,14 +30,10 @@ namespace nvMolKit {
 
 class BatchedForcefield;
 
-using FireSingleEnergyFunctor = std::function<void(const float*)>;
-using FireSingleGradFunctor   = std::function<void()>;
-
 namespace MMFF {
 template <typename ParameterScalar, typename CoordinateScalar, typename TorsionScalar>
 struct BatchedMolecularDeviceBuffersT;
-using BatchedMolecularDeviceBuffers       = BatchedMolecularDeviceBuffersT<double, double, float>;
-using BatchedMolecularDeviceBuffersSingle = BatchedMolecularDeviceBuffersT<float, float, float>;
+using BatchedMolecularDeviceBuffers = BatchedMolecularDeviceBuffersT<double, double, float>;
 }  // namespace MMFF
 
 //! \brief Per-system per-iteration debug snapshot recorded when the minimizer is
@@ -61,38 +57,6 @@ struct FireInternalState {
   std::vector<uint8_t> statuses;
 };
 
-//! Precision-dependent device state for the batched FIRE implementation.
-template <typename real, typename reduceT, typename storageT> struct FireWorkspace {
-  using ComputeScalar   = real;
-  using ReductionScalar = reduceT;
-  using StorageScalar   = storageT;
-
-  AsyncDeviceVector<storageT> velocities;
-  AsyncDeviceVector<storageT> masses;
-  AsyncDeviceVector<storageT> positions;
-  AsyncDeviceVector<storageT> grad;
-  AsyncDeviceVector<storageT> energy;
-  AsyncDeviceVector<storageT> dt;
-  AsyncDeviceVector<storageT> alpha;
-  AsyncDeviceVector<storageT> energyMinStreak;
-  AsyncDeviceVector<storageT> energyMaxStreak;
-
-  void setStream(cudaStream_t stream) {
-    velocities.setStream(stream);
-    masses.setStream(stream);
-    positions.setStream(stream);
-    grad.setStream(stream);
-    energy.setStream(stream);
-    dt.setStream(stream);
-    alpha.setStream(stream);
-    energyMinStreak.setStream(stream);
-    energyMaxStreak.setStream(stream);
-  }
-};
-
-using FullFireWorkspace   = FireWorkspace<double, double, double>;
-using SingleFireWorkspace = FireWorkspace<float, float, float>;
-
 //! \brief Batched FIRE 2.0 minimizer.
 //!
 //! Implements the ASE FIRE 2.0 algorithm with a single semi-implicit Euler
@@ -101,15 +65,23 @@ using SingleFireWorkspace = FireWorkspace<float, float, float>;
 //! per-system state (dt, alpha, nStepsPositive, velocities) and converges
 //! independently. Inactive systems (passed via @p activeThisStage at
 //! construction or marked converged during minimization) are not touched.
-class FireBatchMinimizer final : public BatchMinimizer {
+//! \tparam real Scalar type for the minimizer's working state (double or float). Coordinates, gradients, energies,
+//!              and masses exchanged through the public API remain double precision.
+template <typename real> class FireBatchMinimizerT final : public BatchMinimizer {
+  static_assert(std::is_same_v<real, double> || std::is_same_v<real, float>);
+
  public:
-  explicit FireBatchMinimizer(int                dataDim   = 3,
-                              const FireOptions& options   = FireOptions(),
-                              cudaStream_t       stream    = nullptr,
-                              bool               debugMode = false,
-                              FireBackend        backend   = FireBackend::BATCHED,
-                              PrecisionMode      precision = PrecisionMode::FULL);
-  ~FireBatchMinimizer() override = default;
+  //! Precision mode matching this minimizer's working scalar type.
+  static constexpr PrecisionMode kPrecision = std::is_same_v<real, float> ? PrecisionMode::SINGLE : PrecisionMode::FULL;
+  //! MMFF device buffers consumed by the per-molecule kernel at this precision.
+  using MMFFDeviceBuffers                   = MMFF::BatchedMolecularDeviceBuffersT<real, real, float>;
+
+  explicit FireBatchMinimizerT(int                dataDim   = 3,
+                               const FireOptions& options   = FireOptions(),
+                               cudaStream_t       stream    = nullptr,
+                               bool               debugMode = false,
+                               FireBackend        backend   = FireBackend::BATCHED);
+  ~FireBatchMinimizerT() override = default;
 
   //! \brief Resolve the effective backend for the provided batch under HYBRID selection.
   FireBackend resolveBackend(const std::vector<int>& atomStartsHost) const;
@@ -164,16 +136,12 @@ class FireBatchMinimizer final : public BatchMinimizer {
   //!      to PER_MOLECULE for this batch.
   //! \pre ::FireOptions::stuckDetectionEnabled must be false; the per-molecule path does
   //!      not support FIRE energy-plateau detection.
-  bool                                minimizeWithMMFF(int                                  numIters,
-                                                       double                               gradTol,
-                                                       const std::vector<int>&              atomStartsHost,
-                                                       MMFF::BatchedMolecularDeviceBuffers& systemDevice,
-                                                       const uint8_t*                       activeThisStage = nullptr);
-  bool                                minimizeWithMMFF(int                                        numIters,
-                                                       double                                     gradTol,
-                                                       const std::vector<int>&                    atomStartsHost,
-                                                       MMFF::BatchedMolecularDeviceBuffersSingle& systemDevice,
-                                                       const uint8_t*                             activeThisStage = nullptr);
+  bool minimizeWithMMFF(int                     numIters,
+                        double                  gradTol,
+                        const std::vector<int>& atomStartsHost,
+                        MMFFDeviceBuffers&      systemDevice,
+                        const uint8_t*          activeThisStage = nullptr);
+
   const std::vector<FireDebugOutput>& debugOutputs() const { return debugOutputs_; }
 
   //! \brief Cadence (in iterations) at which the minimize() loop reads the
@@ -198,38 +166,30 @@ class FireBatchMinimizer final : public BatchMinimizer {
   void resetContinuationCache();
 
  private:
-  template <typename DeviceBuffers, typename Workspace>
-  bool minimizeWithMMFFImpl(int                     numIters,
-                            double                  gradTol,
-                            const std::vector<int>& atomStartsHost,
-                            DeviceBuffers&          systemDevice,
-                            Workspace&              workspace,
-                            const uint8_t*          activeThisStage);
-  bool minimizeImpl(int                           numIters,
-                    double                        gradTol,
-                    const std::vector<int>&       atomStartsHost,
-                    const AsyncDeviceVector<int>& atomStarts,
-                    AsyncDeviceVector<double>&    positions,
-                    AsyncDeviceVector<double>&    grad,
-                    AsyncDeviceVector<double>&    energyOuts,
-                    AsyncDeviceVector<double>&    energyBuffer,
-                    EnergyFunctor                 eFunc,
-                    GradFunctor                   gFunc,
-                    FireSingleEnergyFunctor       eFuncSingle,
-                    FireSingleGradFunctor         gFuncSingle,
-                    const uint8_t*                activeThisStage);
-  template <typename storageT>
+  //! \brief Shared host-driven batched FIRE loop over working-precision state.
+  //! \param evalEnergy Writes energies for the given positions into @p energies.
+  //! \param evalGrad Writes gradients at @p positions into @p grad.
+  template <typename EnergyEvaluator, typename GradientEvaluator>
+  void minimizeBatched(int                           numIters,
+                       double                        gradTol,
+                       const AsyncDeviceVector<int>& atomStarts,
+                       AsyncDeviceVector<real>&      positions,
+                       AsyncDeviceVector<real>&      grad,
+                       AsyncDeviceVector<real>&      energies,
+                       EnergyEvaluator               evalEnergy,
+                       GradientEvaluator             evalGrad);
+  //! \brief Report convergence diagnostics and return whether all systems finished.
+  bool finishBatched();
   void launchPreKick(double                        gradTol,
                      const AsyncDeviceVector<int>& atomStarts,
-                     AsyncDeviceVector<storageT>&  positions,
-                     AsyncDeviceVector<storageT>&  grad,
+                     AsyncDeviceVector<real>&      positions,
+                     AsyncDeviceVector<real>&      grad,
                      int                           launchBlocks,
                      bool                          isFirstStep);
-  template <typename storageT>
   void launchPostKick(double                        gradTol,
                       const AsyncDeviceVector<int>& atomStarts,
-                      AsyncDeviceVector<storageT>&  positions,
-                      AsyncDeviceVector<storageT>&  grad,
+                      AsyncDeviceVector<real>&      positions,
+                      AsyncDeviceVector<real>&      grad,
                       int                           launchBlocks);
   void compactActiveAsync();
   int  readbackNumUnfinished();
@@ -237,20 +197,21 @@ class FireBatchMinimizer final : public BatchMinimizer {
   //! \brief Copy per-molecule statuses to host and report whether all active systems converged.
   bool checkPerMolConvergence();
 
-  int           dataDim_;
-  FireOptions   fireOptions_;
-  cudaStream_t  stream_;
-  int           step_                    = 0;
-  bool          debugMode_               = false;
-  int           numSystems_              = 0;
-  int           convergencePollInterval_ = 8;
-  int           lastKnownNumUnfinished_  = 0;
-  FireBackend   backend_                 = FireBackend::BATCHED;
-  PrecisionMode precision_;
+  int          dataDim_;
+  FireOptions  fireOptions_;
+  cudaStream_t stream_;
+  int          step_                    = 0;
+  bool         debugMode_               = false;
+  int          numSystems_              = 0;
+  int          convergencePollInterval_ = 8;
+  int          lastKnownNumUnfinished_  = 0;
+  FireBackend  backend_                 = FireBackend::BATCHED;
 
-  std::unique_ptr<FullFireWorkspace>   fullWorkspace_;
-  std::unique_ptr<SingleFireWorkspace> singleWorkspace_;
+  AsyncDeviceVector<real> velocities_;
+  AsyncDeviceVector<real> masses_;
 
+  AsyncDeviceVector<real>    dt_;
+  AsyncDeviceVector<real>    alpha_;
   AsyncDeviceVector<int>     numStepsWithPositivePower_;
   AsyncDeviceVector<uint8_t> statuses_;
 
@@ -260,7 +221,13 @@ class FireBatchMinimizer final : public BatchMinimizer {
   AsyncDeviceVector<int>     activeSystemIndices_;
   AsyncDeviceVector<int>     allSystemIndices_;
 
-  std::vector<double>       hostMasses_;
+  std::vector<double> hostMasses_;
+
+  // Batched-backend state storage used when `real` differs from the double-precision
+  // buffers passed through the public API. Unused (empty) for double precision.
+  AsyncDeviceVector<real>   ownedPositions_;
+  AsyncDeviceVector<real>   ownedGrad_;
+  AsyncDeviceVector<real>   ownedEnergies_;
   AsyncDeviceVector<double> massInputConversion_;
 
   AsyncDeviceVector<double>    debugPowers_;
@@ -276,9 +243,11 @@ class FireBatchMinimizer final : public BatchMinimizer {
   const uint8_t* cachedActiveThisStage_ = nullptr;
   const double*  cachedMasses_          = nullptr;
 
-  //! Per-system state for energy-plateau stuck detection. The workspace extrema
-  //! track the window while ``stuckStreak_`` counts
+  //! Per-system state for energy-plateau stuck detection. ``energyMinStreak_`` and
+  //! ``energyMaxStreak_`` track the windowed extrema while ``stuckStreak_`` counts
   //! consecutive plateau polls; all reset when the relative tolerance is violated.
+  AsyncDeviceVector<real>    energyMinStreak_;
+  AsyncDeviceVector<real>    energyMaxStreak_;
   AsyncDeviceVector<int32_t> stuckStreak_;
   int                        pollsSinceLastEnergyEval_ = 0;
 
@@ -291,12 +260,13 @@ class FireBatchMinimizer final : public BatchMinimizer {
   AsyncDeviceVector<int>    activeMolIdsDevice_;   //!< Device copy of @c activeMolIds_.
   PinnedHostVector<uint8_t> activeHost_;           //!< Pinned scratch for caller-supplied active mask.
   PinnedHostVector<uint8_t> convergenceHost_;      //!< Pinned scratch for status readback.
-
-  FullFireWorkspace&         fullWorkspace() { return *fullWorkspace_; }
-  const FullFireWorkspace&   fullWorkspace() const { return *fullWorkspace_; }
-  SingleFireWorkspace&       singleWorkspace() { return *singleWorkspace_; }
-  const SingleFireWorkspace& singleWorkspace() const { return *singleWorkspace_; }
 };
+
+using FireBatchMinimizer       = FireBatchMinimizerT<double>;
+using FireBatchMinimizerSingle = FireBatchMinimizerT<float>;
+
+extern template class FireBatchMinimizerT<double>;
+extern template class FireBatchMinimizerT<float>;
 
 }  // namespace nvMolKit
 
