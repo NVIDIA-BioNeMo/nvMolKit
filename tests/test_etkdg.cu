@@ -528,6 +528,16 @@ void testEnergyImprovement(const std::vector<RDKit::ROMol*>&    mols,
     std::vector<std::unique_ptr<RDGeom::Point>> positions;
     std::unique_ptr<ForceFields::ForceField>    field;
 
+    // Embedding starts from random coordinates, so measure the starting energy at a random-coordinate start.
+    // An eigenvector-embedded reference can already sit below a legitimate DG local minimum.
+    auto randomOption            = RDKit::DGeomHelpers::ETKDGv3;
+    randomOption.useRandomCoords = true;
+    {
+      nvMolKit::detail::EmbedArgs              randomEargs;
+      std::unique_ptr<ForceFields::ForceField> randomField;
+      nvMolKit::DGeomHelpers::setupRDKitFFWithPos(mol, randomOption, randomField, randomEargs, positions);
+    }
+
     // Use RDKit's default first minimization force field for energy comparison
     auto option = RDKit::DGeomHelpers::ETKDGv3;
     nvMolKit::DGeomHelpers::setupRDKitFFWithPos(mol, option, field, eargs, positions);
