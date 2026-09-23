@@ -30,6 +30,7 @@ from nvmolkit.similarity import (
     CosineMetric,
     Metric,
     TanimotoMetric,
+    _resolve_aap_metric,
     _resolve_metric,
 )
 from nvmolkit.types import ArrayInput, AsyncGpuResult, _as_cuda_tensor, _resolve_cuda_stream
@@ -145,7 +146,7 @@ def aap_dise(
     similarity_threshold: float = 0.217,
     *,
     assignment: Literal["first", "nearest"] = "nearest",
-    metric: AAPMetric = _DEFAULT_AAP_METRIC,
+    metric: Literal["aap"] | AAPMetric = _DEFAULT_AAP_METRIC,
     stream: torch.cuda.Stream | None = None,
     output: OutputMode = OutputMode.DEVICE,
 ) -> ClusterDeviceResult | _RDKitClusters:
@@ -162,7 +163,7 @@ def aap_dise(
         molecules: RDKit molecules in priority order.
         similarity_threshold: Inclusive similarity threshold in ``[0, 1]``.
         assignment: ``"first"`` or ``"nearest"``.
-        metric: AAP parameters.
+        metric: AAP parameters, or ``"aap"`` for the defaults.
         stream: CUDA stream to use. If None, uses the current stream.
         output: Result representation.
 
@@ -178,8 +179,7 @@ def aap_dise(
     _validate_assignment(assignment)
     if not 0 <= similarity_threshold <= 1:
         raise ValueError(f"similarity_threshold must be in [0, 1], got {similarity_threshold}")
-    if not isinstance(metric, AAPMetric):
-        raise TypeError(f"metric must be an AAPMetric, got {type(metric).__name__}")
+    metric = _resolve_aap_metric(metric)
 
     active_stream = _resolve_cuda_stream(stream)
     function = _clustering.aap_similarity_clustering if assignment == "first" else _clustering.aap_dise_clustering

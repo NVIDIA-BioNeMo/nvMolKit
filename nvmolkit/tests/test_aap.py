@@ -14,7 +14,7 @@ from nvmolkit.clustering import (
     OutputMode,
     aap_dise,
 )
-from nvmolkit.similarity import AAPMetric, aap_similarity
+from nvmolkit.similarity import AAPMetric, TanimotoMetric, aap_similarity
 
 
 def _mol(smiles):
@@ -381,3 +381,26 @@ def test_aap_matches_optional_ligand_clustering_source():
         )
         actual_labels = [cluster_id + 1 for cluster_id in _cluster_ids(molecules, similarity_threshold=threshold)]
         assert actual_labels == expected_labels
+
+
+def test_aap_metric_name_is_equivalent_to_default_metric_object():
+    molecules = [_mol(smiles) for smiles in ("CCCC", "CCCO", "CCOC", "c1ccccc1")]
+
+    assert aap_similarity(molecules[0], molecules[1], metric="aap") == aap_similarity(
+        molecules[0], molecules[1], metric=AAPMetric()
+    )
+    assert aap_dise(molecules, 0.2, metric="aap", output=OutputMode.RDKIT) == aap_dise(
+        molecules, 0.2, metric=AAPMetric(), output=OutputMode.RDKIT
+    )
+
+
+@pytest.mark.parametrize(
+    ("metric", "error"), [("tanimoto", TypeError), (TanimotoMetric(), TypeError), ("euclidean", ValueError)]
+)
+def test_aap_apis_reject_other_metrics(metric, error):
+    molecule = _mol("CCO")
+
+    with pytest.raises(error, match="metric must be"):
+        aap_similarity(molecule, molecule, metric=metric)
+    with pytest.raises(error, match="metric must be"):
+        aap_dise([molecule], metric=metric)

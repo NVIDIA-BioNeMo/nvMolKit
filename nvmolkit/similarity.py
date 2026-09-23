@@ -86,11 +86,18 @@ def _resolve_metric(metric: Metric) -> TanimotoMetric | CosineMetric | AAPMetric
     )
 
 
+def _resolve_aap_metric(metric: Literal["aap"] | AAPMetric) -> AAPMetric:
+    resolved = _resolve_metric(metric)
+    if not isinstance(resolved, AAPMetric):
+        raise TypeError(f"metric must be 'aap' or an AAPMetric, got {metric!r}")
+    return resolved
+
+
 def aap_similarity(
     left,
     right,
     *,
-    metric: AAPMetric = _DEFAULT_AAP_METRIC,
+    metric: Literal["aap"] | AAPMetric = _DEFAULT_AAP_METRIC,
     stream: torch.cuda.Stream | None = None,
 ) -> float:
     """Compute approximate Atom-Atom Path (AAP) similarity between two molecules.
@@ -101,7 +108,7 @@ def aap_similarity(
     Args:
         left: Reference RDKit molecule.
         right: Candidate RDKit molecule.
-        metric: AAP parameters.
+        metric: AAP parameters, or ``"aap"`` for the defaults.
         stream: CUDA stream to use. If None, uses the current stream.
 
     Returns:
@@ -111,8 +118,7 @@ def aap_similarity(
         For method details, see `Gobbi et al. (2015)
         <https://doi.org/10.1186/s13321-015-0056-8>`_.
     """
-    if not isinstance(metric, AAPMetric):
-        raise TypeError(f"metric must be an AAPMetric, got {type(metric).__name__}")
+    metric = _resolve_aap_metric(metric)
     active_stream = _resolve_cuda_stream(stream)
     return _clustering.aap_similarity(
         left,
