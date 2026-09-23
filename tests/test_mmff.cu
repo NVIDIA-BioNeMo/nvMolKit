@@ -2303,3 +2303,33 @@ INSTANTIATE_TEST_SUITE_P(PrecisionModes,
                          [](const ::testing::TestParamInfo<nvMolKit::PrecisionMode>& info) {
                            return info.param == nvMolKit::PrecisionMode::SINGLE ? "Single" : "Full";
                          });
+
+TEST(MMFFPrecisionTest, SinglePrecisionPerMoleculePublicApiOptimizes) {
+  auto first  = createHydroCarbon(5, 1.0);
+  auto second = createHydroCarbon(8, 1.0);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+
+  std::vector<RDKit::ROMol*> molecules{first.get(), second.get()};
+  std::vector<double>        initialEnergies;
+  for (RDKit::ROMol* molecule : molecules) {
+    auto properties = std::make_unique<RDKit::MMFF::MMFFMolProperties>(*molecule);
+    auto forcefield =
+      std::unique_ptr<ForceFields::ForceField>(RDKit::MMFF::constructForceField(*molecule, properties.get()));
+    initialEnergies.push_back(forcefield->calcEnergy());
+  }
+
+  const auto energies = nvMolKit::MMFF::MMFFOptimizeMoleculesConfsBfgs(molecules,
+                                                                       50,
+                                                                       nvMolKit::MMFFProperties{},
+                                                                       {},
+                                                                       nvMolKit::BfgsBackend::PER_MOLECULE,
+                                                                       nvMolKit::PrecisionMode::SINGLE);
+
+  ASSERT_EQ(energies.size(), molecules.size());
+  for (size_t moleculeIdx = 0; moleculeIdx < molecules.size(); ++moleculeIdx) {
+    ASSERT_EQ(energies[moleculeIdx].size(), 1);
+    EXPECT_TRUE(std::isfinite(energies[moleculeIdx][0]));
+    EXPECT_LT(energies[moleculeIdx][0], initialEnergies[moleculeIdx]);
+  }
+}

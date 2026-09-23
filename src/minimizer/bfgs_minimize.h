@@ -16,8 +16,7 @@
 #ifndef NVMOLKIT_BFGS_MINIMIZE_H
 #define NVMOLKIT_BFGS_MINIMIZE_H
 
-#include <functional>
-#include <variant>
+#include <memory>
 #include <vector>
 
 #include "src/minimizer/bfgs_types.h"
@@ -33,7 +32,8 @@ class BatchedForcefield;
 namespace MMFF {
 template <typename ParameterScalar, typename CoordinateScalar, typename TorsionScalar>
 struct BatchedMolecularDeviceBuffersT;
-using BatchedMolecularDeviceBuffers = BatchedMolecularDeviceBuffersT<double, double, float>;
+using BatchedMolecularDeviceBuffers       = BatchedMolecularDeviceBuffersT<double, double, float>;
+using BatchedMolecularDeviceBuffersSingle = BatchedMolecularDeviceBuffersT<float, float, float>;
 }  // namespace MMFF
 
 namespace DistGeom {
@@ -44,34 +44,30 @@ struct BatchedMolecular3DDeviceBuffers;
 //! \brief Computes energies, optionally on an external set of positions.
 //! \param positions Optional flattened coordinate buffer to evaluate.
 //!        When null, the implementation uses its internal position storage.
-using EnergyFunctor       = std::function<void(const double*)>;
-//! \brief Computes gradients on the internal position buffer.
-using GradFunctor         = std::function<void()>;
-using SingleEnergyFunctor = std::function<void(const float*)>;
-using SingleGradFunctor   = std::function<void()>;
-
 //! Precision-dependent device state for the batched BFGS implementation.
 template <typename real, typename reduceT, typename storageT> struct BfgsWorkspace {
   using ComputeScalar   = real;
   using ReductionScalar = reduceT;
   using StorageScalar   = storageT;
 
-  AsyncDeviceVector<storageT> scratchPositions;
-  AsyncDeviceVector<storageT> positions;
-  AsyncDeviceVector<storageT> grad;
-  AsyncDeviceVector<storageT> lineSearchDir;
-  AsyncDeviceVector<storageT> lineSearchLambdaMins;
-  AsyncDeviceVector<storageT> lineSearchLambdas;
-  AsyncDeviceVector<storageT> lineSearchLambdas2;
-  AsyncDeviceVector<storageT> lineSearchSlope;
-  AsyncDeviceVector<storageT> lineSearchMaxSteps;
-  AsyncDeviceVector<storageT> lineSearchStoredEnergy;
-  AsyncDeviceVector<storageT> lineSearchEnergyScratch;
-  AsyncDeviceVector<storageT> energy;
-  AsyncDeviceVector<storageT> scratchGrad;
-  AsyncDeviceVector<storageT> gradScales;
-  AsyncDeviceVector<storageT> inverseHessian;
-  AsyncDeviceVector<storageT> hessDGrad;
+  AsyncDeviceVector<storageT>  scratchPositions;
+  AsyncDeviceVector<storageT>  positions;
+  AsyncDeviceVector<storageT>  grad;
+  AsyncDeviceVector<storageT>  lineSearchDir;
+  AsyncDeviceVector<storageT>  lineSearchLambdaMins;
+  AsyncDeviceVector<storageT>  lineSearchLambdas;
+  AsyncDeviceVector<storageT>  lineSearchLambdas2;
+  AsyncDeviceVector<storageT>  lineSearchSlope;
+  AsyncDeviceVector<storageT>  lineSearchMaxSteps;
+  AsyncDeviceVector<storageT>  lineSearchStoredEnergy;
+  AsyncDeviceVector<storageT>  lineSearchEnergyScratch;
+  AsyncDeviceVector<storageT>  energy;
+  AsyncDeviceVector<storageT>  scratchGrad;
+  AsyncDeviceVector<storageT>  gradScales;
+  AsyncDeviceVector<storageT>  inverseHessian;
+  AsyncDeviceVector<storageT>  hessDGrad;
+  AsyncDeviceVector<storageT*> scratchBufferPointers;
+  PinnedHostVector<storageT*>  scratchBufferPointersHost;
 
   void setStream(cudaStream_t stream) {
     scratchPositions.setStream(stream);
@@ -90,12 +86,12 @@ template <typename real, typename reduceT, typename storageT> struct BfgsWorkspa
     gradScales.setStream(stream);
     inverseHessian.setStream(stream);
     hessDGrad.setStream(stream);
+    scratchBufferPointers.setStream(stream);
   }
 };
 
-using FullBfgsWorkspace    = BfgsWorkspace<double, double, double>;
-using SingleBfgsWorkspace  = BfgsWorkspace<float, float, float>;
-using BfgsWorkspaceVariant = std::variant<FullBfgsWorkspace, SingleBfgsWorkspace>;
+using FullBfgsWorkspace   = BfgsWorkspace<double, double, double>;
+using SingleBfgsWorkspace = BfgsWorkspace<float, float, float>;
 
 //! BFGS Batch Minimizer
 //!
@@ -148,6 +144,18 @@ struct BfgsBatchMinimizer {
                         const std::vector<int>&              atomStartsHost,
                         MMFF::BatchedMolecularDeviceBuffers& systemDevice,
                         const uint8_t*                       activeThisStage = nullptr);
+  //! \brief Runs native single-precision MMFF minimization through the per-molecule CUDA kernels.
+  //! \param numIters Maximum number of BFGS iterations to perform.
+  //! \param gradTol Convergence tolerance applied to the scaled gradients.
+  //! \param atomStartsHost Host-side atom offsets for the flattened systems.
+  //! \param systemDevice Single-precision MMFF device buffers used by the per-molecule kernels.
+  //! \param activeThisStage Optional per-system activity mask for staged minimization.
+  //! \return `false` when all systems converged and `true` when at least one system needs another cycle.
+  bool minimizeWithMMFF(int                                        numIters,
+                        double                                     gradTol,
+                        const std::vector<int>&                    atomStartsHost,
+                        MMFF::BatchedMolecularDeviceBuffersSingle& systemDevice,
+                        const uint8_t*                             activeThisStage = nullptr);
   //! \brief Runs ETK minimization through the per-molecule CUDA kernels.
   //! \param numIters Maximum number of BFGS iterations to perform.
   //! \param gradTol Convergence tolerance applied to the scaled gradients.
@@ -240,20 +248,17 @@ struct BfgsBatchMinimizer {
 
   // Precision-dependent working state. Public coordinates, gradients, and
   // energies remain double precision at the API boundary.
-  BfgsWorkspaceVariant       workspace_;
-  AsyncDeviceVector<int16_t> statuses_;
+  std::unique_ptr<FullBfgsWorkspace>   fullWorkspace_;
+  std::unique_ptr<SingleBfgsWorkspace> singleWorkspace_;
+  AsyncDeviceVector<int16_t>           statuses_;
 
   // Precision-independent line-search status and public energy output.
-  AsyncDeviceVector<int16_t> lineSearchStatus_;
-  AsyncDeviceVector<double>  lineSearchEnergyOut_;
-
-  // Temporary buffers for counting finished systems. Mutable to all
+  AsyncDeviceVector<int16_t>         lineSearchStatus_;
+  // Temporary buffers for counting finished systems. Mutable to allow
   // for const counting methods.
   mutable AsyncDeviceVector<uint8_t> countTempStorage_;
   mutable AsyncDevicePtr<int>        countFinished_;
   mutable PinnedHostVector<int>      loopStatusHost_;
-
-  AsyncDeviceVector<double> finalEnergies_;
 
   // Hessian approximation and scratch buffers.
   AsyncDeviceVector<int> hessianStarts_;
@@ -286,13 +291,9 @@ struct BfgsBatchMinimizer {
   std::vector<int>       activeMolIds_;         // Active molecule IDs
   AsyncDeviceVector<int> activeMolIdsDevice_;   // Device copy of active molecule IDs
 
-  // Device-side array of scratch buffer pointers (used by per-molecule kernel)
-  AsyncDeviceVector<double*> scratchBuffersDevice_;
-
   // Pinned host buffers for async transfers (allocated lazily in initialize())
   PinnedHostVector<uint8_t> activeHost_;
   PinnedHostVector<int16_t> convergenceHost_;  // Changed to int16_t to match statuses_
-  PinnedHostVector<double*> scratchBufferPointersHost_;
 
   // Persistent host vectors for async copies (to avoid stack allocation issues)
   std::vector<int> systemIndicesHost_;
@@ -301,38 +302,64 @@ struct BfgsBatchMinimizer {
   cudaStream_t stream_ = nullptr;
 
  private:
-  FullBfgsWorkspace&         fullWorkspace() { return std::get<FullBfgsWorkspace>(workspace_); }
-  const FullBfgsWorkspace&   fullWorkspace() const { return std::get<FullBfgsWorkspace>(workspace_); }
-  SingleBfgsWorkspace&       singleWorkspace() { return std::get<SingleBfgsWorkspace>(workspace_); }
-  const SingleBfgsWorkspace& singleWorkspace() const { return std::get<SingleBfgsWorkspace>(workspace_); }
+  FullBfgsWorkspace&         fullWorkspace() { return *fullWorkspace_; }
+  const FullBfgsWorkspace&   fullWorkspace() const { return *fullWorkspace_; }
+  SingleBfgsWorkspace&       singleWorkspace() { return *singleWorkspace_; }
+  const SingleBfgsWorkspace& singleWorkspace() const { return *singleWorkspace_; }
 
-  template <typename DeviceBuffers>
+  template <typename Workspace>
+  void initializeImpl(const std::vector<int>& atomStartsHost,
+                      const int*              atomStarts,
+                      double*                 positions,
+                      double*                 grad,
+                      double*                 energyOuts,
+                      BfgsBackend             effectiveBackend,
+                      Workspace&              workspace,
+                      const uint8_t*          activeThisStage);
+  template <typename Workspace, typename storageT>
+  void doLineSearchSetupImpl(const storageT* srcEnergies,
+                             const storageT* positions,
+                             const storageT* grads,
+                             Workspace&      workspace);
+  template <typename Workspace, typename storageT>
+  void doLineSearchPerturbImpl(const storageT* positions, Workspace& workspace);
+  template <typename Workspace, typename storageT>
+  void doLineSearchPostEnergyImpl(int iter, const storageT* energies, Workspace& workspace);
+  template <typename Workspace, typename storageT>
+  void                               doLineSearchPostLoopImpl(const storageT* positions, Workspace& workspace);
+  template <typename Workspace> void setHessianToIdentityImpl(Workspace& workspace);
+  template <typename Workspace, typename storageT> void setMaxStepImpl(const storageT* positions, Workspace& workspace);
+  template <typename Workspace, typename storageT>
+  void setDirectionImpl(storageT* positions, storageT* grads, Workspace& workspace);
+  template <typename Workspace, typename storageT>
+  void scaleGradImpl(bool preLoop, storageT* grads, Workspace& workspace);
+  template <typename Workspace, typename storageT>
+  void                                                  updateDGradImpl(const storageT* energies,
+                                                                        const storageT* grads,
+                                                                        const storageT* positions,
+                                                                        Workspace&      workspace);
+  template <typename Workspace, typename storageT> void updateHessianImpl(const storageT* grads, Workspace& workspace);
+  template <typename storageT> void                     collectDebugDataImpl(const storageT* energies);
+  template <typename Workspace, typename storageT, typename EnergyEvaluator, typename GradientEvaluator>
+  bool minimizeImpl(int                        numIters,
+                    double                     gradTol,
+                    AsyncDeviceVector<double>& publicPositions,
+                    AsyncDeviceVector<double>& publicGrad,
+                    AsyncDeviceVector<double>& publicEnergies,
+                    storageT*                  positions,
+                    storageT*                  grad,
+                    storageT*                  energies,
+                    Workspace&                 workspace,
+                    EnergyEvaluator            evaluateEnergy,
+                    GradientEvaluator          evaluateGradient);
+
+  template <typename DeviceBuffers, typename Workspace>
   bool minimizeWithMMFFImpl(int                     numIters,
                             double                  gradTol,
                             const std::vector<int>& atomStartsHost,
                             DeviceBuffers&          systemDevice,
+                            Workspace&              workspace,
                             const uint8_t*          activeThisStage);
-  //! \brief Shared host-driven batched BFGS implementation used by the public overload.
-  //! \param atomStartsHost Host-side atom offsets for the batch.
-  //! \param atomStarts Device-side atom offsets for the batch.
-  //! \param positions Flattened coordinate buffer for the batch.
-  //! \param grad Gradient buffer matching `positions`.
-  //! \param energyOuts Per-system energy output buffer.
-  //! \param eFunc Energy evaluation callback for the current forcefield.
-  //! \param gFunc Gradient evaluation callback for the current forcefield.
-  //! \param activeThisStage Optional per-system activity mask for staged minimization.
-  bool minimize(int                        numIters,
-                double                     gradTol,
-                const std::vector<int>&    atomStartsHost,
-                const int*                 atomStarts,
-                AsyncDeviceVector<double>& positions,
-                AsyncDeviceVector<double>& grad,
-                AsyncDeviceVector<double>& energyOuts,
-                EnergyFunctor              eFunc,
-                GradFunctor                gFunc,
-                SingleEnergyFunctor        eFuncSingle,
-                SingleGradFunctor          gFuncSingle,
-                const uint8_t*             activeThisStage = nullptr);
 };
 
 void copyAndInvert(const AsyncDeviceVector<double>& src, AsyncDeviceVector<double>& dst);

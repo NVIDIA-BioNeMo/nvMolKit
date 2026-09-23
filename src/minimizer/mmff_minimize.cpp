@@ -23,7 +23,6 @@
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
-#include <variant>
 
 #include "rdkit_extensions/mmff_flattened_builder.h"
 #include "src/conformer/ff_device_collect.h"
@@ -31,10 +30,26 @@
 #include "src/forcefields/mmff_batched_forcefield.h"
 #include "src/minimizer/bfgs_common.h"
 #include "src/minimizer/bfgs_minimize.h"
+#include "src/utils/device_convert.h"
 #include "src/utils/nvtx.h"
 #include "src/utils/openmp_helpers.h"
 
 namespace nvMolKit::MMFF {
+namespace {
+
+cudaError_t copyDeviceValues(float* dst, const double* src, const size_t count, cudaStream_t stream) {
+  return detail::convertDeviceArray(dst, src, static_cast<int>(count), stream);
+}
+
+cudaError_t copyDeviceValues(double* dst, const float* src, const size_t count, cudaStream_t stream) {
+  return detail::convertDeviceArray(dst, src, static_cast<int>(count), stream);
+}
+
+cudaError_t copyDeviceValues(double* dst, const double* src, const size_t count, cudaStream_t stream) {
+  return cudaMemcpyAsync(dst, src, count * sizeof(double), cudaMemcpyDeviceToDevice, stream);
+}
+
+}  // namespace
 
 //! Cached molecule-specific preprocessing
 struct CachedMoleculeData {
@@ -215,12 +230,11 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>&       
 
       cudaStream_t streamPtr = ctx.streamPool[threadId].stream();
 
-      BatchedMolecularSystemHost    systemHost;
-      BatchedMolecularDeviceBuffers systemDevice;
-      BatchedForcefieldMetadata     metadata;
-      std::vector<double>           pos;
-      std::vector<uint32_t>         conformerAtomStarts;
-      uint32_t                      currentAtomOffset = 0;
+      BatchedMolecularSystemHost systemHost;
+      BatchedForcefieldMetadata  metadata;
+      std::vector<double>        pos;
+      std::vector<uint32_t>      conformerAtomStarts;
+      uint32_t                   currentAtomOffset = 0;
 
       for (const auto& confInfo : batchConformers) {
         auto*          mol      = confInfo.mol;
@@ -308,12 +322,10 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>&       
           cudaStreamSynchronize(streamPtr);
         }
       } else {
-        auto& device = systemDevice;
-        nvMolKit::MMFF::setStreams(device, streamPtr);
-        nvMolKit::MMFF::sendContribsAndIndicesToDevice(systemHost, device);
-        nvMolKit::MMFF::allocateIntermediateBuffers(systemHost, device);
-        device.positions.resize(systemHost.positions.size());
-        device.positions.copyFromHost(buffers.initialPositions.data(), systemHost.positions.size());
+        positionsDevice.setStream(streamPtr);
+        energyOutsDevice.setStream(streamPtr);
+        positionsDevice.resize(systemHost.positions.size());
+        positionsDevice.copyFromHost(buffers.initialPositions.data(), systemHost.positions.size());
         if (useDeviceInput) {
           detail::broadcastDeviceInputBatch(*deviceInput,
                                             deviceInputIndex,
@@ -321,20 +333,43 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>&       
                                             batchAtomCounts,
                                             executingGpu,
                                             streamPtr,
-                                            device.positions);
+                                            positionsDevice);
         }
-        device.grad.resize(systemHost.positions.size());
-        device.grad.zero();
 
-        bfgsMinimizer.minimizeWithMMFF(maxIters, gradTol, systemHost.indices.atomStarts, device);
+        auto minimizePerMolecule = [&](auto& device) {
+          nvMolKit::MMFF::setStreams(device, streamPtr);
+          nvMolKit::MMFF::sendContribsAndIndicesToDevice(systemHost, device);
+          nvMolKit::MMFF::allocateIntermediateBuffers(systemHost, device);
+          device.positions.resize(systemHost.positions.size());
+          cudaCheckError(
+            copyDeviceValues(device.positions.data(), positionsDevice.data(), positionsDevice.size(), streamPtr));
+          device.grad.resize(systemHost.positions.size());
+          device.grad.zero();
 
-        finalPositions = &device.positions;
-        finalEnergies  = &device.energyOuts;
+          bfgsMinimizer.minimizeWithMMFF(maxIters, gradTol, systemHost.indices.atomStarts, device);
+
+          energyOutsDevice.resize(device.energyOuts.size());
+          cudaCheckError(
+            copyDeviceValues(positionsDevice.data(), device.positions.data(), device.positions.size(), streamPtr));
+          cudaCheckError(
+            copyDeviceValues(energyOutsDevice.data(), device.energyOuts.data(), device.energyOuts.size(), streamPtr));
+        };
+
+        if (usesSinglePrecision(precision)) {
+          BatchedMolecularDeviceBuffersSingle device;
+          minimizePerMolecule(device);
+        } else {
+          BatchedMolecularDeviceBuffers device;
+          minimizePerMolecule(device);
+        }
+
+        finalPositions = &positionsDevice;
+        finalEnergies  = &energyOutsDevice;
 
         if (!deviceOutput) {
           ScopedNvtxRange finalizeBatchRange("OpenMP loop finalizing batch");
-          device.positions.copyToHost(buffers.positions.data(), device.positions.size());
-          device.energyOuts.copyToHost(buffers.energies.data(), device.energyOuts.size());
+          positionsDevice.copyToHost(buffers.positions.data(), positionsDevice.size());
+          energyOutsDevice.copyToHost(buffers.energies.data(), energyOutsDevice.size());
           cudaStreamSynchronize(streamPtr);
         }
       }

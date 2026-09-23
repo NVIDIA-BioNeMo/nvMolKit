@@ -13,8 +13,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <algorithm>
 #include <cub/cub.cuh>
 #include <numeric>
+#include <type_traits>
 
 #include "src/forcefields/batched_forcefield.h"
 #include "src/forcefields/dist_geom.h"
@@ -194,58 +196,45 @@ __global__ void setLineStatusAndEnergyFromGlobalKernel(const int numSystems,
   }
 }
 
-void BfgsBatchMinimizer::doLineSearchSetup(const double* srcEnergies) {
+template <typename Workspace, typename storageT>
+void BfgsBatchMinimizer::doLineSearchSetupImpl(const storageT* srcEnergies,
+                                               const storageT* positions,
+                                               const storageT* grads,
+                                               Workspace&      workspace) {
+  using real                   = typename Workspace::ComputeScalar;
+  using reduceT                = typename Workspace::ReductionScalar;
   const int     numblocks      = (numSystems_ + 128 - 1) / 128;
   constexpr int blockSizeSetup = 128;
-#define NVMOLKIT_LAUNCH_BFGS_LINE_SETUP(real, reduceT, storageT, maxSteps, dirs, slopes, lambdaMins) \
-  initializeLineSearchKernel<real, reduceT, storageT>                                                \
-    <<<numUnfinishedSystems_, blockSizeSetup, 0, stream_>>>(statuses_.data(),                        \
-                                                            positions,                               \
-                                                            grads,                                   \
-                                                            atomStartsDevice,                        \
-                                                            maxSteps,                                \
-                                                            dirs,                                    \
-                                                            slopes,                                  \
-                                                            lambdaMins,                              \
-                                                            activeSystemIndices_.data(),             \
-                                                            dataDim_)
-  if (usesSinglePrecision(precision_)) {
-    const float* positions = singleWorkspace().positions.data();
-    const float* grads     = singleWorkspace().grad.data();
-    setLineStatusAndEnergyFromGlobalKernel<float>
-      <<<numblocks, 128, 0, stream_>>>(numSystems_,
-                                       statuses_.data(),
-                                       lineSearchStatus_.data(),
-                                       singleWorkspace().energy.data(),
-                                       singleWorkspace().lineSearchStoredEnergy.data(),
-                                       singleWorkspace().lineSearchLambdas.data());
-    NVMOLKIT_LAUNCH_BFGS_LINE_SETUP(float,
-                                    float,
-                                    float,
-                                    singleWorkspace().lineSearchMaxSteps.data(),
-                                    singleWorkspace().lineSearchDir.data(),
-                                    singleWorkspace().lineSearchSlope.data(),
-                                    singleWorkspace().lineSearchLambdaMins.data());
-  } else {
-    const double* positions = positionsDevice;
-    const double* grads     = gradDevice;
-    setLineStatusAndEnergyFromGlobalKernel<double>
-      <<<numblocks, 128, 0, stream_>>>(numSystems_,
-                                       statuses_.data(),
-                                       lineSearchStatus_.data(),
-                                       srcEnergies,
-                                       fullWorkspace().lineSearchStoredEnergy.data(),
-                                       fullWorkspace().lineSearchLambdas.data());
-    NVMOLKIT_LAUNCH_BFGS_LINE_SETUP(double,
-                                    double,
-                                    double,
-                                    fullWorkspace().lineSearchMaxSteps.data(),
-                                    fullWorkspace().lineSearchDir.data(),
-                                    fullWorkspace().lineSearchSlope.data(),
-                                    fullWorkspace().lineSearchLambdaMins.data());
-  }
-#undef NVMOLKIT_LAUNCH_BFGS_LINE_SETUP
+  setLineStatusAndEnergyFromGlobalKernel<storageT>
+    <<<numblocks, 128, 0, stream_>>>(numSystems_,
+                                     statuses_.data(),
+                                     lineSearchStatus_.data(),
+                                     srcEnergies,
+                                     workspace.lineSearchStoredEnergy.data(),
+                                     workspace.lineSearchLambdas.data());
+  initializeLineSearchKernel<real, reduceT, storageT>
+    <<<numUnfinishedSystems_, blockSizeSetup, 0, stream_>>>(statuses_.data(),
+                                                            positions,
+                                                            grads,
+                                                            atomStartsDevice,
+                                                            workspace.lineSearchMaxSteps.data(),
+                                                            workspace.lineSearchDir.data(),
+                                                            workspace.lineSearchSlope.data(),
+                                                            workspace.lineSearchLambdaMins.data(),
+                                                            activeSystemIndices_.data(),
+                                                            dataDim_);
   cudaCheckError(cudaGetLastError());
+}
+
+void BfgsBatchMinimizer::doLineSearchSetup(const double* srcEnergies) {
+  if (usesSinglePrecision(precision_)) {
+    doLineSearchSetupImpl(singleWorkspace().energy.data(),
+                          singleWorkspace().positions.data(),
+                          singleWorkspace().grad.data(),
+                          singleWorkspace());
+    return;
+  }
+  doLineSearchSetupImpl(srcEnergies, positionsDevice, gradDevice, fullWorkspace());
 }
 
 template <typename real, typename storageT>
@@ -290,32 +279,29 @@ __global__ void lineSearchPerturbKernel(const int*      atomStarts,
   }
 }
 
-void BfgsBatchMinimizer::doLineSearchPerturb() {
-  if (usesSinglePrecision(precision_))
-    lineSearchPerturbKernel<float, float>
-      <<<numUnfinishedSystems_, 128, 0, stream_>>>(atomStartsDevice,
-                                                   singleWorkspace().positions.data(),
-                                                   singleWorkspace().lineSearchDir.data(),
-                                                   singleWorkspace().lineSearchLambdas.data(),
-                                                   singleWorkspace().lineSearchLambdaMins.data(),
-                                                   singleWorkspace().scratchPositions.data(),
-                                                   singleWorkspace().scratchPositions.data(),
-                                                   lineSearchStatus_.data(),
-                                                   activeSystemIndices_.data(),
-                                                   dataDim_);
-  else
-    lineSearchPerturbKernel<double, double>
-      <<<numUnfinishedSystems_, 128, 0, stream_>>>(atomStartsDevice,
-                                                   positionsDevice,
-                                                   fullWorkspace().lineSearchDir.data(),
-                                                   fullWorkspace().lineSearchLambdas.data(),
-                                                   fullWorkspace().lineSearchLambdaMins.data(),
-                                                   fullWorkspace().scratchPositions.data(),
-                                                   fullWorkspace().scratchPositions.data(),
-                                                   lineSearchStatus_.data(),
-                                                   activeSystemIndices_.data(),
-                                                   dataDim_);
+template <typename Workspace, typename storageT>
+void BfgsBatchMinimizer::doLineSearchPerturbImpl(const storageT* positions, Workspace& workspace) {
+  using real = typename Workspace::ComputeScalar;
+  lineSearchPerturbKernel<real, storageT>
+    <<<numUnfinishedSystems_, 128, 0, stream_>>>(atomStartsDevice,
+                                                 positions,
+                                                 workspace.lineSearchDir.data(),
+                                                 workspace.lineSearchLambdas.data(),
+                                                 workspace.lineSearchLambdaMins.data(),
+                                                 workspace.scratchPositions.data(),
+                                                 workspace.scratchPositions.data(),
+                                                 lineSearchStatus_.data(),
+                                                 activeSystemIndices_.data(),
+                                                 dataDim_);
   cudaCheckError(cudaGetLastError());
+}
+
+void BfgsBatchMinimizer::doLineSearchPerturb() {
+  if (usesSinglePrecision(precision_)) {
+    doLineSearchPerturbImpl(singleWorkspace().positions.data(), singleWorkspace());
+    return;
+  }
+  doLineSearchPerturbImpl(positionsDevice, fullWorkspace());
 }
 
 template <typename real, typename storageT>
@@ -380,38 +366,28 @@ __global__ void lineSearchPostEnergyKernel(const int       numSystems,
   lambdas[sysIdx]  = static_cast<storageT>(max(tmpLambda, real{0.1} * lambda));
 }
 
-void BfgsBatchMinimizer::doLineSearchPostEnergy(const int iter) {
+template <typename Workspace, typename storageT>
+void BfgsBatchMinimizer::doLineSearchPostEnergyImpl(const int iter, const storageT* energies, Workspace& workspace) {
+  using real          = typename Workspace::ComputeScalar;
   const int numBlocks = (numSystems_ + 127) / 128;
-#define NVMOLKIT_LAUNCH_LINE_POST(real, storageT, newE, stored, slope, scratch, lambda, lambda2) \
-  lineSearchPostEnergyKernel<real, storageT><<<numBlocks, 128, 0, stream_>>>(numSystems_,        \
-                                                                             iter == 0,          \
-                                                                             stored,             \
-                                                                             newE,               \
-                                                                             slope,              \
-                                                                             scratch,            \
-                                                                             lambda,             \
-                                                                             lambda2,            \
-                                                                             lineSearchStatus_.data())
-  if (usesSinglePrecision(precision_))
-    NVMOLKIT_LAUNCH_LINE_POST(float,
-                              float,
-                              singleWorkspace().energy.data(),
-                              singleWorkspace().lineSearchStoredEnergy.data(),
-                              singleWorkspace().lineSearchSlope.data(),
-                              singleWorkspace().lineSearchEnergyScratch.data(),
-                              singleWorkspace().lineSearchLambdas.data(),
-                              singleWorkspace().lineSearchLambdas2.data());
-  else
-    NVMOLKIT_LAUNCH_LINE_POST(double,
-                              double,
-                              energyOutsDevice,
-                              fullWorkspace().lineSearchStoredEnergy.data(),
-                              fullWorkspace().lineSearchSlope.data(),
-                              fullWorkspace().lineSearchEnergyScratch.data(),
-                              fullWorkspace().lineSearchLambdas.data(),
-                              fullWorkspace().lineSearchLambdas2.data());
-#undef NVMOLKIT_LAUNCH_LINE_POST
+  lineSearchPostEnergyKernel<real, storageT><<<numBlocks, 128, 0, stream_>>>(numSystems_,
+                                                                             iter == 0,
+                                                                             workspace.lineSearchStoredEnergy.data(),
+                                                                             energies,
+                                                                             workspace.lineSearchSlope.data(),
+                                                                             workspace.lineSearchEnergyScratch.data(),
+                                                                             workspace.lineSearchLambdas.data(),
+                                                                             workspace.lineSearchLambdas2.data(),
+                                                                             lineSearchStatus_.data());
   cudaCheckError(cudaGetLastError());
+}
+
+void BfgsBatchMinimizer::doLineSearchPostEnergy(const int iter) {
+  if (usesSinglePrecision(precision_)) {
+    doLineSearchPostEnergyImpl(iter, singleWorkspace().energy.data(), singleWorkspace());
+    return;
+  }
+  doLineSearchPostEnergyImpl(iter, energyOutsDevice, fullWorkspace());
 }
 
 template <typename storageT>
@@ -449,26 +425,24 @@ __global__ void lineSearchPostLoopKernel(const int*      atomStarts,
   }
 }
 
-void BfgsBatchMinimizer::doLineSearchPostLoop() {
-  if (usesSinglePrecision(precision_))
-    lineSearchPostLoopKernel<float>
-      <<<numUnfinishedSystems_, 128, 0, stream_>>>(atomStartsDevice,
-                                                   lineSearchStatus_.data(),
-                                                   singleWorkspace().positions.data(),
-                                                   singleWorkspace().scratchPositions.data(),
-                                                   singleWorkspace().scratchPositions.data(),
-                                                   activeSystemIndices_.data(),
-                                                   dataDim_);
-  else
-    lineSearchPostLoopKernel<double>
-      <<<numUnfinishedSystems_, 128, 0, stream_>>>(atomStartsDevice,
-                                                   lineSearchStatus_.data(),
-                                                   positionsDevice,
-                                                   fullWorkspace().scratchPositions.data(),
-                                                   fullWorkspace().scratchPositions.data(),
-                                                   activeSystemIndices_.data(),
-                                                   dataDim_);
+template <typename Workspace, typename storageT>
+void BfgsBatchMinimizer::doLineSearchPostLoopImpl(const storageT* positions, Workspace& workspace) {
+  lineSearchPostLoopKernel<storageT><<<numUnfinishedSystems_, 128, 0, stream_>>>(atomStartsDevice,
+                                                                                 lineSearchStatus_.data(),
+                                                                                 positions,
+                                                                                 workspace.scratchPositions.data(),
+                                                                                 workspace.scratchPositions.data(),
+                                                                                 activeSystemIndices_.data(),
+                                                                                 dataDim_);
   cudaCheckError(cudaGetLastError());
+}
+
+void BfgsBatchMinimizer::doLineSearchPostLoop() {
+  if (usesSinglePrecision(precision_)) {
+    doLineSearchPostLoopImpl(singleWorkspace().positions.data(), singleWorkspace());
+    return;
+  }
+  doLineSearchPostLoopImpl(positionsDevice, fullWorkspace());
 }
 
 struct NotEqualToMinusTwoFunctor {
@@ -490,11 +464,14 @@ BfgsBatchMinimizer::BfgsBatchMinimizer(const int     dataDim,
   dataDim_    = dataDim;
   scaleGrads_ = scaleGrads;
   stream_     = stream;
-  // Per-molecule kernels operate in double precision.
-  backend_    = usesSinglePrecision(precision) ? BfgsBackend::BATCHED : backend;
+  backend_    = backend;
   precision_  = precision;
   if (usesSinglePrecision(precision_)) {
-    workspace_.emplace<SingleBfgsWorkspace>();
+    singleWorkspace_ = std::make_unique<SingleBfgsWorkspace>();
+    singleWorkspace_->setStream(stream_);
+  } else {
+    fullWorkspace_ = std::make_unique<FullBfgsWorkspace>();
+    fullWorkspace_->setStream(stream_);
   }
   // For HYBRID, we need to support both paths, so initialize for both
   if (backend_ == BfgsBackend::BATCHED || backend_ == BfgsBackend::HYBRID) {
@@ -505,23 +482,13 @@ BfgsBatchMinimizer::BfgsBatchMinimizer(const int     dataDim,
     activeSystemIndices_.setStream(stream_);
     allSystemIndices_.setStream(stream_);
 
-    std::visit([&](auto& workspace) { workspace.setStream(stream_); }, workspace_);
     statuses_.setStream(stream_);
 
     lineSearchStatus_.setStream(stream_);
     countTempStorage_.setStream(stream_);
     countFinished_.setStream(stream_);
-    lineSearchEnergyOut_.setStream(stream_);
-
-    finalEnergies_.setStream(stream_);
-
     hessianStarts_.setStream(stream_);
-    scratchBuffersDevice_.setStream(stream_);
     activeMolIdsDevice_.setStream(stream_);
-  }
-  // Allocate device array for per-molecule backend (also needed for HYBRID which might use it)
-  if (backend_ == BfgsBackend::PER_MOLECULE || backend_ == BfgsBackend::HYBRID) {
-    scratchBuffersDevice_.resize(5);
   }
 }
 BfgsBatchMinimizer::~BfgsBatchMinimizer() = default;
@@ -530,13 +497,15 @@ BfgsBackend BfgsBatchMinimizer::resolveBackend(const std::vector<int>& atomStart
   return nvMolKit::resolveBackend(backend_, atomStartsHost);
 }
 
-void BfgsBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
-                                    const int*              atomStarts,
-                                    double*                 positions,
-                                    double*                 grad,
-                                    double*                 energyOuts,
-                                    BfgsBackend             effectiveBackend,
-                                    const uint8_t*          activeThisStage) {
+template <typename Workspace>
+void BfgsBatchMinimizer::initializeImpl(const std::vector<int>& atomStartsHost,
+                                        const int*              atomStarts,
+                                        double*                 positions,
+                                        double*                 grad,
+                                        double*                 energyOuts,
+                                        BfgsBackend             effectiveBackend,
+                                        Workspace&              workspace,
+                                        const uint8_t*          activeThisStage) {
   atomStartsDevice = atomStarts;
   positionsDevice  = positions;
   gradDevice       = grad;
@@ -545,7 +514,6 @@ void BfgsBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
   const int numSystems = atomStartsHost.size() - 1;
   activeHost_.resize(numSystems);
   convergenceHost_.resize(numSystems);
-  scratchBufferPointersHost_.resize(5);
 
   statuses_.resize(numSystems);
   if (activeThisStage) {
@@ -610,13 +578,6 @@ void BfgsBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
     }
   }
 
-  activeSystemIndices_.resize(numSystems_);
-  allSystemIndices_.resize(numSystems_);
-  systemIndicesHost_.resize(numSystems_);
-  std::iota(systemIndicesHost_.begin(), systemIndicesHost_.end(), 0);
-  allSystemIndices_.setFromVector(systemIndicesHost_);
-  activeSystemIndices_.setFromVector(systemIndicesHost_);
-
   hessianStartsHost_.clear();
   hessianStartsHost_.reserve(numSystems + 1);
   hessianStartsHost_.push_back(0);
@@ -628,57 +589,48 @@ void BfgsBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
   }
   hessianStarts_.resize(numSystems + 1);
   hessianStarts_.setFromVector(hessianStartsHost_);
-  if (usesSinglePrecision(precision_)) {
-    singleWorkspace().energy.resize(numSystems);
-    singleWorkspace().inverseHessian.resize(hessianStartsHost_.back());
-    singleWorkspace().inverseHessian.zero();
-  } else {
-    fullWorkspace().inverseHessian.resize(hessianStartsHost_.back());
-    fullWorkspace().inverseHessian.zero();
-  }
+  workspace.inverseHessian.resize(hessianStartsHost_.back());
+  workspace.inverseHessian.zero();
 
   const int numStateTerms = atomStartsHost.back() * dataDim_;
-  lineSearchStatus_.resize(numSystems);
-  if (usesSinglePrecision(precision_)) {
-    singleWorkspace().positions.resize(numStateTerms);
-    singleWorkspace().grad.resize(numStateTerms);
-    if (positions != nullptr) {
-      cudaCheckError(detail::convertDeviceArray(singleWorkspace().positions.data(), positions, numStateTerms, stream_));
-    } else {
-      singleWorkspace().positions.zero();
-    }
-    singleWorkspace().grad.zero();
-    singleWorkspace().scratchPositions.resize(numStateTerms);
-    singleWorkspace().scratchPositions.zero();
-    singleWorkspace().lineSearchDir.resize(numStateTerms);
-    singleWorkspace().scratchGrad.resize(numStateTerms);
-    singleWorkspace().hessDGrad.resize(numStateTerms);
-    singleWorkspace().hessDGrad.zero();
-    singleWorkspace().gradScales.resize(numSystems);
-    singleWorkspace().lineSearchLambdaMins.resize(numSystems);
-    singleWorkspace().lineSearchLambdas.resize(numSystems);
-    singleWorkspace().lineSearchLambdas2.resize(numSystems);
-    singleWorkspace().lineSearchSlope.resize(numSystems);
-    singleWorkspace().lineSearchMaxSteps.resize(numSystems);
-    singleWorkspace().lineSearchStoredEnergy.resize(numSystems);
-    singleWorkspace().lineSearchEnergyScratch.resize(numSystems);
+  workspace.scratchPositions.resize(numStateTerms);
+  workspace.scratchPositions.zero();
+  workspace.lineSearchDir.resize(numStateTerms);
+  workspace.scratchGrad.resize(numStateTerms);
+  workspace.hessDGrad.resize(numStateTerms);
+  workspace.hessDGrad.zero();
 
-  } else {
-    fullWorkspace().scratchPositions.resize(numStateTerms);
-    fullWorkspace().scratchPositions.zero();
-    fullWorkspace().lineSearchDir.resize(numStateTerms);
-    fullWorkspace().scratchGrad.resize(numStateTerms);
-    fullWorkspace().hessDGrad.resize(numStateTerms);
-    fullWorkspace().hessDGrad.zero();
-    fullWorkspace().gradScales.resize(numSystems);
-    fullWorkspace().lineSearchLambdaMins.resize(numSystems);
-    fullWorkspace().lineSearchLambdas.resize(numSystems);
-    fullWorkspace().lineSearchLambdas2.resize(numSystems);
-    fullWorkspace().lineSearchSlope.resize(numSystems);
-    fullWorkspace().lineSearchMaxSteps.resize(numSystems);
-    fullWorkspace().lineSearchStoredEnergy.resize(numSystems);
-    fullWorkspace().lineSearchEnergyScratch.resize(numSystems);
+  if (effectiveBackend == BfgsBackend::PER_MOLECULE) {
+    return;
   }
+
+  activeSystemIndices_.resize(numSystems_);
+  allSystemIndices_.resize(numSystems_);
+  systemIndicesHost_.resize(numSystems_);
+  std::iota(systemIndicesHost_.begin(), systemIndicesHost_.end(), 0);
+  allSystemIndices_.setFromVector(systemIndicesHost_);
+  activeSystemIndices_.setFromVector(systemIndicesHost_);
+
+  lineSearchStatus_.resize(numSystems);
+  if constexpr (std::is_same_v<typename Workspace::StorageScalar, float>) {
+    workspace.energy.resize(numSystems);
+    workspace.positions.resize(numStateTerms);
+    workspace.grad.resize(numStateTerms);
+    if (positions != nullptr) {
+      cudaCheckError(detail::convertDeviceArray(workspace.positions.data(), positions, numStateTerms, stream_));
+    } else {
+      workspace.positions.zero();
+    }
+    workspace.grad.zero();
+  }
+  workspace.gradScales.resize(numSystems);
+  workspace.lineSearchLambdaMins.resize(numSystems);
+  workspace.lineSearchLambdas.resize(numSystems);
+  workspace.lineSearchLambdas2.resize(numSystems);
+  workspace.lineSearchSlope.resize(numSystems);
+  workspace.lineSearchMaxSteps.resize(numSystems);
+  workspace.lineSearchStoredEnergy.resize(numSystems);
+  workspace.lineSearchEnergyScratch.resize(numSystems);
 
   // Compute needed reduction storage.
   size_t temp_storage_bytes = 0;
@@ -708,6 +660,34 @@ void BfgsBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
   }
 }
 
+void BfgsBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
+                                    const int*              atomStarts,
+                                    double*                 positions,
+                                    double*                 grad,
+                                    double*                 energyOuts,
+                                    BfgsBackend             effectiveBackend,
+                                    const uint8_t*          activeThisStage) {
+  if (usesSinglePrecision(precision_)) {
+    initializeImpl(atomStartsHost,
+                   atomStarts,
+                   positions,
+                   grad,
+                   energyOuts,
+                   effectiveBackend,
+                   singleWorkspace(),
+                   activeThisStage);
+    return;
+  }
+  initializeImpl(atomStartsHost,
+                 atomStarts,
+                 positions,
+                 grad,
+                 energyOuts,
+                 effectiveBackend,
+                 fullWorkspace(),
+                 activeThisStage);
+}
+
 template <typename storageT>
 __global__ void populateHessianIdentityKernel(const int* hessianStarts,
                                               const int* atomStarts,
@@ -727,23 +707,23 @@ __global__ void populateHessianIdentityKernel(const int* hessianStarts,
   }
 }
 
-void BfgsBatchMinimizer::setHessianToIdentity() {
+template <typename Workspace> void BfgsBatchMinimizer::setHessianToIdentityImpl(Workspace& workspace) {
   constexpr int blockDim  = 128;
   const int     numBlocks = hessianStarts_.size() - 1;
-  if (usesSinglePrecision(precision_)) {
-    singleWorkspace().inverseHessian.zero();
-    populateHessianIdentityKernel<<<numBlocks, blockDim, 0, stream_>>>(hessianStarts_.data(),
-                                                                       atomStartsDevice,
-                                                                       singleWorkspace().inverseHessian.data(),
-                                                                       dataDim_);
-  } else {
-    fullWorkspace().inverseHessian.zero();
-    populateHessianIdentityKernel<<<numBlocks, blockDim, 0, stream_>>>(hessianStarts_.data(),
-                                                                       atomStartsDevice,
-                                                                       fullWorkspace().inverseHessian.data(),
-                                                                       dataDim_);
-  }
+  workspace.inverseHessian.zero();
+  populateHessianIdentityKernel<<<numBlocks, blockDim, 0, stream_>>>(hessianStarts_.data(),
+                                                                     atomStartsDevice,
+                                                                     workspace.inverseHessian.data(),
+                                                                     dataDim_);
   cudaCheckError(cudaGetLastError());
+}
+
+void BfgsBatchMinimizer::setHessianToIdentity() {
+  if (usesSinglePrecision(precision_)) {
+    setHessianToIdentityImpl(singleWorkspace());
+    return;
+  }
+  setHessianToIdentityImpl(fullWorkspace());
 }
 
 template <typename real, typename reduceT, typename storageT>
@@ -772,20 +752,21 @@ __global__ void setMaxStepKernel(const int* atomStarts, const storageT* position
   }
 }
 
-void BfgsBatchMinimizer::setMaxStep() {
-#define NVMOLKIT_LAUNCH_MAX_STEP(real, reduceT, storageT, positions, output) \
-  setMaxStepKernel<real, reduceT, storageT>                                  \
-    <<<numSystems_, 128, 0, stream_>>>(atomStartsDevice, positions, output, dataDim_)
-  if (usesSinglePrecision(precision_))
-    NVMOLKIT_LAUNCH_MAX_STEP(float,
-                             float,
-                             float,
-                             singleWorkspace().positions.data(),
-                             singleWorkspace().lineSearchMaxSteps.data());
-  else
-    NVMOLKIT_LAUNCH_MAX_STEP(double, double, double, positionsDevice, fullWorkspace().lineSearchMaxSteps.data());
-#undef NVMOLKIT_LAUNCH_MAX_STEP
+template <typename Workspace, typename storageT>
+void BfgsBatchMinimizer::setMaxStepImpl(const storageT* positions, Workspace& workspace) {
+  using real    = typename Workspace::ComputeScalar;
+  using reduceT = typename Workspace::ReductionScalar;
+  setMaxStepKernel<real, reduceT, storageT>
+    <<<numSystems_, 128, 0, stream_>>>(atomStartsDevice, positions, workspace.lineSearchMaxSteps.data(), dataDim_);
   cudaCheckError(cudaGetLastError());
+}
+
+void BfgsBatchMinimizer::setMaxStep() {
+  if (usesSinglePrecision(precision_)) {
+    setMaxStepImpl(singleWorkspace().positions.data(), singleWorkspace());
+    return;
+  }
+  setMaxStepImpl(positionsDevice, fullWorkspace());
 }
 
 namespace {
@@ -798,14 +779,17 @@ __global__ void copyAndNegate(const int numElements, const sourceT* src, storage
   }
 }
 
-void prepareScratchBuffers(AsyncDeviceVector<double>&  grad,
-                           AsyncDeviceVector<double>&  lineSearchDir,
-                           AsyncDeviceVector<double>&  scratchPositions,
-                           AsyncDeviceVector<double>&  hessDGrad,
-                           AsyncDeviceVector<double>&  scratchGrad,
-                           AsyncDeviceVector<double*>& scratchBuffersDevice,
-                           PinnedHostVector<double*>&  scratchBufferPointersHost,
-                           cudaStream_t                stream) {
+template <typename storageT>
+void prepareScratchBuffers(AsyncDeviceVector<storageT>&  grad,
+                           AsyncDeviceVector<storageT>&  lineSearchDir,
+                           AsyncDeviceVector<storageT>&  scratchPositions,
+                           AsyncDeviceVector<storageT>&  hessDGrad,
+                           AsyncDeviceVector<storageT>&  scratchGrad,
+                           AsyncDeviceVector<storageT*>& scratchBuffersDevice,
+                           PinnedHostVector<storageT*>&  scratchBufferPointersHost,
+                           cudaStream_t                  stream) {
+  scratchBuffersDevice.resize(5);
+  scratchBufferPointersHost.resize(5);
   scratchBufferPointersHost[0] = grad.data();
   scratchBufferPointersHost[1] = lineSearchDir.data();
   scratchBufferPointersHost[2] = scratchPositions.data();
@@ -814,7 +798,7 @@ void prepareScratchBuffers(AsyncDeviceVector<double>&  grad,
 
   cudaCheckError(cudaMemcpyAsync(scratchBuffersDevice.data(),
                                  scratchBufferPointersHost.data(),
-                                 5 * sizeof(double*),
+                                 5 * sizeof(storageT*),
                                  cudaMemcpyHostToDevice,
                                  stream));
 }
@@ -927,38 +911,30 @@ __global__ void setDirectionKernel(const int*      atomStarts,
   }
 }
 
-void BfgsBatchMinimizer::setDirection() {
+template <typename Workspace, typename storageT>
+void BfgsBatchMinimizer::setDirectionImpl(storageT* positions, storageT* grads, Workspace& workspace) {
   const ScopedNvtxRange bfgsSetDirection("BfgsBatchMinimizer::setDirection");
-#define NVMOLKIT_LAUNCH_SET_DIRECTION(real, reduceT, storageT, scratchPos, grads, dirs, positions, scratchGrad)        \
-  setDirectionKernel<real, reduceT, storageT><<<numUnfinishedSystems_, 128, 0, stream_>>>(atomStartsDevice,            \
-                                                                                          scratchPos,                  \
-                                                                                          grads,                       \
-                                                                                          dirs,                        \
-                                                                                          positions,                   \
-                                                                                          scratchGrad,                 \
-                                                                                          statuses_.data(),            \
-                                                                                          activeSystemIndices_.data(), \
-                                                                                          dataDim_)
-  if (usesSinglePrecision(precision_))
-    NVMOLKIT_LAUNCH_SET_DIRECTION(float,
-                                  float,
-                                  float,
-                                  singleWorkspace().scratchPositions.data(),
-                                  singleWorkspace().grad.data(),
-                                  singleWorkspace().lineSearchDir.data(),
-                                  singleWorkspace().positions.data(),
-                                  singleWorkspace().scratchGrad.data());
-  else
-    NVMOLKIT_LAUNCH_SET_DIRECTION(double,
-                                  double,
-                                  double,
-                                  fullWorkspace().scratchPositions.data(),
-                                  gradDevice,
-                                  fullWorkspace().lineSearchDir.data(),
-                                  positionsDevice,
-                                  fullWorkspace().scratchGrad.data());
-#undef NVMOLKIT_LAUNCH_SET_DIRECTION
+  using real    = typename Workspace::ComputeScalar;
+  using reduceT = typename Workspace::ReductionScalar;
+  setDirectionKernel<real, reduceT, storageT>
+    <<<numUnfinishedSystems_, 128, 0, stream_>>>(atomStartsDevice,
+                                                 workspace.scratchPositions.data(),
+                                                 grads,
+                                                 workspace.lineSearchDir.data(),
+                                                 positions,
+                                                 workspace.scratchGrad.data(),
+                                                 statuses_.data(),
+                                                 activeSystemIndices_.data(),
+                                                 dataDim_);
   cudaCheckError(cudaGetLastError());
+}
+
+void BfgsBatchMinimizer::setDirection() {
+  if (usesSinglePrecision(precision_)) {
+    setDirectionImpl(singleWorkspace().positions.data(), singleWorkspace().grad.data(), singleWorkspace());
+    return;
+  }
+  setDirectionImpl(positionsDevice, gradDevice, fullWorkspace());
 }
 
 // Mirrors RDKit's ForceField::minimize gradient cap (calcGradient in
@@ -1023,38 +999,35 @@ __global__ void scaleGradKernel(const int16_t* statuses,
   }
 }
 
-void BfgsBatchMinimizer::scaleGrad(const bool preLoop) {
+template <typename Workspace, typename storageT>
+void BfgsBatchMinimizer::scaleGradImpl(const bool preLoop, storageT* grads, Workspace& workspace) {
   const int  numSystems          = preLoop ? numSystems_ : numUnfinishedSystems_;
   const int* activeSystemIndices = preLoop ? nullptr : activeSystemIndices_.data();
-#define NVMOLKIT_LAUNCH_SCALE_GRAD(Scale, real, reduceT, storageT, grads, gradScales)                   \
-  scaleGradKernel<Scale, real, reduceT, storageT><<<numSystems, 128, 0, stream_>>>(statuses_.data(),    \
-                                                                                   atomStartsDevice,    \
-                                                                                   grads,               \
-                                                                                   gradScales,          \
-                                                                                   activeSystemIndices, \
-                                                                                   dataDim_)
-  if (usesSinglePrecision(precision_)) {
-    if (scaleGrads_)
-      NVMOLKIT_LAUNCH_SCALE_GRAD(true,
-                                 float,
-                                 float,
-                                 float,
-                                 singleWorkspace().grad.data(),
-                                 singleWorkspace().gradScales.data());
-    else
-      NVMOLKIT_LAUNCH_SCALE_GRAD(false,
-                                 float,
-                                 float,
-                                 float,
-                                 singleWorkspace().grad.data(),
-                                 singleWorkspace().gradScales.data());
+  using real                     = typename Workspace::ComputeScalar;
+  using reduceT                  = typename Workspace::ReductionScalar;
+  if (scaleGrads_) {
+    scaleGradKernel<true, real, reduceT, storageT><<<numSystems, 128, 0, stream_>>>(statuses_.data(),
+                                                                                    atomStartsDevice,
+                                                                                    grads,
+                                                                                    workspace.gradScales.data(),
+                                                                                    activeSystemIndices,
+                                                                                    dataDim_);
   } else {
-    if (scaleGrads_)
-      NVMOLKIT_LAUNCH_SCALE_GRAD(true, double, double, double, gradDevice, fullWorkspace().gradScales.data());
-    else
-      NVMOLKIT_LAUNCH_SCALE_GRAD(false, double, double, double, gradDevice, fullWorkspace().gradScales.data());
+    scaleGradKernel<false, real, reduceT, storageT><<<numSystems, 128, 0, stream_>>>(statuses_.data(),
+                                                                                     atomStartsDevice,
+                                                                                     grads,
+                                                                                     workspace.gradScales.data(),
+                                                                                     activeSystemIndices,
+                                                                                     dataDim_);
   }
-#undef NVMOLKIT_LAUNCH_SCALE_GRAD
+}
+
+void BfgsBatchMinimizer::scaleGrad(const bool preLoop) {
+  if (usesSinglePrecision(precision_)) {
+    scaleGradImpl(preLoop, singleWorkspace().grad.data(), singleWorkspace());
+    return;
+  }
+  scaleGradImpl(preLoop, gradDevice, fullWorkspace());
 }
 
 template <typename real, typename reduceT, typename storageT>
@@ -1113,39 +1086,37 @@ __global__ void updateDGradKernel(const storageT  gradTol,
   }
 }
 
-void BfgsBatchMinimizer::updateDGrad() {
+template <typename Workspace, typename storageT>
+void BfgsBatchMinimizer::updateDGradImpl(const storageT* energies,
+                                         const storageT* grads,
+                                         const storageT* positions,
+                                         Workspace&      workspace) {
   const ScopedNvtxRange bfgsUpdateDGrad("BfgsBatchMinimizer::updateDGrad");
-#define NVMOLKIT_LAUNCH_UPDATE_DGRAD(real, reduceT, storageT, energies, grads, positions, gradScales, dGrads)         \
-  updateDGradKernel<real, reduceT, storageT><<<numUnfinishedSystems_, 128, 0, stream_>>>(gradTol_,                    \
-                                                                                         atomStartsDevice,            \
-                                                                                         energies,                    \
-                                                                                         gradScales,                  \
-                                                                                         grads,                       \
-                                                                                         positions,                   \
-                                                                                         dGrads,                      \
-                                                                                         statuses_.data(),            \
-                                                                                         activeSystemIndices_.data(), \
-                                                                                         dataDim_)
-  if (usesSinglePrecision(precision_))
-    NVMOLKIT_LAUNCH_UPDATE_DGRAD(float,
-                                 float,
-                                 float,
-                                 singleWorkspace().energy.data(),
-                                 singleWorkspace().grad.data(),
-                                 singleWorkspace().positions.data(),
-                                 singleWorkspace().gradScales.data(),
-                                 singleWorkspace().scratchGrad.data());
-  else
-    NVMOLKIT_LAUNCH_UPDATE_DGRAD(double,
-                                 double,
-                                 double,
-                                 energyOutsDevice,
-                                 gradDevice,
-                                 positionsDevice,
-                                 fullWorkspace().gradScales.data(),
-                                 fullWorkspace().scratchGrad.data());
-#undef NVMOLKIT_LAUNCH_UPDATE_DGRAD
+  using real    = typename Workspace::ComputeScalar;
+  using reduceT = typename Workspace::ReductionScalar;
+  updateDGradKernel<real, reduceT, storageT>
+    <<<numUnfinishedSystems_, 128, 0, stream_>>>(static_cast<storageT>(gradTol_),
+                                                 atomStartsDevice,
+                                                 energies,
+                                                 workspace.gradScales.data(),
+                                                 grads,
+                                                 positions,
+                                                 workspace.scratchGrad.data(),
+                                                 statuses_.data(),
+                                                 activeSystemIndices_.data(),
+                                                 dataDim_);
   cudaCheckError(cudaGetLastError());
+}
+
+void BfgsBatchMinimizer::updateDGrad() {
+  if (usesSinglePrecision(precision_)) {
+    updateDGradImpl(singleWorkspace().energy.data(),
+                    singleWorkspace().grad.data(),
+                    singleWorkspace().positions.data(),
+                    singleWorkspace());
+    return;
+  }
+  updateDGradImpl(energyOutsDevice, gradDevice, positionsDevice, fullWorkspace());
 }
 
 template <typename storageT>
@@ -1177,45 +1148,37 @@ void updateHessianState(int             numUnfinishedSystems,
                                           stream);
 }
 
-void BfgsBatchMinimizer::updateHessian() {
+template <typename Workspace, typename storageT>
+void BfgsBatchMinimizer::updateHessianImpl(const storageT* grads, Workspace& workspace) {
   const ScopedNvtxRange bfgsUpdateHessian("BfgsBatchMinimizer::updateHessian");
-  // Determine if any active system exceeds the shared-memory-optimized limit
-  bool                  largeMol = hasLargeSystem_;
-#define NVMOLKIT_UPDATE_HESSIAN(hessian, dGrads, dirs, hessDGrads, grads) \
-  updateHessianState(numUnfinishedSystems_,                               \
-                     statuses_.data(),                                    \
-                     hessianStarts_.data(),                               \
-                     atomStartsDevice,                                    \
-                     hessian,                                             \
-                     dGrads,                                              \
-                     dirs,                                                \
-                     hessDGrads,                                          \
-                     grads,                                               \
-                     dataDim_,                                            \
-                     largeMol,                                            \
-                     activeSystemIndices_.data(),                         \
-                     stream_)
-  if (usesSinglePrecision(precision_))
-    NVMOLKIT_UPDATE_HESSIAN(singleWorkspace().inverseHessian.data(),
-                            singleWorkspace().scratchGrad.data(),
-                            singleWorkspace().lineSearchDir.data(),
-                            singleWorkspace().hessDGrad.data(),
-                            singleWorkspace().grad.data());
-  else
-    NVMOLKIT_UPDATE_HESSIAN(fullWorkspace().inverseHessian.data(),
-                            fullWorkspace().scratchGrad.data(),
-                            fullWorkspace().lineSearchDir.data(),
-                            fullWorkspace().hessDGrad.data(),
-                            gradDevice);
-#undef NVMOLKIT_UPDATE_HESSIAN
+  updateHessianState(numUnfinishedSystems_,
+                     statuses_.data(),
+                     hessianStarts_.data(),
+                     atomStartsDevice,
+                     workspace.inverseHessian.data(),
+                     workspace.scratchGrad.data(),
+                     workspace.lineSearchDir.data(),
+                     workspace.hessDGrad.data(),
+                     grads,
+                     dataDim_,
+                     hasLargeSystem_,
+                     activeSystemIndices_.data(),
+                     stream_);
 }
 
-void BfgsBatchMinimizer::collectDebugData() {
+void BfgsBatchMinimizer::updateHessian() {
+  if (usesSinglePrecision(precision_)) {
+    updateHessianImpl(singleWorkspace().grad.data(), singleWorkspace());
+    return;
+  }
+  updateHessianImpl(gradDevice, fullWorkspace());
+}
+
+template <typename storageT> void BfgsBatchMinimizer::collectDebugDataImpl(const storageT* energies) {
   if (debugLevel_ != DebugLevel::STEPWISE) {
     return;
   }
 
-  // Copy energies and statuses to host for debugging.
   std::vector<int16_t> statusesHost(numSystems_);
   std::vector<double>  energiesHost(numSystems_);
   cudaCheckError(cudaMemcpyAsync(statusesHost.data(),
@@ -1223,118 +1186,104 @@ void BfgsBatchMinimizer::collectDebugData() {
                                  numSystems_ * sizeof(int16_t),
                                  cudaMemcpyDeviceToHost,
                                  stream_));
-  cudaCheckError(cudaMemcpyAsync(energiesHost.data(),
-                                 energyOutsDevice,
-                                 numSystems_ * sizeof(double),
-                                 cudaMemcpyDeviceToHost,
-                                 stream_));
-  cudaCheckError(cudaStreamSynchronize(stream_));
+  if constexpr (std::is_same_v<storageT, float>) {
+    std::vector<float> singleEnergiesHost(numSystems_);
+    cudaCheckError(cudaMemcpyAsync(singleEnergiesHost.data(),
+                                   energies,
+                                   numSystems_ * sizeof(float),
+                                   cudaMemcpyDeviceToHost,
+                                   stream_));
+    cudaCheckError(cudaStreamSynchronize(stream_));
+    std::transform(singleEnergiesHost.begin(), singleEnergiesHost.end(), energiesHost.begin(), [](const float value) {
+      return static_cast<double>(value);
+    });
+  } else {
+    cudaCheckError(
+      cudaMemcpyAsync(energiesHost.data(), energies, numSystems_ * sizeof(double), cudaMemcpyDeviceToHost, stream_));
+    cudaCheckError(cudaStreamSynchronize(stream_));
+  }
 
   stepwiseStatuses.push_back(std::move(statusesHost));
   stepwiseEnergies.push_back(std::move(energiesHost));
 }
 
-bool BfgsBatchMinimizer::minimize(const int                  numIters,
-                                  const double               gradTol,
-                                  const std::vector<int>&    atomStartsHost,
-                                  const int*                 atomStarts,
-                                  AsyncDeviceVector<double>& positions,
-                                  AsyncDeviceVector<double>& grad,
-                                  AsyncDeviceVector<double>& energyOuts,
-                                  EnergyFunctor              eFunc,
-                                  GradFunctor                gFunc,
-                                  SingleEnergyFunctor        eFuncSingle,
-                                  SingleGradFunctor          gFuncSingle,
-                                  const uint8_t*             activeThisStage) {
-  gradTol_             = gradTol;
-  const int numSystems = atomStartsHost.size() - 1;
-
-  if (backend_ == BfgsBackend::PER_MOLECULE) {
-    throw std::runtime_error(
-      "PER_MOLECULE backend is only supported through the forcefield-specific entry points. "
-      "Use minimizeWithMMFF(), minimizeWithETK(), minimizeWithDG(), or switch to BATCHED backend.");
+void BfgsBatchMinimizer::collectDebugData() {
+  if (usesSinglePrecision(precision_)) {
+    collectDebugDataImpl(singleWorkspace().energy.data());
+    return;
   }
+  collectDebugDataImpl(energyOutsDevice);
+}
+
+template <typename Workspace, typename storageT, typename EnergyEvaluator, typename GradientEvaluator>
+bool BfgsBatchMinimizer::minimizeImpl(const int                  numIters,
+                                      const double               gradTol,
+                                      AsyncDeviceVector<double>& publicPositions,
+                                      AsyncDeviceVector<double>& publicGrad,
+                                      AsyncDeviceVector<double>& publicEnergies,
+                                      storageT*                  positions,
+                                      storageT*                  grad,
+                                      storageT*                  energies,
+                                      Workspace&                 workspace,
+                                      EnergyEvaluator            evaluateEnergy,
+                                      GradientEvaluator          evaluateGradient) {
+  gradTol_             = gradTol;
+  const int numSystems = numSystems_;
 
   {
     const ScopedNvtxRange bfgsFullInitialize("BfgsBatchMinimizer::fullInitialize");
-    initialize(atomStartsHost,
-               atomStarts,
-               positions.data(),
-               grad.data(),
-               energyOuts.data(),
-               BfgsBackend::BATCHED,
-               activeThisStage);
+    setHessianToIdentityImpl(workspace);
 
-    setHessianToIdentity();
+    cudaCheckError(cudaMemsetAsync(energies, 0, numSystems * sizeof(storageT), stream_));
+    evaluateEnergy(positions);
+    cudaCheckError(cudaMemsetAsync(grad, 0, publicGrad.size() * sizeof(storageT), stream_));
+    evaluateGradient();
+    scaleGradImpl(/*preLoop=*/true, grad, workspace);
 
-    energyOuts.zero();
-    if (usesSinglePrecision(precision_)) {
-      eFuncSingle(singleWorkspace().positions.data());
-      singleWorkspace().grad.zero();
-      gFuncSingle();
-    } else {
-      eFunc(nullptr);
-      grad.zero();
-      gFunc();
-    }
-    scaleGrad(/*preLoop=*/true);
-
-    collectDebugData();
-    if (usesSinglePrecision(precision_))
-      copyAndInvert(singleWorkspace().grad, singleWorkspace().lineSearchDir);
-    else
-      copyAndInvert(grad, fullWorkspace().lineSearchDir);
-    setMaxStep();
+    collectDebugDataImpl(energies);
+    constexpr int copyBlockSize = 128;
+    const int     copyBlocks    = (publicGrad.size() + copyBlockSize - 1) / copyBlockSize;
+    copyAndNegate<<<copyBlocks, copyBlockSize, 0, stream_>>>(publicGrad.size(), grad, workspace.lineSearchDir.data());
+    cudaCheckError(cudaGetLastError());
+    setMaxStepImpl(positions, workspace);
   }
 
   for (int currIter = 0; currIter < numIters && compactAndCountConverged() < numSystems; currIter++) {
     {
       const ScopedNvtxRange bfgsLineSearch("BfgsBatchMinimizer::lineSearch");
-      doLineSearchSetup(energyOuts.data());
+      doLineSearchSetupImpl(energies, positions, grad, workspace);
 
       int              lineSearchIter         = 0;
       constexpr double MAX_ITER_LINEAR_SEARCH = 1000;
       while (lineSearchIter < MAX_ITER_LINEAR_SEARCH && lineSearchCountFinished() < numSystems) {
-        doLineSearchPerturb();
-        energyOuts.zero();
-        if (usesSinglePrecision(precision_))
-          eFuncSingle(singleWorkspace().scratchPositions.data());
-        else
-          eFunc(fullWorkspace().scratchPositions.data());
-        doLineSearchPostEnergy(lineSearchIter);
+        doLineSearchPerturbImpl(positions, workspace);
+        cudaCheckError(cudaMemsetAsync(energies, 0, numSystems * sizeof(storageT), stream_));
+        evaluateEnergy(workspace.scratchPositions.data());
+        doLineSearchPostEnergyImpl(lineSearchIter, energies, workspace);
         lineSearchIter++;
       }
-      doLineSearchPostLoop();
+      doLineSearchPostLoopImpl(positions, workspace);
     }
-    setDirection();
+    setDirectionImpl(positions, grad, workspace);
 
     {
       const ScopedNvtxRange bfgsGetAndScaleGrad("BfgsBatchMinimizer::getAndScaleGrad");
-      if (usesSinglePrecision(precision_)) {
-        singleWorkspace().grad.zero();
-        gFuncSingle();
-      } else {
-        grad.zero();
-        gFunc();
-      }
-      scaleGrad(/*preLoop=*/false);
+      cudaCheckError(cudaMemsetAsync(grad, 0, publicGrad.size() * sizeof(storageT), stream_));
+      evaluateGradient();
+      scaleGradImpl(/*preLoop=*/false, grad, workspace);
     }
 
-    updateDGrad();
-    updateHessian();
-    collectDebugData();
+    updateDGradImpl(energies, grad, positions, workspace);
+    updateHessianImpl(grad, workspace);
+    collectDebugDataImpl(energies);
   }
 
-  energyOuts.zero();
-  if (usesSinglePrecision(precision_)) {
-    eFuncSingle(singleWorkspace().positions.data());
-    cudaCheckError(
-      detail::convertDeviceArray(energyOuts.data(), singleWorkspace().energy.data(), energyOuts.size(), stream_));
-    cudaCheckError(
-      detail::convertDeviceArray(positions.data(), singleWorkspace().positions.data(), positions.size(), stream_));
-    cudaCheckError(detail::convertDeviceArray(grad.data(), singleWorkspace().grad.data(), grad.size(), stream_));
-  } else {
-    eFunc(nullptr);
+  cudaCheckError(cudaMemsetAsync(energies, 0, numSystems * sizeof(storageT), stream_));
+  evaluateEnergy(positions);
+  if constexpr (std::is_same_v<storageT, float>) {
+    cudaCheckError(detail::convertDeviceArray(publicEnergies.data(), energies, publicEnergies.size(), stream_));
+    cudaCheckError(detail::convertDeviceArray(publicPositions.data(), positions, publicPositions.size(), stream_));
+    cudaCheckError(detail::convertDeviceArray(publicGrad.data(), grad, publicGrad.size(), stream_));
   }
   return compactAndCountConverged() == numSystems ? 0 : 1;
 }
@@ -1352,60 +1301,103 @@ bool BfgsBatchMinimizer::minimize(const int                  numIters,
     throw std::runtime_error("BatchedForcefield minimization is only supported on the BATCHED backend");
   }
 
-  auto* singlePrecisionForcefield = dynamic_cast<SinglePrecisionBatchedForcefield*>(&ff);
+  if (usesSinglePrecision(precision_)) {
+    initializeImpl(atomStartsHost,
+                   ff.atomStartsDevice(),
+                   positions.data(),
+                   grad.data(),
+                   energyOuts.data(),
+                   BfgsBackend::BATCHED,
+                   singleWorkspace(),
+                   activeSystemMask);
 
-  auto eFunc = [&](const double* evalPositions) {
-    const double* positionsToEvaluate = evalPositions != nullptr ? evalPositions : positions.data();
-    ff.computeEnergy(energyOuts.data(), positionsToEvaluate, activeSystemMask, stream_);
-  };
-  auto gFunc       = [&]() { ff.computeGradients(grad.data(), positions.data(), activeSystemMask, stream_); };
-  auto eFuncSingle = [&](const float* evalPositions) {
+    auto* singlePrecisionForcefield = dynamic_cast<SinglePrecisionBatchedForcefield*>(&ff);
     if (singlePrecisionForcefield == nullptr) {
-      cudaCheckError(detail::convertDeviceArray(positions.data(), evalPositions, positions.size(), stream_));
-      cudaCheckError(ff.computeEnergy(energyOuts.data(), positions.data(), activeSystemMask, stream_));
-      cudaCheckError(
-        detail::convertDeviceArray(singleWorkspace().energy.data(), energyOuts.data(), energyOuts.size(), stream_));
-    } else {
+      auto evaluateEnergy = [&](const float* evalPositions) {
+        cudaCheckError(detail::convertDeviceArray(positions.data(), evalPositions, positions.size(), stream_));
+        energyOuts.zero();
+        cudaCheckError(ff.computeEnergy(energyOuts.data(), positions.data(), activeSystemMask, stream_));
+        cudaCheckError(
+          detail::convertDeviceArray(singleWorkspace().energy.data(), energyOuts.data(), energyOuts.size(), stream_));
+      };
+      auto evaluateGradient = [&]() {
+        cudaCheckError(
+          detail::convertDeviceArray(positions.data(), singleWorkspace().positions.data(), positions.size(), stream_));
+        grad.zero();
+        cudaCheckError(ff.computeGradients(grad.data(), positions.data(), activeSystemMask, stream_));
+        cudaCheckError(detail::convertDeviceArray(singleWorkspace().grad.data(), grad.data(), grad.size(), stream_));
+      };
+      return minimizeImpl(numIters,
+                          gradTol,
+                          positions,
+                          grad,
+                          energyOuts,
+                          singleWorkspace().positions.data(),
+                          singleWorkspace().grad.data(),
+                          singleWorkspace().energy.data(),
+                          singleWorkspace(),
+                          evaluateEnergy,
+                          evaluateGradient);
+    }
+
+    auto evaluateEnergy = [&](const float* evalPositions) {
       cudaCheckError(singlePrecisionForcefield->computeEnergy(singleWorkspace().energy.data(),
                                                               evalPositions,
                                                               activeSystemMask,
                                                               stream_));
-    }
-  };
-  auto gFuncSingle = [&]() {
-    if (singlePrecisionForcefield == nullptr) {
-      cudaCheckError(
-        detail::convertDeviceArray(positions.data(), singleWorkspace().positions.data(), positions.size(), stream_));
-      grad.zero();
-      cudaCheckError(ff.computeGradients(grad.data(), positions.data(), activeSystemMask, stream_));
-      cudaCheckError(detail::convertDeviceArray(singleWorkspace().grad.data(), grad.data(), grad.size(), stream_));
-    } else {
+    };
+    auto evaluateGradient = [&]() {
       cudaCheckError(singlePrecisionForcefield->computeGradients(singleWorkspace().grad.data(),
                                                                  singleWorkspace().positions.data(),
                                                                  activeSystemMask,
                                                                  stream_));
-    }
-  };
+    };
+    return minimizeImpl(numIters,
+                        gradTol,
+                        positions,
+                        grad,
+                        energyOuts,
+                        singleWorkspace().positions.data(),
+                        singleWorkspace().grad.data(),
+                        singleWorkspace().energy.data(),
+                        singleWorkspace(),
+                        evaluateEnergy,
+                        evaluateGradient);
+  }
 
-  return minimize(numIters,
-                  gradTol,
-                  atomStartsHost,
-                  ff.atomStartsDevice(),
-                  positions,
-                  grad,
-                  energyOuts,
-                  eFunc,
-                  gFunc,
-                  eFuncSingle,
-                  gFuncSingle,
-                  activeSystemMask);
+  initializeImpl(atomStartsHost,
+                 ff.atomStartsDevice(),
+                 positions.data(),
+                 grad.data(),
+                 energyOuts.data(),
+                 BfgsBackend::BATCHED,
+                 fullWorkspace(),
+                 activeSystemMask);
+  auto evaluateEnergy = [&](const double* evalPositions) {
+    cudaCheckError(ff.computeEnergy(energyOuts.data(), evalPositions, activeSystemMask, stream_));
+  };
+  auto evaluateGradient = [&]() {
+    cudaCheckError(ff.computeGradients(grad.data(), positions.data(), activeSystemMask, stream_));
+  };
+  return minimizeImpl(numIters,
+                      gradTol,
+                      positions,
+                      grad,
+                      energyOuts,
+                      positions.data(),
+                      grad.data(),
+                      energyOuts.data(),
+                      fullWorkspace(),
+                      evaluateEnergy,
+                      evaluateGradient);
 }
 
-template <typename DeviceBuffers>
+template <typename DeviceBuffers, typename Workspace>
 bool BfgsBatchMinimizer::minimizeWithMMFFImpl(const int               numIters,
                                               const double            gradTol,
                                               const std::vector<int>& atomStartsHost,
                                               DeviceBuffers&          systemDevice,
+                                              Workspace&              workspace,
                                               const uint8_t*          activeThisStage) {
   const int         numSystems       = atomStartsHost.size() - 1;
   const BfgsBackend effectiveBackend = resolveBackend(atomStartsHost);
@@ -1414,25 +1406,24 @@ bool BfgsBatchMinimizer::minimizeWithMMFFImpl(const int               numIters,
     throw std::runtime_error("Use minimize(..., BatchedForcefield&) for batched MMFF minimization");
   }
 
-  initialize(atomStartsHost,
-             systemDevice.indices.atomStarts.data(),
-             systemDevice.positions.data(),
-             systemDevice.grad.data(),
-             systemDevice.energyOuts.data(),
-             effectiveBackend,
-             activeThisStage);
-
-  setHessianToIdentity();
+  initializeImpl(atomStartsHost,
+                 systemDevice.indices.atomStarts.data(),
+                 nullptr,
+                 nullptr,
+                 nullptr,
+                 effectiveBackend,
+                 workspace,
+                 activeThisStage);
 
   const ScopedNvtxRange bfgsPerMolecule("BfgsBatchMinimizer::perMoleculeMinimize");
 
   prepareScratchBuffers(systemDevice.grad,
-                        fullWorkspace().lineSearchDir,
-                        fullWorkspace().scratchPositions,
-                        fullWorkspace().hessDGrad,
-                        fullWorkspace().scratchGrad,
-                        scratchBuffersDevice_,
-                        scratchBufferPointersHost_,
+                        workspace.lineSearchDir,
+                        workspace.scratchPositions,
+                        workspace.hessDGrad,
+                        workspace.scratchGrad,
+                        workspace.scratchBufferPointers,
+                        workspace.scratchBufferPointersHost,
                         stream_);
 
   auto terms         = MMFF::toEnergyForceContribsDevicePtr(systemDevice);
@@ -1450,8 +1441,8 @@ bool BfgsBatchMinimizer::minimizeWithMMFFImpl(const int               numIters,
                                                          systemIndices,
                                                          systemDevice.positions.data(),
                                                          systemDevice.grad.data(),
-                                                         fullWorkspace().inverseHessian.data(),
-                                                         scratchBuffersDevice_.data(),
+                                                         workspace.inverseHessian.data(),
+                                                         workspace.scratchBufferPointers.data(),
                                                          systemDevice.energyOuts.data(),
                                                          MMFF::batchHasConstraints(systemDevice.contribs),
                                                          statuses_.data(),
@@ -1469,7 +1460,21 @@ bool BfgsBatchMinimizer::minimizeWithMMFF(const int                            n
                                           const std::vector<int>&              atomStartsHost,
                                           MMFF::BatchedMolecularDeviceBuffers& systemDevice,
                                           const uint8_t*                       activeThisStage) {
-  return minimizeWithMMFFImpl(numIters, gradTol, atomStartsHost, systemDevice, activeThisStage);
+  if (usesSinglePrecision(precision_)) {
+    throw std::invalid_argument("Double MMFF buffers require PrecisionMode::FULL");
+  }
+  return minimizeWithMMFFImpl(numIters, gradTol, atomStartsHost, systemDevice, fullWorkspace(), activeThisStage);
+}
+
+bool BfgsBatchMinimizer::minimizeWithMMFF(const int                                  numIters,
+                                          const double                               gradTol,
+                                          const std::vector<int>&                    atomStartsHost,
+                                          MMFF::BatchedMolecularDeviceBuffersSingle& systemDevice,
+                                          const uint8_t*                             activeThisStage) {
+  if (!usesSinglePrecision(precision_)) {
+    throw std::invalid_argument("Single MMFF buffers require PrecisionMode::SINGLE");
+  }
+  return minimizeWithMMFFImpl(numIters, gradTol, atomStartsHost, systemDevice, singleWorkspace(), activeThisStage);
 }
 
 bool BfgsBatchMinimizer::minimizeWithETK(const int                                  numIters,
@@ -1503,8 +1508,8 @@ bool BfgsBatchMinimizer::minimizeWithETK(const int                              
                         fullWorkspace().scratchPositions,
                         fullWorkspace().hessDGrad,
                         fullWorkspace().scratchGrad,
-                        scratchBuffersDevice_,
-                        scratchBufferPointersHost_,
+                        fullWorkspace().scratchBufferPointers,
+                        fullWorkspace().scratchBufferPointersHost,
                         stream_);
 
   auto terms         = DistGeom::toEnergy3DForceContribsDevicePtr(systemDevice);
@@ -1523,7 +1528,7 @@ bool BfgsBatchMinimizer::minimizeWithETK(const int                              
                                                             positions.data(),
                                                             systemDevice.grad.data(),
                                                             fullWorkspace().inverseHessian.data(),
-                                                            scratchBuffersDevice_.data(),
+                                                            fullWorkspace().scratchBufferPointers.data(),
                                                             systemDevice.energyOuts.data(),
                                                             statuses_.data(),
                                                             stream_);
@@ -1573,8 +1578,8 @@ bool BfgsBatchMinimizer::minimizeWithDG(const int                               
                         fullWorkspace().scratchPositions,
                         fullWorkspace().hessDGrad,
                         fullWorkspace().scratchGrad,
-                        scratchBuffersDevice_,
-                        scratchBufferPointersHost_,
+                        fullWorkspace().scratchBufferPointers,
+                        fullWorkspace().scratchBufferPointersHost,
                         stream_);
 
   auto terms         = DistGeom::toEnergyForceContribsDevicePtr(systemDevice);
@@ -1593,7 +1598,7 @@ bool BfgsBatchMinimizer::minimizeWithDG(const int                               
                                                            positions.data(),
                                                            systemDevice.grad.data(),
                                                            fullWorkspace().inverseHessian.data(),
-                                                           scratchBuffersDevice_.data(),
+                                                           fullWorkspace().scratchBufferPointers.data(),
                                                            systemDevice.energyOuts.data(),
                                                            chiralWeight,
                                                            fourthDimWeight,
