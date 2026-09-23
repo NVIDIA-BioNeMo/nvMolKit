@@ -72,6 +72,11 @@ UFFBatchedForcefield::UFFBatchedForcefield(const UFF::BatchedMolecularSystemHost
   }
 }
 
+PrecisionMode UFFBatchedForcefield::precision() const {
+  return std::holds_alternative<UFF::BatchedMolecularDeviceBuffersSingle>(systemDevice_) ? PrecisionMode::SINGLE :
+                                                                                           PrecisionMode::FULL;
+}
+
 cudaError_t UFFBatchedForcefield::computeEnergy(float*         energyOuts,
                                                 const float*   positions,
                                                 const uint8_t* activeSystemMask,

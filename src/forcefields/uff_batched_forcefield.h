@@ -38,18 +38,19 @@ class UFFBatchedForcefield final : public BatchedForcefield, public SinglePrecis
                             const uint8_t* activeSystemMask = nullptr,
                             cudaStream_t   stream           = nullptr) override;
 
-  cudaError_t computeGradients(double*        grad,
-                               const double*  positions,
-                               const uint8_t* activeSystemMask = nullptr,
-                               cudaStream_t   stream           = nullptr) override;
-  cudaError_t computeEnergy(float*         energyOuts,
-                            const float*   positions,
-                            const uint8_t* activeSystemMask = nullptr,
-                            cudaStream_t   stream           = nullptr) override;
-  cudaError_t computeGradients(float*         grad,
-                               const float*   positions,
-                               const uint8_t* activeSystemMask = nullptr,
-                               cudaStream_t   stream           = nullptr) override;
+  cudaError_t   computeGradients(double*        grad,
+                                 const double*  positions,
+                                 const uint8_t* activeSystemMask = nullptr,
+                                 cudaStream_t   stream           = nullptr) override;
+  cudaError_t   computeEnergy(float*         energyOuts,
+                              const float*   positions,
+                              const uint8_t* activeSystemMask = nullptr,
+                              cudaStream_t   stream           = nullptr) override;
+  cudaError_t   computeGradients(float*         grad,
+                                 const float*   positions,
+                                 const uint8_t* activeSystemMask = nullptr,
+                                 cudaStream_t   stream           = nullptr) override;
+  PrecisionMode precision() const override;
 
  private:
   std::variant<UFF::BatchedMolecularDeviceBuffers, UFF::BatchedMolecularDeviceBuffersSingle> systemDevice_;
