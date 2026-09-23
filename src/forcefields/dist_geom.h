@@ -262,8 +262,8 @@ template <typename Scalar> struct Energy3DForceContribsDeviceT {
   DistanceConstraintContribTermsDeviceT<Scalar> longRangeDistTerms;
 };
 
-using EnergyForceContribsDevice         = EnergyForceContribsDeviceT<double>;
-using Energy3DForceContribsDevice       = Energy3DForceContribsDeviceT<double>;
+using EnergyForceContribsDevice   = EnergyForceContribsDeviceT<double>;
+using Energy3DForceContribsDevice = Energy3DForceContribsDeviceT<double>;
 
 //! See BatchedIndices for more information on each field.
 struct BatchedIndicesDevice {
@@ -336,8 +336,8 @@ template <typename ParameterScalar> struct BatchedMolecular3DDeviceBuffersT {
   nvMolKit::AsyncDeviceVector<double>           energyOuts;
 };
 
-using BatchedMolecularDeviceBuffers         = BatchedMolecularDeviceBuffersT<double>;
-using BatchedMolecular3DDeviceBuffers       = BatchedMolecular3DDeviceBuffersT<double>;
+using BatchedMolecularDeviceBuffers   = BatchedMolecularDeviceBuffersT<double>;
+using BatchedMolecular3DDeviceBuffers = BatchedMolecular3DDeviceBuffersT<double>;
 
 //! Set all DeviceVector streams for the batched molecular device buffers.
 void setStreams(BatchedMolecularDeviceBuffers& devBuffers, cudaStream_t stream);
@@ -439,7 +439,7 @@ void setupDeviceBuffers3D(BatchedMolecularSystem3DHost&    molSystemHost,
                           const int                        numMols);
 
 //! Create pointer struct from device buffers for use in per-molecule kernels (4D DG)
-EnergyForceContribsDevicePtr       toEnergyForceContribsDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice);
+EnergyForceContribsDevicePtr toEnergyForceContribsDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice);
 
 //! Create pointer struct from device buffers for use in per-molecule kernels (4D DG)
 BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice,
