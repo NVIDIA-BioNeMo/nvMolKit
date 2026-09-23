@@ -16,8 +16,13 @@
 #include <boost/python.hpp>
 
 #include "src/minimizer/fire_options.h"
+#include "src/precision/precision_mode.h"
 
 BOOST_PYTHON_MODULE(_types) {
+  boost::python::enum_<nvMolKit::PrecisionMode>("PrecisionMode")
+    .value("FULL", nvMolKit::PrecisionMode::FULL)
+    .value("SINGLE", nvMolKit::PrecisionMode::SINGLE);
+
   boost::python::class_<nvMolKit::FireOptions>("FireOptions")
     .def(boost::python::init<>())
     .def_readwrite("dtInit", &nvMolKit::FireOptions::dtInit)

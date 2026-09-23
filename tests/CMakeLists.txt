@@ -395,6 +395,11 @@ target_link_libraries(
   test_substruct_label_integration PRIVATE substructure_search molecules device
                                            test_utils molData ${RDKit_LIBS})
 
+add_executable(test_descriptors3d test_descriptors3d.cpp)
+target_link_libraries(
+  test_descriptors3d PRIVATE ${RDKit_LIBS} descriptors3d_mol
+                             conformer_coord_upload)
+
 add_executable(test_tfd_cpu test_tfd_cpu.cpp)
 target_link_libraries(test_tfd_cpu PRIVATE ${RDKit_LIBS} tfd_cpu test_utils
                                            nvmolkit_versions)
@@ -413,6 +418,7 @@ target_link_libraries(test_tfd PRIVATE ${RDKit_LIBS} tfd_gpu tfd_cpu
                                        device_vector test_utils)
 
 set(TEST_LIST
+    test_descriptors3d
     test_boolean_tree
     test_butina
     test_bfgs_hessian

@@ -138,6 +138,23 @@ Conformer RMSD
    conformerRmsd.GetConformerRMSMatrix
    conformerRmsd.GetConformerRMSMatrixBatch
 
+3D Descriptors
+--------------
+
+.. autosummary::
+   :toctree: generated/
+   :template: function_template.rst
+
+   descriptors3d.Calc3DProperties
+
+.. autosummary::
+   :toctree: generated/
+   :template: class_template.rst
+
+   descriptors3d.Property3D
+   descriptors3d.Device3DPropertyResult
+   descriptors3d.Dense3DPropertyResult
+
 Torsion Fingerprint Deviation (TFD)
 -----------------------------------
 

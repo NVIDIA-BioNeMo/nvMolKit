@@ -113,6 +113,15 @@ target_include_directories(_conformerRmsd PUBLIC ${Boost_INCLUDE_DIRS}
                                                  ${Python_INCLUDE_DIRS})
 installpythontarget(_conformerRmsd ./)
 
+add_library(_descriptors3d MODULE descriptors3d.cpp)
+target_link_libraries(
+  _descriptors3d PUBLIC ${Boost_LIBRARIES} ${PYTHON_LIBRARIES}
+                        descriptors3d_mol device CUDA::cudart)
+target_link_libraries(_descriptors3d PRIVATE ${RDKit_LIBS})
+target_include_directories(_descriptors3d PUBLIC ${Boost_INCLUDE_DIRS}
+                                                 ${Python_INCLUDE_DIRS})
+installpythontarget(_descriptors3d ./)
+
 add_library(_substructure MODULE substructure.cpp)
 target_link_libraries(_substructure PUBLIC ${Boost_LIBRARIES}
                                            ${PYTHON_LIBRARIES})
