@@ -38,8 +38,10 @@ using BatchedMolecularDeviceBuffers = BatchedMolecularDeviceBuffersT<double, dou
 namespace DistGeom {
 template <typename ParameterScalar> struct BatchedMolecularDeviceBuffersT;
 template <typename ParameterScalar> struct BatchedMolecular3DDeviceBuffersT;
-using BatchedMolecularDeviceBuffers   = BatchedMolecularDeviceBuffersT<double>;
-using BatchedMolecular3DDeviceBuffers = BatchedMolecular3DDeviceBuffersT<double>;
+using BatchedMolecularDeviceBuffers         = BatchedMolecularDeviceBuffersT<double>;
+using BatchedMolecularDeviceBuffersSingle   = BatchedMolecularDeviceBuffersT<float>;
+using BatchedMolecular3DDeviceBuffers       = BatchedMolecular3DDeviceBuffersT<double>;
+using BatchedMolecular3DDeviceBuffersSingle = BatchedMolecular3DDeviceBuffersT<float>;
 }  // namespace DistGeom
 
 //! BFGS Batch Minimizer
@@ -59,8 +61,14 @@ template <typename real> struct BfgsBatchMinimizerT {
 
   //! Precision mode matching this minimizer's working scalar type.
   static constexpr PrecisionMode kPrecision = std::is_same_v<real, float> ? PrecisionMode::SINGLE : PrecisionMode::FULL;
+  //! Working scalar type.
+  using Scalar                              = real;
   //! MMFF device buffers consumed by the per-molecule kernels at this precision.
   using MMFFDeviceBuffers                   = MMFF::BatchedMolecularDeviceBuffersT<real, real, float>;
+  //! Distance-geometry device buffers consumed by the per-molecule kernels at this precision.
+  using DGDeviceBuffers                     = DistGeom::BatchedMolecularDeviceBuffersT<real>;
+  //! ETK device buffers consumed by the per-molecule kernels at this precision.
+  using ETKDeviceBuffers                    = DistGeom::BatchedMolecular3DDeviceBuffersT<real>;
 
   explicit BfgsBatchMinimizerT(int          dataDim    = 3,
                                DebugLevel   debugLevel = DebugLevel::NONE,
@@ -109,14 +117,13 @@ template <typename real> struct BfgsBatchMinimizerT {
   //! \param systemDevice ETK device buffers used by the per-molecule kernels.
   //! \param activeThisStage Optional per-system activity mask for staged minimization.
   //! \return `false` when all systems converged and `true` when at least one system needs another cycle.
-  bool minimizeWithETK(int                                        numIters,
-                       double                                     gradTol,
-                       const std::vector<int>&                    atomStartsHost,
-                       const AsyncDeviceVector<int>&              atomStarts,
-                       AsyncDeviceVector<double>&                 positions,
-                       DistGeom::BatchedMolecular3DDeviceBuffers& systemDevice,
-                       const uint8_t*                             activeThisStage = nullptr)
-    requires std::is_same_v<real, double>;
+  bool minimizeWithETK(int                           numIters,
+                       double                        gradTol,
+                       const std::vector<int>&       atomStartsHost,
+                       const AsyncDeviceVector<int>& atomStarts,
+                       AsyncDeviceVector<real>&      positions,
+                       ETKDeviceBuffers&             systemDevice,
+                       const uint8_t*                activeThisStage = nullptr);
 
   //! \brief Runs DG minimization through the per-molecule CUDA kernels.
   //! \param numIters Maximum number of BFGS iterations to perform.
@@ -129,16 +136,15 @@ template <typename real> struct BfgsBatchMinimizerT {
   //! \param fourthDimWeight Weight applied to the DG fourth-dimension term.
   //! \param activeThisStage Optional per-system activity mask for staged minimization.
   //! \return `false` when all systems converged and `true` when at least one system needs another cycle.
-  bool minimizeWithDG(int                                      numIters,
-                      double                                   gradTol,
-                      const std::vector<int>&                  atomStartsHost,
-                      const AsyncDeviceVector<int>&            atomStarts,
-                      AsyncDeviceVector<double>&               positions,
-                      DistGeom::BatchedMolecularDeviceBuffers& systemDevice,
-                      double                                   chiralWeight,
-                      double                                   fourthDimWeight,
-                      const uint8_t*                           activeThisStage = nullptr)
-    requires std::is_same_v<real, double>;
+  bool minimizeWithDG(int                           numIters,
+                      double                        gradTol,
+                      const std::vector<int>&       atomStartsHost,
+                      const AsyncDeviceVector<int>& atomStarts,
+                      AsyncDeviceVector<real>&      positions,
+                      DGDeviceBuffers&              systemDevice,
+                      double                        chiralWeight,
+                      double                        fourthDimWeight,
+                      const uint8_t*                activeThisStage = nullptr);
 
   //! \brief Resolves the effective backend for the provided batch.
   //! \param atomStartsHost Host-side atom offsets for the systems under consideration.

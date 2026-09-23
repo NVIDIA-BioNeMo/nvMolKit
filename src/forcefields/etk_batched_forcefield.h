@@ -71,9 +71,10 @@ class ETKBatchedForcefield final : public BatchedForcefield, public SinglePrecis
     return std::get<DistGeom::BatchedMolecular3DDeviceBuffers>(systemDevice_).contribs;
   }
 
-  //! \brief Visits uploaded ETK contribution buffers in their native precision.
-  template <typename Visitor> decltype(auto) visitContribs(Visitor&& visitor) const {
-    return std::visit([&](const auto& buffers) -> decltype(auto) { return visitor(buffers.contribs); }, systemDevice_);
+  //! \brief Returns the single-precision ETK contribution buffers for auxiliary kernels.
+  //! \pre This force field was constructed with PrecisionMode::SINGLE.
+  const DistGeom::Energy3DForceContribsDeviceSingle& singleContribs() const {
+    return std::get<DistGeom::BatchedMolecular3DDeviceBuffersSingle>(systemDevice_).contribs;
   }
 
  private:

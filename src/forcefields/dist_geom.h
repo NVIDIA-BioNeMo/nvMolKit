@@ -312,30 +312,30 @@ struct BatchedIndices3DDevice {
 //!   Finally, on reduction, each block does a local summation, then atomically adds to the output energy for the
 //!   molecule, using the energyBufferBlockIdxToBatchIdx to map the block to the molecule output index.
 template <typename ParameterScalar> struct BatchedMolecularDeviceBuffersT {
-  EnergyForceContribsDeviceT<ParameterScalar> contribs;
+  EnergyForceContribsDeviceT<ParameterScalar>  contribs;
   //! Size n_molecules
-  BatchedIndicesDevice                        indices;
+  BatchedIndicesDevice                         indices;
   //! Size total num positions of all molecules
-  nvMolKit::AsyncDeviceVector<double>         grad;
+  nvMolKit::AsyncDeviceVector<ParameterScalar> grad;
   //! Variable size - max terms in each molecule concatenated.
   //! Each molecule has an energy buffer to add to and reduce to energyOuts.
-  nvMolKit::AsyncDeviceVector<double>         energyBuffer;
+  nvMolKit::AsyncDeviceVector<ParameterScalar> energyBuffer;
   //! Size n_molecules
-  nvMolKit::AsyncDeviceVector<double>         energyOuts;
+  nvMolKit::AsyncDeviceVector<ParameterScalar> energyOuts;
   //! Dimension of all molecules in the batch (3 or 4)
-  int                                         dimension = 3;
+  int                                          dimension = 3;
 };
 
 template <typename ParameterScalar> struct BatchedMolecular3DDeviceBuffersT {
   Energy3DForceContribsDeviceT<ParameterScalar> contribs;
   BatchedIndices3DDevice                        indices;
   //! Size total num positions of all molecules
-  nvMolKit::AsyncDeviceVector<double>           grad;
+  nvMolKit::AsyncDeviceVector<ParameterScalar>  grad;
   //! Variable size - max terms in each molecule concatenated.
   //! Each molecule has an energy buffer to add to and reduce to energyOuts.
-  nvMolKit::AsyncDeviceVector<double>           energyBuffer;
+  nvMolKit::AsyncDeviceVector<ParameterScalar>  energyBuffer;
   //! Size n_molecules
-  nvMolKit::AsyncDeviceVector<double>           energyOuts;
+  nvMolKit::AsyncDeviceVector<ParameterScalar>  energyOuts;
 };
 
 using BatchedMolecularDeviceBuffers         = BatchedMolecularDeviceBuffersT<double>;

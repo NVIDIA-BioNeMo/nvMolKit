@@ -74,19 +74,21 @@ class DistGeomMinimizeStage : public ETKDGStage {
     executeImpl(ctx, chiralWeight_, fourthDimWeight_, maxIters_, checkEnergy_);
   }
 
-  nvMolKit::DistGeom::BatchedMolecularSystemHost    molSystemHost;
-  nvMolKit::DistGeom::BatchedMolecularDeviceBuffers molSystemDevice;
-  BatchedForcefieldMetadata                         metadata_;
-  AsyncDeviceVector<double>                         grad_;
-  AsyncDeviceVector<double>                         energyOuts_;
-  const RDKit::DGeomHelpers::EmbedParameters&       embedParam_;
-  BfgsBatchMinimizer&                               minimizer_;
-  double                                            chiralWeight_;
-  double                                            fourthDimWeight_;
-  int                                               maxIters_;
-  bool                                              checkEnergy_;
-  std::string                                       stageName_;
-  cudaStream_t                                      stream_;
+  nvMolKit::DistGeom::BatchedMolecularSystemHost          molSystemHost;
+  nvMolKit::DistGeom::BatchedMolecularDeviceBuffers       molSystemDevice;
+  nvMolKit::DistGeom::BatchedMolecularDeviceBuffersSingle molSystemDeviceSingle;
+  BatchedForcefieldMetadata                               metadata_;
+  AsyncDeviceVector<double>                               grad_;
+  AsyncDeviceVector<double>                               energyOuts_;
+  AsyncDeviceVector<float>                                positionsSingle_;
+  const RDKit::DGeomHelpers::EmbedParameters&             embedParam_;
+  BfgsBatchMinimizer&                                     minimizer_;
+  double                                                  chiralWeight_;
+  double                                                  fourthDimWeight_;
+  int                                                     maxIters_;
+  bool                                                    checkEnergy_;
+  std::string                                             stageName_;
+  cudaStream_t                                            stream_;
 };
 
 //! Wrapper stage for distance geometry minimization
