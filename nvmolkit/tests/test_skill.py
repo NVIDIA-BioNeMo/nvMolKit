@@ -45,7 +45,13 @@ def _extract_python_blocks(skill_path: Path) -> list[str]:
 
 @pytest.mark.parametrize(
     "snippet_idx, snippet",
-    list(enumerate(_extract_python_blocks(SKILL_PATH))),
+    list(
+        enumerate(
+            snippet
+            for path in [SKILL_PATH, *sorted((SKILL_PATH.parent / "references").glob("*.md"))]
+            for snippet in _extract_python_blocks(path)
+        )
+    ),
 )
 def test_skill_snippet_runs(snippet_idx: int, snippet: str, tmp_path: Path) -> None:
     script_path = tmp_path / f"snippet_{snippet_idx}.py"
