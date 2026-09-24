@@ -23,7 +23,12 @@ from rdkit.ForceField import rdForceField as _rdForceField  # noqa: F401
 from rdkit.Geometry import Point3D
 
 from nvmolkit.batchedForcefield import MMFFBatchedForcefield, UFFBatchedForcefield
-from nvmolkit.types import HardwareOptions
+from nvmolkit.types import HardwareOptions, PrecisionMode
+
+
+@pytest.fixture(params=[PrecisionMode.FULL, PrecisionMode.SINGLE], ids=["full", "single"])
+def precision(request):
+    return request.param
 
 
 def load_reference_mol():
@@ -159,12 +164,14 @@ def get_mmff_reference_energy_and_grad(
     return ff.CalcEnergy(), list(ff.CalcGrad())
 
 
-def assert_energy_and_gradient_close(got_energy, want_energy, got_grad, want_grad):
-    assert got_energy == pytest.approx(want_energy, rel=1e-5, abs=1e-5)
-    assert got_grad == pytest.approx(want_grad, rel=1e-4, abs=1e-4)
+def assert_energy_and_gradient_close(got_energy, want_energy, got_grad, want_grad, precision=PrecisionMode.FULL):
+    energy_tol = 1e-5
+    gradient_tol = 5e-3 if precision == PrecisionMode.SINGLE else 1e-4
+    assert got_energy == pytest.approx(want_energy, rel=energy_tol, abs=energy_tol)
+    assert got_grad == pytest.approx(want_grad, rel=gradient_tol, abs=gradient_tol)
 
 
-def _assert_batched_compute_matches_rdkit_mmff(mol_specs):
+def _assert_batched_compute_matches_rdkit_mmff(mol_specs, precision):
     """Verify batched MMFF energies and gradients against RDKit.
 
     Build a single MMFFBatchedForcefield from ``mol_specs`` and compare each
@@ -197,6 +204,7 @@ def _assert_batched_compute_matches_rdkit_mmff(mol_specs):
         properties=properties,
         nonBondedThreshold=thresholds,
         ignoreInterfragInteractions=interfrags,
+        precision=precision,
     )
     for mol_idx, spec in enumerate(mol_specs):
         if spec.get("configure_batch") is not None:
@@ -219,7 +227,11 @@ def _assert_batched_compute_matches_rdkit_mmff(mol_specs):
 
     for mol_idx in range(len(mol_specs)):
         assert_energy_and_gradient_close(
-            got_energies[mol_idx][0], want_energies[mol_idx], got_grads[mol_idx][0], want_grads[mol_idx]
+            got_energies[mol_idx][0],
+            want_energies[mol_idx],
+            got_grads[mol_idx][0],
+            want_grads[mol_idx],
+            precision,
         )
 
     if not any(spec.get("configure_batch") is not None for spec in mol_specs):
@@ -230,6 +242,7 @@ def _assert_batched_compute_matches_rdkit_mmff(mol_specs):
         properties=properties,
         nonBondedThreshold=thresholds,
         ignoreInterfragInteractions=interfrags,
+        precision=precision,
     )
     unconstrained_energies = unconstrained_forcefield.compute_energy()
     unconstrained_grads = unconstrained_forcefield.compute_gradients()
@@ -266,7 +279,7 @@ def _assert_batched_compute_matches_rdkit_mmff(mol_specs):
         ), f"mol {mol_idx}: constraint had no observable effect on gradient"
 
 
-def test_mmff_batched_forcefield_properties_match_rdkit():
+def test_mmff_batched_forcefield_properties_match_rdkit(precision):
     """Test varied per-molecule property configurations.
 
     Cover defaults, MMFF variants, dielectric models, term toggles, and
@@ -295,11 +308,12 @@ def test_mmff_batched_forcefield_properties_match_rdkit():
                 "non_bonded_threshold": 25.0,
                 "ignore_interfrag_interactions": False,
             },
-        ]
+        ],
+        precision,
     )
 
 
-def test_mmff_batched_forcefield_reads_externally_configured_properties():
+def test_mmff_batched_forcefield_reads_externally_configured_properties(precision):
     """Test externally configured RDKit MMFF properties.
 
     Configure properties via raw ``rdForceFieldHelpers.MMFFGetMoleculeProperties``
@@ -316,23 +330,23 @@ def test_mmff_batched_forcefield_reads_externally_configured_properties():
     props.SetMMFFTorsionTerm(False)
     props.SetMMFFDielectricConstant(2.5)
 
-    forcefield = MMFFBatchedForcefield(clone_mols([mol]), properties=[props])
+    forcefield = MMFFBatchedForcefield(clone_mols([mol]), properties=[props], precision=precision)
     got_energy = forcefield.compute_energy()[0][0]
     got_grad = forcefield.compute_gradients()[0][0]
 
     rd_ff = rdForceFieldHelpers.MMFFGetMoleculeForceField(mol, props)
     rd_energy = rd_ff.CalcEnergy()
     rd_grad = list(rd_ff.CalcGrad())
-    assert_energy_and_gradient_close(got_energy, rd_energy, got_grad, rd_grad)
+    assert_energy_and_gradient_close(got_energy, rd_energy, got_grad, rd_grad, precision)
 
-    default_forcefield = MMFFBatchedForcefield(clone_mols([mol]))
+    default_forcefield = MMFFBatchedForcefield(clone_mols([mol]), precision=precision)
     default_energy = default_forcefield.compute_energy()[0][0]
     assert abs(got_energy - default_energy) > 1e-6, (
         "term toggles on externally-configured MMFFMolProperties had no observable effect on the batched energy"
     )
 
 
-def test_mmff_batched_forcefield_constraints_match_rdkit():
+def test_mmff_batched_forcefield_constraints_match_rdkit(precision):
     """Test all five MMFF constraint types against RDKit.
 
     Apply one constraint type per molecule, with some molecules also carrying
@@ -367,11 +381,12 @@ def test_mmff_batched_forcefield_constraints_match_rdkit():
                 "configure_batch": lambda element: element.add_torsion_constraint(0, 1, 2, 3, True, 15.0, 30.0, 12.0),
                 "configure_rdkit": lambda ff: ff.MMFFAddTorsionConstraint(0, 1, 2, 3, True, 15.0, 30.0, 12.0),
             },
-        ]
+        ],
+        precision,
     )
 
 
-def test_mmff_batched_forcefield_multi_conformer_matches_rdkit():
+def test_mmff_batched_forcefield_multi_conformer_matches_rdkit(precision):
     mols = [
         make_embedded_mol("CCO", num_confs=2),
         make_embedded_mol("CCCO", num_confs=5),
@@ -379,7 +394,7 @@ def test_mmff_batched_forcefield_multi_conformer_matches_rdkit():
     ]
     conf_counts = [mol.GetNumConformers() for mol in mols]
     ff_mols = clone_mols(mols)
-    ff = MMFFBatchedForcefield(ff_mols)
+    ff = MMFFBatchedForcefield(ff_mols, precision=precision)
 
     opt_energies, converged = ff.minimize()
 
@@ -396,7 +411,8 @@ def test_mmff_batched_forcefield_multi_conformer_matches_rdkit():
             ref_ff = make_rdkit_mmff_forcefield(ref_mol, conf_id=conf.GetId())
             ref_ff.Minimize()
             want_energy = ref_ff.CalcEnergy()
-            assert opt_energies[mol_idx][conf_idx] == pytest.approx(want_energy, rel=1e-5, abs=1e-5)
+            tolerance = 1e-4 if precision == PrecisionMode.SINGLE else 1e-5
+            assert opt_energies[mol_idx][conf_idx] == pytest.approx(want_energy, rel=tolerance, abs=tolerance)
 
         for conf_idx, conf in enumerate(ff_mols[mol_idx].GetConformers()):
             ref_conf = mols[mol_idx].GetConformer(conf.GetId())
@@ -514,16 +530,29 @@ _MMFF_BATCH_CONSTRAINT_SPECS = [
 ]
 
 
-def _build_constrained_mmff_batch(specs=_MMFF_BATCH_CONSTRAINT_SPECS, hardwareOptions=None):
+def _build_constrained_mmff_batch(
+    specs=_MMFF_BATCH_CONSTRAINT_SPECS, hardwareOptions=None, precision=PrecisionMode.FULL
+):
     mols = [perturb_conformers(make_embedded_mol(s["smiles"], num_confs=s["num_confs"])) for s in specs]
     ff_mols = clone_mols(mols)
-    ff = MMFFBatchedForcefield(ff_mols, hardwareOptions=hardwareOptions)
+    ff = MMFFBatchedForcefield(ff_mols, hardwareOptions=hardwareOptions, precision=precision)
     for idx, spec in enumerate(specs):
         spec["apply"](ff[idx])
     return mols, ff_mols, ff
 
 
-def _assert_batched_minimize_matches_rdkit(specs, mols, opt_energies, converged, make_ref_ff):
+def _build_stable_hardware_options_batch(forcefield_type, hardware_options, precision):
+    source_mols = [
+        make_embedded_mol("CCO", num_confs=2),
+        make_embedded_mol("CCCO", num_confs=2),
+        make_embedded_mol("c1ccccc1", num_confs=2),
+    ]
+    return forcefield_type(clone_mols(source_mols), hardwareOptions=hardware_options, precision=precision)
+
+
+def _assert_batched_minimize_matches_rdkit(
+    specs, mols, opt_energies, converged, make_ref_ff, precision=PrecisionMode.FULL
+):
     """Compare nvMolKit and RDKit minimization results.
 
     Compare each molecule and conformer while each molecule carries a different
@@ -539,25 +568,28 @@ def _assert_batched_minimize_matches_rdkit(specs, mols, opt_energies, converged,
             spec["apply_rdkit"](ref_ff)
             ref_ff.Minimize(maxIts=500)
             want_energy = ref_ff.CalcEnergy()
-            assert opt_energies[mol_idx][conf_idx] == pytest.approx(want_energy, rel=1e-3, abs=1e-3)
+            rel_tol, abs_tol = (2e-2, 1e-1) if precision == PrecisionMode.SINGLE else (1e-3, 1e-3)
+            assert opt_energies[mol_idx][conf_idx] == pytest.approx(want_energy, rel=rel_tol, abs=abs_tol)
 
 
-def test_mmff_batched_minimize_with_constraints_batch_matches_rdkit():
+def test_mmff_batched_minimize_with_constraints_batch_matches_rdkit(precision):
     """Test constrained batch minimization against RDKit.
 
     Use different constraint types, molecule sizes, and conformer counts, then
     compare each molecule and conformer energy to RDKit with the same constraint.
     """
-    mols, _, ff = _build_constrained_mmff_batch()
+    mols, _, ff = _build_constrained_mmff_batch(precision=precision)
     opt_energies, converged = ff.minimize(maxIters=500)
 
     def make_ref(mol, conf_id):
         return make_rdkit_mmff_forcefield(mol, conf_id=conf_id)
 
-    _assert_batched_minimize_matches_rdkit(_MMFF_BATCH_CONSTRAINT_SPECS, mols, opt_energies, converged, make_ref)
+    _assert_batched_minimize_matches_rdkit(
+        _MMFF_BATCH_CONSTRAINT_SPECS, mols, opt_energies, converged, make_ref, precision
+    )
 
 
-def test_mmff_batched_minimize_respects_maxiters_and_forcetol():
+def test_mmff_batched_minimize_respects_maxiters_and_forcetol(precision):
     """Test that maxIters and forceTol are passed through.
 
     A single-iteration minimization should not converge and should leave energies
@@ -567,14 +599,14 @@ def test_mmff_batched_minimize_respects_maxiters_and_forcetol():
         perturb_conformers(make_embedded_mol("CCCO", num_confs=2)),
         perturb_conformers(make_embedded_mol("c1ccccc1CCO", num_confs=2)),
     ]
-    starting_energies = MMFFBatchedForcefield(clone_mols(perturbed_mols)).compute_energy()
+    starting_energies = MMFFBatchedForcefield(clone_mols(perturbed_mols), precision=precision).compute_energy()
 
-    tight_ff = MMFFBatchedForcefield(clone_mols(perturbed_mols))
+    tight_ff = MMFFBatchedForcefield(clone_mols(perturbed_mols), precision=precision)
     tight_energies, tight_converged = tight_ff.minimize(maxIters=1, forceTol=1e-12)
     for mol_converged in tight_converged:
         assert not any(mol_converged), "1 iteration at 1e-12 forceTol should not converge"
 
-    loose_ff = MMFFBatchedForcefield(clone_mols(perturbed_mols))
+    loose_ff = MMFFBatchedForcefield(clone_mols(perturbed_mols), precision=precision)
     loose_energies, loose_converged = loose_ff.minimize(maxIters=500, forceTol=1e-4)
     for mol_converged in loose_converged:
         assert all(mol_converged), "500 iterations at 1e-4 forceTol should converge"
@@ -591,13 +623,12 @@ def test_mmff_batched_minimize_respects_maxiters_and_forcetol():
 
 @pytest.mark.parametrize("batch_size", [0, 2])
 @pytest.mark.parametrize("batches_per_gpu", [1, 3])
-def test_mmff_batched_minimize_single_gpu_hardware_options_matches_default(batch_size, batches_per_gpu):
-    """HardwareOptions must produce same results as default on a varied constrained batch."""
-    _, _, default_ff = _build_constrained_mmff_batch()
+def test_mmff_batched_minimize_single_gpu_hardware_options_matches_default(batch_size, batches_per_gpu, precision):
+    default_ff = _build_stable_hardware_options_batch(MMFFBatchedForcefield, None, precision)
     default_energies, default_converged = default_ff.minimize(maxIters=500)
 
     hw_opts = HardwareOptions(gpuIds=[0], batchSize=batch_size, batchesPerGpu=batches_per_gpu)
-    _, _, tuned_ff = _build_constrained_mmff_batch(hardwareOptions=hw_opts)
+    tuned_ff = _build_stable_hardware_options_batch(MMFFBatchedForcefield, hw_opts, precision)
     tuned_energies, tuned_converged = tuned_ff.minimize(maxIters=500)
 
     assert tuned_converged == default_converged
@@ -608,14 +639,14 @@ def test_mmff_batched_minimize_single_gpu_hardware_options_matches_default(batch
             )
 
 
-def test_mmff_batched_minimize_multi_gpu_matches_single_gpu():
+def test_mmff_batched_minimize_multi_gpu_matches_single_gpu(precision):
     if torch.cuda.device_count() < 2:
         pytest.skip("Test requires at least 2 GPUs")
 
-    _, _, single_ff = _build_constrained_mmff_batch(hardwareOptions=HardwareOptions(gpuIds=[0]))
+    _, _, single_ff = _build_constrained_mmff_batch(hardwareOptions=HardwareOptions(gpuIds=[0]), precision=precision)
     single_energies, single_converged = single_ff.minimize(maxIters=500)
 
-    _, _, multi_ff = _build_constrained_mmff_batch(hardwareOptions=HardwareOptions(gpuIds=[0, 1]))
+    _, _, multi_ff = _build_constrained_mmff_batch(hardwareOptions=HardwareOptions(gpuIds=[0, 1]), precision=precision)
     multi_energies, multi_converged = multi_ff.minimize(maxIters=500)
 
     assert multi_converged == single_converged
