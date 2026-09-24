@@ -882,7 +882,7 @@ _UFF_BATCH_CONSTRAINT_SPECS = [
     },
     {
         "smiles": "CCCCCCO",
-        "num_confs": 1,
+        "num_confs": 2,
         "apply": lambda element: element.add_angle_constraint(0, 1, 2, True, -5.0, 5.0, 30.0),
         "apply_rdkit": lambda ff: ff.UFFAddAngleConstraint(0, 1, 2, True, -5.0, 5.0, 30.0),
     },
@@ -894,16 +894,30 @@ _UFF_BATCH_CONSTRAINT_SPECS = [
     },
     {
         "smiles": "CCCC",
-        "num_confs": 1,
+        "num_confs": 2,
         "apply": lambda element: element.add_torsion_constraint(0, 1, 2, 3, True, -10.0, 10.0, 15.0),
         "apply_rdkit": lambda ff: ff.UFFAddTorsionConstraint(0, 1, 2, 3, True, -10.0, 10.0, 15.0),
     },
 ]
 
 
-def _build_constrained_uff_batch(
-    specs=_UFF_BATCH_CONSTRAINT_SPECS, hardwareOptions=None, precision=PrecisionMode.FULL
-):
+def _uff_batch_constraint_specs(precision):
+    """Constraint specs for ``precision``.
+
+    Single precision settles the extra perturbed angle- and torsion-constrained conformers in
+    different basins than RDKit, so those molecules keep one conformer there.
+    """
+    if precision == PrecisionMode.FULL:
+        return _UFF_BATCH_CONSTRAINT_SPECS
+    return [
+        {**spec, "num_confs": 1} if spec["smiles"] in ("CCCCCCO", "CCCC") else spec
+        for spec in _UFF_BATCH_CONSTRAINT_SPECS
+    ]
+
+
+def _build_constrained_uff_batch(specs=None, hardwareOptions=None, precision=PrecisionMode.FULL):
+    if specs is None:
+        specs = _uff_batch_constraint_specs(precision)
     mols = [perturb_conformers(make_embedded_mol(s["smiles"], num_confs=s["num_confs"])) for s in specs]
     ff_mols = clone_mols(mols)
     ff = UFFBatchedForcefield(ff_mols, hardwareOptions=hardwareOptions, precision=precision)
@@ -922,19 +936,26 @@ def test_uff_batched_minimize_with_constraints_batch_matches_rdkit(precision):
         return ref_ff
 
     _assert_batched_minimize_matches_rdkit(
-        _UFF_BATCH_CONSTRAINT_SPECS, mols, opt_energies, converged, make_ref, precision
+        _uff_batch_constraint_specs(precision), mols, opt_energies, converged, make_ref, precision
     )
 
 
 @pytest.mark.parametrize("batch_size", [0, 2])
 @pytest.mark.parametrize("batches_per_gpu", [1, 3])
 def test_uff_batched_minimize_single_gpu_hardware_options_matches_default(batch_size, batches_per_gpu, precision):
-    # Isolate scheduling from optimizer basin selection.
-    default_ff = _build_stable_hardware_options_batch(UFFBatchedForcefield, None, precision)
-    default_energies, default_converged = default_ff.minimize(maxIters=500)
+    """HardwareOptions must produce same results as default on a varied constrained batch.
 
+    Single precision uses an unconstrained batch that isolates scheduling from basin selection;
+    see the MMFF variant of this test.
+    """
     hw_opts = HardwareOptions(gpuIds=[0], batchSize=batch_size, batchesPerGpu=batches_per_gpu)
-    tuned_ff = _build_stable_hardware_options_batch(UFFBatchedForcefield, hw_opts, precision)
+    if precision == PrecisionMode.FULL:
+        _, _, default_ff = _build_constrained_uff_batch()
+        _, _, tuned_ff = _build_constrained_uff_batch(hardwareOptions=hw_opts)
+    else:
+        default_ff = _build_stable_hardware_options_batch(UFFBatchedForcefield, None, precision)
+        tuned_ff = _build_stable_hardware_options_batch(UFFBatchedForcefield, hw_opts, precision)
+    default_energies, default_converged = default_ff.minimize(maxIters=500)
     tuned_energies, tuned_converged = tuned_ff.minimize(maxIters=500)
 
     assert tuned_converged == default_converged
