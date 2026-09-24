@@ -624,11 +624,21 @@ def test_mmff_batched_minimize_respects_maxiters_and_forcetol(precision):
 @pytest.mark.parametrize("batch_size", [0, 2])
 @pytest.mark.parametrize("batches_per_gpu", [1, 3])
 def test_mmff_batched_minimize_single_gpu_hardware_options_matches_default(batch_size, batches_per_gpu, precision):
-    default_ff = _build_stable_hardware_options_batch(MMFFBatchedForcefield, None, precision)
-    default_energies, default_converged = default_ff.minimize(maxIters=500)
+    """HardwareOptions must produce same results as default on a varied constrained batch.
 
+    The constrained batch's uneven conformer counts make ``batchSize=2`` split a molecule's
+    conformers across worker batches. Single precision can settle those perturbed, constrained
+    conformers in different basins when the batch layout changes, so it uses an unconstrained
+    batch that isolates scheduling from basin selection.
+    """
     hw_opts = HardwareOptions(gpuIds=[0], batchSize=batch_size, batchesPerGpu=batches_per_gpu)
-    tuned_ff = _build_stable_hardware_options_batch(MMFFBatchedForcefield, hw_opts, precision)
+    if precision == PrecisionMode.FULL:
+        _, _, default_ff = _build_constrained_mmff_batch()
+        _, _, tuned_ff = _build_constrained_mmff_batch(hardwareOptions=hw_opts)
+    else:
+        default_ff = _build_stable_hardware_options_batch(MMFFBatchedForcefield, None, precision)
+        tuned_ff = _build_stable_hardware_options_batch(MMFFBatchedForcefield, hw_opts, precision)
+    default_energies, default_converged = default_ff.minimize(maxIters=500)
     tuned_energies, tuned_converged = tuned_ff.minimize(maxIters=500)
 
     assert tuned_converged == default_converged
