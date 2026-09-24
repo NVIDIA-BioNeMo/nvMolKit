@@ -38,7 +38,8 @@ template <typename Real> struct Property3DBatchResult {
  * @param mols            Non-null molecules. Output rows follow input-molecule order, then
  *                        conformer order (or the row order of @p coordinates).
  * @param properties      Non-empty, duplicate-free property selection.
- * @param useAtomicMasses Weight atoms by mass (RDKit's default) instead of unit weights.
+ * @param useAtomicMasses Weight atoms by mass (RDKit's default) instead of unit weights. This does
+ *                        not affect SpherocityIndex, which RDKit defines as unweighted.
  * @param stream          CUDA stream for all transfers and computation.
  * @param coordinates     Optional device coordinates; `coordinates->nMols` must equal @c mols.size().
  * @throws std::invalid_argument on null molecules, an invalid property selection, or a molecule
