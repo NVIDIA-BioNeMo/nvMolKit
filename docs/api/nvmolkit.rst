@@ -160,6 +160,9 @@ Conformer RMSD
    descriptors3d.Property3D
    descriptors3d.Device3DPropertyResult
    descriptors3d.Dense3DPropertyResult
+   descriptors3d.Property3DOptions
+   descriptors3d.MomentOptions
+   descriptors3d.WhimOptions
 
 Torsion Fingerprint Deviation (TFD)
 -----------------------------------

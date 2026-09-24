@@ -38,19 +38,23 @@ template <typename Real> struct Property3DBatchResult {
  * @param mols            Non-null molecules. Output rows follow input-molecule order, then
  *                        conformer order (or the row order of @p coordinates).
  * @param properties      Non-empty, duplicate-free property selection.
- * @param useAtomicMasses Weight atoms by mass (RDKit's default) instead of unit weights. This does
- *                        not affect SpherocityIndex, which RDKit defines as unweighted.
+ * @param options         Per-family options; see Property3DOptions.
  * @param stream          CUDA stream for all transfers and computation.
  * @param coordinates     Optional device coordinates; `coordinates->nMols` must equal @c mols.size().
- * @throws std::invalid_argument on null molecules, an invalid property selection, or a molecule
- *                               count mismatch with @p coordinates.
+ *                        Device coordinate rows are treated as three-dimensional for PBF; molecule
+ *                        conformers keep their RDKit is3D flag.
+ * @param preprocessingThreads CPU threads for coordinate and atom-weight extraction; -1 uses every
+ *                        available OpenMP thread.
+ * @throws std::invalid_argument on null molecules, an invalid property selection, options or thread
+ *                               count, or a molecule count mismatch with @p coordinates.
  */
 template <typename Real>
 Property3DBatchResult<Real> calc3DProperties(const std::vector<const RDKit::ROMol*>& mols,
                                              const std::vector<Property3D>&          properties,
-                                             bool                                    useAtomicMasses,
+                                             const Property3DOptions&                options,
                                              cudaStream_t                            stream,
-                                             const DeviceCoordView*                  coordinates = nullptr);
+                                             const DeviceCoordView*                  coordinates          = nullptr,
+                                             int                                     preprocessingThreads = -1);
 
 }  // namespace nvMolKit
 

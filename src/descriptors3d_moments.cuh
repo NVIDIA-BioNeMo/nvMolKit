@@ -164,6 +164,9 @@ __device__ __forceinline__ Real computeMomentProperty(const Property3D property,
       gyrationMoments(state, smallest, middle, largest);
       return largest < Real(1e-4) ? Real(0) : Real(3) * smallest / (smallest + middle + largest);
     }
+    case Property3D::PBF:
+    case Property3D::WHIM:
+      return static_cast<Real>(nan(""));
   }
   return static_cast<Real>(nan(""));
 }

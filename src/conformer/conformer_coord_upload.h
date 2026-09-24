@@ -35,13 +35,16 @@ namespace nvMolKit {
  * without conformers contribute no rows but still count toward @c nMols. @c confIndices holds the
  * per-molecule conformer position (0, 1, ...). @c energies and @c converged are left empty.
  *
- * Coordinates are extracted into pageable host memory in parallel across molecules and copied on
- * @p stream. The result is bound to @p stream and to the current CUDA device.
+ * Coordinates are extracted into pageable host memory across @p numThreads CPU threads (-1 uses every
+ * available OpenMP thread) and copied on @p stream. The result is bound to @p stream and to the current
+ * CUDA device.
  *
- * @throws std::invalid_argument if any molecule pointer is null.
+ * @throws std::invalid_argument if any molecule pointer is null or @p numThreads is 0 or below -1.
  * @throws std::overflow_error   if the total atom count across all conformers exceeds int32 range.
  */
-DeviceCoordResult uploadConformerCoordinates(const std::vector<const RDKit::ROMol*>& mols, cudaStream_t stream);
+DeviceCoordResult uploadConformerCoordinates(const std::vector<const RDKit::ROMol*>& mols,
+                                             cudaStream_t                            stream,
+                                             int                                     numThreads = -1);
 
 }  // namespace nvMolKit
 

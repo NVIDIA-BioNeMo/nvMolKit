@@ -37,4 +37,4 @@ add_library(conformer_coord_upload conformer_coord_upload.cpp)
 target_link_libraries(
   conformer_coord_upload
   PUBLIC conformer_types device_vector
-  PRIVATE cuda_error_check ${RDKit_LIBS} OpenMP::OpenMP_CXX)
+  PRIVATE cuda_error_check openmp_helpers ${RDKit_LIBS} OpenMP::OpenMP_CXX)
