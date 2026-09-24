@@ -25,6 +25,7 @@ from nvmolkit.types import (
     Device3DResult,
     FireOptions,
     HardwareOptions,
+    PrecisionMode,
 )
 
 
@@ -115,6 +116,10 @@ def test_fire_options_exposes_native_defaults_and_mutators():
     assert options.useMass is True
     assert math.isclose(native.gradTol, 1e-3)
     assert native.useMass is True
+
+
+def test_precision_modes_are_distinct():
+    assert PrecisionMode.FULL != PrecisionMode.SINGLE
 
 
 def test_device_3d_result_num_conformers_matches_atom_starts():

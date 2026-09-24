@@ -25,7 +25,13 @@ from rdkit.Geometry import Point3D
 
 import nvmolkit.mmffOptimization as nvmolkit_mmff
 from nvmolkit.embedMolecules import EmbedMolecules
-from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions, HardwareOptions
+from nvmolkit.types import (
+    CoordinateOutput,
+    Device3DResult,
+    FireOptions,
+    HardwareOptions,
+    PrecisionMode,
+)
 
 
 @pytest.fixture
@@ -85,6 +91,11 @@ def create_hard_copy_mols(molecules):
     return copied_mols
 
 
+@pytest.fixture(params=[PrecisionMode.FULL, PrecisionMode.SINGLE], ids=["full", "single"])
+def precision(request):
+    return request.param
+
+
 def make_fragmented_mol():
     mol = Chem.AddHs(Chem.MolFromSmiles("CC.CC"))
     params = ETKDGv3()
@@ -140,7 +151,7 @@ def calculate_rdkit_mmff_energies(
         ignoreInterfragInteractions: Whether to omit interactions between fragments.
 
     Returns:
-        list: List of lists containing energies for each molecule's conformers
+        List of lists containing energies for each molecule's conformers.
     """
     all_energies = []
 
@@ -172,7 +183,7 @@ def calculate_rdkit_mmff_energies(
     return all_energies
 
 
-def test_mmff_optimization_serial_vs_rdkit(mmff_test_mols):
+def test_mmff_optimization_serial_vs_rdkit(mmff_test_mols, precision):
     """Test nvMolKit MMFF optimization one molecule at a time against RDKit reference.
 
     This test compares the energy results when optimizing molecules individually
@@ -196,6 +207,7 @@ def test_mmff_optimization_serial_vs_rdkit(mmff_test_mols):
         mol_energies = nvmolkit_mmff.MMFFOptimizeMoleculesConfs(
             [mol],
             maxIters=200,
+            precision=precision,
         )
         nvmolkit_energies.extend(mol_energies)
 
@@ -225,7 +237,7 @@ def test_mmff_optimization_serial_vs_rdkit(mmff_test_mols):
 @pytest.mark.parametrize("gpu_ids", [[0, 1], [0], [1]])
 @pytest.mark.parametrize("batchesize", [0, 2, 5])
 @pytest.mark.parametrize("batches_per_gpu", [1, 3])
-def test_mmff_optimization_batch_vs_rdkit(mmff_test_mols, gpu_ids, batchesize, batches_per_gpu):
+def test_mmff_optimization_batch_vs_rdkit(mmff_test_mols, gpu_ids, batchesize, batches_per_gpu, precision):
     """Test nvMolKit MMFF batch optimization against RDKit reference.
 
     This test compares the energy results when optimizing all molecules together
@@ -249,7 +261,7 @@ def test_mmff_optimization_batch_vs_rdkit(mmff_test_mols, gpu_ids, batchesize, b
 
     # Get nvMolKit energies in batch mode (all molecules at once)
     nvmolkit_energies = nvmolkit_mmff.MMFFOptimizeMoleculesConfs(
-        nvmolkit_mols, maxIters=200, hardwareOptions=hardware_options
+        nvmolkit_mols, maxIters=200, hardwareOptions=hardware_options, precision=precision
     )
 
     # Verify we have the same number of molecules
@@ -275,14 +287,14 @@ def test_mmff_optimization_batch_vs_rdkit(mmff_test_mols, gpu_ids, batchesize, b
             )
 
 
-def test_mmff_optimization_empty_input():
+def test_mmff_optimization_empty_input(precision):
     """Test nvMolKit MMFF optimization with empty input."""
-    result = nvmolkit_mmff.MMFFOptimizeMoleculesConfs([])
+    result = nvmolkit_mmff.MMFFOptimizeMoleculesConfs([], precision=precision)
     assert result == []
 
 
 @pytest.mark.parametrize("backend", ["BATCHED", "PER_MOL"])
-def test_mmff_optimization_fire_matches_rdkit(mmff_test_mols, backend):
+def test_mmff_optimization_fire_matches_rdkit(mmff_test_mols, backend, precision):
     starting_mols = create_hard_copy_mols(mmff_test_mols[:2])
     rdkit_mols = create_hard_copy_mols(mmff_test_mols[:2])
     nvmolkit_mols = create_hard_copy_mols(mmff_test_mols[:2])
@@ -303,6 +315,7 @@ def test_mmff_optimization_fire_matches_rdkit(mmff_test_mols, backend):
         minimizerKind="FIRE",
         backend=backend,
         fireOptions=options,
+        precision=precision,
     )
 
     assert len(nvmolkit_energies) == len(rdkit_energies)
@@ -344,7 +357,7 @@ def test_mmff_optimization_invalid_input():
     assert exc_info.value.args[1] == {"none": [0], "no_params": []}
 
 
-def test_mmff_optimization_allows_large_molecule_interleaved():
+def test_mmff_optimization_allows_large_molecule_interleaved(precision):
     """Ensure a large (>256 atoms) molecule in batch is accepted and optimized."""
     small1 = Chem.AddHs(Chem.MolFromSmiles("CCCCCC"), explicitOnly=False)
     small2 = Chem.AddHs(Chem.MolFromSmiles("CCC"), explicitOnly=False)
@@ -359,7 +372,7 @@ def test_mmff_optimization_allows_large_molecule_interleaved():
     rdkit_mols = create_hard_copy_mols(mols)
     rdkit_energies = calculate_rdkit_mmff_energies(rdkit_mols, maxIters=10)
 
-    energies = nvmolkit_mmff.MMFFOptimizeMoleculesConfs(mols, maxIters=10)
+    energies = nvmolkit_mmff.MMFFOptimizeMoleculesConfs(mols, maxIters=10, precision=precision)
     assert len(energies) == 3
 
     for mol_idx, (rdkit_mol_energies, nvmolkit_mol_energies) in enumerate(zip(rdkit_energies, energies)):
@@ -379,7 +392,7 @@ def test_mmff_optimization_allows_large_molecule_interleaved():
             )
 
 
-def test_mmff_optimization_custom_properties_vs_rdkit(mmff_test_mols):
+def test_mmff_optimization_custom_properties_vs_rdkit(mmff_test_mols, precision):
     custom_property_settings = {
         "dielectric_constant": 2.0,
         "dielectric_model": 2,
@@ -395,6 +408,7 @@ def test_mmff_optimization_custom_properties_vs_rdkit(mmff_test_mols):
             nvmolkit_mols_0,
             maxIters=0,
             properties=props,
+            precision=precision,
         )
         for mol_idx, (r, n) in enumerate(zip(rdkit_e0, nvmolkit_e0)):
             for conf_idx, (re, ne) in enumerate(zip(r, n)):
@@ -428,6 +442,7 @@ def test_mmff_optimization_custom_properties_vs_rdkit(mmff_test_mols):
         nvmolkit_mols,
         maxIters=100,
         properties=custom_props,
+        precision=precision,
     )
 
     assert len(rdkit_energies) == len(nvmolkit_energies)
@@ -443,7 +458,7 @@ def test_mmff_optimization_custom_properties_vs_rdkit(mmff_test_mols):
             )
 
 
-def test_mmff_optimization_per_molecule_properties_vs_rdkit(mmff_test_mols):
+def test_mmff_optimization_per_molecule_properties_vs_rdkit(mmff_test_mols, precision):
     mols = create_hard_copy_mols(mmff_test_mols[:2])
     rdkit_mols = create_hard_copy_mols(mols)
     nvmolkit_mols = create_hard_copy_mols(mols)
@@ -468,6 +483,7 @@ def test_mmff_optimization_per_molecule_properties_vs_rdkit(mmff_test_mols):
         nvmolkit_mols,
         maxIters=100,
         properties=properties,
+        precision=precision,
     )
 
     assert len(rdkit_energies) == len(nvmolkit_energies)
@@ -483,7 +499,7 @@ def test_mmff_optimization_per_molecule_properties_vs_rdkit(mmff_test_mols):
             )
 
 
-def test_mmff_optimization_per_molecule_thresholds_and_interfrag_vs_rdkit():
+def test_mmff_optimization_per_molecule_thresholds_and_interfrag_vs_rdkit(precision):
     mols = [make_fragmented_mol(), make_fragmented_mol()]
     rdkit_mols = create_hard_copy_mols(mols)
     nvmolkit_mols = create_hard_copy_mols(mols)
@@ -506,6 +522,7 @@ def test_mmff_optimization_per_molecule_thresholds_and_interfrag_vs_rdkit():
         properties=properties,
         nonBondedThreshold=non_bonded_thresholds,
         ignoreInterfragInteractions=ignore_interfrag_interactions,
+        precision=precision,
     )
 
     assert len(rdkit_energies) == len(nvmolkit_energies)
@@ -535,17 +552,17 @@ def test_error_case_throws_properly():
     assert exc_info.value.args[1] == {"none": [], "no_params": [0]}
 
 
-def test_mmff_optimization_device_output_matches_host(mmff_test_mols):
-    """MMFFOptimizeMoleculesConfs(output=DEVICE) returns Device3DResult; energies match host path."""
+def test_mmff_optimization_device_output_matches_host(mmff_test_mols, precision):
     host_mols = create_hard_copy_mols(mmff_test_mols)
     device_mols = create_hard_copy_mols(mmff_test_mols)
 
-    host_energies = nvmolkit_mmff.MMFFOptimizeMoleculesConfs(host_mols, maxIters=50)
+    host_energies = nvmolkit_mmff.MMFFOptimizeMoleculesConfs(host_mols, maxIters=50, precision=precision)
 
     result = nvmolkit_mmff.MMFFOptimizeMoleculesConfs(
         device_mols,
         maxIters=50,
         output=CoordinateOutput.DEVICE,
+        precision=precision,
     )
     assert isinstance(result, Device3DResult)
     torch.cuda.synchronize()

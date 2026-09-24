@@ -20,12 +20,14 @@
 #include <limits>
 #include <numeric>
 #include <stdexcept>
+#include <type_traits>
 
 #include "src/forcefields/batched_forcefield.h"
 #include "src/forcefields/mmff.h"
 #include "src/forcefields/mmff_kernels.h"
 #include "src/minimizer/fire_minimize_permol_kernels.h"
 #include "src/minimizer/fire_minimizer.h"
+#include "src/utils/device_convert.cuh"
 #include "src/utils/nvtx.h"
 
 namespace nvMolKit {
@@ -69,17 +71,33 @@ __device__ __forceinline__ cuda::std::span<T> getSystemSpan(const cuda::std::spa
   return data.subspan(atomStarts[sysIdx] * dataDim, (atomStarts[sysIdx + 1] - atomStarts[sysIdx]) * dataDim);
 }
 
+template <typename real> __device__ __forceinline__ real fireSqrt(real value) {
+  static_assert(cuda::std::is_same_v<real, float> || cuda::std::is_same_v<real, double>);
+  if constexpr (cuda::std::is_same_v<real, float>)
+    return sqrtf(value);
+  else
+    return sqrt(value);
+}
+
+template <typename real> __device__ __forceinline__ real firePow(real base, int exponent) {
+  static_assert(cuda::std::is_same_v<real, float> || cuda::std::is_same_v<real, double>);
+  if constexpr (cuda::std::is_same_v<real, float>)
+    return powf(base, static_cast<float>(exponent));
+  else
+    return pow(base, static_cast<double>(exponent));
+}
+
 //! Packed read-only kernel parameters.
-struct FireKernelParams {
-  double dtIncrementFactor;
-  double dtDecrementFactor;
-  double minDt;
-  double maxDt;
-  double dMax;
-  double alphaStart;
-  double alphaDecrementFactor;
-  double gradTol;
-  int    nMinForIncrease;
+template <typename storageT> struct FireKernelParams {
+  storageT dtIncrementFactor;
+  storageT dtDecrementFactor;
+  storageT minDt;
+  storageT maxDt;
+  storageT dMax;
+  storageT alphaStart;
+  storageT alphaDecrementFactor;
+  storageT gradTol;
+  int      nMinForIncrease;
 };
 
 //! \brief Pre-kick stage of FIRE 2.0. One block per system.
@@ -90,26 +108,27 @@ struct FireKernelParams {
 //! caller must re-evaluate the gradient at the new positions before invoking
 //! ::firePostKickKernel. This split mirrors ASE FIRE2 which evaluates forces twice per
 //! iteration (once before the state machine and again after any half-step-back).
-__global__ void firePreKickKernel(const cuda::std::span<const int>    atomStarts,
-                                  const cuda::std::span<const int>    activeIndices,
-                                  const cuda::std::span<double>       x,
-                                  const cuda::std::span<double>       v,
-                                  const cuda::std::span<const double> f,
-                                  const int                           dataDim,
-                                  const cuda::std::span<double>       alphas,
-                                  const cuda::std::span<double>       dts,
-                                  const cuda::std::span<int>          nStepsPositive,
-                                  const FireKernelParams              params,
-                                  const bool                          takeHalfStepBack,
-                                  const bool                          isFirstStep,
-                                  uint8_t*                            statuses,
-                                  uint8_t*                            convergeReason,
-                                  const cuda::std::span<double>       debugPowers) {
-  using BlockReduce = cub::BlockReduce<double, kFireBlockSize>;
+template <typename real, typename reduceT, typename storageT>
+__global__ void firePreKickKernel(const cuda::std::span<const int>      atomStarts,
+                                  const cuda::std::span<const int>      activeIndices,
+                                  const cuda::std::span<storageT>       x,
+                                  const cuda::std::span<storageT>       v,
+                                  const cuda::std::span<const storageT> f,
+                                  const int                             dataDim,
+                                  const cuda::std::span<storageT>       alphas,
+                                  const cuda::std::span<storageT>       dts,
+                                  const cuda::std::span<int>            nStepsPositive,
+                                  const FireKernelParams<storageT>      params,
+                                  const bool                            takeHalfStepBack,
+                                  const bool                            isFirstStep,
+                                  uint8_t*                              statuses,
+                                  uint8_t*                              convergeReason,
+                                  const cuda::std::span<double>         debugPowers) {
+  using BlockReduce = cub::BlockReduce<reduceT, kFireBlockSize>;
   __shared__ typename BlockReduce::TempStorage tempStorage;
-  __shared__ double                            sharedScalar0;
-  __shared__ double                            sharedScalar1;
-  __shared__ double                            sharedDt;
+  __shared__ reduceT                           sharedScalar0;
+  __shared__ reduceT                           sharedScalar1;
+  __shared__ real                              sharedDt;
   __shared__ bool                              sharedConverged;
 
   const int sysIdx = activeIndices[blockIdx.x];
@@ -127,35 +146,35 @@ __global__ void firePreKickKernel(const cuda::std::span<const int>    atomStarts
   }
   __syncthreads();
 
-  const double dtIn    = sharedDt;
-  const double alphaIn = alphas[sysIdx];
-  const int    nstepIn = nStepsPositive[sysIdx];
+  const real dtIn    = sharedDt;
+  const real alphaIn = static_cast<real>(alphas[sysIdx]);
+  const int  nstepIn = nStepsPositive[sysIdx];
 
-  double power  = 0.0;
-  double gradSq = 0.0;
+  reduceT power  = 0;
+  reduceT gradSq = 0;
   for (int i = threadIdx.x; i < static_cast<int>(vSys.size()); i += kFireBlockSize) {
-    const double fi = fSys[i];
+    const real fi = static_cast<real>(fSys[i]);
     if (!isFirstStep) {
-      power += vSys[i] * -fi;
+      power += static_cast<reduceT>(static_cast<real>(vSys[i]) * -fi);
     }
-    gradSq += fi * fi;
+    gradSq += static_cast<reduceT>(fi * fi);
   }
-  double powerSum = 0.0;
+  reduceT powerSum = 0;
   if (!isFirstStep) {
     powerSum = BlockReduce(tempStorage).Sum(power);
     __syncthreads();
   }
-  const double gradSqSum = BlockReduce(tempStorage).Sum(gradSq);
+  const reduceT gradSqSum = BlockReduce(tempStorage).Sum(gradSq);
   if (threadIdx.x == 0) {
     sharedScalar0 = powerSum;
     sharedScalar1 = gradSqSum;
   }
   __syncthreads();
-  const double powerShared  = sharedScalar0;
-  const double gradSqShared = sharedScalar1;
+  const reduceT powerShared  = sharedScalar0;
+  const reduceT gradSqShared = sharedScalar1;
 
   if (threadIdx.x == 0) {
-    if (sqrt(gradSqShared) <= params.gradTol) {
+    if (fireSqrt(gradSqShared) <= static_cast<reduceT>(params.gradTol)) {
       sharedConverged        = true;
       statuses[sysIdx]       = 0;
       convergeReason[sysIdx] = 1;
@@ -171,18 +190,18 @@ __global__ void firePreKickKernel(const cuda::std::span<const int>    atomStarts
       debugPowers[sysIdx] = powerShared;
     }
 
-    double    newDt     = dtIn;
-    double    newAlpha  = alphaIn;
-    const int newNsteps = powerShared >= 0.0 ? nstepIn + 1 : 0;
+    real      newDt     = dtIn;
+    real      newAlpha  = alphaIn;
+    const int newNsteps = powerShared >= reduceT{0} ? nstepIn + 1 : 0;
 
-    if (powerShared >= 0.0) {
+    if (powerShared >= reduceT{0}) {
       if (newNsteps > params.nMinForIncrease) {
-        newDt    = fmin(dtIn * params.dtIncrementFactor, params.maxDt);
-        newAlpha = alphaIn * params.alphaDecrementFactor;
+        newDt    = min(dtIn * static_cast<real>(params.dtIncrementFactor), static_cast<real>(params.maxDt));
+        newAlpha = alphaIn * static_cast<real>(params.alphaDecrementFactor);
       }
     } else {
-      newAlpha = params.alphaStart;
-      newDt    = fmax(dtIn * params.dtDecrementFactor, params.minDt);
+      newAlpha = static_cast<real>(params.alphaStart);
+      newDt    = max(dtIn * static_cast<real>(params.dtDecrementFactor), static_cast<real>(params.minDt));
     }
 
     sharedDt               = newDt;
@@ -192,15 +211,15 @@ __global__ void firePreKickKernel(const cuda::std::span<const int>    atomStarts
   }
   __syncthreads();
 
-  const double dt = sharedDt;
+  const real dt = sharedDt;
 
   // Negative-power half-step-back must read the freshly-updated nstepsPositive=0 marker
   // to decide if it fires. Equivalently: it fires iff power < 0 on a non-first step.
-  const bool negative = !isFirstStep && (powerShared < 0.0);
+  const bool negative = !isFirstStep && (powerShared < reduceT{0});
   if (negative) {
     for (int i = threadIdx.x; i < static_cast<int>(vSys.size()); i += kFireBlockSize) {
       if (takeHalfStepBack) {
-        xSys[i] -= 0.5 * dt * vSys[i];
+        xSys[i] = static_cast<real>(xSys[i]) - real{0.5} * dt * static_cast<real>(vSys[i]);
       }
       vSys[i] = 0.0;
     }
@@ -214,22 +233,23 @@ __global__ void firePreKickKernel(const cuda::std::span<const int>    atomStarts
 //! semi-implicit Euler kick (v += dt*F), the FIRE mixer, and the displacement clip /
 //! position update. Per-system dt/alpha/nstepsPositive are read back from the device
 //! buffers populated by the pre-kick.
-__global__ void firePostKickKernel(const cuda::std::span<const int>    atomStarts,
-                                   const cuda::std::span<const int>    activeIndices,
-                                   const cuda::std::span<double>       x,
-                                   const cuda::std::span<double>       v,
-                                   const cuda::std::span<const double> f,
-                                   const cuda::std::span<const double> masses,
-                                   const int                           dataDim,
-                                   const cuda::std::span<const double> alphas,
-                                   const cuda::std::span<const double> dts,
-                                   const cuda::std::span<const int>    nStepsPositive,
-                                   const FireKernelParams              params,
-                                   const bool                          useAbc,
-                                   const uint8_t*                      statuses) {
-  using BlockReduce = cub::BlockReduce<double, kFireBlockSize>;
+template <typename real, typename reduceT, typename storageT>
+__global__ void firePostKickKernel(const cuda::std::span<const int>      atomStarts,
+                                   const cuda::std::span<const int>      activeIndices,
+                                   const cuda::std::span<storageT>       x,
+                                   const cuda::std::span<storageT>       v,
+                                   const cuda::std::span<const storageT> f,
+                                   const cuda::std::span<const storageT> masses,
+                                   const int                             dataDim,
+                                   const cuda::std::span<const storageT> alphas,
+                                   const cuda::std::span<const storageT> dts,
+                                   const cuda::std::span<const int>      nStepsPositive,
+                                   const FireKernelParams<storageT>      params,
+                                   const bool                            useAbc,
+                                   const uint8_t*                        statuses) {
+  using BlockReduce = cub::BlockReduce<reduceT, kFireBlockSize>;
   __shared__ typename BlockReduce::TempStorage tempStorage;
-  __shared__ double                            sharedScalar0;
+  __shared__ reduceT                           sharedScalar0;
 
   const int sysIdx = activeIndices[blockIdx.x];
   if (statuses[sysIdx] == 0) {
@@ -240,102 +260,105 @@ __global__ void firePostKickKernel(const cuda::std::span<const int>    atomStart
   const auto fSys = getSystemSpan(f, atomStarts, sysIdx, dataDim);
   const auto xSys = getSystemSpan(x, atomStarts, sysIdx, dataDim);
 
-  cuda::std::span<const double> massSys;
-  const bool                    massEnabled = !masses.empty();
+  cuda::std::span<const storageT> massSys;
+  const bool                      massEnabled = !masses.empty();
   if (massEnabled) {
     const int atomStart = atomStarts[sysIdx];
     const int atomCount = atomStarts[sysIdx + 1] - atomStart;
     massSys             = masses.subspan(atomStart, atomCount);
   }
 
-  const double dt     = dts[sysIdx];
-  const double alpha  = alphas[sysIdx];
-  const int    nsteps = nStepsPositive[sysIdx];
+  const real dt     = static_cast<real>(dts[sysIdx]);
+  const real alpha  = static_cast<real>(alphas[sysIdx]);
+  const real dMax   = static_cast<real>(params.dMax);
+  const int  nsteps = nStepsPositive[sysIdx];
 
   // Kick: v += dt * F. With mass weighting (real MD-style integration), F is converted
   // to physical Å/ps^2 via kForceKcalMolPerAng_PerAmu_to_AngPerPs2 and divided by
   // per-atom mass. Without mass weighting we mirror ASE FIRE2: v += dt * F where F is
   // the raw force in the calculator's native units (no implicit unit conversion).
-  double vSqAccum    = 0.0;
-  double gradSqAccum = 0.0;
+  reduceT vSqAccum    = 0;
+  reduceT gradSqAccum = 0;
   for (int i = threadIdx.x; i < static_cast<int>(vSys.size()); i += kFireBlockSize) {
-    double accel;
+    real accel;
     if (massEnabled) {
-      const double accelMag = -fSys[i] * kForceKcalMolPerAng_PerAmu_to_AngPerPs2;
-      const int    coordIdx = i / dataDim;
-      accel                 = accelMag / massSys[coordIdx];
+      const real accelMag = -static_cast<real>(fSys[i]) * static_cast<real>(kForceKcalMolPerAng_PerAmu_to_AngPerPs2);
+      const int  coordIdx = i / dataDim;
+      accel               = accelMag / static_cast<real>(massSys[coordIdx]);
     } else {
-      accel = -fSys[i];
+      accel = -static_cast<real>(fSys[i]);
     }
-    const double newV = vSys[i] + dt * accel;
-    vSys[i]           = newV;
-    vSqAccum += newV * newV;
-    gradSqAccum += fSys[i] * fSys[i];
+    const real newV = static_cast<real>(vSys[i]) + dt * accel;
+    vSys[i]         = newV;
+    vSqAccum += static_cast<reduceT>(newV * newV);
+    const real fi = static_cast<real>(fSys[i]);
+    gradSqAccum += static_cast<reduceT>(fi * fi);
   }
-  const double vSqReduced = BlockReduce(tempStorage).Sum(vSqAccum);
+  const reduceT vSqReduced = BlockReduce(tempStorage).Sum(vSqAccum);
   if (threadIdx.x == 0) {
     sharedScalar0 = vSqReduced;
   }
   __syncthreads();
-  const double vSqSum        = sharedScalar0;
-  const double gradSqReduced = BlockReduce(tempStorage).Sum(gradSqAccum);
+  const reduceT vSqSum        = sharedScalar0;
+  const reduceT gradSqReduced = BlockReduce(tempStorage).Sum(gradSqAccum);
   if (threadIdx.x == 0) {
     sharedScalar0 = gradSqReduced;
   }
   __syncthreads();
-  const double gradSqSum = sharedScalar0;
+  const reduceT gradSqSum = sharedScalar0;
 
   // Mixer: v = (1 - alpha) * v + alpha * |v|/|grad| * (-grad). With ABC,
   // multiply by 1 / (1 - (1 - alpha)^(N+1)).
-  const double mixCoef1 = 1.0 - alpha;
-  const double mixCoef2 = (gradSqSum > 1e-30) ? (alpha * sqrt(vSqSum) / sqrt(gradSqSum)) : 0.0;
-  double       abcMult  = 1.0;
+  const real mixCoef1 = real{1} - alpha;
+  const real mixCoef2 =
+    (gradSqSum > reduceT{1e-30}) ? (alpha * static_cast<real>(fireSqrt(vSqSum) / fireSqrt(gradSqSum))) : real{0};
+  real abcMult = 1;
   if (useAbc) {
-    const double oneMinusA = 1.0 - fmax(alpha, 1e-10);
-    const double pow_term  = pow(oneMinusA, static_cast<double>(nsteps + 1));
-    const double denom     = 1.0 - pow_term;
-    abcMult                = (denom > 1e-30) ? (1.0 / denom) : 1.0;
+    const real oneMinusA = real{1} - max(alpha, real{1e-10});
+    const real pow_term  = firePow(oneMinusA, nsteps + 1);
+    const real denom     = real{1} - pow_term;
+    abcMult              = (denom > real{1e-30}) ? (real{1} / denom) : real{1};
   }
 
   for (int i = threadIdx.x; i < static_cast<int>(vSys.size()); i += kFireBlockSize) {
-    const double vMix = mixCoef1 * vSys[i] + mixCoef2 * (-fSys[i]);
-    vSys[i]           = abcMult * vMix;
+    const real vMix = mixCoef1 * static_cast<real>(vSys[i]) + mixCoef2 * (-static_cast<real>(fSys[i]));
+    vSys[i]         = abcMult * vMix;
   }
   __syncthreads();
 
   // Displacement handling: ABC clips per-component v to ±dMax/dt, non-ABC
   // norm-clips dr (without modifying v) before the position update.
-  double drScale = 1.0;
+  real drScale = 1;
   if (useAbc) {
-    if (params.dMax > 0.0) {
-      const double maxV = params.dMax / dt;
+    if (dMax > real{0}) {
+      const real maxV = dMax / dt;
       for (int i = threadIdx.x; i < static_cast<int>(vSys.size()); i += kFireBlockSize) {
-        const double clamped = fmax(-maxV, fmin(maxV, vSys[i]));
-        vSys[i]              = clamped;
+        const real clamped = max(-maxV, min(maxV, static_cast<real>(vSys[i])));
+        vSys[i]            = clamped;
       }
       __syncthreads();
     }
   } else {
-    if (params.dMax > 0.0) {
-      double drSqAccum = 0.0;
+    if (dMax > real{0}) {
+      reduceT drSqAccum = 0;
       for (int i = threadIdx.x; i < static_cast<int>(vSys.size()); i += kFireBlockSize) {
-        const double dri = dt * vSys[i];
-        drSqAccum += dri * dri;
+        const real dri = dt * static_cast<real>(vSys[i]);
+        drSqAccum += static_cast<reduceT>(dri * dri);
       }
-      const double drSqReduced = BlockReduce(tempStorage).Sum(drSqAccum);
+      const reduceT drSqReduced = BlockReduce(tempStorage).Sum(drSqAccum);
       if (threadIdx.x == 0) {
         sharedScalar0 = drSqReduced;
       }
       __syncthreads();
-      const double drNorm = sqrt(sharedScalar0);
-      if (drNorm > params.dMax) {
-        drScale = params.dMax / drNorm;
+      const real drNorm = static_cast<real>(fireSqrt(sharedScalar0));
+      if (drNorm > dMax) {
+        drScale = dMax / drNorm;
       }
     }
   }
 
   for (int i = threadIdx.x; i < static_cast<int>(vSys.size()); i += kFireBlockSize) {
-    xSys[i] += drScale * dt * vSys[i];
+    xSys[i] = static_cast<real>(xSys[i]) + drScale * dt * static_cast<real>(vSys[i]);
   }
 }
 
@@ -345,15 +368,19 @@ __global__ void firePostKickKernel(const cuda::std::span<const int>    atomStart
 //! per-system streak state. When the windowed extrema relative spread falls below
 //! @p relTol, the streak counter increments; otherwise the window resets to the current
 //! sample. Reaching @p streakLimit declares the system converged (status = 0).
-__global__ void fireStuckCheckKernel(cuda::std::span<const int>    activeSystemIndices,
-                                     cuda::std::span<const double> energies,
-                                     cuda::std::span<double>       energyMinStreak,
-                                     cuda::std::span<double>       energyMaxStreak,
-                                     cuda::std::span<int32_t>      stuckStreak,
-                                     uint8_t*                      statuses,
-                                     uint8_t*                      convergeReason,
-                                     const double                  relTol,
-                                     const int                     streakLimit) {
+//! @tparam real Arithmetic type.
+//! @tparam storageT Persistent energy-extrema storage type. API-boundary energies are
+//! converted to this type before launch.
+template <typename real, typename storageT>
+__global__ void fireStuckCheckKernel(cuda::std::span<const int>      activeSystemIndices,
+                                     cuda::std::span<const storageT> energies,
+                                     cuda::std::span<storageT>       energyMinStreak,
+                                     cuda::std::span<storageT>       energyMaxStreak,
+                                     cuda::std::span<int32_t>        stuckStreak,
+                                     uint8_t*                        statuses,
+                                     uint8_t*                        convergeReason,
+                                     const storageT                  relTol,
+                                     const int                       streakLimit) {
   if (threadIdx.x != 0) {
     return;
   }
@@ -361,49 +388,57 @@ __global__ void fireStuckCheckKernel(cuda::std::span<const int>    activeSystemI
   if (statuses[sysIdx] == 0) {
     return;
   }
-  const double energy = energies[sysIdx];
-  double       newMin = fmin(energyMinStreak[sysIdx], energy);
-  double       newMax = fmax(energyMaxStreak[sysIdx], energy);
-  const double denom  = fmax(fabs(energy), 1.0);
-  if ((newMax - newMin) <= relTol * denom) {
+  const real energy    = static_cast<real>(energies[sysIdx]);
+  const real storedMin = static_cast<real>(energyMinStreak[sysIdx]);
+  const real storedMax = static_cast<real>(energyMaxStreak[sysIdx]);
+  const real newMin    = energy < storedMin ? energy : storedMin;
+  const real newMax    = energy > storedMax ? energy : storedMax;
+  const real energyAbs = energy < real{0} ? -energy : energy;
+  const real denom     = energyAbs > real{1} ? energyAbs : real{1};
+  if ((newMax - newMin) <= static_cast<real>(relTol) * denom) {
     const int32_t streak = stuckStreak[sysIdx] + 1;
     stuckStreak[sysIdx]  = streak;
     if (streak >= streakLimit) {
       statuses[sysIdx]       = 0;
       convergeReason[sysIdx] = 2;
     }
-    energyMinStreak[sysIdx] = newMin;
-    energyMaxStreak[sysIdx] = newMax;
+    energyMinStreak[sysIdx] = static_cast<storageT>(newMin);
+    energyMaxStreak[sysIdx] = static_cast<storageT>(newMax);
   } else {
     stuckStreak[sysIdx]     = 1;
-    energyMinStreak[sysIdx] = energy;
-    energyMaxStreak[sysIdx] = energy;
+    energyMinStreak[sysIdx] = static_cast<storageT>(energy);
+    energyMaxStreak[sysIdx] = static_cast<storageT>(energy);
   }
 }
 
 }  // namespace
 
-FireBatchMinimizer::FireBatchMinimizer(const int          dataDim,
-                                       const FireOptions& options,
-                                       cudaStream_t       stream,
-                                       const bool         debugMode,
-                                       const FireBackend  backend)
+template <typename real>
+FireBatchMinimizerT<real>::FireBatchMinimizerT(const int          dataDim,
+                                               const FireOptions& options,
+                                               cudaStream_t       stream,
+                                               const bool         debugMode,
+                                               const FireBackend  backend)
     : dataDim_(dataDim),
       fireOptions_(options),
       stream_(stream),
       debugMode_(debugMode),
       backend_(backend) {
   velocities_.setStream(stream_);
-  statuses_.setStream(stream_);
+  masses_.setStream(stream_);
   dt_.setStream(stream_);
   alpha_.setStream(stream_);
+  statuses_.setStream(stream_);
   allSystemIndices_.setStream(stream_);
   activeSystemIndices_.setStream(stream_);
   numStepsWithPositivePower_.setStream(stream_);
   countUnfinished_.setStream(stream_);
   countTempStorage_.setStream(stream_);
-  masses_.setStream(stream_);
   debugPowers_.setStream(stream_);
+  ownedPositions_.setStream(stream_);
+  ownedGrad_.setStream(stream_);
+  ownedEnergies_.setStream(stream_);
+  massInputConversion_.setStream(stream_);
   energyMinStreak_.setStream(stream_);
   energyMaxStreak_.setStream(stream_);
   stuckStreak_.setStream(stream_);
@@ -413,7 +448,8 @@ FireBatchMinimizer::FireBatchMinimizer(const int          dataDim,
   loopStatusHost_[0] = 0;
 }
 
-FireBackend FireBatchMinimizer::resolveBackend(const std::vector<int>& atomStartsHost) const {
+template <typename real>
+FireBackend FireBatchMinimizerT<real>::resolveBackend(const std::vector<int>& atomStartsHost) const {
   if (backend_ != FireBackend::HYBRID) {
     return backend_;
   }
@@ -425,11 +461,11 @@ FireBackend FireBatchMinimizer::resolveBackend(const std::vector<int>& atomStart
   return FireBackend::PER_MOLECULE;
 }
 
-void FireBatchMinimizer::setMasses(const std::vector<double>& masses) {
+template <typename real> void FireBatchMinimizerT<real>::setMasses(const std::vector<double>& masses) {
   hostMasses_ = masses;
 }
 
-void FireBatchMinimizer::resetContinuationCache() {
+template <typename real> void FireBatchMinimizerT<real>::resetContinuationCache() {
   hasInitializedBatch_   = false;
   cachedNumSystems_      = -1;
   cachedTotalAtoms_      = -1;
@@ -437,17 +473,18 @@ void FireBatchMinimizer::resetContinuationCache() {
   cachedMasses_          = nullptr;
 }
 
-void FireBatchMinimizer::setConvergencePollInterval(const int interval) {
+template <typename real> void FireBatchMinimizerT<real>::setConvergencePollInterval(const int interval) {
   if (interval < 1) {
     throw std::invalid_argument("FireBatchMinimizer poll interval must be >= 1");
   }
   convergencePollInterval_ = interval;
 }
 
-void FireBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
-                                    const double*           masses,
-                                    const uint8_t*          activeThisStage,
-                                    const FireBackend       effectiveBackend) {
+template <typename real>
+void FireBatchMinimizerT<real>::initialize(const std::vector<int>& atomStartsHost,
+                                           const double*           masses,
+                                           const uint8_t*          activeThisStage,
+                                           const FireBackend       effectiveBackend) {
   step_                = 0;
   const int totalAtoms = atomStartsHost.back();
   const int numSystems = static_cast<int>(atomStartsHost.size()) - 1;
@@ -459,18 +496,31 @@ void FireBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
                               cachedActiveThisStage_ == activeThisStage && cachedMasses_ == masses;
 
   numSystems_ = numSystems;
-
   velocities_.resize(static_cast<size_t>(totalAtoms) * dataDim_);
   velocities_.zero();
+  if constexpr (!std::is_same_v<real, double>) {
+    const size_t stateSize = effectiveBackend == FireBackend::BATCHED ? static_cast<size_t>(totalAtoms) * dataDim_ : 0;
+    ownedEnergies_.resize(effectiveBackend == FireBackend::BATCHED ? numSystems : 0);
+    ownedPositions_.resize(stateSize);
+    ownedGrad_.resize(stateSize);
+  }
 
+  if (fireOptions_.useMass && !hostMasses_.empty() && masses == nullptr &&
+      hostMasses_.size() != static_cast<size_t>(totalAtoms)) {
+    throw std::runtime_error("Stored masses size does not match atom count");
+  }
   if (fireOptions_.useMass && masses != nullptr) {
     masses_.resize(totalAtoms);
-    cudaCheckError(cudaMemcpyAsync(masses_.data(), masses, totalAtoms * sizeof(double), cudaMemcpyDefault, stream_));
-  } else if (fireOptions_.useMass && !hostMasses_.empty()) {
-    if (hostMasses_.size() != static_cast<size_t>(totalAtoms)) {
-      throw std::runtime_error("Stored masses size does not match atom count");
+    if constexpr (std::is_same_v<real, double>) {
+      cudaCheckError(cudaMemcpyAsync(masses_.data(), masses, totalAtoms * sizeof(double), cudaMemcpyDefault, stream_));
+    } else {
+      massInputConversion_.resize(totalAtoms);
+      cudaCheckError(
+        cudaMemcpyAsync(massInputConversion_.data(), masses, totalAtoms * sizeof(double), cudaMemcpyDefault, stream_));
+      cudaCheckError(detail::convertDeviceArray(masses_.data(), massInputConversion_.data(), totalAtoms, stream_));
     }
-    masses_.setFromVector(hostMasses_);
+  } else if (fireOptions_.useMass && !hostMasses_.empty()) {
+    masses_.setFromVector(std::vector<real>(hostMasses_.begin(), hostMasses_.end()));
   } else {
     masses_.resize(0);
   }
@@ -488,9 +538,9 @@ void FireBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
   numStepsWithPositivePower_.resize(numSystems);
   numStepsWithPositivePower_.zero();
   alpha_.resize(numSystems);
-  setAll(alpha_, fireOptions_.alphaInit);
+  setAll(alpha_, static_cast<real>(fireOptions_.alphaInit));
   dt_.resize(numSystems);
-  setAll(dt_, fireOptions_.dtInit);
+  setAll(dt_, static_cast<real>(fireOptions_.dtInit));
 
   if (effectiveBackend == FireBackend::PER_MOLECULE) {
     energyMinStreak_.resize(0);
@@ -552,8 +602,8 @@ void FireBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
     energyMaxStreak_.resize(numSystems);
     stuckStreak_.resize(numSystems);
     if (!isContinuation) {
-      setAll(energyMinStreak_, std::numeric_limits<double>::infinity());
-      setAll(energyMaxStreak_, -std::numeric_limits<double>::infinity());
+      setAll(energyMinStreak_, std::numeric_limits<real>::infinity());
+      setAll(energyMaxStreak_, -std::numeric_limits<real>::infinity());
       stuckStreak_.zero();
     }
   } else {
@@ -602,7 +652,7 @@ void FireBatchMinimizer::initialize(const std::vector<int>& atomStartsHost,
   }
 }
 
-void FireBatchMinimizer::compactActiveAsync() {
+template <typename real> void FireBatchMinimizerT<real>::compactActiveAsync() {
   size_t tempStorageBytes = countTempStorage_.size();
   cudaCheckError(cub::DeviceSelect::Flagged(countTempStorage_.data(),
                                             tempStorageBytes,
@@ -614,7 +664,7 @@ void FireBatchMinimizer::compactActiveAsync() {
                                             stream_));
 }
 
-int FireBatchMinimizer::readbackNumUnfinished() {
+template <typename real> int FireBatchMinimizerT<real>::readbackNumUnfinished() {
   int& host = loopStatusHost_[0];
   countUnfinished_.get(host);
   cudaCheckError(cudaStreamSynchronize(stream_));
@@ -622,114 +672,149 @@ int FireBatchMinimizer::readbackNumUnfinished() {
 }
 
 namespace {
-FireKernelParams buildKernelParams(const FireOptions& opts, const double gradTol) {
-  FireKernelParams params{};
-  params.dtIncrementFactor    = opts.timeStepIncrement;
-  params.dtDecrementFactor    = opts.timeStepDecrement;
-  params.minDt                = opts.dtInit * opts.dtMinFactor;
-  params.maxDt                = opts.dtInit * opts.dtMaxFactor;
-  params.dMax                 = opts.dMax;
-  params.alphaStart           = opts.alphaInit;
-  params.alphaDecrementFactor = opts.alphaDecrement;
-  params.gradTol              = gradTol;
+template <typename storageT>
+FireKernelParams<storageT> buildKernelParams(const FireOptions& opts, const double gradTol) {
+  FireKernelParams<storageT> params{};
+  params.dtIncrementFactor    = static_cast<storageT>(opts.timeStepIncrement);
+  params.dtDecrementFactor    = static_cast<storageT>(opts.timeStepDecrement);
+  params.minDt                = static_cast<storageT>(opts.dtInit * opts.dtMinFactor);
+  params.maxDt                = static_cast<storageT>(opts.dtInit * opts.dtMaxFactor);
+  params.dMax                 = static_cast<storageT>(opts.dMax);
+  params.alphaStart           = static_cast<storageT>(opts.alphaInit);
+  params.alphaDecrementFactor = static_cast<storageT>(opts.alphaDecrement);
+  params.gradTol              = static_cast<storageT>(gradTol);
   params.nMinForIncrease      = opts.nMinForIncrease;
   return params;
 }
+
+template <typename T> cuda::std::span<T> fireSpan(AsyncDeviceVector<T>& vec) {
+  return cuda::std::span<T>(vec.data(), vec.size());
+}
+
+template <typename T> cuda::std::span<const T> fireConstSpan(const AsyncDeviceVector<T>& vec) {
+  return cuda::std::span<const T>(vec.data(), vec.size());
+}
 }  // namespace
 
-void FireBatchMinimizer::launchPreKick(const double                  gradTol,
-                                       const AsyncDeviceVector<int>& atomStarts,
-                                       AsyncDeviceVector<double>&    positions,
-                                       AsyncDeviceVector<double>&    grad,
-                                       const int                     launchBlocks,
-                                       const bool                    isFirstStep) {
+template <typename real>
+void FireBatchMinimizerT<real>::launchPreKick(const double                  gradTol,
+                                              const AsyncDeviceVector<int>& atomStarts,
+                                              AsyncDeviceVector<real>&      positions,
+                                              AsyncDeviceVector<real>&      grad,
+                                              const int                     launchBlocks,
+                                              const bool                    isFirstStep) {
   if (launchBlocks <= 0) {
     return;
   }
 
   cuda::std::span<double> debugPowersSpan;
   if (debugMode_ && debugPowers_.size() > 0) {
-    debugPowersSpan = cuda::std::span<double>(debugPowers_.data(), debugPowers_.size());
+    debugPowersSpan = fireSpan(debugPowers_);
   }
 
-  const FireKernelParams params = buildKernelParams(fireOptions_, gradTol);
-
-  firePreKickKernel<<<launchBlocks, kFireBlockSize, 0, stream_>>>(
-    cuda::std::span<const int>(atomStarts.data(), atomStarts.size()),
-    cuda::std::span<const int>(activeSystemIndices_.data(), activeSystemIndices_.size()),
-    cuda::std::span<double>(positions.data(), positions.size()),
-    cuda::std::span<double>(velocities_.data(), velocities_.size()),
-    cuda::std::span<const double>(grad.data(), grad.size()),
-    dataDim_,
-    cuda::std::span<double>(alpha_.data(), alpha_.size()),
-    cuda::std::span<double>(dt_.data(), dt_.size()),
-    cuda::std::span<int>(numStepsWithPositivePower_.data(), numStepsWithPositivePower_.size()),
-    params,
-    fireOptions_.takeHalfStepBack,
-    isFirstStep,
-    statuses_.data(),
-    convergeReason_.data(),
-    debugPowersSpan);
+  firePreKickKernel<real, real, real>
+    <<<launchBlocks, kFireBlockSize, 0, stream_>>>(fireConstSpan(atomStarts),
+                                                   fireConstSpan(activeSystemIndices_),
+                                                   fireSpan(positions),
+                                                   fireSpan(velocities_),
+                                                   fireConstSpan(grad),
+                                                   dataDim_,
+                                                   fireSpan(alpha_),
+                                                   fireSpan(dt_),
+                                                   fireSpan(numStepsWithPositivePower_),
+                                                   buildKernelParams<real>(fireOptions_, gradTol),
+                                                   fireOptions_.takeHalfStepBack,
+                                                   isFirstStep,
+                                                   statuses_.data(),
+                                                   convergeReason_.data(),
+                                                   debugPowersSpan);
   cudaCheckError(cudaGetLastError());
 }
 
-void FireBatchMinimizer::launchPostKick(const double                  gradTol,
-                                        const AsyncDeviceVector<int>& atomStarts,
-                                        AsyncDeviceVector<double>&    positions,
-                                        AsyncDeviceVector<double>&    grad,
-                                        const int                     launchBlocks) {
+template <typename real>
+void FireBatchMinimizerT<real>::launchPostKick(const double                  gradTol,
+                                               const AsyncDeviceVector<int>& atomStarts,
+                                               AsyncDeviceVector<real>&      positions,
+                                               AsyncDeviceVector<real>&      grad,
+                                               const int                     launchBlocks) {
   if (launchBlocks <= 0) {
     return;
   }
 
-  cuda::std::span<const double> massesSpan;
-  if (masses_.size() > 0) {
-    massesSpan = cuda::std::span<const double>(masses_.data(), masses_.size());
-  }
-
-  const FireKernelParams params = buildKernelParams(fireOptions_, gradTol);
-
-  firePostKickKernel<<<launchBlocks, kFireBlockSize, 0, stream_>>>(
-    cuda::std::span<const int>(atomStarts.data(), atomStarts.size()),
-    cuda::std::span<const int>(activeSystemIndices_.data(), activeSystemIndices_.size()),
-    cuda::std::span<double>(positions.data(), positions.size()),
-    cuda::std::span<double>(velocities_.data(), velocities_.size()),
-    cuda::std::span<const double>(grad.data(), grad.size()),
-    massesSpan,
-    dataDim_,
-    cuda::std::span<const double>(alpha_.data(), alpha_.size()),
-    cuda::std::span<const double>(dt_.data(), dt_.size()),
-    cuda::std::span<const int>(numStepsWithPositivePower_.data(), numStepsWithPositivePower_.size()),
-    params,
-    fireOptions_.abcCorrection,
-    statuses_.data());
+  firePostKickKernel<real, real, real>
+    <<<launchBlocks, kFireBlockSize, 0, stream_>>>(fireConstSpan(atomStarts),
+                                                   fireConstSpan(activeSystemIndices_),
+                                                   fireSpan(positions),
+                                                   fireSpan(velocities_),
+                                                   fireConstSpan(grad),
+                                                   fireConstSpan(masses_),
+                                                   dataDim_,
+                                                   fireConstSpan(alpha_),
+                                                   fireConstSpan(dt_),
+                                                   fireConstSpan(numStepsWithPositivePower_),
+                                                   buildKernelParams<real>(fireOptions_, gradTol),
+                                                   fireOptions_.abcCorrection,
+                                                   statuses_.data());
   cudaCheckError(cudaGetLastError());
 }
 
-bool FireBatchMinimizer::step(const double                  gradTol,
-                              const AsyncDeviceVector<int>& atomStarts,
-                              AsyncDeviceVector<double>&    positions,
-                              AsyncDeviceVector<double>&    grad,
-                              const GradFunctor&            gFunc) {
+template <typename real>
+bool FireBatchMinimizerT<real>::step(const double                  gradTol,
+                                     const AsyncDeviceVector<int>& atomStarts,
+                                     AsyncDeviceVector<double>&    positions,
+                                     AsyncDeviceVector<double>&    grad,
+                                     const GradFunctor&            gFunc) {
   const ScopedNvtxRange stepRange("FireBatchMinimizer::step");
-  {
-    const ScopedNvtxRange gradRange("FIRE pre-kick gradient");
+  constexpr bool        isDouble       = std::is_same_v<real, double>;
+  auto&                 statePositions = [&]() -> AsyncDeviceVector<real>& {
+    if constexpr (isDouble) {
+      return positions;
+    } else {
+      return ownedPositions_;
+    }
+  }();
+  auto& stateGrad = [&]() -> AsyncDeviceVector<real>& {
+    if constexpr (isDouble) {
+      return grad;
+    } else {
+      return ownedGrad_;
+    }
+  }();
+  // Evaluates the gradient at the caller's positions into stateGrad.
+  auto evalGrad = [&]() {
     grad.zero();
     gFunc();
+    if constexpr (!isDouble) {
+      cudaCheckError(detail::convertDeviceArray(stateGrad.data(), grad.data(), grad.size(), stream_));
+    }
+  };
+
+  if constexpr (!isDouble) {
+    cudaCheckError(detail::convertDeviceArray(statePositions.data(), positions.data(), positions.size(), stream_));
+  }
+  {
+    const ScopedNvtxRange gradRange("FIRE pre-kick gradient");
+    evalGrad();
   }
   const bool isFirstStep = (step_ == 0);
   {
     const ScopedNvtxRange preKickRange("FIRE preKick");
-    launchPreKick(gradTol, atomStarts, positions, grad, lastKnownNumUnfinished_, isFirstStep);
+    launchPreKick(gradTol, atomStarts, statePositions, stateGrad, lastKnownNumUnfinished_, isFirstStep);
+    if constexpr (!isDouble) {
+      cudaCheckError(detail::convertDeviceArray(positions.data(), statePositions.data(), positions.size(), stream_));
+    }
   }
   {
     const ScopedNvtxRange gradRange("FIRE post-kick gradient");
-    grad.zero();
-    gFunc();
+    evalGrad();
   }
   {
     const ScopedNvtxRange postKickRange("FIRE postKick");
-    launchPostKick(gradTol, atomStarts, positions, grad, lastKnownNumUnfinished_);
+    launchPostKick(gradTol, atomStarts, statePositions, stateGrad, lastKnownNumUnfinished_);
+    if constexpr (!isDouble) {
+      cudaCheckError(detail::convertDeviceArray(positions.data(), statePositions.data(), positions.size(), stream_));
+      cudaCheckError(detail::convertDeviceArray(grad.data(), stateGrad.data(), grad.size(), stream_));
+    }
   }
   compactActiveAsync();
   lastKnownNumUnfinished_ = readbackNumUnfinished();
@@ -739,45 +824,40 @@ bool FireBatchMinimizer::step(const double                  gradTol,
 
 namespace {
 
-std::vector<double> debugDump(const AsyncDeviceVector<double>& vec) {
-  std::vector<double> result(vec.size());
+template <typename T> std::vector<double> debugDump(const AsyncDeviceVector<T>& vec) {
+  std::vector<T> stored(vec.size());
   if (vec.size() == 0) {
-    return result;
+    return {};
   }
-  vec.copyToHost(result);
+  vec.copyToHost(stored);
   cudaCheckError(cudaStreamSynchronize(vec.stream()));
-  return result;
+  return std::vector<double>(stored.begin(), stored.end());
 }
 
 }  // namespace
 
-bool FireBatchMinimizer::minimize(const int                                   numIters,
-                                  const double                                gradTol,
-                                  const std::vector<int>&                     atomStartsHost,
-                                  const AsyncDeviceVector<int>&               atomStarts,
-                                  AsyncDeviceVector<double>&                  positions,
-                                  AsyncDeviceVector<double>&                  grad,
-                                  [[maybe_unused]] AsyncDeviceVector<double>& energyOuts,
-                                  [[maybe_unused]] AsyncDeviceVector<double>& energyBuffer,
-                                  EnergyFunctor                               eFunc,
-                                  const GradFunctor                           gFunc,
-                                  const uint8_t*                              activeThisStage) {
-  const ScopedNvtxRange minimizeRange("FireBatchMinimizer::minimize (batched)");
-  initialize(atomStartsHost, nullptr, activeThisStage, FireBackend::BATCHED);
-
+template <typename real>
+template <typename EnergyEvaluator, typename GradientEvaluator>
+void FireBatchMinimizerT<real>::minimizeBatched(const int                     numIters,
+                                                const double                  gradTol,
+                                                const AsyncDeviceVector<int>& atomStarts,
+                                                AsyncDeviceVector<real>&      positions,
+                                                AsyncDeviceVector<real>&      grad,
+                                                AsyncDeviceVector<real>&      energies,
+                                                EnergyEvaluator               evalEnergy,
+                                                GradientEvaluator             evalGrad) {
   for (int iter = 0; iter < numIters; ++iter) {
     if (debugMode_) {
-      energyBuffer.zero();
-      energyOuts.zero();
-      eFunc(positions.data());
+      energies.zero();
+      evalEnergy(positions.data());
 
-      const std::vector<double> energies = debugDump(energyOuts);
-      const std::vector<double> powers   = debugDump(debugPowers_);
-      const std::vector<double> alphas   = debugDump(alpha_);
-      const std::vector<double> dts      = debugDump(dt_);
+      const std::vector<double> energiesHost = debugDump(energies);
+      const std::vector<double> powers       = debugDump(debugPowers_);
+      const std::vector<double> alphas       = debugDump(alpha_);
+      const std::vector<double> dts          = debugDump(dt_);
 
-      for (size_t sysIdx = 0; sysIdx < energies.size(); ++sysIdx) {
-        debugOutputs_[sysIdx].energies.push_back(energies[sysIdx]);
+      for (size_t sysIdx = 0; sysIdx < energiesHost.size(); ++sysIdx) {
+        debugOutputs_[sysIdx].energies.push_back(energiesHost[sysIdx]);
         debugOutputs_[sysIdx].powers.push_back(powers[sysIdx]);
         debugOutputs_[sysIdx].alphas.push_back(alphas[sysIdx]);
         debugOutputs_[sysIdx].dt.push_back(dts[sysIdx]);
@@ -785,16 +865,16 @@ bool FireBatchMinimizer::minimize(const int                                   nu
     }
 
     if (lastKnownNumUnfinished_ == 0) {
-      return true;
+      break;
     }
 
     grad.zero();
-    gFunc();
+    evalGrad();
 
     const bool isFirstStep = (step_ == 0);
     launchPreKick(gradTol, atomStarts, positions, grad, lastKnownNumUnfinished_, isFirstStep);
     grad.zero();
-    gFunc();
+    evalGrad();
     launchPostKick(gradTol, atomStarts, positions, grad, lastKnownNumUnfinished_);
     compactActiveAsync();
 
@@ -805,18 +885,18 @@ bool FireBatchMinimizer::minimize(const int                                   nu
         ++pollsSinceLastEnergyEval_;
         if (pollsSinceLastEnergyEval_ >= fireOptions_.stuckEvalEveryNPolls) {
           pollsSinceLastEnergyEval_ = 0;
-          energyOuts.zero();
-          eFunc(nullptr);
-          fireStuckCheckKernel<<<activeBeforeStuckCheck, 1, 0, stream_>>>(
-            cuda::std::span<const int>(activeSystemIndices_.data(), activeSystemIndices_.size()),
-            cuda::std::span<const double>(energyOuts.data(), energyOuts.size()),
-            cuda::std::span<double>(energyMinStreak_.data(), energyMinStreak_.size()),
-            cuda::std::span<double>(energyMaxStreak_.data(), energyMaxStreak_.size()),
-            cuda::std::span<int32_t>(stuckStreak_.data(), stuckStreak_.size()),
-            statuses_.data(),
-            convergeReason_.data(),
-            fireOptions_.stuckEnergyRelTol,
-            fireOptions_.stuckStreakLength);
+          energies.zero();
+          evalEnergy(positions.data());
+          fireStuckCheckKernel<real, real>
+            <<<activeBeforeStuckCheck, 1, 0, stream_>>>(fireConstSpan(activeSystemIndices_),
+                                                        fireConstSpan(energies),
+                                                        fireSpan(energyMinStreak_),
+                                                        fireSpan(energyMaxStreak_),
+                                                        fireSpan(stuckStreak_),
+                                                        statuses_.data(),
+                                                        convergeReason_.data(),
+                                                        fireOptions_.stuckEnergyRelTol,
+                                                        fireOptions_.stuckStreakLength);
           cudaCheckError(cudaGetLastError());
           compactActiveAsync();
         }
@@ -826,7 +906,9 @@ bool FireBatchMinimizer::minimize(const int                                   nu
 
     step_++;
   }
+}
 
+template <typename real> bool FireBatchMinimizerT<real>::finishBatched() {
   if (lastKnownNumUnfinished_ != 0) {
     lastKnownNumUnfinished_ = readbackNumUnfinished();
   }
@@ -855,13 +937,65 @@ bool FireBatchMinimizer::minimize(const int                                   nu
   return lastKnownNumUnfinished_ == 0;
 }
 
-bool FireBatchMinimizer::minimize(const int                  numIters,
-                                  const double               gradTol,
-                                  BatchedForcefield&         ff,
-                                  AsyncDeviceVector<double>& positions,
-                                  AsyncDeviceVector<double>& grad,
-                                  AsyncDeviceVector<double>& energyOuts,
-                                  const uint8_t*             activeSystemMask) {
+template <typename real>
+bool FireBatchMinimizerT<real>::minimize(const int                     numIters,
+                                         const double                  gradTol,
+                                         const std::vector<int>&       atomStartsHost,
+                                         const AsyncDeviceVector<int>& atomStarts,
+                                         AsyncDeviceVector<double>&    positions,
+                                         AsyncDeviceVector<double>&    grad,
+                                         AsyncDeviceVector<double>&    energyOuts,
+                                         AsyncDeviceVector<double>&    energyBuffer,
+                                         EnergyFunctor                 eFunc,
+                                         GradFunctor                   gFunc,
+                                         const uint8_t*                activeThisStage) {
+  const ScopedNvtxRange minimizeRange("FireBatchMinimizer::minimize (batched)");
+  initialize(atomStartsHost, nullptr, activeThisStage, FireBackend::BATCHED);
+
+  if constexpr (std::is_same_v<real, double>) {
+    auto evaluateEnergy = [&](const double* evalPositions) {
+      energyBuffer.zero();
+      eFunc(evalPositions);
+    };
+    minimizeBatched(numIters, gradTol, atomStarts, positions, grad, energyOuts, evaluateEnergy, gFunc);
+  } else {
+    // Callbacks evaluate in double precision: round-trip through the caller's buffers.
+    auto evaluateEnergy = [&](const real* evalPositions) {
+      cudaCheckError(detail::convertDeviceArray(positions.data(), evalPositions, positions.size(), stream_));
+      energyBuffer.zero();
+      energyOuts.zero();
+      eFunc(positions.data());
+      cudaCheckError(detail::convertDeviceArray(ownedEnergies_.data(), energyOuts.data(), energyOuts.size(), stream_));
+    };
+    auto evaluateGradient = [&]() {
+      cudaCheckError(detail::convertDeviceArray(positions.data(), ownedPositions_.data(), positions.size(), stream_));
+      grad.zero();
+      gFunc();
+      cudaCheckError(detail::convertDeviceArray(ownedGrad_.data(), grad.data(), grad.size(), stream_));
+    };
+    cudaCheckError(detail::convertDeviceArray(ownedPositions_.data(), positions.data(), positions.size(), stream_));
+    minimizeBatched(numIters,
+                    gradTol,
+                    atomStarts,
+                    ownedPositions_,
+                    ownedGrad_,
+                    ownedEnergies_,
+                    evaluateEnergy,
+                    evaluateGradient);
+    cudaCheckError(detail::convertDeviceArray(positions.data(), ownedPositions_.data(), positions.size(), stream_));
+    cudaCheckError(detail::convertDeviceArray(grad.data(), ownedGrad_.data(), grad.size(), stream_));
+  }
+  return finishBatched();
+}
+
+template <typename real>
+bool FireBatchMinimizerT<real>::minimize(const int                  numIters,
+                                         const double               gradTol,
+                                         BatchedForcefield&         ff,
+                                         AsyncDeviceVector<double>& positions,
+                                         AsyncDeviceVector<double>& grad,
+                                         AsyncDeviceVector<double>& energyOuts,
+                                         const uint8_t*             activeSystemMask) {
   const ScopedNvtxRange minimizeRange("FireBatchMinimizer::minimize (BatchedForcefield)");
   const auto&           atomStartsHost = ff.atomStartsHost();
 
@@ -870,17 +1004,45 @@ bool FireBatchMinimizer::minimize(const int                  numIters,
   energyBuffer.resize(energyOuts.size());
   energyBuffer.zero();
 
-  auto eFunc = [&](const double* evalPositions) {
-    const double* positionsToEvaluate = evalPositions != nullptr ? evalPositions : positions.data();
-    ff.computeEnergy(energyOuts.data(), positionsToEvaluate, activeSystemMask, stream_);
-  };
-  auto gFunc = [&]() { ff.computeGradients(grad.data(), positions.data(), activeSystemMask, stream_); };
-
   // The BatchMinimizer interface requires owning storage for device atom offsets.
   AsyncDeviceVector<int> atomStartsDeviceMirror;
   atomStartsDeviceMirror.setStream(stream_);
   atomStartsDeviceMirror.setFromArray(ff.atomStartsHost().data(), atomStartsHost.size());
 
+  auto eFunc = [&](const double* evalPositions) {
+    cudaCheckError(ff.computeEnergy(energyOuts.data(), evalPositions, activeSystemMask, stream_));
+  };
+  auto gFunc = [&]() { cudaCheckError(ff.computeGradients(grad.data(), positions.data(), activeSystemMask, stream_)); };
+
+  if constexpr (!std::is_same_v<real, double>) {
+    auto* singlePrecisionForcefield = dynamic_cast<SinglePrecisionBatchedForcefield*>(&ff);
+    if (singlePrecisionForcefield != nullptr && usesSinglePrecision(singlePrecisionForcefield->precision())) {
+      const ScopedNvtxRange batchedRange("FireBatchMinimizer::minimize (batched)");
+      initialize(atomStartsHost, nullptr, activeSystemMask, FireBackend::BATCHED);
+      auto evaluateEnergy = [&](const real* evalPositions) {
+        cudaCheckError(
+          singlePrecisionForcefield->computeEnergy(ownedEnergies_.data(), evalPositions, activeSystemMask, stream_));
+      };
+      auto evaluateGradient = [&]() {
+        cudaCheckError(singlePrecisionForcefield->computeGradients(ownedGrad_.data(),
+                                                                   ownedPositions_.data(),
+                                                                   activeSystemMask,
+                                                                   stream_));
+      };
+      cudaCheckError(detail::convertDeviceArray(ownedPositions_.data(), positions.data(), positions.size(), stream_));
+      minimizeBatched(numIters,
+                      gradTol,
+                      atomStartsDeviceMirror,
+                      ownedPositions_,
+                      ownedGrad_,
+                      ownedEnergies_,
+                      evaluateEnergy,
+                      evaluateGradient);
+      cudaCheckError(detail::convertDeviceArray(positions.data(), ownedPositions_.data(), positions.size(), stream_));
+      cudaCheckError(detail::convertDeviceArray(grad.data(), ownedGrad_.data(), grad.size(), stream_));
+      return finishBatched();
+    }
+  }
   return minimize(numIters,
                   gradTol,
                   atomStartsHost,
@@ -894,7 +1056,7 @@ bool FireBatchMinimizer::minimize(const int                  numIters,
                   activeSystemMask);
 }
 
-bool FireBatchMinimizer::checkPerMolConvergence() {
+template <typename real> bool FireBatchMinimizerT<real>::checkPerMolConvergence() {
   if (numSystems_ == 0) {
     return true;
   }
@@ -917,11 +1079,12 @@ void requireStuckDetectionDisabled(const FireOptions& options) {
 }
 }  // namespace
 
-bool FireBatchMinimizer::minimizeWithMMFF(const int                            numIters,
-                                          const double                         gradTol,
-                                          const std::vector<int>&              atomStartsHost,
-                                          MMFF::BatchedMolecularDeviceBuffers& systemDevice,
-                                          const uint8_t*                       activeThisStage) {
+template <typename real>
+bool FireBatchMinimizerT<real>::minimizeWithMMFF(const int               numIters,
+                                                 const double            gradTol,
+                                                 const std::vector<int>& atomStartsHost,
+                                                 MMFFDeviceBuffers&      systemDevice,
+                                                 const uint8_t*          activeThisStage) {
   const ScopedNvtxRange perMolRange("FireBatchMinimizer::perMoleculeMinimizeMMFF");
   requireStuckDetectionDisabled(fireOptions_);
 
@@ -968,19 +1131,16 @@ bool FireBatchMinimizer::minimizeWithMMFF(const int                            n
   return checkPerMolConvergence();
 }
 
-FireInternalState FireBatchMinimizer::snapshotInternalState() const {
+template <typename real> FireInternalState FireBatchMinimizerT<real>::snapshotInternalState() const {
   FireInternalState snap;
-  snap.velocities.resize(velocities_.size());
-  if (velocities_.size() > 0) {
-    velocities_.copyToHost(snap.velocities);
-  }
-  snap.dt.resize(dt_.size());
-  if (dt_.size() > 0) {
-    dt_.copyToHost(snap.dt);
-  }
-  snap.alpha.resize(alpha_.size());
-  if (alpha_.size() > 0) {
-    alpha_.copyToHost(snap.alpha);
+  snap.velocities      = debugDump(velocities_);
+  snap.dt              = debugDump(dt_);
+  snap.alpha           = debugDump(alpha_);
+  snap.energyMinStreak = debugDump(energyMinStreak_);
+  snap.energyMaxStreak = debugDump(energyMaxStreak_);
+  snap.stuckStreak.resize(stuckStreak_.size());
+  if (stuckStreak_.size() > 0) {
+    stuckStreak_.copyToHost(snap.stuckStreak);
   }
   snap.nStepsPositive.resize(numStepsWithPositivePower_.size());
   if (numStepsWithPositivePower_.size() > 0) {
@@ -993,5 +1153,8 @@ FireInternalState FireBatchMinimizer::snapshotInternalState() const {
   cudaCheckError(cudaStreamSynchronize(stream_));
   return snap;
 }
+
+template class FireBatchMinimizerT<double>;
+template class FireBatchMinimizerT<float>;
 
 }  // namespace nvMolKit

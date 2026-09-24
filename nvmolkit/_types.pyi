@@ -1,3 +1,8 @@
+class PrecisionMode:
+    FULL: "PrecisionMode"
+    SINGLE: "PrecisionMode"
+
+
 class FireOptions:
     dtInit: float
     dtMinFactor: float

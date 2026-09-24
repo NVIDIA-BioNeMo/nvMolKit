@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <string>
+#include <type_traits>
 #include <vector>
 
 #include "src/minimizer/fire_minimizer.h"
@@ -74,7 +76,6 @@ void initReferenceSystem(ReferenceSystem&           sys,
   sys.nstep     = 0;
   sys.converged = false;
 }
-
 void referenceStep(ReferenceSystem&           sys,
                    const std::vector<double>& grad,
                    const ReferenceConfig&     cfg,
@@ -350,7 +351,25 @@ void runReferenceStep(std::vector<ReferenceSystem>& refs,
 
 // ---------- Tests ----------
 
-TEST(FireMinimizer, BatchedReferenceTrajectoryMatchesAseFire2) {
+template <typename T> class FireMinimizerPrecisionTest : public ::testing::Test {
+ protected:
+  static constexpr bool kSingle = std::is_same_v<T, float>;
+
+  static double stateTolerance() { return kSingle ? 1e-6 : 1e-12; }
+
+  static double strictStateTolerance() { return kSingle ? 1e-6 : 1e-15; }
+};
+
+struct PrecisionTypeNames {
+  template <typename T> static std::string GetName(int /*index*/) {
+    return std::is_same_v<T, float> ? "Single" : "Full";
+  }
+};
+
+using PrecisionTypes = ::testing::Types<double, float>;
+TYPED_TEST_SUITE(FireMinimizerPrecisionTest, PrecisionTypes, PrecisionTypeNames);
+
+TYPED_TEST(FireMinimizerPrecisionTest, BatchedReferenceTrajectoryMatchesAseFire2) {
   const std::vector<int>    atomCounts = {1, 1, 1, 1, 1, 1};
   const std::vector<double> kPerSys    = {2.5, 5.0, 7.5, 10.0, 12.5, 15.0};
   std::vector<double>       startingPositions(atomCounts.size() * kDim, 0.0);
@@ -370,7 +389,7 @@ TEST(FireMinimizer, BatchedReferenceTrajectoryMatchesAseFire2) {
   options.abcCorrection         = false;
   options.nMinForIncrease       = 5;
 
-  nvMolKit::FireBatchMinimizer minimizer(kDim, options);
+  nvMolKit::FireBatchMinimizerT<TypeParam> minimizer(kDim, options);
   minimizer.setConvergencePollInterval(1);
   minimizer.initialize(systems.atomStartsHost());
 
@@ -410,8 +429,10 @@ TEST(FireMinimizer, BatchedReferenceTrajectoryMatchesAseFire2) {
                                                  << " device=" << devPos[coord] << " ref=" << ref.positions[coord];
       }
       if (!ref.converged && iter < 50) {
-        ASSERT_NEAR(state.dt[sysIdx], ref.dt, 1e-12) << "dt mismatch iter=" << iter << " sys=" << sysIdx;
-        ASSERT_NEAR(state.alpha[sysIdx], ref.alpha, 1e-12) << "alpha mismatch iter=" << iter << " sys=" << sysIdx;
+        ASSERT_NEAR(state.dt[sysIdx], ref.dt, TestFixture::stateTolerance())
+          << "dt mismatch iter=" << iter << " sys=" << sysIdx;
+        ASSERT_NEAR(state.alpha[sysIdx], ref.alpha, TestFixture::stateTolerance())
+          << "alpha mismatch iter=" << iter << " sys=" << sysIdx;
         ASSERT_EQ(state.nStepsPositive[sysIdx], ref.nstep) << "nstep mismatch iter=" << iter << " sys=" << sysIdx;
       }
     }
@@ -430,7 +451,7 @@ TEST(FireMinimizer, BatchedReferenceTrajectoryMatchesAseFire2) {
   EXPECT_GE(uniqueConvIters.size(), 2u) << "Test should produce at least two distinct convergence iterations";
 }
 
-TEST(FireMinimizer, AbcModeMatchesReference) {
+TYPED_TEST(FireMinimizerPrecisionTest, AbcModeMatchesReference) {
   const std::vector<int>    atomCounts = {1, 1, 1, 1};
   const std::vector<double> kPerSys    = {3.0, 6.0, 9.0, 12.0};
   std::vector<double>       startingPositions(atomCounts.size() * kDim, 0.0);
@@ -451,7 +472,7 @@ TEST(FireMinimizer, AbcModeMatchesReference) {
   options.abcCorrection         = true;
   options.nMinForIncrease       = 5;
 
-  nvMolKit::FireBatchMinimizer minimizer(kDim, options);
+  nvMolKit::FireBatchMinimizerT<TypeParam> minimizer(kDim, options);
   minimizer.setConvergencePollInterval(1);
   minimizer.initialize(systems.atomStartsHost());
 
@@ -487,7 +508,7 @@ TEST(FireMinimizer, AbcModeMatchesReference) {
   }
 }
 
-TEST(FireMinimizer, MaxStepNormClipping) {
+TYPED_TEST(FireMinimizerPrecisionTest, MaxStepNormClipping) {
   const std::vector<int>    atomCounts = {1};
   const std::vector<double> kPerSys    = {100.0};
   std::vector<double>       startingPositions(kDim, 0.0);
@@ -505,7 +526,7 @@ TEST(FireMinimizer, MaxStepNormClipping) {
   options.abcCorrection         = false;
   options.takeHalfStepBack      = false;  // isolate the clipped post-kick displacement in this test.
 
-  nvMolKit::FireBatchMinimizer minimizer(kDim, options);
+  nvMolKit::FireBatchMinimizerT<TypeParam> minimizer(kDim, options);
   minimizer.setConvergencePollInterval(1);
   minimizer.initialize(systems.atomStartsHost());
 
@@ -523,7 +544,8 @@ TEST(FireMinimizer, MaxStepNormClipping) {
       drNorm += d * d;
     }
     drNorm = std::sqrt(drNorm);
-    EXPECT_LE(drNorm, options.dMax + 1e-9) << "iter=" << iter << " unbounded displacement " << drNorm;
+    EXPECT_LE(drNorm, options.dMax + TestFixture::stateTolerance())
+      << "iter=" << iter << " unbounded displacement " << drNorm;
     previous = current;
     if (done) {
       break;
@@ -534,7 +556,7 @@ TEST(FireMinimizer, MaxStepNormClipping) {
   HarmonicSystems       systems2(atomCounts, kPerSys, startingPositions, targets);
   nvMolKit::FireOptions options2 = options;
   options2.dMax                  = 0.0;
-  nvMolKit::FireBatchMinimizer minimizer2(kDim, options2);
+  nvMolKit::FireBatchMinimizerT<TypeParam> minimizer2(kDim, options2);
   minimizer2.setConvergencePollInterval(1);
   minimizer2.initialize(systems2.atomStartsHost());
 
@@ -562,7 +584,7 @@ TEST(FireMinimizer, MaxStepNormClipping) {
   EXPECT_TRUE(exceeded) << "Without clipping, the unconstrained dynamics should overshoot dMax in at least one step";
 }
 
-TEST(FireMinimizer, NegativePowerHalfStepBack) {
+TYPED_TEST(FireMinimizerPrecisionTest, NegativePowerHalfStepBack) {
   const std::vector<int>    atomCounts = {1};
   const std::vector<double> kPerSys    = {2000.0};  // chosen so raw-force dynamics overshoot quickly
   std::vector<double>       startingPositions(kDim, 0.0);
@@ -582,7 +604,7 @@ TEST(FireMinimizer, NegativePowerHalfStepBack) {
   options.abcCorrection         = false;
   options.nMinForIncrease       = 5;
 
-  nvMolKit::FireBatchMinimizer minimizer(kDim, options);
+  nvMolKit::FireBatchMinimizerT<TypeParam> minimizer(kDim, options);
   minimizer.setConvergencePollInterval(1);
   minimizer.initialize(systems.atomStartsHost());
 
@@ -607,7 +629,7 @@ TEST(FireMinimizer, NegativePowerHalfStepBack) {
     }
     if (state.nStepsPositive[0] == 0 && state.dt[0] < previousDeviceDt) {
       sawDeviceNegative = true;
-      EXPECT_NEAR(state.alpha[0], options.alphaInit, 1e-12);
+      EXPECT_NEAR(state.alpha[0], options.alphaInit, TestFixture::stateTolerance());
     }
     previousDeviceDt = state.dt[0];
   }
@@ -615,7 +637,7 @@ TEST(FireMinimizer, NegativePowerHalfStepBack) {
   EXPECT_TRUE(sawDeviceNegative) << "Test setup should trigger at least one device negative-power step";
 }
 
-TEST(FireMinimizer, MmffPhysicalUnits) {
+TYPED_TEST(FireMinimizerPrecisionTest, MmffPhysicalUnits) {
   const std::vector<int>    atomCounts = {2};
   const std::vector<double> kPerSys    = {300.0};  // ~kcal/mol/Å^2 spring
   std::vector<double>       startingPositions(2 * kDim, 0.0);
@@ -633,8 +655,8 @@ TEST(FireMinimizer, MmffPhysicalUnits) {
   options.abcCorrection         = false;
   options.nMinForIncrease       = 5;
 
-  nvMolKit::FireBatchMinimizer minimizer(kDim, options);
-  std::vector<double>          masses(2, 12.0);  // carbon mass
+  nvMolKit::FireBatchMinimizerT<TypeParam> minimizer(kDim, options);
+  std::vector<double>                      masses(2, 12.0);  // carbon mass
   minimizer.setMasses(masses);
   minimizer.setConvergencePollInterval(1);
 
@@ -655,7 +677,7 @@ TEST(FireMinimizer, MmffPhysicalUnits) {
   }
 }
 
-TEST(FireMinimizer, MassWeightingScalesAcceleration) {
+TYPED_TEST(FireMinimizerPrecisionTest, MassWeightingScalesAcceleration) {
   const std::vector<int>    atomCounts = {1};
   const std::vector<double> kPerSys    = {10.0};
   std::vector<double>       startingPositions(kDim, 0.0);
@@ -672,7 +694,7 @@ TEST(FireMinimizer, MassWeightingScalesAcceleration) {
     options.useMass               = true;
     options.takeHalfStepBack      = true;
     options.abcCorrection         = false;
-    nvMolKit::FireBatchMinimizer minimizer(kDim, options);
+    nvMolKit::FireBatchMinimizerT<TypeParam> minimizer(kDim, options);
     minimizer.setMasses({mass});
     minimizer.setConvergencePollInterval(1);
     minimizer.initialize(systems.atomStartsHost());
@@ -696,11 +718,11 @@ TEST(FireMinimizer, MassWeightingScalesAcceleration) {
   EXPECT_GT(disp1, disp5);
   EXPECT_GT(disp5, disp10);
   // Linear inverse scaling for the very first step (no mixer history).
-  EXPECT_NEAR(disp5 * 5.0, disp1 * 1.0, 1e-9);
-  EXPECT_NEAR(disp10 * 10.0, disp1 * 1.0, 1e-9);
+  EXPECT_NEAR(disp5 * 5.0, disp1 * 1.0, TestFixture::stateTolerance());
+  EXPECT_NEAR(disp10 * 10.0, disp1 * 1.0, TestFixture::stateTolerance());
 }
 
-TEST(FireMinimizer, UseMassFalseEqualsEquivalentPhysicalMass) {
+TYPED_TEST(FireMinimizerPrecisionTest, UseMassFalseEqualsEquivalentPhysicalMass) {
   const std::vector<int>    atomCounts = {2};
   const std::vector<double> kPerSys    = {3.0};
   std::vector<double>       startingPositions(2 * kDim, 0.0);
@@ -718,7 +740,7 @@ TEST(FireMinimizer, UseMassFalseEqualsEquivalentPhysicalMass) {
     options.useMass               = useMass;
     options.abcCorrection         = false;
     options.nMinForIncrease       = 5;
-    nvMolKit::FireBatchMinimizer minimizer(kDim, options);
+    nvMolKit::FireBatchMinimizerT<TypeParam> minimizer(kDim, options);
     if (useMass) {
       minimizer.setMasses(masses);
     }
@@ -739,11 +761,11 @@ TEST(FireMinimizer, UseMassFalseEqualsEquivalentPhysicalMass) {
     runFifty(true, {kForceKcalMolPerAng_PerAmu_to_AngPerPs2_Local, kForceKcalMolPerAng_PerAmu_to_AngPerPs2_Local});
   ASSERT_EQ(noMass.size(), equivalentPhysicalMass.size());
   for (size_t i = 0; i < noMass.size(); ++i) {
-    EXPECT_NEAR(noMass[i], equivalentPhysicalMass[i], 1e-12) << "coord " << i;
+    EXPECT_NEAR(noMass[i], equivalentPhysicalMass[i], TestFixture::stateTolerance()) << "coord " << i;
   }
 }
 
-TEST(FireMinimizer, ParameterPropagation) {
+TYPED_TEST(FireMinimizerPrecisionTest, ParameterPropagation) {
   const std::vector<int>    atomCounts = {1};
   const std::vector<double> kPerSys    = {1.0};
   std::vector<double>       startingPositions(kDim, 0.0);
@@ -767,13 +789,13 @@ TEST(FireMinimizer, ParameterPropagation) {
   options.takeHalfStepBack      = true;
   options.abcCorrection         = false;
 
-  nvMolKit::FireBatchMinimizer minimizer(kDim, options);
+  nvMolKit::FireBatchMinimizerT<TypeParam> minimizer(kDim, options);
   minimizer.setConvergencePollInterval(1);
   minimizer.initialize(systems.atomStartsHost());
 
   auto state0 = minimizer.snapshotInternalState();
-  EXPECT_NEAR(state0.dt[0], options.dtInit, 1e-15);
-  EXPECT_NEAR(state0.alpha[0], options.alphaInit, 1e-15);
+  EXPECT_NEAR(state0.dt[0], options.dtInit, TestFixture::strictStateTolerance());
+  EXPECT_NEAR(state0.alpha[0], options.alphaInit, TestFixture::strictStateTolerance());
   EXPECT_EQ(state0.nStepsPositive[0], 0);
 
   ReferenceConfig              refCfg = referenceConfigFromOptions(options);
@@ -787,15 +809,65 @@ TEST(FireMinimizer, ParameterPropagation) {
                    systems.gradFunctor());
     runReferenceStep(refs, systems, refCfg, isFirstStep);
     const auto state = minimizer.snapshotInternalState();
-    EXPECT_NEAR(state.dt[0], refs[0].dt, 1e-12) << "iter=" << iter;
-    EXPECT_NEAR(state.alpha[0], refs[0].alpha, 1e-12) << "iter=" << iter;
+    EXPECT_NEAR(state.dt[0], refs[0].dt, TestFixture::stateTolerance()) << "iter=" << iter;
+    EXPECT_NEAR(state.alpha[0], refs[0].alpha, TestFixture::stateTolerance()) << "iter=" << iter;
     EXPECT_EQ(state.nStepsPositive[0], refs[0].nstep) << "iter=" << iter;
-    EXPECT_LE(state.dt[0], options.dtInit * options.dtMaxFactor + 1e-12);
-    EXPECT_GE(state.dt[0], options.dtInit * options.dtMinFactor - 1e-12);
+    EXPECT_LE(state.dt[0], options.dtInit * options.dtMaxFactor + TestFixture::stateTolerance());
+    EXPECT_GE(state.dt[0], options.dtInit * options.dtMinFactor - TestFixture::stateTolerance());
   }
 }
 
-TEST(FireMinimizer, ActiveSystemMaskRespected) {
+TEST(FireMinimizer, SinglePrecisionTracksDoubleReference) {
+  const std::vector<int>    atomCounts = {1};
+  const std::vector<double> kPerSys    = {1.0};
+  std::vector<double>       startingPositions(kDim, 0.0);
+  startingPositions[0] = 0.5;
+  std::vector<double> targets(kDim, 0.0);
+  HarmonicSystems     systems(atomCounts, kPerSys, startingPositions, targets);
+
+  nvMolKit::FireOptions options;
+  options.stuckDetectionEnabled = false;
+  options.dtInit                = 0.002;
+  options.dtMinFactor           = 0.01;
+  options.dtMaxFactor           = 4.0;
+  options.alphaInit             = 0.4;
+  options.alphaDecrement        = 0.5;
+  options.timeStepIncrement     = 1.5;
+  options.timeStepDecrement     = 0.25;
+  options.nMinForIncrease       = 2;
+  options.dMax                  = 0.0;
+  options.gradTol               = 1e-9;
+  options.useMass               = false;
+
+  nvMolKit::FireBatchMinimizerSingle minimizer(kDim, options);
+  minimizer.setConvergencePollInterval(1);
+  minimizer.initialize(systems.atomStartsHost());
+
+  ReferenceConfig              refCfg = referenceConfigFromOptions(options);
+  std::vector<ReferenceSystem> refs   = initializeReferenceSystems(systems, refCfg);
+  for (int iter = 0; iter < 30; ++iter) {
+    const bool isFirstStep = (iter == 0);
+    minimizer.step(options.gradTol,
+                   systems.atomStartsDevice(),
+                   systems.positionsDevice(),
+                   systems.gradDevice(),
+                   systems.gradFunctor());
+    runReferenceStep(refs, systems, refCfg, isFirstStep);
+
+    const auto state = minimizer.snapshotInternalState();
+    EXPECT_NEAR(state.dt[0], refs[0].dt, 1e-6) << "iter=" << iter;
+    EXPECT_NEAR(state.alpha[0], refs[0].alpha, 1e-6) << "iter=" << iter;
+    EXPECT_EQ(state.nStepsPositive[0], refs[0].nstep) << "iter=" << iter;
+  }
+
+  const auto positions = systems.readbackPositions();
+  ASSERT_EQ(positions.size(), refs[0].positions.size());
+  for (size_t coord = 0; coord < positions.size(); ++coord) {
+    EXPECT_NEAR(positions[coord], refs[0].positions[coord], 1e-6) << "coord=" << coord;
+  }
+}
+
+TYPED_TEST(FireMinimizerPrecisionTest, ActiveSystemMaskRespected) {
   const std::vector<int>    atomCounts = {1, 1, 1};
   const std::vector<double> kPerSys    = {2.0, 2.0, 2.0};
   std::vector<double>       startingPositions(3 * kDim, 0.0);
@@ -814,8 +886,8 @@ TEST(FireMinimizer, ActiveSystemMaskRespected) {
   options.abcCorrection         = false;
   options.nMinForIncrease       = 5;
 
-  nvMolKit::FireBatchMinimizer minimizer(kDim, options);
-  std::vector<uint8_t>         mask = {1, 0, 1};
+  nvMolKit::FireBatchMinimizerT<TypeParam> minimizer(kDim, options);
+  std::vector<uint8_t>                     mask = {1, 0, 1};
   minimizer.setConvergencePollInterval(1);
   minimizer.initialize(systems.atomStartsHost(), nullptr, mask.data());
 
@@ -841,7 +913,7 @@ TEST(FireMinimizer, ActiveSystemMaskRespected) {
   }
 }
 
-TEST(FireMinimizer, ActiveMaskMatchesBfgsContract) {
+TYPED_TEST(FireMinimizerPrecisionTest, ActiveMaskMatchesBfgsContract) {
   // Pin down the contract that ETKDG's bfgs_distgeom-style call sites depend
   // on: with activeThisStage = {1, 0, 1, 1, 0, 1}, the FIRE minimizer must
   // not touch inactive systems' positions, velocities, dt, alpha, or
@@ -865,7 +937,7 @@ TEST(FireMinimizer, ActiveMaskMatchesBfgsContract) {
   options.takeHalfStepBack      = true;
   options.abcCorrection         = false;
   options.nMinForIncrease       = 5;
-  nvMolKit::FireBatchMinimizer minimizer(kDim, options);
+  nvMolKit::FireBatchMinimizerT<TypeParam> minimizer(kDim, options);
   minimizer.setConvergencePollInterval(1);
   minimizer.initialize(systems.atomStartsHost(), nullptr, mask.data());
 
@@ -910,7 +982,7 @@ TEST(FireMinimizer, ActiveMaskMatchesBfgsContract) {
   }
 }
 
-TEST(FireMinimizer, StaggeredConvergenceCount) {
+TYPED_TEST(FireMinimizerPrecisionTest, StaggeredConvergenceCount) {
   const std::vector<int>    atomCounts = {1, 1, 1, 1, 1, 1, 1, 1};
   const std::vector<double> kPerSys    = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0};
   std::vector<double>       startingPositions(atomCounts.size() * kDim, 0.0);
@@ -929,7 +1001,7 @@ TEST(FireMinimizer, StaggeredConvergenceCount) {
   options.abcCorrection         = false;
   options.nMinForIncrease       = 5;
 
-  nvMolKit::FireBatchMinimizer minimizer(kDim, options);
+  nvMolKit::FireBatchMinimizerT<TypeParam> minimizer(kDim, options);
   minimizer.setConvergencePollInterval(1);
   minimizer.initialize(systems.atomStartsHost());
 
@@ -992,4 +1064,14 @@ TEST(FireMinimizer, HybridBackendSelectionAndPerMolInitialization) {
     EXPECT_NEAR(state.dt[i], options.dtInit, 0.0);
     EXPECT_NEAR(state.alpha[i], options.alphaInit, 0.0);
   }
+}
+
+TEST(FireMinimizer, SinglePrecisionPreservesPerMoleculeBackend) {
+  nvMolKit::FireBatchMinimizerSingle minimizer(kDim,
+                                               nvMolKit::FireOptions{},
+                                               /*stream=*/nullptr,
+                                               /*debugMode=*/false,
+                                               nvMolKit::FireBackend::PER_MOLECULE);
+
+  EXPECT_EQ(minimizer.resolveBackend({0, 5, 10}), nvMolKit::FireBackend::PER_MOLECULE);
 }
