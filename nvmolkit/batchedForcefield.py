@@ -85,7 +85,7 @@ from typing import TYPE_CHECKING, Literal, overload
 
 from nvmolkit import _batchedForcefield  # type: ignore
 from nvmolkit._mmff_bridge import default_rdkit_mmff_properties, make_internal_mmff_properties
-from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions, HardwareOptions
+from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions, HardwareOptions, PrecisionMode
 
 if TYPE_CHECKING:
     from rdkit.Chem import Mol
@@ -339,12 +339,14 @@ class _BatchedForcefieldBase:
         molecules: list["Mol"],
         ignoreInterfragInteractions,
         hardwareOptions: HardwareOptions | None,
+        precision: PrecisionMode = PrecisionMode.FULL,
     ) -> None:
         self._molecules = molecules
         self._ignore_interfrag_interactions = _normalize_scalar_or_list(
             ignoreInterfragInteractions, len(molecules), "ignoreInterfragInteractions"
         )
         self._hardware_options = hardwareOptions if hardwareOptions is not None else HardwareOptions()
+        self._precision = precision
         self._distance_constraints: list[list[_DistanceConstraint]] = [[] for _ in molecules]
         self._position_constraints: list[list[_PositionConstraint]] = [[] for _ in molecules]
         self._angle_constraints: list[list[_AngleConstraint]] = [[] for _ in molecules]
@@ -487,6 +489,7 @@ class MMFFBatchedForcefield(_BatchedForcefieldBase):
         nonBondedThreshold: float | Sequence[float] = 100.0,
         ignoreInterfragInteractions: bool | Sequence[bool] = True,
         hardwareOptions: HardwareOptions | None = None,
+        precision: PrecisionMode = PrecisionMode.FULL,
     ):
         """Create a batched MMFF forcefield wrapper.
 
@@ -504,8 +507,10 @@ class MMFFBatchedForcefield(_BatchedForcefieldBase):
                 non-bonded interactions, as a scalar or per-molecule list.
             hardwareOptions: GPU device and batching configuration.  Uses
                 reasonable defaults when ``None``.
+            precision: ``PrecisionMode.FULL`` (default) or
+                ``PrecisionMode.SINGLE``.
         """
-        self._init_common(molecules, ignoreInterfragInteractions, hardwareOptions)
+        self._init_common(molecules, ignoreInterfragInteractions, hardwareOptions, precision)
         self._properties = self._normalize_properties(properties)
         self._non_bonded_thresholds = _normalize_scalar_or_list(
             nonBondedThreshold, len(molecules), "nonBondedThreshold"
@@ -556,6 +561,7 @@ class MMFFBatchedForcefield(_BatchedForcefieldBase):
             ang,
             tor,
             self._hardware_options._as_native(),
+            self._precision,
         )
 
     @overload
