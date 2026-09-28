@@ -350,6 +350,51 @@ void minimizeMMFF(Minimizer&                        minimizer,
   }
 }
 
+//! Tolerance policy for comparing per-molecule minimized energies against an RDKit reference.
+//! With `maxOutliers == 0` this reduces exactly to a strict Pointwise(DoubleNear(tightTolerance)) check.
+struct EnergyMatchTolerance {
+  double tightTolerance;
+  int    maxOutliers      = 0;
+  double averageTolerance = 0.0;  // 0 disables the average-difference check
+  bool   requireProgress  = false;
+};
+
+//! Compares `got` against `ref` per-molecule, allowing up to `tol.maxOutliers` molecules (e.g. ones that
+//! converged to an alternate local minimum) to exceed `tol.tightTolerance`.
+void expectEnergyMatch(const std::vector<double>&  got,
+                       const std::vector<double>&  ref,
+                       const std::vector<double>&  start,
+                       const EnergyMatchTolerance& tol) {
+  if (tol.maxOutliers == 0) {
+    EXPECT_THAT(got, ::testing::Pointwise(::testing::DoubleNear(tol.tightTolerance), ref));
+  }
+  int    outliers        = 0;
+  double matchingDiffSum = 0.0;
+  for (size_t i = 0; i < got.size(); ++i) {
+    if (tol.requireProgress) {
+      EXPECT_TRUE(std::isfinite(got[i]));
+      EXPECT_LT(got[i], start[i]);
+    }
+    const double diff = std::abs(got[i] - ref[i]);
+    if (diff > tol.tightTolerance) {
+      ++outliers;
+    } else {
+      matchingDiffSum += diff;
+    }
+  }
+  if (tol.maxOutliers > 0) {
+    EXPECT_LE(outliers, tol.maxOutliers)
+      << outliers << " of " << got.size() << " molecules exceeded tight tolerance " << tol.tightTolerance;
+  }
+  if (tol.averageTolerance > 0.0) {
+    const int matchingCount = static_cast<int>(got.size()) - outliers;
+    if (matchingCount > 0) {
+      EXPECT_LT(matchingDiffSum / static_cast<double>(matchingCount), tol.averageTolerance)
+        << "Average energy difference between RDKit and nvMolKit minimizations is too large";
+    }
+  }
+}
+
 void refLineSearchSetup(unsigned int  dim,
                         const double* oldPt,
                         const double* grad,
@@ -906,35 +951,19 @@ TEST_P(BFGSMinimizerBackendTest, E2EMinimizationMultiSystemMultiMolsMatchesConve
                          gotEnergies.size() * sizeof(double),
                          cudaMemcpyDeviceToHost));
 
-    const bool singlePerMolecule =
-      precision == nvMolKit::PrecisionMode::SINGLE &&
-      bfgsMinimizer.resolveBackend(systemHost.indices.atomStarts) == nvMolKit::BfgsBackend::PER_MOLECULE;
-    if (singlePerMolecule) {
-      int    alternateBasins          = 0;
-      double matchingEnergyDifference = 0.0;
-      for (size_t i = 0; i < gotEnergies.size(); ++i) {
-        EXPECT_TRUE(std::isfinite(gotEnergies[i]));
-        EXPECT_LT(gotEnergies[i], startEnergies[i]);
-        const double difference = std::abs(gotEnergies[i] - refEnergies[i]);
-        if (difference > 1e-2) {
-          ++alternateBasins;
-        } else {
-          matchingEnergyDifference += difference;
-        }
-      }
-      EXPECT_LE(alternateBasins, 1);
-      EXPECT_LT(matchingEnergyDifference / static_cast<double>(gotEnergies.size() - alternateBasins), 1e-3);
-    } else {
-      EXPECT_THAT(gotEnergies, ::testing::Pointwise(::testing::DoubleNear(1e-2), refEnergies));
-      double averagedEnergyDifference = 0.0;
-      for (size_t i = 0; i < gotEnergies.size(); ++i) {
-        averagedEnergyDifference += std::abs(gotEnergies[i] - refEnergies[i]);
-      }
-      averagedEnergyDifference /= static_cast<double>(gotEnergies.size());
-      const double averageTolerance = precision == nvMolKit::PrecisionMode::SINGLE ? 1e-3 : 1e-4;
-      EXPECT_NEAR(averagedEnergyDifference, 0.0, averageTolerance)
-        << "Average energy difference between RDKit and nvMolKit minimizations is too large";
-    }
+    // Nonconvex MMFF landscapes occasionally let a molecule converge to a different local minimum
+    // than RDKit's reference; single precision's coarser gradients make this more likely regardless
+    // of backend. maxOutliers=0 for FULL precision keeps its check identical to a strict Pointwise.
+    const EnergyMatchTolerance tolerance = precision == nvMolKit::PrecisionMode::SINGLE
+                                             ? EnergyMatchTolerance{.tightTolerance   = 1e-2,
+                                                                    .maxOutliers      = 1,
+                                                                    .averageTolerance = 1e-3,
+                                                                    .requireProgress  = true}
+                                             : EnergyMatchTolerance{.tightTolerance   = 1e-2,
+                                                                    .maxOutliers      = 0,
+                                                                    .averageTolerance = 1e-4,
+                                                                    .requireProgress  = false};
+    expectEnergyMatch(gotEnergies, refEnergies, startEnergies, tolerance);
     std::vector<int16_t> gotStatuses(systemDevice.energyOuts.size());
     ASSERT_EQ(0,
               cudaMemcpy(gotStatuses.data(),
