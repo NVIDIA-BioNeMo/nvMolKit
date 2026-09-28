@@ -186,6 +186,17 @@ template <typename real> struct BfgsBatchMinimizerT {
   //! \brief Captures per-iteration debug data when stepwise debugging is enabled.
   void collectDebugData();
 
+  //! \brief Declared first (destroyed last) so `stream_` is drained after all cudaFreeAsync calls below complete.
+  struct StreamDrainGuard {
+    const cudaStream_t* streamPtr = nullptr;
+    ~StreamDrainGuard() noexcept {
+      if (streamPtr != nullptr && *streamPtr != nullptr) {
+        cudaStreamSynchronize(*streamPtr);
+      }
+    }
+  };
+  StreamDrainGuard streamDrainGuard_{&stream_};
+
   AsyncDeviceVector<int> allSystemIndices_;
   AsyncDeviceVector<int> activeSystemIndices_;  // Indices of systems that are active in the current iteration.
   mutable int            numUnfinishedSystems_ = 0;
