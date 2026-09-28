@@ -383,8 +383,8 @@ void expectEnergyMatch(const std::vector<double>&  got,
     }
   }
   if (tol.maxOutliers > 0) {
-    EXPECT_LE(outliers, tol.maxOutliers)
-      << outliers << " of " << got.size() << " molecules exceeded tight tolerance " << tol.tightTolerance;
+    EXPECT_LE(outliers, tol.maxOutliers) << outliers << " of " << got.size() << " molecules exceeded tight tolerance "
+                                         << tol.tightTolerance;
   }
   if (tol.averageTolerance > 0.0) {
     const int matchingCount = static_cast<int>(got.size()) - outliers;
@@ -954,15 +954,15 @@ TEST_P(BFGSMinimizerBackendTest, E2EMinimizationMultiSystemMultiMolsMatchesConve
     // Nonconvex MMFF landscapes occasionally let a molecule converge to a different local minimum
     // than RDKit's reference; single precision's coarser gradients make this more likely regardless
     // of backend. maxOutliers=0 for FULL precision keeps its check identical to a strict Pointwise.
-    const EnergyMatchTolerance tolerance = precision == nvMolKit::PrecisionMode::SINGLE
-                                             ? EnergyMatchTolerance{.tightTolerance   = 1e-2,
-                                                                    .maxOutliers      = 1,
-                                                                    .averageTolerance = 1e-3,
-                                                                    .requireProgress  = true}
-                                             : EnergyMatchTolerance{.tightTolerance   = 1e-2,
-                                                                    .maxOutliers      = 0,
-                                                                    .averageTolerance = 1e-4,
-                                                                    .requireProgress  = false};
+    const EnergyMatchTolerance tolerance = precision == nvMolKit::PrecisionMode::SINGLE ?
+                                             EnergyMatchTolerance{.tightTolerance   = 1e-2,
+                                                                  .maxOutliers      = 1,
+                                                                  .averageTolerance = 1e-3,
+                                                                  .requireProgress  = true} :
+                                             EnergyMatchTolerance{.tightTolerance   = 1e-2,
+                                                                  .maxOutliers      = 0,
+                                                                  .averageTolerance = 1e-4,
+                                                                  .requireProgress  = false};
     expectEnergyMatch(gotEnergies, refEnergies, startEnergies, tolerance);
     std::vector<int16_t> gotStatuses(systemDevice.energyOuts.size());
     ASSERT_EQ(0,
