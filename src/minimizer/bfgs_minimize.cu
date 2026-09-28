@@ -1161,7 +1161,10 @@ bool BfgsBatchMinimizerT<real>::minimize(const int                  numIters,
     auto evaluateGradient = [&]() {
       cudaCheckError(ff.computeGradients(gradDevice, positionsDevice, activeSystemMask, stream_));
     };
-    return minimizeBatched(numIters, gradTol, evaluateEnergy, evaluateGradient);
+    const bool needsAnotherCycle = minimizeBatched(numIters, gradTol, evaluateEnergy, evaluateGradient);
+    // stream_ is non-blocking, so callers' synchronous reads don't implicitly wait for it.
+    cudaCheckError(cudaStreamSynchronize(stream_));
+    return needsAnotherCycle;
   } else {
     bool  needsAnotherCycle         = false;
     auto* singlePrecisionForcefield = dynamic_cast<SinglePrecisionBatchedForcefield*>(&ff);
@@ -1194,6 +1197,8 @@ bool BfgsBatchMinimizerT<real>::minimize(const int                  numIters,
     cudaCheckError(detail::convertDeviceArray(energyOuts.data(), energyOutsDevice, energyOuts.size(), stream_));
     cudaCheckError(detail::convertDeviceArray(positions.data(), positionsDevice, positions.size(), stream_));
     cudaCheckError(detail::convertDeviceArray(grad.data(), gradDevice, grad.size(), stream_));
+    // stream_ is non-blocking, so callers' synchronous reads don't implicitly wait for it.
+    cudaCheckError(cudaStreamSynchronize(stream_));
     return needsAnotherCycle;
   }
 }

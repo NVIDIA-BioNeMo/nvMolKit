@@ -83,4 +83,4 @@ jobs:
         run: |
           set -xeo pipefail
           . /usr/local/anaconda/etc/profile.d/conda.sh && conda activate base
-          ctest --test-dir build --output-on-failure
+          ctest --test-dir build --output-on-failure -j4

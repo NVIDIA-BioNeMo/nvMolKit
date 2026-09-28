@@ -911,6 +911,10 @@ void FireBatchMinimizerT<real>::minimizeBatched(const int                     nu
 template <typename real> bool FireBatchMinimizerT<real>::finishBatched() {
   if (lastKnownNumUnfinished_ != 0) {
     lastKnownNumUnfinished_ = readbackNumUnfinished();
+  } else {
+    // readbackNumUnfinished() above also syncs stream_; when skipped (already converged), callers'
+    // buffer conversions enqueued just before this call still need draining before we return.
+    cudaCheckError(cudaStreamSynchronize(stream_));
   }
 
   static const bool diagVerbose = []() {

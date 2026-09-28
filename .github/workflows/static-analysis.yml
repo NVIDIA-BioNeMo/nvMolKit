@@ -32,7 +32,7 @@ concurrency:
 jobs:
   clang-tidy:
     name: clang-tidy
-    runs-on: colossus
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     container:
       image: nvcr.io/nvidia/cuda:12.9.2-devel-ubuntu24.04

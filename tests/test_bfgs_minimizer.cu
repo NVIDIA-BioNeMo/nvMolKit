@@ -345,6 +345,8 @@ void minimizeMMFF(Minimizer&                        minimizer,
                                                    singleDevice.energyOuts.size(),
                                                    stream),
               cudaSuccess);
+    // stream is non-blocking, so callers' synchronous readbacks below don't implicitly wait for it.
+    ASSERT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
   } else {
     minimizer.minimizeWithMMFF(numIters, gradTol, systemHost.indices.atomStarts, systemDevice, activeThisStage);
   }
