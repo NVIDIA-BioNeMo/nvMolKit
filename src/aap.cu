@@ -429,7 +429,7 @@ CentroidSelection selectCentroids(const AapHostDescriptors&   hostDescriptors,
   return result;
 }
 
-AapClusteringResult buildClusteringResult(const std::vector<int>& labels, const std::vector<int>& centroids) {
+ClusteringResult buildClusteringResult(const std::vector<int>& labels, const std::vector<int>& centroids) {
   const int        numClusters = static_cast<int>(centroids.size());
   std::vector<int> sizes(numClusters, 0);
   for (const int label : labels) {
@@ -444,7 +444,7 @@ AapClusteringResult buildClusteringResult(const std::vector<int>& labels, const 
   for (int newId = 0; newId < numClusters; ++newId) {
     remap[order[newId]] = newId;
   }
-  AapClusteringResult result;
+  ClusteringResult result;
   result.clusterIds.resize(labels.size());
   result.centroids.resize(numClusters);
   result.clusterSizes.resize(numClusters);
@@ -484,10 +484,10 @@ float aapSimilarityGpu(const RDKit::ROMol& left,
   return outputHost[0];
 }
 
-AapClusteringResult aapSimilarityClustering(const std::vector<const RDKit::ROMol*>& molecules,
-                                            const float                             threshold,
-                                            const AapOptions&                       options,
-                                            cudaStream_t                            stream) {
+ClusteringResult aapSimilarityClustering(const std::vector<const RDKit::ROMol*>& molecules,
+                                         const float                             threshold,
+                                         const AapOptions&                       options,
+                                         cudaStream_t                            stream) {
   validateOptions(options);
   if (!(threshold >= 0.0F && threshold <= 1.0F)) {
     throw std::invalid_argument("threshold must be between 0 and 1");
@@ -517,10 +517,10 @@ AapClusteringResult aapSimilarityClustering(const std::vector<const RDKit::ROMol
   return buildClusteringResult(selection.labels, selection.centroids);
 }
 
-AapClusteringResult aapDiseClustering(const std::vector<const RDKit::ROMol*>& molecules,
-                                      const float                             threshold,
-                                      const AapOptions&                       options,
-                                      cudaStream_t                            stream) {
+ClusteringResult aapDiseClustering(const std::vector<const RDKit::ROMol*>& molecules,
+                                   const float                             threshold,
+                                   const AapOptions&                       options,
+                                   cudaStream_t                            stream) {
   validateOptions(options);
   if (!(threshold >= 0.0F && threshold <= 1.0F)) {
     throw std::invalid_argument("threshold must be between 0 and 1");
