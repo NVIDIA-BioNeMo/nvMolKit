@@ -87,10 +87,7 @@ TEST(Property3DNames, RoundTripAndRejectUnknown) {
 }
 
 TEST_F(Descriptors3DTest, UnitWeightMomentsMatchClosedForm) {
-  const std::vector<Property3D> properties = {Property3D::RadiusOfGyration,
-                                              Property3D::PMI3,
-                                              Property3D::PMI1,
-                                              Property3D::PMI2};
+  const std::vector<Property3D> properties(nvMolKit::kAllProperty3D.begin(), nvMolKit::kAllProperty3D.end());
   auto results = nvMolKit::calc3DProperties<double>(mols_, properties, /*useAtomicMasses=*/false, nullptr);
   ASSERT_EQ(results.properties.size(), properties.size());
 
@@ -98,6 +95,12 @@ TEST_F(Descriptors3DTest, UnitWeightMomentsMatchClosedForm) {
   const auto pmi2 = toHost(results.properties.at(Property3D::PMI2));
   const auto pmi3 = toHost(results.properties.at(Property3D::PMI3));
   const auto rg   = toHost(results.properties.at(Property3D::RadiusOfGyration));
+  const auto npr1 = toHost(results.properties.at(Property3D::NPR1));
+  const auto npr2 = toHost(results.properties.at(Property3D::NPR2));
+  const auto isf  = toHost(results.properties.at(Property3D::InertialShapeFactor));
+  const auto ecc  = toHost(results.properties.at(Property3D::Eccentricity));
+  const auto asph = toHost(results.properties.at(Property3D::Asphericity));
+  const auto sph  = toHost(results.properties.at(Property3D::SpherocityIndex));
   ASSERT_EQ(pmi1.size(), 3u);  // line + two square conformers; the conformer-less mol adds no rows
 
   // Rows are labeled by input molecule and per-molecule conformer position.
@@ -109,11 +112,23 @@ TEST_F(Descriptors3DTest, UnitWeightMomentsMatchClosedForm) {
   EXPECT_NEAR(pmi2[0], 2.0, kTol);
   EXPECT_NEAR(pmi3[0], 2.0, kTol);
   EXPECT_NEAR(rg[0], std::sqrt(2.0 / 3.0), kTol);
+  EXPECT_NEAR(npr1[0], 0.0, kTol);
+  EXPECT_NEAR(npr2[0], 1.0, kTol);
+  EXPECT_NEAR(isf[0], 0.0, kTol);
+  EXPECT_NEAR(ecc[0], 1.0, kTol);
+  EXPECT_NEAR(asph[0], 1.0, kTol);
+  EXPECT_NEAR(sph[0], 0.0, kTol);
   for (int row = 1; row < 3; ++row) {
     EXPECT_NEAR(pmi1[row], 4.0, kTol);
     EXPECT_NEAR(pmi2[row], 4.0, kTol);
     EXPECT_NEAR(pmi3[row], 8.0, kTol);
     EXPECT_NEAR(rg[row], std::sqrt(2.0), kTol);
+    EXPECT_NEAR(npr1[row], 0.5, kTol);
+    EXPECT_NEAR(npr2[row], 0.5, kTol);
+    EXPECT_NEAR(isf[row], 0.125, kTol);
+    EXPECT_NEAR(ecc[row], std::sqrt(3.0) / 2.0, kTol);
+    EXPECT_NEAR(asph[row], 0.25, kTol);
+    EXPECT_NEAR(sph[row], 0.0, kTol);
   }
 }
 
@@ -148,10 +163,14 @@ TEST(Descriptors3DMass, MassWeightedDiatomicUsesReducedMass) {
 
   const std::vector<const RDKit::ROMol*> mols = {mol.get()};
   auto                                   results =
-    nvMolKit::calc3DProperties<double>(mols, {Property3D::PMI3, Property3D::RadiusOfGyration}, true, nullptr);
+    nvMolKit::calc3DProperties<double>(mols,
+                                       {Property3D::PMI3, Property3D::RadiusOfGyration, Property3D::SpherocityIndex},
+                                       true,
+                                       nullptr);
   EXPECT_EQ(results.properties.count(Property3D::PMI1), 0u);
   EXPECT_NEAR(toHost(results.properties.at(Property3D::PMI3))[0], inertia, 1e-12);
   EXPECT_NEAR(toHost(results.properties.at(Property3D::RadiusOfGyration))[0], std::sqrt(inertia / (m0 + m1)), 1e-12);
+  EXPECT_NEAR(toHost(results.properties.at(Property3D::SpherocityIndex))[0], 0.0, 1e-12);
 }
 
 TEST_F(Descriptors3DTest, DeviceCoordinatesMatchMoleculeCoordinates) {
@@ -212,7 +231,7 @@ TEST_F(Descriptors3DTest, RejectsUnknownPropertyValue) {
                                               Property3D::PMI2,
                                               Property3D::PMI3,
                                               Property3D::RadiusOfGyration,
-                                              static_cast<Property3D>(7)};
+                                              static_cast<Property3D>(10)};
   EXPECT_THROW(nvMolKit::calc3DProperties<double>(mols_, properties, true, nullptr), std::invalid_argument);
   EXPECT_THROW(nvMolKit::calc3DProperties<float>(mols_, {static_cast<Property3D>(-1)}, true, nullptr),
                std::invalid_argument);

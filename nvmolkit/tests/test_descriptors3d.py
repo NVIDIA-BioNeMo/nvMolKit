@@ -39,15 +39,26 @@ def _embed(smiles, num_confs, seed):
     return mol
 
 
-def _reference_rows(mols, properties, use_atomic_masses):
+def _rdkit_property(mol, conf_id, prop, use_atomic_masses):
     calculators = {
         Property3D.PMI1: rdMolDescriptors.CalcPMI1,
         Property3D.PMI2: rdMolDescriptors.CalcPMI2,
         Property3D.PMI3: rdMolDescriptors.CalcPMI3,
         Property3D.RADIUS_OF_GYRATION: rdMolDescriptors.CalcRadiusOfGyration,
+        Property3D.NPR1: rdMolDescriptors.CalcNPR1,
+        Property3D.NPR2: rdMolDescriptors.CalcNPR2,
+        Property3D.INERTIAL_SHAPE_FACTOR: rdMolDescriptors.CalcInertialShapeFactor,
+        Property3D.ECCENTRICITY: rdMolDescriptors.CalcEccentricity,
+        Property3D.ASPHERICITY: rdMolDescriptors.CalcAsphericity,
     }
+    if prop == Property3D.SPHEROCITY_INDEX:
+        return rdMolDescriptors.CalcSpherocityIndex(mol, confId=conf_id)
+    return calculators[prop](mol, confId=conf_id, useAtomicMasses=use_atomic_masses)
+
+
+def _reference_rows(mols, properties, use_atomic_masses):
     rows = [
-        [calculators[prop](mol, confId=conf.GetId(), useAtomicMasses=use_atomic_masses) for prop in properties]
+        [_rdkit_property(mol, conf.GetId(), prop, use_atomic_masses) for prop in properties]
         for mol in mols
         for conf in mol.GetConformers()
     ]
@@ -93,12 +104,6 @@ def _mol_with_conformers(smiles, coordinate_sets):
 
 
 def _reference_device_rows(mols, coordinates, properties, use_atomic_masses=True):
-    calculators = {
-        Property3D.PMI1: rdMolDescriptors.CalcPMI1,
-        Property3D.PMI2: rdMolDescriptors.CalcPMI2,
-        Property3D.PMI3: rdMolDescriptors.CalcPMI3,
-        Property3D.RADIUS_OF_GYRATION: rdMolDescriptors.CalcRadiusOfGyration,
-    }
     values = coordinates.values.numpy()
     atom_starts = coordinates.atom_starts.torch().tolist()
     mol_indices = coordinates.mol_indices.torch().tolist()
@@ -111,7 +116,7 @@ def _reference_device_rows(mols, coordinates, properties, use_atomic_masses=True
         for atom_idx, (x, y, z) in enumerate(positions):
             conf.SetAtomPosition(atom_idx, Point3D(float(x), float(y), float(z)))
         conf_id = mol.AddConformer(conf, assignId=True)
-        rows.append([calculators[prop](mol, confId=conf_id, useAtomicMasses=use_atomic_masses) for prop in properties])
+        rows.append([_rdkit_property(mol, conf_id, prop, use_atomic_masses) for prop in properties])
     return np.asarray(rows, dtype=np.float64)
 
 
@@ -120,12 +125,7 @@ def _reference_device_rows(mols, coordinates, properties, use_atomic_masses=True
 def test_shape_properties_match_rdkit_for_mixed_batch_and_selection(use_atomic_masses, precision):
     # Hexadecane (50 atoms with Hs) takes several strides through the per-conformer atom loop.
     mols = [_embed("CCO", 3, 7), _embed("c1ccccc1", 2, 11), Chem.MolFromSmiles("CC"), _embed("C" * 16, 2, 13)]
-    properties = (
-        Property3D.RADIUS_OF_GYRATION,
-        Property3D.PMI3,
-        Property3D.PMI1,
-        Property3D.PMI2,
-    )
+    properties = tuple(Property3D)
 
     result = Calc3DProperties(mols, properties, useAtomicMasses=use_atomic_masses, precision=precision)
     expected = _reference_rows(mols, properties, use_atomic_masses)
@@ -229,6 +229,23 @@ def test_degenerate_geometries_and_empty_inputs_match_rdkit(use_atomic_masses, p
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)
+def test_spherocity_ignores_atomic_mass_option(precision):
+    mol = _mol_with_conformers(
+        "COPF",
+        [[(0.0, 0.0, 0.0), (1.4, 0.1, 0.2), (-0.3, 1.7, -0.1), (0.2, -0.4, 2.1)]],
+    )
+    properties = (Property3D.SPHEROCITY_INDEX,)
+
+    mass_weighted = Calc3DProperties(mol, properties, useAtomicMasses=True, precision=precision)
+    unit_weighted = Calc3DProperties(mol, properties, useAtomicMasses=False, precision=precision)
+    expected = _reference_rows([mol], properties, use_atomic_masses=False)
+
+    for column, prop in enumerate(properties):
+        _assert_matches_rdkit(mass_weighted[prop].numpy(), expected[:, column], precision)
+        np.testing.assert_array_equal(mass_weighted[prop].numpy(), unit_weighted[prop].numpy())
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
 def test_embed_device_output_chains_directly_into_3d_properties(precision):
     mols = [Chem.AddHs(Chem.MolFromSmiles("CCO")), Chem.AddHs(Chem.MolFromSmiles("CCCO"))]
     params = EmbedParameters()
@@ -268,12 +285,19 @@ def test_device_atom_starts_outside_values_produce_nan(atom_starts, bad_row):
         n_mols=1,
     )
 
+    properties = tuple(Property3D)
     result = Calc3DProperties(
-        mols, "RadiusOfGyration", coordinates=coordinates, useAtomicMasses=False, precision=PrecisionMode.FULL
+        mols, properties, coordinates=coordinates, useAtomicMasses=False, precision=PrecisionMode.FULL
     )
-    values = result["RadiusOfGyration"].numpy()
-    assert np.isnan(values[bad_row])
-    np.testing.assert_allclose(values[1 - bad_row], np.sqrt(2.0), rtol=1e-12)
+    expected = _reference_rows(mols, properties, use_atomic_masses=False)
+    for column, prop in enumerate(properties):
+        values = result[prop].numpy()
+        assert np.isnan(values[bad_row])
+        _assert_matches_rdkit(
+            values[1 - bad_row : 2 - bad_row],
+            expected[1 - bad_row : 2 - bad_row, column],
+            PrecisionMode.FULL,
+        )
 
 
 def test_extracted_async_result_keeps_device_inputs_alive_on_explicit_stream():

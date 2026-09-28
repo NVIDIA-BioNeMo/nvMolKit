@@ -3,8 +3,7 @@
 
 """Batched GPU calculation of molecular 3D properties.
 
-Supported properties are the three principal moments of inertia and the radius
-of gyration. Coordinates may come from RDKit conformers or directly from a
+Coordinates may come from RDKit conformers or directly from a
 :class:`~nvmolkit.types.Device3DResult` produced by another nvMolKit stage.
 """
 
@@ -24,16 +23,21 @@ from nvmolkit.types import AsyncGpuResult, Device3DResult, PrecisionMode, _resol
 class Property3D(Enum):
     """3D properties implemented by :func:`Calc3DProperties`.
 
-    ``PMI1``, ``PMI2`` and ``PMI3`` are the principal moments of inertia in ascending order, as
-    computed by RDKit's ``CalcPMI1``/``CalcPMI2``/``CalcPMI3``. ``RADIUS_OF_GYRATION`` is the radius
-    of gyration, as computed by RDKit's ``CalcRadiusOfGyration``. Wherever a property is accepted,
-    its string value (``"PMI1"``, ``"PMI2"``, ``"PMI3"``, ``"RadiusOfGyration"``) may be used instead.
+    Names and values match the corresponding functions in RDKit's
+    ``rdMolDescriptors`` module. Wherever a property is accepted, its string
+    value may be used instead.
     """
 
     PMI1 = "PMI1"
     PMI2 = "PMI2"
     PMI3 = "PMI3"
     RADIUS_OF_GYRATION = "RadiusOfGyration"
+    NPR1 = "NPR1"
+    NPR2 = "NPR2"
+    INERTIAL_SHAPE_FACTOR = "InertialShapeFactor"
+    ECCENTRICITY = "Eccentricity"
+    ASPHERICITY = "Asphericity"
+    SPHEROCITY_INDEX = "SpherocityIndex"
 
 
 @dataclass(frozen=True)
@@ -216,8 +220,7 @@ def Calc3DProperties(
     Args:
         mols: One RDKit molecule or an iterable of molecules. Molecules provide
             atom identity even when coordinates are supplied separately.
-        properties: Ordered property selection. Supported values are ``PMI1``,
-            ``PMI2``, ``PMI3``, and ``RadiusOfGyration``.
+        properties: Ordered selection from :class:`Property3D`.
         coordinates: Optional device-resident coordinates from an nvMolKit 3D
             operation, read in place. When omitted, coordinates are taken from
             each molecule's RDKit conformers. Rows whose ``mol_indices`` entry
@@ -226,7 +229,8 @@ def Calc3DProperties(
             produce NaN rather than an error, so no host synchronization is
             needed.
         useAtomicMasses: Match RDKit's mass-weighted default. ``False`` gives
-            every atom unit weight.
+            every atom unit weight. RDKit defines ``SpherocityIndex`` as
+            unweighted, so this option does not affect it.
         precision: ``PrecisionMode.SINGLE`` (default) computes and returns
             float32 values; ``PrecisionMode.FULL`` uses float64 throughout and
             matches RDKit to near double-precision rounding.

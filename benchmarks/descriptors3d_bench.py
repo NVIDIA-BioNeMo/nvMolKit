@@ -49,7 +49,19 @@ RDKIT_CALCULATORS = {
     Property3D.PMI2: rdMolDescriptors.CalcPMI2,
     Property3D.PMI3: rdMolDescriptors.CalcPMI3,
     Property3D.RADIUS_OF_GYRATION: rdMolDescriptors.CalcRadiusOfGyration,
+    Property3D.NPR1: rdMolDescriptors.CalcNPR1,
+    Property3D.NPR2: rdMolDescriptors.CalcNPR2,
+    Property3D.INERTIAL_SHAPE_FACTOR: rdMolDescriptors.CalcInertialShapeFactor,
+    Property3D.ECCENTRICITY: rdMolDescriptors.CalcEccentricity,
+    Property3D.ASPHERICITY: rdMolDescriptors.CalcAsphericity,
 }
+
+
+def _calc_rdkit_property(mol: Chem.Mol, conf_id: int, prop: Property3D) -> float:
+    """Calculate one property using the options mirrored by the benchmark."""
+    if prop == Property3D.SPHEROCITY_INDEX:
+        return rdMolDescriptors.CalcSpherocityIndex(mol, confId=conf_id)
+    return RDKIT_CALCULATORS[prop](mol, confId=conf_id, useAtomicMasses=True)
 
 
 def _pack_device_coordinates(mols: list[Chem.Mol]) -> Device3DResult:
@@ -86,7 +98,7 @@ def _pack_device_coordinates(mols: list[Chem.Mol]) -> Device3DResult:
 def _calc_rdkit(mols: list[Chem.Mol], properties: tuple[Property3D, ...]) -> np.ndarray:
     """Calculate a dense reference array in molecule/conformer order."""
     rows = [
-        [RDKIT_CALCULATORS[prop](mol, confId=conf.GetId(), useAtomicMasses=True) for prop in properties]
+        [_calc_rdkit_property(mol, conf.GetId(), prop) for prop in properties]
         for mol in mols
         for conf in mol.GetConformers()
     ]

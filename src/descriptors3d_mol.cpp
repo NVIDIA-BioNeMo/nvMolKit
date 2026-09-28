@@ -38,12 +38,14 @@ DeviceAtomWeights uploadAtomWeights(const std::vector<const RDKit::ROMol*>& mols
   }
   atomStarts[numMols] = static_cast<int32_t>(totalAtoms);
 
-  std::vector<double> weights(static_cast<size_t>(totalAtoms));
+  std::vector<double> weights(useAtomicMasses ? static_cast<size_t>(totalAtoms) : 0);
+  if (useAtomicMasses) {
 #pragma omp parallel for schedule(dynamic)
-  for (int molIdx = 0; molIdx < numMols; ++molIdx) {
-    size_t atomOffset = static_cast<size_t>(atomStarts[molIdx]);
-    for (const auto* atom : mols[molIdx]->atoms()) {
-      weights[atomOffset++] = useAtomicMasses ? atom->getMass() : 1.0;
+    for (int molIdx = 0; molIdx < numMols; ++molIdx) {
+      size_t atomOffset = static_cast<size_t>(atomStarts[molIdx]);
+      for (const auto* atom : mols[molIdx]->atoms()) {
+        weights[atomOffset++] = atom->getMass();
+      }
     }
   }
 
@@ -86,8 +88,9 @@ Property3DBatchResult<Real> calc3DProperties(const std::vector<const RDKit::ROMo
   const DeviceAtomWeights weights = uploadAtomWeights(mols, useAtomicMasses, stream);
 
   Property3DBatchResult<Real> result;
+  const double*               atomWeights = useAtomicMasses ? weights.weights.data() : nullptr;
   result.properties =
-    calc3DPropertiesGpu<Real>(view, weights.weights.data(), weights.moleculeAtomStarts.data(), properties, stream);
+    calc3DPropertiesGpu<Real>(view, atomWeights, weights.moleculeAtomStarts.data(), properties, stream);
   result.molIndices  = std::move(uploaded.molIndices);
   result.confIndices = std::move(uploaded.confIndices);
   return result;
