@@ -83,6 +83,7 @@ void launchResolveLeaderWindow(const LeaderState&         state,
                                cudaStream_t               stream);
 void launchApplyLeaderWindow(const LeaderState& state, int numItems, cudaStream_t stream);
 void validateFirstPicks(const std::vector<int>& firstPicks, int numItems);
+void validateUnitCutoff(double cutoff);
 
 //! Returns the first @p count picks as an exactly sized result.
 inline PickerResult makePickerResult(const AsyncDeviceVector<int>& picks, const int count, cudaStream_t stream) {

@@ -11,11 +11,17 @@
 
 #include "src/diversity_picker_algorithms.cuh"
 #include "src/diversity_pickers.h"
+#include "src/fingerprint_similarity_device.cuh"
 #include "src/utils/cuda_error_check.h"
 
 namespace nvMolKit {
 namespace detail {
 namespace {
+
+//! Sources per shared-memory tile in the multi-source fingerprint kernel.
+constexpr int kSourceTile    = 32;
+//! Largest fingerprint, in 32-bit words, that the tiled kernel stages in shared memory.
+constexpr int kMaxTiledWords = 256;
 
 __global__ void gatherLeaderWindowKernel(const LeaderState state, const int numItems, const int windowSize) {
   using BlockScan = cub::BlockScan<int, kPickerBlockSize>;
@@ -127,6 +133,155 @@ __global__ void matrixDistancesKernel(const Scalar* distances,
   op.finish(candidate, state);
 }
 
+__global__ void fingerprintBitCountsKernel(const std::uint32_t* fingerprints,
+                                           int*                 bitCounts,
+                                           const int            numItems,
+                                           const int            numWords) {
+  const int index = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (index >= numItems) {
+    return;
+  }
+  int count = 0;
+  for (int word = 0; word < numWords; ++word) {
+    count += __popc(fingerprints[static_cast<std::size_t>(index) * numWords + word]);
+  }
+  bitCounts[index] = count;
+}
+
+template <bool Vectorized>
+__device__ __forceinline__ int intersectionCount(const std::uint32_t* left,
+                                                 const std::uint32_t* right,
+                                                 const int            numWords) {
+  int count = 0;
+  if constexpr (Vectorized) {
+    const auto* left4  = reinterpret_cast<const uint4*>(left);
+    const auto* right4 = reinterpret_cast<const uint4*>(right);
+    for (int word = 0; word < numWords / 4; ++word) {
+      const uint4 a = left4[word];
+      const uint4 b = right4[word];
+      count += __popc(a.x & b.x) + __popc(a.y & b.y) + __popc(a.z & b.z) + __popc(a.w & b.w);
+    }
+  } else {
+    for (int word = 0; word < numWords; ++word) {
+      count += __popc(left[word] & right[word]);
+    }
+  }
+  return count;
+}
+
+//! One thread per candidate; source rows are read through the cache. Used for single sources and wide fingerprints.
+template <FingerprintSimilarityMetric Metric, bool Vectorized, typename Op>
+__global__ void fingerprintDistancesKernel(const std::uint32_t* fingerprints,
+                                           const int*           bitCounts,
+                                           const int            numItems,
+                                           const int            numWords,
+                                           const int*           sources,
+                                           const int            numSources,
+                                           const Op             op) {
+  const int candidate = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (candidate >= numItems || op.skip(candidate)) {
+    return;
+  }
+  const std::uint32_t* row      = fingerprints + static_cast<std::size_t>(candidate) * numWords;
+  const int            rowCount = bitCounts[candidate];
+  auto                 state    = op.start(candidate);
+  for (int ordinal = 0; ordinal < numSources; ++ordinal) {
+    const int source = sources[ordinal];
+    if (validSource(source, numItems)) {
+      const int intersection =
+        intersectionCount<Vectorized>(fingerprints + static_cast<std::size_t>(source) * numWords, row, numWords);
+      op.visit(state,
+               ordinal,
+               source == candidate,
+               fingerprintDistance<Metric>(intersection, bitCounts[source], rowCount));
+    }
+  }
+  op.finish(candidate, state);
+}
+
+//! One thread per candidate against tiles of kSourceTile sources staged in shared memory, reading each candidate
+//! word once per tile.
+template <FingerprintSimilarityMetric Metric, bool Vectorized, typename Op>
+__global__ void fingerprintTiledDistancesKernel(const std::uint32_t* fingerprints,
+                                                const int*           bitCounts,
+                                                const int            numItems,
+                                                const int            numWords,
+                                                const int*           sources,
+                                                const int            numSources,
+                                                const Op             op) {
+  extern __shared__ uint4 tileStorage[];
+  auto*                   tile = reinterpret_cast<std::uint32_t*>(tileStorage);
+  __shared__ int          tileSources[kSourceTile];
+  __shared__ int          tileCounts[kSourceTile];
+
+  const int  candidate = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  const bool live      = candidate < numItems && !op.skip(candidate);
+  if (__syncthreads_or(live) == 0) {
+    return;
+  }
+  const std::uint32_t* row      = fingerprints + static_cast<std::size_t>(live ? candidate : 0) * numWords;
+  const int            rowCount = live ? bitCounts[candidate] : 0;
+  typename Op::State   state{};
+  if (live) {
+    state = op.start(candidate);
+  }
+
+  for (int base = 0; base < numSources; base += kSourceTile) {
+    const int tileLength = min(kSourceTile, numSources - base);
+    __syncthreads();
+    if (threadIdx.x < kSourceTile) {
+      const int  source        = static_cast<int>(threadIdx.x) < tileLength ? sources[base + threadIdx.x] : -1;
+      const bool valid         = validSource(source, numItems);
+      tileSources[threadIdx.x] = valid ? source : -1;
+      tileCounts[threadIdx.x]  = valid ? bitCounts[source] : 0;
+    }
+    __syncthreads();
+    for (int index = static_cast<int>(threadIdx.x); index < tileLength * numWords; index += kPickerBlockSize) {
+      const int source = tileSources[index / numWords];
+      tile[index] = source >= 0 ? fingerprints[static_cast<std::size_t>(source) * numWords + index % numWords] : 0U;
+    }
+    __syncthreads();
+    if (!live) {
+      continue;
+    }
+
+    int intersections[kSourceTile] = {};
+    if constexpr (Vectorized) {
+      const auto* row4   = reinterpret_cast<const uint4*>(row);
+      const auto* tile4  = reinterpret_cast<const uint4*>(tile);
+      const int   words4 = numWords / 4;
+      for (int word = 0; word < words4; ++word) {
+        const uint4 a = row4[word];
+#pragma unroll
+        for (int t = 0; t < kSourceTile; ++t) {
+          const uint4 b = tile4[t * words4 + word];
+          intersections[t] += __popc(a.x & b.x) + __popc(a.y & b.y) + __popc(a.z & b.z) + __popc(a.w & b.w);
+        }
+      }
+    } else {
+      for (int word = 0; word < numWords; ++word) {
+        const std::uint32_t a = row[word];
+#pragma unroll
+        for (int t = 0; t < kSourceTile; ++t) {
+          intersections[t] += __popc(a & tile[t * numWords + word]);
+        }
+      }
+    }
+#pragma unroll
+    for (int t = 0; t < kSourceTile; ++t) {
+      if (t < tileLength && tileSources[t] >= 0) {
+        op.visit(state,
+                 base + t,
+                 tileSources[t] == candidate,
+                 fingerprintDistance<Metric>(intersections[t], tileCounts[t], rowCount));
+      }
+    }
+  }
+  if (live) {
+    op.finish(candidate, state);
+  }
+}
+
 template <typename Scalar> class MatrixDistanceProvider {
  public:
   MatrixDistanceProvider(const cuda::std::span<const Scalar> distances, const int numItems)
@@ -154,6 +309,74 @@ template <typename Scalar> class MatrixDistanceProvider {
   int                           numItems_;
 };
 
+template <FingerprintSimilarityMetric Metric> class FingerprintDistanceProvider {
+ public:
+  FingerprintDistanceProvider(const cuda::std::span<const std::uint32_t> fingerprints,
+                              const int                                  numItems,
+                              const int                                  numWords,
+                              cudaStream_t                               stream)
+      : fingerprints_(fingerprints),
+        numItems_(numItems),
+        numWords_(numWords),
+        vectorized_(numWords % 4 == 0 && reinterpret_cast<std::uintptr_t>(fingerprints.data()) % alignof(uint4) == 0),
+        bitCounts_(numItems, stream) {
+    if (numItems > 0) {
+      fingerprintBitCountsKernel<<<pickerGridSize(numItems), kPickerBlockSize, 0, stream>>>(fingerprints_.data(),
+                                                                                            bitCounts_.data(),
+                                                                                            numItems_,
+                                                                                            numWords_);
+      cudaCheckError(cudaGetLastError());
+    }
+  }
+
+  int size() const { return numItems_; }
+  int leaderWindow() const { return kMaxLeaderWindow; }
+
+  template <typename Op>
+  void accumulateDistances(const int* sources, const int numSources, const Op& op, cudaStream_t stream) const {
+    if (numItems_ == 0 || numSources == 0) {
+      return;
+    }
+    if (vectorized_) {
+      launch<true>(sources, numSources, op, stream);
+    } else {
+      launch<false>(sources, numSources, op, stream);
+    }
+  }
+
+ private:
+  template <bool Vectorized, typename Op>
+  void launch(const int* sources, const int numSources, const Op& op, cudaStream_t stream) const {
+    const int grid = pickerGridSize(numItems_);
+    if (numSources > 1 && numWords_ <= kMaxTiledWords) {
+      const auto sharedBytes = static_cast<std::size_t>(kSourceTile) * numWords_ * sizeof(std::uint32_t);
+      fingerprintTiledDistancesKernel<Metric, Vectorized>
+        <<<grid, kPickerBlockSize, sharedBytes, stream>>>(fingerprints_.data(),
+                                                          bitCounts_.data(),
+                                                          numItems_,
+                                                          numWords_,
+                                                          sources,
+                                                          numSources,
+                                                          op);
+    } else {
+      fingerprintDistancesKernel<Metric, Vectorized><<<grid, kPickerBlockSize, 0, stream>>>(fingerprints_.data(),
+                                                                                            bitCounts_.data(),
+                                                                                            numItems_,
+                                                                                            numWords_,
+                                                                                            sources,
+                                                                                            numSources,
+                                                                                            op);
+    }
+    cudaCheckError(cudaGetLastError());
+  }
+
+  cuda::std::span<const std::uint32_t> fingerprints_;
+  int                                  numItems_;
+  int                                  numWords_;
+  bool                                 vectorized_;
+  AsyncDeviceVector<int>               bitCounts_;
+};
+
 template <typename Scalar>
 void validateDistanceMatrix(const cuda::std::span<const Scalar> distanceMatrix, const int numItems) {
   if (numItems < 0 || distanceMatrix.size() != static_cast<std::size_t>(numItems) * numItems) {
@@ -165,6 +388,37 @@ void validateMatrixCutoff(const double cutoff) {
   if (!std::isfinite(cutoff) || cutoff < 0.0 || cutoff > std::numeric_limits<float>::max()) {
     throw std::invalid_argument("cutoff must be finite, non-negative, and no larger than the maximum float32 value");
   }
+}
+
+void validateFingerprintInput(const cuda::std::span<const std::uint32_t> fingerprints,
+                              const int                                  numItems,
+                              const int                                  numWords) {
+  if (numItems < 0 || numWords <= 0 ||
+      fingerprints.size() != static_cast<std::size_t>(numItems) * static_cast<std::size_t>(numWords)) {
+    throw std::invalid_argument("Fingerprint buffer size does not match its shape");
+  }
+}
+
+template <typename Function>
+auto withFingerprintProvider(const cuda::std::span<const std::uint32_t> fingerprints,
+                             const int                                  numItems,
+                             const int                                  numWords,
+                             const FingerprintSimilarityMetric          metric,
+                             cudaStream_t                               stream,
+                             Function&&                                 function) {
+  validateFingerprintInput(fingerprints, numItems, numWords);
+  if (metric == FingerprintSimilarityMetric::Tanimoto) {
+    FingerprintDistanceProvider<FingerprintSimilarityMetric::Tanimoto> provider(fingerprints,
+                                                                                numItems,
+                                                                                numWords,
+                                                                                stream);
+    return function(provider);
+  }
+  if (metric == FingerprintSimilarityMetric::Cosine) {
+    FingerprintDistanceProvider<FingerprintSimilarityMetric::Cosine> provider(fingerprints, numItems, numWords, stream);
+    return function(provider);
+  }
+  throw std::invalid_argument("Unsupported fingerprint similarity metric");
 }
 
 template <typename Scalar>
@@ -215,6 +469,12 @@ void validateFirstPicks(const std::vector<int>& firstPicks, const int numItems) 
   }
 }
 
+void validateUnitCutoff(const double cutoff) {
+  if (!(cutoff >= 0.0 && cutoff <= 1.0)) {
+    throw std::invalid_argument("cutoff must be in [0, 1]");
+  }
+}
+
 }  // namespace detail
 
 PickerResult leaderFromDistanceMatrix(const cuda::std::span<const float> distanceMatrix,
@@ -233,6 +493,20 @@ PickerResult leaderFromDistanceMatrix(const cuda::std::span<const double> distan
                                       const std::vector<int>&             firstPicks,
                                       cudaStream_t                        stream) {
   return detail::leaderFromMatrix(distanceMatrix, numItems, cutoff, pickSize, firstPicks, stream);
+}
+
+PickerResult fusedLeaderGpu(const cuda::std::span<const std::uint32_t> fingerprints,
+                            const int                                  numFingerprints,
+                            const int                                  numWords,
+                            const double                               cutoff,
+                            const FingerprintSimilarityMetric          metric,
+                            const int                                  pickSize,
+                            const std::vector<int>&                    firstPicks,
+                            cudaStream_t                               stream) {
+  detail::validateUnitCutoff(cutoff);
+  return detail::withFingerprintProvider(fingerprints, numFingerprints, numWords, metric, stream, [&](auto& provider) {
+    return detail::leaderPick(provider, static_cast<float>(cutoff), pickSize, firstPicks, stream);
+  });
 }
 
 }  // namespace nvMolKit

@@ -12,7 +12,7 @@ from nvmolkit.clustering import (
     OutputMode,
     fused_butina,
 )
-from nvmolkit.pickers import leader
+from nvmolkit.pickers import fused_leader, leader
 from nvmolkit.similarity import CosineMetric, TanimotoMetric
 from nvmolkit.types import AsyncGpuResult
 
@@ -33,8 +33,27 @@ def _reference_leader(distances, cutoff, pick_size=0, first_picks=()):
     return tuple(selected)
 
 
+def _fingerprint_distance_matrix(fingerprints, metric):
+    counts = np.asarray([sum(int(word).bit_count() for word in row) for row in fingerprints])
+    result = np.zeros((len(fingerprints), len(fingerprints)), dtype=np.float64)
+    for left in range(len(fingerprints)):
+        for right in range(len(fingerprints)):
+            intersection = sum(
+                (int(left_word) & int(right_word)).bit_count()
+                for left_word, right_word in zip(fingerprints[left], fingerprints[right], strict=True)
+            )
+            if metric == "tanimoto":
+                denominator = counts[left] + counts[right] - intersection
+                similarity = intersection / denominator if denominator else 1.0
+            else:
+                denominator = np.sqrt(counts[left] * counts[right])
+                similarity = intersection / denominator if denominator else 0.0
+            result[left, right] = 1.0 - similarity
+    return result
+
+
 # ---------------------------------------------------------------------------
-# Integration: ChEMBL fingerprints against RDKit
+# Integration: ChEMBL fingerprints against RDKit and the matrix APIs
 # ---------------------------------------------------------------------------
 
 
@@ -46,6 +65,14 @@ def test_leader_matches_rdkit_on_chembl(chembl_fingerprints, chembl_distances, c
     expected = tuple(rdSimDivPickers.LeaderPicker().LazyBitVectorPick(bit_vectors, len(bit_vectors), cutoff))
 
     assert leader(chembl_distances["tanimoto"], cutoff, output=RDKIT) == expected
+
+
+@pytest.mark.parametrize("cutoff", [0.0, 0.25, 0.5, 0.625, 1.0])
+def test_fused_leader_matches_rdkit_on_chembl(chembl_fingerprints, cutoff):
+    bit_vectors, packed = chembl_fingerprints
+    expected = tuple(rdSimDivPickers.LeaderPicker().LazyBitVectorPick(bit_vectors, len(bit_vectors), cutoff))
+
+    assert fused_leader(packed, cutoff, output=RDKIT) == expected
 
 
 @pytest.mark.parametrize("num_first_picks", [3, 40])
@@ -61,6 +88,28 @@ def test_leader_first_picks_and_pick_size_match_rdkit_on_chembl(
     )
 
     assert leader(chembl_distances["tanimoto"], 0.5, pick_size=50, first_picks=first_picks, output=RDKIT) == expected
+
+
+@pytest.mark.parametrize("num_first_picks", [3, 40])
+def test_fused_leader_first_picks_and_pick_size_match_rdkit_on_chembl(chembl_fingerprints, num_first_picks):
+    bit_vectors, packed = chembl_fingerprints
+    first_picks = [int(index) for index in np.random.default_rng(5).permutation(len(bit_vectors))[:num_first_picks]]
+    expected = tuple(
+        rdSimDivPickers.LeaderPicker().LazyBitVectorPick(
+            bit_vectors, len(bit_vectors), 0.5, pickSize=50, firstPicks=first_picks
+        )
+    )
+
+    assert fused_leader(packed, 0.5, pick_size=50, first_picks=first_picks, output=RDKIT) == expected
+
+
+@pytest.mark.parametrize("metric", ["tanimoto", "cosine"])
+@pytest.mark.parametrize("cutoff", [0.3, 0.55])
+def test_fused_algorithms_match_matrix_forms_on_chembl(chembl_fingerprints, chembl_distances, metric, cutoff):
+    _, packed = chembl_fingerprints
+    distances = chembl_distances[metric]
+
+    assert fused_leader(packed, cutoff, metric=metric, output=RDKIT) == leader(distances, cutoff, output=RDKIT)
 
 
 def test_float32_and_float64_matrices_agree_on_chembl(chembl_distances):
@@ -168,14 +217,57 @@ def test_selected_device_can_differ_from_current_device(stream_kind):
         assert tuple(result.numpy()) == expected
 
 
-def test_explicit_stream_matches_default_stream_on_chembl(chembl_distances):
-    distances = chembl_distances["tanimoto"]
+@pytest.mark.parametrize("num_words", [3, 260])
+@pytest.mark.parametrize("metric", ["tanimoto", "cosine"])
+def test_fused_forms_match_matrix_forms_for_unusual_widths(float32_distances, num_words, metric):
+    # 3 words cannot use vector loads; 260 words exceed the shared-memory source tile.
+    rng = np.random.default_rng(num_words)
+    bits = rng.random((300, num_words * 32)) < 0.03
+    bits[:40] = bits[40:80] | (rng.random((40, num_words * 32)) < 0.01)
+    packed = np.packbits(bits, axis=1, bitorder="little").view(np.uint32)
+    distances = float32_distances(packed, metric)
+
+    assert fused_leader(packed, 0.9, metric=metric, output=RDKIT) == leader(distances, 0.9, output=RDKIT)
+
+
+def test_fused_forms_handle_buffers_not_aligned_for_vector_loads(chembl_fingerprints):
+    _, packed = chembl_fingerprints
+    storage = torch.zeros(packed.size + 1, dtype=torch.int32, device="cuda")
+    shifted = storage[1:].view(packed.shape)
+    shifted.copy_(torch.from_numpy(packed.view(np.int32)))
+    assert shifted.data_ptr() % 16 != 0
+
+    assert fused_leader(shifted, 0.4, output=RDKIT) == fused_leader(packed, 0.4, output=RDKIT)
+
+
+@pytest.mark.parametrize("form", ["int32", "torch_cpu", "torch_cuda", "async", "non_contiguous"])
+def test_fused_inputs_accept_array_forms(chembl_fingerprints, form):
+    _, packed = chembl_fingerprints
+    expected = fused_leader(packed, 0.4, output=RDKIT)
+    if form == "int32":
+        value = packed.view(np.int32)
+    elif form == "torch_cpu":
+        value = torch.from_numpy(packed.view(np.int32))
+    elif form == "torch_cuda":
+        value = torch.from_numpy(packed.view(np.int32)).cuda()
+    elif form == "async":
+        value = AsyncGpuResult(torch.from_numpy(packed.view(np.int32)).cuda())
+    else:
+        value = torch.from_numpy(np.asfortranarray(packed.view(np.int32))).cuda()
+        value = value.t().contiguous().t()
+        assert not value.is_contiguous()
+
+    assert fused_leader(value, 0.4, output=RDKIT) == expected
+
+
+def test_explicit_stream_matches_default_stream_on_chembl(chembl_fingerprints):
+    _, packed = chembl_fingerprints
     stream = torch.cuda.Stream()
 
-    selection = leader(distances, 0.4, stream=stream)
+    selection = fused_leader(packed, 0.4, stream=stream)
     stream.synchronize()
 
-    assert selection.numpy().tolist() == list(leader(distances, 0.4, output=RDKIT))
+    assert selection.numpy().tolist() == list(fused_leader(packed, 0.4, output=RDKIT))
 
 
 # ---------------------------------------------------------------------------
@@ -183,9 +275,10 @@ def test_explicit_stream_matches_default_stream_on_chembl(chembl_distances):
 # ---------------------------------------------------------------------------
 
 
-def test_aap_is_not_yet_supported_by_fused_butina():
+@pytest.mark.parametrize("function", [fused_butina, fused_leader])
+def test_aap_is_not_yet_supported_by_fused_forms(function):
     with pytest.raises(NotImplementedError, match="AAPMetric"):
-        fused_butina(np.zeros((1, 1), dtype=np.uint32), 0.5, metric="aap")
+        function(np.zeros((1, 1), dtype=np.uint32), 0.5, metric="aap")
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +309,30 @@ def test_forced_picks_are_kept_even_when_they_exclude_each_other():
 
 
 def test_identical_inputs_collapse_to_one_leader():
+    fingerprints = np.tile(np.asarray([[0b1011, 0b0110]], dtype=np.uint32), (300, 1))
+
     assert leader(np.zeros((300, 300)), 0.0, output=RDKIT) == (0,)
+    assert fused_leader(fingerprints, 0.0, output=RDKIT) == (0,)
+
+
+@pytest.mark.parametrize("metric", [TanimotoMetric(), CosineMetric()])
+@pytest.mark.parametrize("cutoff", [0.0, 0.5, 1.0])
+def test_empty_fingerprints_follow_each_metric_convention(metric, cutoff):
+    # Tanimoto defines two empty fingerprints as identical; cosine defines them as unrelated.
+    metric_name = "tanimoto" if isinstance(metric, TanimotoMetric) else "cosine"
+    fingerprints = np.asarray([[0], [0b0011], [0], [0b0010], [0b1100]], dtype=np.uint32)
+    distances = _fingerprint_distance_matrix(fingerprints, metric_name)
+
+    assert fused_leader(fingerprints, cutoff, metric=metric, output=RDKIT) == leader(distances, cutoff, output=RDKIT)
+
+
+def test_fused_tanimoto_distance_matches_double_precision_matrix_at_cutoff_boundary():
+    # Intersection 1 and union 3: 2/3 rounds up in float32, but 1 - float32(1/3) rounds down.
+    fingerprints = np.asarray([[0b001], [0b111]], dtype=np.uint32)
+    distances = np.asarray([[0.0, 2 / 3], [2 / 3, 0.0]])
+    cutoff = float(np.nextafter(np.float32(2 / 3), np.float32(0)))
+
+    assert fused_leader(fingerprints, cutoff, output=RDKIT) == leader(distances, cutoff, output=RDKIT) == (0, 1)
 
 
 def test_leader_removes_itself_without_a_zero_diagonal():
@@ -227,9 +343,11 @@ def test_leader_removes_itself_without_a_zero_diagonal():
 
 def test_empty_and_singleton_inputs():
     empty_matrix = np.empty((0, 0))
+    empty_fingerprints = np.empty((0, 4), dtype=np.uint32)
     singleton = np.zeros((1, 1))
 
     assert leader(empty_matrix, 0.0, output=RDKIT) == ()
+    assert fused_leader(empty_fingerprints, 0.5, output=RDKIT) == ()
     assert leader(singleton, 0.0, output=RDKIT) == (0,)
 
 
@@ -243,6 +361,7 @@ def test_numpy_and_torch_integer_arguments_are_accepted():
 @pytest.mark.parametrize(
     "function, args",
     [
+        (fused_leader, (0.5,)),
         (fused_butina, (0.5,)),
     ],
 )
@@ -281,6 +400,13 @@ def test_matrix_sphere_exclusion_rejects_invalid_cutoffs(function, cutoff):
         function(_small_matrix(), cutoff)
 
 
+@pytest.mark.parametrize("function", [fused_leader])
+@pytest.mark.parametrize("cutoff", [-0.1, 1.1, np.nan])
+def test_fused_sphere_exclusion_rejects_invalid_cutoffs(function, cutoff):
+    with pytest.raises(ValueError, match="cutoff"):
+        function(np.asarray([[1]], dtype=np.uint32), cutoff)
+
+
 @pytest.mark.parametrize(
     "matrix, message",
     [
@@ -312,8 +438,17 @@ def test_pick_size_is_validated(pick_size):
         leader(_small_matrix(), 0.2, pick_size=pick_size)
 
 
+def test_fingerprint_input_is_validated():
+    with pytest.raises(ValueError, match="2D"):
+        fused_leader(np.asarray([1, 2], dtype=np.uint32), 0.2)
+    with pytest.raises(ValueError, match="dtype"):
+        fused_leader(np.asarray([[1.0]]), 0.2)
+    with pytest.raises(ValueError, match="at least one fingerprint word"):
+        fused_leader(np.empty((2, 0), dtype=np.uint32), 0.2)
+
+
 def test_metric_and_output_are_validated():
     with pytest.raises(ValueError, match="metric must be"):
-        fused_butina(np.asarray([[1]], dtype=np.uint32), 0.2, metric="euclidean")
+        fused_leader(np.asarray([[1]], dtype=np.uint32), 0.2, metric="euclidean")
     with pytest.raises(TypeError, match="OutputMode"):
         leader(_small_matrix(), 0.2, output="rdkit")

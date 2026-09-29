@@ -13,7 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""GPU-accelerated clustering from distance matrices, fingerprints, or ordered RDKit molecules."""
+"""GPU-accelerated clustering.
+
+Each algorithm has a matrix form that takes a precomputed distance matrix and a
+``fused_`` form that computes distances from fingerprints or molecules as needed.
+"""
 
 from dataclasses import dataclass
 from enum import Enum
@@ -23,13 +27,12 @@ import numpy as np
 import torch
 
 from nvmolkit import _clustering
+from nvmolkit._distance_inputs import _packed_metric_name
 from nvmolkit._fingerprint_inputs import _prepare_packed_fingerprints
 from nvmolkit.similarity import (
     _DEFAULT_AAP_METRIC,
     AAPMetric,
-    CosineMetric,
     Metric,
-    TanimotoMetric,
     _resolve_aap_metric,
     _resolve_metric,
 )
@@ -81,10 +84,6 @@ def _validate_assignment(assignment: str) -> None:
 
 def _aap_args(metric: AAPMetric) -> tuple:
     return (metric.max_path_length, metric.histogram_bins, metric.sinkhorn_iterations, metric.sinkhorn_temperature)
-
-
-def _packed_metric_name(metric: TanimotoMetric | CosineMetric) -> str:
-    return "tanimoto" if isinstance(metric, TanimotoMetric) else "cosine"
 
 
 def _cluster_arrays_to_rdkit(cluster_ids_array, centroids_array) -> _RDKitClusters:

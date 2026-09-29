@@ -107,6 +107,7 @@ Diversity Selection
    :template: function_template.rst
 
    pickers.leader
+   pickers.fused_leader
 
 Maximum Common Substructure (MCS)
 ---------------------------------

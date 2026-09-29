@@ -107,6 +107,21 @@ MatrixInput parseDistanceMatrix(const boost::python::dict& matrix) {
   throw std::invalid_argument("distance_matrix must have dtype float32 or float64");
 }
 
+struct FingerprintInput {
+  cuda::std::span<const std::uint32_t> fingerprints;
+  int                                  numItems;
+  int                                  numWords;
+};
+
+FingerprintInput parseFingerprints(const boost::python::dict& fingerprints) {
+  boost::python::tuple shape       = boost::python::extract<boost::python::tuple>(fingerprints["shape"]);
+  boost::python::tuple data        = boost::python::extract<boost::python::tuple>(fingerprints["data"]);
+  const std::size_t    dataPointer = boost::python::extract<std::size_t>(data[0]);
+  return {nvMolKit::getSpanFromDictElems<std::uint32_t>(reinterpret_cast<void*>(dataPointer), shape),
+          boost::python::extract<int>(shape[0]),
+          boost::python::extract<int>(shape[1])};
+}
+
 std::vector<int> extractIndices(const boost::python::object& values) {
   std::vector<int> result;
   const auto       count = boost::python::len(values);
@@ -115,6 +130,16 @@ std::vector<int> extractIndices(const boost::python::object& values) {
     result.push_back(boost::python::extract<int>(values[index]));
   }
   return result;
+}
+
+nvMolKit::FingerprintSimilarityMetric parseFingerprintMetric(const std::string& metric) {
+  if (metric == "tanimoto") {
+    return nvMolKit::FingerprintSimilarityMetric::Tanimoto;
+  }
+  if (metric == "cosine") {
+    return nvMolKit::FingerprintSimilarityMetric::Cosine;
+  }
+  throw std::invalid_argument("metric must be one of ['tanimoto', 'cosine']");
 }
 
 }  // namespace
@@ -226,6 +251,32 @@ BOOST_PYTHON_MODULE(_clustering) {
     },
     (boost::python::arg("distance_matrix"),
      boost::python::arg("cutoff"),
+     boost::python::arg("pick_size"),
+     boost::python::arg("first_picks"),
+     boost::python::arg("stream")));
+
+  boost::python::def(
+    "fused_leader",
+    +[](const boost::python::dict&   fingerprints,
+        const double                 cutoff,
+        const std::string&           metric,
+        const int                    pickSize,
+        const boost::python::object& firstPicks,
+        const std::uintptr_t         streamPtr) {
+      const auto input  = parseFingerprints(fingerprints);
+      auto       result = nvMolKit::fusedLeaderGpu(input.fingerprints,
+                                             input.numItems,
+                                             input.numWords,
+                                             cutoff,
+                                             parseFingerprintMetric(metric),
+                                             pickSize,
+                                             extractIndices(firstPicks),
+                                             requireStream(streamPtr));
+      return wrapPickerResult(result);
+    },
+    (boost::python::arg("fingerprints"),
+     boost::python::arg("cutoff"),
+     boost::python::arg("metric"),
      boost::python::arg("pick_size"),
      boost::python::arg("first_picks"),
      boost::python::arg("stream")));
