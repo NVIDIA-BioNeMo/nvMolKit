@@ -434,8 +434,10 @@ class NativeUFFBatchedForcefield {
                              const bp::list&                       positionConstraints,
                              const bp::list&                       angleConstraints,
                              const bp::list&                       torsionConstraints,
-                             const nvMolKit::BatchHardwareOptions& hwOpts)
-      : hwOpts_(hwOpts) {
+                             const nvMolKit::BatchHardwareOptions& hwOpts,
+                             const nvMolKit::PrecisionMode&        precision)
+      : hwOpts_(hwOpts),
+        precision_(precision) {
     throwIfCudaError(cudaGetDevice(&gpuId_), "UFF wrapper/cudaGetDevice");
     mols_             = nvMolKit::extractMolecules(molecules);
     const int numMols = static_cast<int>(mols_.size());
@@ -468,14 +470,21 @@ class NativeUFFBatchedForcefield {
                                                                  vdwThresholds_,
                                                                  ignoreInterfragInteractions_,
                                                                  constraints_,
-                                                                 hwOpts_) :
+                                                                 hwOpts_,
+                                                                 nvMolKit::CoordinateOutput::RDKIT_CONFORMERS,
+                                                                 -1,
+                                                                 precision_) :
                           nvMolKit::UFF::UFFMinimizeMoleculesConfs(mols_,
                                                              maxIters,
                                                              gradTol,
                                                              vdwThresholds_,
                                                              ignoreInterfragInteractions_,
                                                              constraints_,
-                                                             hwOpts_);
+                                                             hwOpts_,
+                                                             nvMolKit::CoordinateOutput::RDKIT_CONFORMERS,
+                                                             -1,
+                                                             nullptr,
+                                                             precision_);
 
     uploadConformerPositions(mols_, positionsDevice_);
 
@@ -508,7 +517,8 @@ class NativeUFFBatchedForcefield {
                                                                  constraints_,
                                                                  hwOpts_,
                                                                  nvMolKit::CoordinateOutput::DEVICE,
-                                                                 gpuId_) :
+                                                                 gpuId_,
+                                                                 precision_) :
                           nvMolKit::UFF::UFFMinimizeMoleculesConfs(mols_,
                                                              maxIters,
                                                              gradTol,
@@ -517,7 +527,9 @@ class NativeUFFBatchedForcefield {
                                                              constraints_,
                                                              hwOpts_,
                                                              nvMolKit::CoordinateOutput::DEVICE,
-                                                             gpuId_);
+                                                             gpuId_,
+                                                             nullptr,
+                                                             precision_);
     if (!result.device.has_value()) {
       throw std::runtime_error("UFFMinimizeMoleculesConfs(DEVICE) returned no device result");
     }
@@ -563,7 +575,7 @@ class NativeUFFBatchedForcefield {
       numConformersPerMol_[molIdx] = confIdx;
     }
 
-    forcefield_ = std::make_unique<nvMolKit::UFFBatchedForcefield>(systemHost, metadata);
+    forcefield_ = std::make_unique<nvMolKit::UFFBatchedForcefield>(systemHost, metadata, nullptr, precision_);
     positionsDevice_.setFromVector(systemHost.positions);
     gradDevice_.resize(forcefield_->totalPositions());
     energyOutsDevice_.resize(forcefield_->numMolecules());
@@ -574,6 +586,7 @@ class NativeUFFBatchedForcefield {
   std::vector<bool>                  ignoreInterfragInteractions_;
   std::vector<FC::PerMolConstraints> constraints_;
   nvMolKit::BatchHardwareOptions     hwOpts_;
+  nvMolKit::PrecisionMode            precision_;
 
   std::unique_ptr<nvMolKit::UFFBatchedForcefield> forcefield_;
   nvMolKit::AsyncDeviceVector<double>             positionsDevice_;
@@ -626,7 +639,8 @@ BOOST_PYTHON_MODULE(_batchedForcefield) {
                                                                       const bp::list&,
                                                                       const bp::list&,
                                                                       const bp::list&,
-                                                                      const nvMolKit::BatchHardwareOptions&>())
+                                                                      const nvMolKit::BatchHardwareOptions&,
+                                                                      const nvMolKit::PrecisionMode&>())
     .def("computeEnergy", &NativeUFFBatchedForcefield::computeEnergy)
     .def("computeGradients", &NativeUFFBatchedForcefield::computeGradients)
     .def("minimize", &NativeUFFBatchedForcefield::minimize)

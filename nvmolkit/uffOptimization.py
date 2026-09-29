@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Literal, overload
 from rdkit.Chem import rdForceFieldHelpers
 
 from nvmolkit._arrayHelpers import *  # noqa: F403  # registers PyArray for DEVICE-mode returns
-from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions, HardwareOptions
+from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions, HardwareOptions, PrecisionMode
 
 if TYPE_CHECKING:
     from rdkit.Chem import Mol
@@ -40,6 +40,7 @@ def UFFOptimizeMoleculesConfs(
     targetGpu: int = -1,
     minimizerKind: str = "BFGS",
     fireOptions: FireOptions | None = None,
+    precision: PrecisionMode = PrecisionMode.FULL,
 ) -> list[list[float]]: ...
 @overload
 def UFFOptimizeMoleculesConfs(
@@ -53,6 +54,7 @@ def UFFOptimizeMoleculesConfs(
     targetGpu: int = -1,
     minimizerKind: str = "BFGS",
     fireOptions: FireOptions | None = None,
+    precision: PrecisionMode = PrecisionMode.FULL,
 ) -> Device3DResult: ...
 def UFFOptimizeMoleculesConfs(
     molecules: list["Mol"],
@@ -64,6 +66,7 @@ def UFFOptimizeMoleculesConfs(
     targetGpu: int = -1,
     minimizerKind: str = "BFGS",
     fireOptions: FireOptions | None = None,
+    precision: PrecisionMode = PrecisionMode.FULL,
 ):
     """Optimize conformers for multiple molecules using the UFF force field.
 
@@ -85,6 +88,8 @@ def UFFOptimizeMoleculesConfs(
             selects the first configured execution GPU.
         minimizerKind: ``"BFGS"`` (default) or ``"FIRE"``.
         fireOptions: FIRE algorithm options used when ``minimizerKind="FIRE"``.
+        precision: ``PrecisionMode.FULL`` (default) or
+            ``PrecisionMode.SINGLE``.
 
     Returns:
         For ``RDKIT_CONFORMERS``: list of lists of optimized conformer energies.
@@ -148,6 +153,7 @@ def UFFOptimizeMoleculesConfs(
             int(targetGpu),
             minimizer_kind,
             fireOptions._as_native(),
+            precision,
         )
     return _uffOptimization.UFFOptimizeMoleculesConfs(
         molecules,
@@ -157,4 +163,5 @@ def UFFOptimizeMoleculesConfs(
         hardwareOptions._as_native(),
         minimizer_kind,
         fireOptions._as_native(),
+        precision,
     )
