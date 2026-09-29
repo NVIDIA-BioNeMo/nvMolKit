@@ -336,6 +336,9 @@ target_link_libraries(test_etkdg_result_tracker PRIVATE etkdg_impl)
 add_executable(test_butina test_butina.cpp)
 target_link_libraries(test_butina PRIVATE butina device)
 
+add_executable(test_diversity_pickers test_diversity_pickers.cu)
+target_link_libraries(test_diversity_pickers PRIVATE diversity_pickers device)
+
 add_executable(test_boolean_tree test_boolean_tree.cu)
 target_link_libraries(test_boolean_tree PRIVATE substruct_definitions device)
 
@@ -421,6 +424,7 @@ set(TEST_LIST
     test_descriptors3d
     test_boolean_tree
     test_butina
+    test_diversity_pickers
     test_bfgs_hessian
     test_tfd_cpu
     test_tfd_kernels

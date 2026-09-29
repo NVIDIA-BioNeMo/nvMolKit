@@ -99,6 +99,15 @@ Clustering
    clustering.OutputMode
    clustering.ClusterDeviceResult
 
+Diversity Selection
+-------------------
+
+.. autosummary::
+   :toctree: generated/
+   :template: function_template.rst
+
+   pickers.leader
+
 Maximum Common Substructure (MCS)
 ---------------------------------
 

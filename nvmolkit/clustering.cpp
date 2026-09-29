@@ -21,11 +21,14 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <variant>
+#include <vector>
 
 #include "nvmolkit/array_helpers.h"
 #include "nvmolkit/boost_python_utils.h"
 #include "src/aap.h"
 #include "src/butina.h"
+#include "src/diversity_pickers.h"
 #include "src/utils/device.h"
 
 namespace {
@@ -68,6 +71,50 @@ boost::python::tuple wrapClusteringResult(const nvMolKit::ClusteringResult& resu
     toOwnedPyArray(nvMolKit::makePyArray(clusterIds)),
     toOwnedPyArray(nvMolKit::makePyArray(centroids)),
     toOwnedPyArray(nvMolKit::makePyArray(clusterSizes, "i8", boost::python::make_tuple(clusterSizes.size()))));
+}
+
+boost::python::object wrapPickerResult(nvMolKit::PickerResult& result) {
+  return toOwnedPyArray(nvMolKit::makePyArray(result.indices));
+}
+
+cudaStream_t requireStream(const std::uintptr_t streamPtr) {
+  auto streamOpt = nvMolKit::acquireExternalStream(streamPtr);
+  if (!streamOpt) {
+    throw std::invalid_argument("Invalid CUDA stream");
+  }
+  return *streamOpt;
+}
+
+struct MatrixInput {
+  std::variant<cuda::std::span<const float>, cuda::std::span<const double>> distances;
+  int                                                                       numItems;
+};
+
+//! Parses a float32 or float64 square matrix from its CUDA array interface.
+MatrixInput parseDistanceMatrix(const boost::python::dict& matrix) {
+  boost::python::tuple shape       = boost::python::extract<boost::python::tuple>(matrix["shape"]);
+  boost::python::tuple data        = boost::python::extract<boost::python::tuple>(matrix["data"]);
+  const std::size_t    dataPointer = boost::python::extract<std::size_t>(data[0]);
+  const std::string    typestr     = boost::python::extract<std::string>(matrix["typestr"]);
+  const int            numItems    = boost::python::extract<int>(shape[0]);
+  auto*                pointer     = reinterpret_cast<void*>(dataPointer);
+  if (typestr == "<f4") {
+    return {nvMolKit::getSpanFromDictElems<float>(pointer, shape), numItems};
+  }
+  if (typestr == "<f8") {
+    return {nvMolKit::getSpanFromDictElems<double>(pointer, shape), numItems};
+  }
+  throw std::invalid_argument("distance_matrix must have dtype float32 or float64");
+}
+
+std::vector<int> extractIndices(const boost::python::object& values) {
+  std::vector<int> result;
+  const auto       count = boost::python::len(values);
+  result.reserve(count);
+  for (int index = 0; index < count; ++index) {
+    result.push_back(boost::python::extract<int>(values[index]));
+  }
+  return result;
 }
 
 }  // namespace
@@ -156,6 +203,32 @@ BOOST_PYTHON_MODULE(_clustering) {
      boost::python::arg("sinkhorn_temperature") = 0.104F,
      boost::python::arg("device_output")        = true,
      boost::python::arg("stream")               = 0));
+
+  boost::python::def(
+    "leader",
+    +[](const boost::python::dict&   distanceMatrix,
+        const double                 cutoff,
+        const int                    pickSize,
+        const boost::python::object& firstPicks,
+        const std::uintptr_t         streamPtr) {
+      const auto input  = parseDistanceMatrix(distanceMatrix);
+      auto       result = std::visit(
+        [&](const auto distances) {
+          return nvMolKit::leaderFromDistanceMatrix(distances,
+                                                    input.numItems,
+                                                    cutoff,
+                                                    pickSize,
+                                                    extractIndices(firstPicks),
+                                                    requireStream(streamPtr));
+        },
+        input.distances);
+      return wrapPickerResult(result);
+    },
+    (boost::python::arg("distance_matrix"),
+     boost::python::arg("cutoff"),
+     boost::python::arg("pick_size"),
+     boost::python::arg("first_picks"),
+     boost::python::arg("stream")));
 
   boost::python::def(
     "butina",
