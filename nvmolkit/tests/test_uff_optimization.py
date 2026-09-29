@@ -127,6 +127,8 @@ def assert_minimized_energies_match_rdkit(
     ``starting_energies``. Every energy must stay finite. FULL keeps the strict per-conformer check.
     """
     max_outliers = 1 if precision == PrecisionMode.SINGLE else 0
+    # Float32 energy sums carry ~1e-5 kcal/mol of rounding, which dominates the relative error near zero.
+    abs_tol = 1e-3 if precision == PrecisionMode.SINGLE else 0.0
     mismatches = []
     assert len(rdkit_energies) == len(nvmolkit_energies)
     for mol_idx, (rdkit_mol_energies, nvmolkit_mol_energies) in enumerate(zip(rdkit_energies, nvmolkit_energies)):
@@ -135,7 +137,7 @@ def assert_minimized_energies_match_rdkit(
             assert math.isfinite(nvmolkit_energy), f"Molecule {mol_idx}, conformer {conf_idx}: non-finite energy"
             diff = abs(rdkit_energy - nvmolkit_energy)
             rel = diff / abs(rdkit_energy) if abs(rdkit_energy) > 1e-10 else diff
-            if rel >= rel_tol:
+            if rel >= rel_tol and diff >= abs_tol:
                 starting_energy = starting_energies[mol_idx][conf_idx]
                 assert nvmolkit_energy < starting_energy, (
                     f"Molecule {mol_idx}, conformer {conf_idx}: energy rose from {starting_energy:.6f} "
