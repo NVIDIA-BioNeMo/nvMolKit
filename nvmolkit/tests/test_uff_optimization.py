@@ -55,14 +55,13 @@ def uff_test_mols(num_mols=4):
         if not rdForceFieldHelpers.UFFHasAllMoleculeParams(mol):
             continue
         molecules.append(mol)
-        if len(molecules) >= num_mols + 1:
+        if len(molecules) >= num_mols:
             break
 
-    if len(molecules) < num_mols + 1:
-        pytest.skip(f"Expected {num_mols + 1} UFF-valid molecules, found {len(molecules)}")
+    if len(molecules) < num_mols:
+        pytest.skip(f"Expected {num_mols} UFF-valid molecules, found {len(molecules)}")
 
-    # Small numeric differences select a different basin for the first molecule.
-    return molecules[1:]
+    return molecules
 
 
 def create_hard_copy_mols(molecules):
@@ -118,6 +117,30 @@ def calculate_rdkit_uff_energies(
     return all_energies
 
 
+def assert_minimized_energies_match_rdkit(rdkit_energies, nvmolkit_energies, precision, rel_tol=1e-3):
+    """Compare per-conformer minimized energies against RDKit.
+
+    Single precision's coarser gradients can let a conformer settle in a different local minimum than
+    RDKit's reference, so SINGLE allows one such outlier while every energy must stay finite. FULL keeps
+    the strict per-conformer check.
+    """
+    max_outliers = 1 if precision == PrecisionMode.SINGLE else 0
+    mismatches = []
+    assert len(rdkit_energies) == len(nvmolkit_energies)
+    for mol_idx, (rdkit_mol_energies, nvmolkit_mol_energies) in enumerate(zip(rdkit_energies, nvmolkit_energies)):
+        assert len(rdkit_mol_energies) == len(nvmolkit_mol_energies)
+        for conf_idx, (rdkit_energy, nvmolkit_energy) in enumerate(zip(rdkit_mol_energies, nvmolkit_mol_energies)):
+            assert math.isfinite(nvmolkit_energy), f"Molecule {mol_idx}, conformer {conf_idx}: non-finite energy"
+            diff = abs(rdkit_energy - nvmolkit_energy)
+            rel = diff / abs(rdkit_energy) if abs(rdkit_energy) > 1e-10 else diff
+            if rel >= rel_tol:
+                mismatches.append(
+                    f"Molecule {mol_idx}, conformer {conf_idx}: "
+                    f"RDKit={rdkit_energy:.6f} nvMolKit={nvmolkit_energy:.6f} rel={rel:.6f}"
+                )
+    assert len(mismatches) <= max_outliers, "\n".join(mismatches)
+
+
 def test_uff_optimization_serial_vs_rdkit(uff_test_mols, precision):
     rdkit_mols = create_hard_copy_mols(uff_test_mols)
     nvmolkit_mols = create_hard_copy_mols(uff_test_mols)
@@ -129,16 +152,7 @@ def test_uff_optimization_serial_vs_rdkit(uff_test_mols, precision):
         mol_energies = nvmolkit_uff.UFFOptimizeMoleculesConfs([mol], maxIters=200, precision=precision)
         nvmolkit_energies.extend(mol_energies)
 
-    assert len(rdkit_energies) == len(nvmolkit_energies)
-    for mol_idx, (rdkit_mol_energies, nvmolkit_mol_energies) in enumerate(zip(rdkit_energies, nvmolkit_energies)):
-        assert len(rdkit_mol_energies) == len(nvmolkit_mol_energies)
-        for conf_idx, (rdkit_energy, nvmolkit_energy) in enumerate(zip(rdkit_mol_energies, nvmolkit_mol_energies)):
-            diff = abs(rdkit_energy - nvmolkit_energy)
-            rel = diff / abs(rdkit_energy) if abs(rdkit_energy) > 1e-10 else diff
-            assert rel < 1e-3, (
-                f"Molecule {mol_idx}, conformer {conf_idx}: "
-                f"RDKit={rdkit_energy:.6f} nvMolKit={nvmolkit_energy:.6f} rel={rel:.6f}"
-            )
+    assert_minimized_energies_match_rdkit(rdkit_energies, nvmolkit_energies, precision)
 
 
 def test_uff_optimization_batch_vs_rdkit(uff_test_mols, precision):
@@ -154,16 +168,7 @@ def test_uff_optimization_batch_vs_rdkit(uff_test_mols, precision):
         precision=precision,
     )
 
-    assert len(rdkit_energies) == len(nvmolkit_energies)
-    for mol_idx, (rdkit_mol_energies, nvmolkit_mol_energies) in enumerate(zip(rdkit_energies, nvmolkit_energies)):
-        assert len(rdkit_mol_energies) == len(nvmolkit_mol_energies)
-        for conf_idx, (rdkit_energy, nvmolkit_energy) in enumerate(zip(rdkit_mol_energies, nvmolkit_mol_energies)):
-            diff = abs(rdkit_energy - nvmolkit_energy)
-            rel = diff / abs(rdkit_energy) if abs(rdkit_energy) > 1e-10 else diff
-            assert rel < 1e-3, (
-                f"Molecule {mol_idx}, conformer {conf_idx}: "
-                f"RDKit={rdkit_energy:.6f} nvMolKit={nvmolkit_energy:.6f} rel={rel:.6f}"
-            )
+    assert_minimized_energies_match_rdkit(rdkit_energies, nvmolkit_energies, precision)
 
 
 def test_uff_optimization_empty_input(precision):
@@ -265,16 +270,7 @@ def test_uff_optimization_threshold_and_interfrag_vs_rdkit(precision):
         precision=precision,
     )
 
-    assert len(rdkit_energies) == len(nvmolkit_energies)
-    for mol_idx, (rdkit_mol_energies, nvmolkit_mol_energies) in enumerate(zip(rdkit_energies, nvmolkit_energies)):
-        assert len(rdkit_mol_energies) == len(nvmolkit_mol_energies)
-        for conf_idx, (rdkit_energy, nvmolkit_energy) in enumerate(zip(rdkit_mol_energies, nvmolkit_mol_energies)):
-            diff = abs(rdkit_energy - nvmolkit_energy)
-            rel = diff / abs(rdkit_energy) if abs(rdkit_energy) > 1e-10 else diff
-            assert rel < 1e-3, (
-                f"Molecule {mol_idx}, conformer {conf_idx}: "
-                f"RDKit={rdkit_energy:.6f} nvMolKit={nvmolkit_energy:.6f} rel={rel:.6f}"
-            )
+    assert_minimized_energies_match_rdkit(rdkit_energies, nvmolkit_energies, precision)
 
 
 def test_uff_optimization_device_output_matches_host(uff_test_mols, precision):

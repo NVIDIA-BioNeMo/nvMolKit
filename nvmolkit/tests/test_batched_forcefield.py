@@ -550,12 +550,16 @@ def _build_stable_hardware_options_batch(forcefield_type, hardware_options, prec
     return forcefield_type(clone_mols(source_mols), hardwareOptions=hardware_options, precision=precision)
 
 
-def _assert_batched_minimize_matches_rdkit(specs, mols, opt_energies, converged, make_ref_ff, precision):
+def _assert_batched_minimize_matches_rdkit(
+    specs, mols, opt_energies, converged, make_ref_ff, precision, max_outliers=0
+):
     """Compare nvMolKit and RDKit minimization results.
 
     Compare each molecule and conformer while each molecule carries a different
-    constraint from ``specs``.
+    constraint from ``specs``. Up to ``max_outliers`` conformers may differ from
+    RDKit, e.g. by converging to a different local minimum.
     """
+    mismatches = []
     for mol_idx, (mol, spec) in enumerate(zip(mols, specs)):
         assert len(opt_energies[mol_idx]) == mol.GetNumConformers()
         assert all(converged[mol_idx]), f"Mol {mol_idx} failed to converge"
@@ -567,7 +571,10 @@ def _assert_batched_minimize_matches_rdkit(specs, mols, opt_energies, converged,
             ref_ff.Minimize(maxIts=500)
             want_energy = ref_ff.CalcEnergy()
             rel_tol, abs_tol = (2e-2, 1e-1) if precision == PrecisionMode.SINGLE else (1e-3, 1e-3)
-            assert opt_energies[mol_idx][conf_idx] == pytest.approx(want_energy, rel=rel_tol, abs=abs_tol)
+            got_energy = opt_energies[mol_idx][conf_idx]
+            if got_energy != pytest.approx(want_energy, rel=rel_tol, abs=abs_tol):
+                mismatches.append(f"Mol {mol_idx} conformer {conf_idx}: got {got_energy:.6f}, want {want_energy:.6f}")
+    assert len(mismatches) <= max_outliers, "\n".join(mismatches)
 
 
 def test_mmff_batched_minimize_with_constraints_batch_matches_rdkit(precision):
@@ -901,23 +908,9 @@ _UFF_BATCH_CONSTRAINT_SPECS = [
 ]
 
 
-def _uff_batch_constraint_specs(precision):
-    """Constraint specs for ``precision``.
-
-    Single precision settles the extra perturbed angle- and torsion-constrained conformers in
-    different basins than RDKit, so those molecules keep one conformer there.
-    """
-    if precision == PrecisionMode.FULL:
-        return _UFF_BATCH_CONSTRAINT_SPECS
-    return [
-        {**spec, "num_confs": 1} if spec["smiles"] in ("CCCCCCO", "CCCC") else spec
-        for spec in _UFF_BATCH_CONSTRAINT_SPECS
-    ]
-
-
-def _build_constrained_uff_batch(specs=None, hardwareOptions=None, precision=PrecisionMode.FULL):
-    if specs is None:
-        specs = _uff_batch_constraint_specs(precision)
+def _build_constrained_uff_batch(
+    specs=_UFF_BATCH_CONSTRAINT_SPECS, hardwareOptions=None, precision=PrecisionMode.FULL
+):
     mols = [perturb_conformers(make_embedded_mol(s["smiles"], num_confs=s["num_confs"])) for s in specs]
     ff_mols = clone_mols(mols)
     ff = UFFBatchedForcefield(ff_mols, hardwareOptions=hardwareOptions, precision=precision)
@@ -936,7 +929,14 @@ def test_uff_batched_minimize_with_constraints_batch_matches_rdkit(precision):
         return ref_ff
 
     _assert_batched_minimize_matches_rdkit(
-        _uff_batch_constraint_specs(precision), mols, opt_energies, converged, make_ref, precision
+        _UFF_BATCH_CONSTRAINT_SPECS,
+        mols,
+        opt_energies,
+        converged,
+        make_ref,
+        precision,
+        # Single precision can settle a perturbed, constrained conformer in a different local minimum.
+        max_outliers=1 if precision == PrecisionMode.SINGLE else 0,
     )
 
 

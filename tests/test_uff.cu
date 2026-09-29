@@ -298,8 +298,6 @@ TEST_P(UFFValidationPrecisionTest, BatchMinimizerMatchesRDKitFinalEnergies) {
   std::vector<std::unique_ptr<RDKit::ROMol>> mols;
   getMols(sdfPath, mols, 8);
   ASSERT_FALSE(mols.empty());
-  // Small numeric differences select a different basin for the first molecule.
-  mols.erase(mols.begin());
 
   BatchedMolecularSystemHost host;
   std::vector<double>        referenceFinalEnergies;
@@ -323,7 +321,13 @@ TEST_P(UFFValidationPrecisionTest, BatchMinimizerMatchesRDKitFinalEnergies) {
   energiesDevice.zero();
 
   nvMolKit::UFFBatchedForcefield forcefield(host, {}, nullptr, GetParam());
-  auto                           runMinimizer = [&](auto&& minimizer) {
+  ASSERT_EQ(forcefield.computeEnergy(energiesDevice.data(), positionsDevice.data()), cudaSuccess);
+  std::vector<double> startEnergies(mols.size(), 0.0);
+  energiesDevice.copyToHost(startEnergies);
+  cudaDeviceSynchronize();
+  energiesDevice.zero();
+
+  auto runMinimizer = [&](auto&& minimizer) {
     return minimizer.minimize(1000, 1.0e-6, forcefield, positionsDevice, gradDevice, energiesDevice);
   };
   const bool needsMore = nvMolKit::usesSinglePrecision(GetParam()) ?
@@ -334,9 +338,15 @@ TEST_P(UFFValidationPrecisionTest, BatchMinimizerMatchesRDKitFinalEnergies) {
   std::vector<double> gotFinalEnergies(mols.size(), 0.0);
   energiesDevice.copyToHost(gotFinalEnergies);
   cudaDeviceSynchronize();
-  for (size_t i = 0; i < gotFinalEnergies.size(); ++i) {
-    EXPECT_NEAR(gotFinalEnergies[i], referenceFinalEnergies[i], kMinimizeEnergyTol) << "molecule " << i;
-  }
+  // Single precision's coarser gradients can let a molecule settle in a different local minimum than
+  // RDKit's reference; FULL keeps the strict per-molecule check.
+  const EnergyMatchTolerance tolerance = nvMolKit::usesSinglePrecision(GetParam()) ?
+                                           EnergyMatchTolerance{.tightTolerance   = kMinimizeEnergyTol,
+                                                                .maxOutliers      = 1,
+                                                                .averageTolerance = 1e-3,
+                                                                .requireProgress  = true} :
+                                           EnergyMatchTolerance{.tightTolerance = kMinimizeEnergyTol};
+  expectEnergyMatch(gotFinalEnergies, referenceFinalEnergies, startEnergies, tolerance);
 }
 
 TEST_P(UFFValidationPrecisionTest, FireWrapperImprovesAndApproachesRDKitFinalEnergies) {

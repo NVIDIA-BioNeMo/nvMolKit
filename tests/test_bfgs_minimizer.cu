@@ -352,51 +352,6 @@ void minimizeMMFF(Minimizer&                        minimizer,
   }
 }
 
-//! Tolerance policy for comparing per-molecule minimized energies against an RDKit reference.
-//! With `maxOutliers == 0` this reduces exactly to a strict Pointwise(DoubleNear(tightTolerance)) check.
-struct EnergyMatchTolerance {
-  double tightTolerance;
-  int    maxOutliers      = 0;
-  double averageTolerance = 0.0;  // 0 disables the average-difference check
-  bool   requireProgress  = false;
-};
-
-//! Compares `got` against `ref` per-molecule, allowing up to `tol.maxOutliers` molecules (e.g. ones that
-//! converged to an alternate local minimum) to exceed `tol.tightTolerance`.
-void expectEnergyMatch(const std::vector<double>&  got,
-                       const std::vector<double>&  ref,
-                       const std::vector<double>&  start,
-                       const EnergyMatchTolerance& tol) {
-  if (tol.maxOutliers == 0) {
-    EXPECT_THAT(got, ::testing::Pointwise(::testing::DoubleNear(tol.tightTolerance), ref));
-  }
-  int    outliers        = 0;
-  double matchingDiffSum = 0.0;
-  for (size_t i = 0; i < got.size(); ++i) {
-    if (tol.requireProgress) {
-      EXPECT_TRUE(std::isfinite(got[i]));
-      EXPECT_LT(got[i], start[i]);
-    }
-    const double diff = std::abs(got[i] - ref[i]);
-    if (diff > tol.tightTolerance) {
-      ++outliers;
-    } else {
-      matchingDiffSum += diff;
-    }
-  }
-  if (tol.maxOutliers > 0) {
-    EXPECT_LE(outliers, tol.maxOutliers) << outliers << " of " << got.size() << " molecules exceeded tight tolerance "
-                                         << tol.tightTolerance;
-  }
-  if (tol.averageTolerance > 0.0) {
-    const int matchingCount = static_cast<int>(got.size()) - outliers;
-    if (matchingCount > 0) {
-      EXPECT_LT(matchingDiffSum / static_cast<double>(matchingCount), tol.averageTolerance)
-        << "Average energy difference between RDKit and nvMolKit minimizations is too large";
-    }
-  }
-}
-
 void refLineSearchSetup(unsigned int  dim,
                         const double* oldPt,
                         const double* grad,
