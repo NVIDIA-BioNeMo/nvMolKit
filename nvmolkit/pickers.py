@@ -103,10 +103,11 @@ def fused_leader(
 
     Args:
         x: Packed int32 or uint32 fingerprints of shape ``(N, num_words)``.
-        cutoff: Inclusive exclusion distance in ``[0, 1]``.
+        cutoff: Inclusive exclusion distance in ``[0, 1]``, rounded to float32.
         metric: Similarity metric. :class:`~nvmolkit.similarity.AAPMetric` is not
             yet supported.
-        pick_size: Maximum number of leaders, or ``0`` for no limit.
+        pick_size: Maximum number of leaders, or ``0`` for no limit. All
+            ``first_picks`` are retained even if they exceed this limit.
         first_picks: Unique indices selected as leaders, in order, before the
             input-order pass.
         stream: CUDA stream to use. If None, uses the current stream.
@@ -120,7 +121,13 @@ def fused_leader(
     resolved, inputs, active_stream = _prepare_fused_input(x, metric, stream, "fused_leader")
     pick_size = operator.index(pick_size)
     first_picks = _index_tuple("first_picks", first_picks)
-    result = _clustering.fused_leader(
-        inputs, cutoff, _packed_metric_name(resolved), pick_size, first_picks, active_stream.cuda_stream
-    )
-    return _resolve_selection_output(result, output)
+    with torch.cuda.stream(active_stream):
+        result = _clustering.fused_leader(
+            inputs.__cuda_array_interface__,
+            cutoff,
+            _packed_metric_name(resolved),
+            pick_size,
+            first_picks,
+            active_stream.cuda_stream,
+        )
+        return _resolve_selection_output(result, output)

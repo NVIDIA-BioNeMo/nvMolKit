@@ -31,4 +31,4 @@ def _prepare_fused_input(x, metric: Metric, stream: torch.cuda.Stream | None, na
     if isinstance(resolved, AAPMetric):
         raise NotImplementedError(f"{name} does not yet support AAPMetric")
     (fingerprints,), active_stream = _prepare_packed_fingerprints(("x", x), stream=stream)
-    return resolved, fingerprints.__cuda_array_interface__, active_stream
+    return resolved, fingerprints, active_stream

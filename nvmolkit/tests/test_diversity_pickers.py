@@ -1,13 +1,14 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import weakref
 
 import numpy as np
 import pytest
 import torch
 from rdkit.SimDivFilters import rdSimDivPickers
 
-from nvmolkit import _clustering, pickers
+from nvmolkit import _clustering, _distance_inputs, pickers
 from nvmolkit.clustering import (
     OutputMode,
     fused_butina,
@@ -160,15 +161,19 @@ def test_matrix_cutoff_accepts_largest_finite_float32():
     assert leader(distances, largest_float32, output=RDKIT) == (0,)
 
 
+@pytest.mark.parametrize(
+    "function, metric", [(leader, "matrix"), (fused_leader, "tanimoto"), (fused_leader, "cosine")]
+)
 @pytest.mark.parametrize("output", [RDKIT, OutputMode.DEVICE])
-def test_native_call_and_output_wrapping_use_selected_stream(monkeypatch, output):
+def test_native_call_and_output_wrapping_use_selected_stream(monkeypatch, function, metric, output):
     stream = torch.cuda.Stream()
-    points = np.asarray([0.0, 0.05, 0.25, 0.6, 0.65, 1.0])
-    distances = np.abs(points[:, None] - points[None, :])
-    inputs = torch.from_numpy(distances).to(stream.device)
-    expected = _reference_leader(distances, 0.2)
+    fingerprints = np.asarray([[3], [2], [12], [7]], dtype=np.int32)
+    distances = _fingerprint_distance_matrix(fingerprints, "tanimoto" if metric == "matrix" else metric)
+    inputs = torch.from_numpy(distances if metric == "matrix" else fingerprints).to(stream.device)
+    options = {} if metric == "matrix" else {"metric": metric}
+    expected = _reference_leader(distances, 0.5)
     torch.cuda.current_stream().synchronize()
-    native = _clustering.leader
+    native = getattr(_clustering, function.__name__)
     resolve = pickers._resolve_selection_output
     calls = []
 
@@ -182,10 +187,10 @@ def test_native_call_and_output_wrapping_use_selected_stream(monkeypatch, output
         calls.append("output")
         return resolve(*args, **kwargs)
 
-    monkeypatch.setattr(_clustering, "leader", check_native)
+    monkeypatch.setattr(_clustering, function.__name__, check_native)
     monkeypatch.setattr(pickers, "_resolve_selection_output", check_output)
     original_stream = torch.cuda.current_stream()
-    result = leader(inputs, 0.2, stream=stream, output=output)
+    result = function(inputs, 0.5, stream=stream, output=output, **options)
     stream.synchronize()
 
     assert calls == ["native", "output"]
@@ -196,21 +201,25 @@ def test_native_call_and_output_wrapping_use_selected_stream(monkeypatch, output
     assert result == expected
 
 
+@pytest.mark.parametrize(
+    "function, metric", [(leader, "matrix"), (fused_leader, "tanimoto"), (fused_leader, "cosine")]
+)
 @pytest.mark.parametrize("stream_kind", ["explicit", "default"])
-def test_selected_device_can_differ_from_current_device(stream_kind):
+def test_selected_device_can_differ_from_current_device(function, metric, stream_kind):
     if torch.cuda.device_count() < 2:
         pytest.skip("Requires two CUDA devices")
-    points = np.asarray([0.0, 0.05, 0.25, 0.6, 0.65, 1.0])
-    distances = np.abs(points[:, None] - points[None, :])
-    expected = _reference_leader(distances, 0.2)
+    fingerprints = np.asarray([[3], [2], [12], [7]], dtype=np.int32)
+    distances = _fingerprint_distance_matrix(fingerprints, "tanimoto" if metric == "matrix" else metric)
+    options = {} if metric == "matrix" else {"metric": metric}
+    expected = _reference_leader(distances, 0.5)
     with torch.cuda.device(1):
-        inputs = torch.from_numpy(distances).to("cuda:1")
+        inputs = torch.from_numpy(distances if metric == "matrix" else fingerprints).to("cuda:1")
         stream = torch.cuda.Stream() if stream_kind == "explicit" else torch.cuda.default_stream()
         torch.cuda.synchronize()
 
     with torch.cuda.device(0):
         stream_argument = stream if stream_kind == "explicit" else None
-        result = leader(inputs, 0.2, stream=stream_argument)
+        result = function(inputs, 0.5, stream=stream_argument, **options)
         assert torch.cuda.current_device() == 0
         stream.synchronize()
         assert result.device.index == 1
@@ -258,6 +267,44 @@ def test_fused_inputs_accept_array_forms(chembl_fingerprints, form):
         assert not value.is_contiguous()
 
     assert fused_leader(value, 0.4, output=RDKIT) == expected
+
+
+@pytest.mark.parametrize("form", ["numpy", "torch_cpu", "non_contiguous_cuda"])
+@pytest.mark.parametrize("metric", ["tanimoto", "cosine"])
+def test_fused_prepared_input_owns_storage_through_native_call(monkeypatch, form, metric):
+    fingerprints = np.asarray([[3, 0], [2, 0], [12, 0], [7, 0], [0, 16], [3, 0]], dtype=np.int32)
+    distances = _fingerprint_distance_matrix(fingerprints, metric)
+    expected = _reference_leader(distances, 0.5)
+    prepared_reference = None
+    prepare = _distance_inputs._prepare_packed_fingerprints
+
+    def capture_prepared(*args, **kwargs):
+        nonlocal prepared_reference
+        tensors, active_stream = prepare(*args, **kwargs)
+        prepared_reference = weakref.ref(tensors[0])
+        return tensors, active_stream
+
+    native = _clustering.fused_leader
+
+    def allocate_before_native(array_interface, *args):
+        # A freed preparation buffer can be recycled by this same-size allocation.
+        overwrite = torch.empty(fingerprints.shape, dtype=torch.int32, device="cuda").zero_()
+        assert prepared_reference() is not None
+        assert overwrite.data_ptr() != array_interface["data"][0]
+        return native(array_interface, *args)
+
+    monkeypatch.setattr(_distance_inputs, "_prepare_packed_fingerprints", capture_prepared)
+    monkeypatch.setattr(_clustering, "fused_leader", allocate_before_native)
+    if form == "numpy":
+        inputs = fingerprints.copy()
+    elif form == "torch_cpu":
+        inputs = torch.from_numpy(fingerprints.copy())
+    else:
+        storage = torch.from_numpy(fingerprints.T.copy()).cuda()
+        inputs = storage.T
+        assert not inputs.is_contiguous()
+
+    assert fused_leader(inputs, 0.5, metric=metric, output=RDKIT) == expected
 
 
 def test_explicit_stream_matches_default_stream_on_chembl(chembl_fingerprints):
