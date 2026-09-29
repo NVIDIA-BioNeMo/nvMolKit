@@ -557,7 +557,8 @@ def _assert_batched_minimize_matches_rdkit(
 
     Compare each molecule and conformer while each molecule carries a different
     constraint from ``specs``. Up to ``max_outliers`` conformers may differ from
-    RDKit, e.g. by converging to a different local minimum.
+    RDKit, e.g. by converging to a different local minimum, but each must still
+    have lowered its energy from the starting geometry.
     """
     mismatches = []
     for mol_idx, (mol, spec) in enumerate(zip(mols, specs)):
@@ -568,11 +569,15 @@ def _assert_batched_minimize_matches_rdkit(
             ref_mol = Chem.Mol(mol)
             ref_ff = make_ref_ff(ref_mol, conf.GetId())
             spec["apply_rdkit"](ref_ff)
+            starting_energy = ref_ff.CalcEnergy()
             ref_ff.Minimize(maxIts=500)
             want_energy = ref_ff.CalcEnergy()
             rel_tol, abs_tol = (2e-2, 1e-1) if precision == PrecisionMode.SINGLE else (1e-3, 1e-3)
             got_energy = opt_energies[mol_idx][conf_idx]
             if got_energy != pytest.approx(want_energy, rel=rel_tol, abs=abs_tol):
+                assert got_energy < starting_energy, (
+                    f"Mol {mol_idx} conformer {conf_idx}: energy rose from {starting_energy:.6f} to {got_energy:.6f}"
+                )
                 mismatches.append(f"Mol {mol_idx} conformer {conf_idx}: got {got_energy:.6f}, want {want_energy:.6f}")
     assert len(mismatches) <= max_outliers, "\n".join(mismatches)
 

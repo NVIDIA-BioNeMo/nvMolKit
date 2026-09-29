@@ -117,12 +117,14 @@ def calculate_rdkit_uff_energies(
     return all_energies
 
 
-def assert_minimized_energies_match_rdkit(rdkit_energies, nvmolkit_energies, precision, rel_tol=1e-3):
+def assert_minimized_energies_match_rdkit(
+    rdkit_energies, nvmolkit_energies, starting_energies, precision, rel_tol=1e-3
+):
     """Compare per-conformer minimized energies against RDKit.
 
     Single precision's coarser gradients can let a conformer settle in a different local minimum than
-    RDKit's reference, so SINGLE allows one such outlier while every energy must stay finite. FULL keeps
-    the strict per-conformer check.
+    RDKit's reference, so SINGLE allows one such outlier, which must still have lowered its energy from
+    ``starting_energies``. Every energy must stay finite. FULL keeps the strict per-conformer check.
     """
     max_outliers = 1 if precision == PrecisionMode.SINGLE else 0
     mismatches = []
@@ -134,6 +136,11 @@ def assert_minimized_energies_match_rdkit(rdkit_energies, nvmolkit_energies, pre
             diff = abs(rdkit_energy - nvmolkit_energy)
             rel = diff / abs(rdkit_energy) if abs(rdkit_energy) > 1e-10 else diff
             if rel >= rel_tol:
+                starting_energy = starting_energies[mol_idx][conf_idx]
+                assert nvmolkit_energy < starting_energy, (
+                    f"Molecule {mol_idx}, conformer {conf_idx}: energy rose from {starting_energy:.6f} "
+                    f"to {nvmolkit_energy:.6f} (RDKit={rdkit_energy:.6f})"
+                )
                 mismatches.append(
                     f"Molecule {mol_idx}, conformer {conf_idx}: "
                     f"RDKit={rdkit_energy:.6f} nvMolKit={nvmolkit_energy:.6f} rel={rel:.6f}"
@@ -145,6 +152,7 @@ def test_uff_optimization_serial_vs_rdkit(uff_test_mols, precision):
     rdkit_mols = create_hard_copy_mols(uff_test_mols)
     nvmolkit_mols = create_hard_copy_mols(uff_test_mols)
 
+    starting_energies = calculate_rdkit_uff_energies(create_hard_copy_mols(uff_test_mols), maxIters=0)
     rdkit_energies = calculate_rdkit_uff_energies(rdkit_mols, maxIters=200)
 
     nvmolkit_energies = []
@@ -152,13 +160,14 @@ def test_uff_optimization_serial_vs_rdkit(uff_test_mols, precision):
         mol_energies = nvmolkit_uff.UFFOptimizeMoleculesConfs([mol], maxIters=200, precision=precision)
         nvmolkit_energies.extend(mol_energies)
 
-    assert_minimized_energies_match_rdkit(rdkit_energies, nvmolkit_energies, precision)
+    assert_minimized_energies_match_rdkit(rdkit_energies, nvmolkit_energies, starting_energies, precision)
 
 
 def test_uff_optimization_batch_vs_rdkit(uff_test_mols, precision):
     rdkit_mols = create_hard_copy_mols(uff_test_mols)
     nvmolkit_mols = create_hard_copy_mols(uff_test_mols)
 
+    starting_energies = calculate_rdkit_uff_energies(create_hard_copy_mols(uff_test_mols), maxIters=0)
     rdkit_energies = calculate_rdkit_uff_energies(rdkit_mols, maxIters=200)
     hardware_options = HardwareOptions(batchSize=2, batchesPerGpu=1)
     nvmolkit_energies = nvmolkit_uff.UFFOptimizeMoleculesConfs(
@@ -168,7 +177,7 @@ def test_uff_optimization_batch_vs_rdkit(uff_test_mols, precision):
         precision=precision,
     )
 
-    assert_minimized_energies_match_rdkit(rdkit_energies, nvmolkit_energies, precision)
+    assert_minimized_energies_match_rdkit(rdkit_energies, nvmolkit_energies, starting_energies, precision)
 
 
 def test_uff_optimization_empty_input(precision):
@@ -253,6 +262,15 @@ def test_uff_optimization_threshold_and_interfrag_vs_rdkit(precision):
     thresholds = [25.0, 100.0]
     ignore_interfrag = [False, True]
 
+    starting_energies = [
+        calculate_rdkit_uff_energies(
+            [mol],
+            maxIters=0,
+            vdwThreshold=threshold,
+            ignoreInterfragInteractions=ignore,
+        )[0]
+        for mol, threshold, ignore in zip(create_hard_copy_mols(mols), thresholds, ignore_interfrag)
+    ]
     rdkit_energies = [
         calculate_rdkit_uff_energies(
             [mol],
@@ -270,7 +288,7 @@ def test_uff_optimization_threshold_and_interfrag_vs_rdkit(precision):
         precision=precision,
     )
 
-    assert_minimized_energies_match_rdkit(rdkit_energies, nvmolkit_energies, precision)
+    assert_minimized_energies_match_rdkit(rdkit_energies, nvmolkit_energies, starting_energies, precision)
 
 
 def test_uff_optimization_device_output_matches_host(uff_test_mols, precision):
