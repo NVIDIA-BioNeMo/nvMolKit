@@ -14,6 +14,7 @@
 #include "src/butina.h"
 #include "src/butina_common.cuh"
 #include "src/fingerprint_similarity_device.cuh"
+#include "src/utils/conditional_loop_graph.cuh"
 #include "src/utils/cub_helpers.cuh"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"

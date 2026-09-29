@@ -12,8 +12,8 @@
 #include <stdexcept>
 #include <vector>
 
-#include "src/butina_common.cuh"
 #include "src/diversity_pickers.h"
+#include "src/utils/conditional_loop_graph.cuh"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
 #include "src/utils/host_vector.h"
@@ -22,9 +22,9 @@
 //
 //   int size() const;
 //   int leaderWindow() const;
-//   template <typename Op> void forEachDistance(const int* sources, int numSources, const Op& op, cudaStream_t);
+//   template <typename Op> void accumulateDistances(const int* sources, int numSources, const Op& op, cudaStream_t);
 //
-// forEachDistance visits every candidate c for which op.skip(c) is false:
+// accumulateDistances folds ordered source distances into each candidate c for which op.skip(c) is false:
 //
 //   auto state = op.start(c);
 //   for k in [0, numSources): op.visit(state, k, sources[k] == c, distance(sources[k] -> c));
@@ -117,8 +117,17 @@ PickerResult leaderPick(Provider&               provider,
     return PickerResult{AsyncDeviceVector<int>(0, stream)};
   }
 
-  const int                        limit      = pickSize == 0 ? numItems : pickSize;
-  const int                        windowSize = std::clamp(provider.leaderWindow(), 1, kMaxLeaderWindow);
+  const int limit = pickSize == 0 ? numItems : pickSize;
+  if (limit == 1 || firstPicks.size() >= static_cast<std::size_t>(limit)) {
+    const std::vector<int> initial = firstPicks.empty() ? std::vector<int>{0} : firstPicks;
+    PickerResult           result{AsyncDeviceVector<int>(initial.size(), stream)};
+    result.indices.copyFromHost(initial);
+    cudaCheckError(cudaStreamSynchronize(stream));
+    return result;
+  }
+
+  const int remainingPicks = limit - static_cast<int>(firstPicks.size());
+  const int windowSize     = std::clamp(provider.leaderWindow(), 1, std::min(kMaxLeaderWindow, remainingPicks));
   AsyncDeviceVector<int>           picks(std::max<std::size_t>(limit, firstPicks.size()), stream);
   AsyncDeviceVector<std::uint8_t>  active(numItems, stream);
   AsyncDeviceVector<std::uint32_t> hits(numItems, stream);
@@ -135,7 +144,7 @@ PickerResult leaderPick(Provider&               provider,
   for (std::size_t first = 0; first < firstPicks.size(); first += kMaxLeaderWindow) {
     const auto chunk = std::min<std::size_t>(kMaxLeaderWindow, firstPicks.size() - first);
     window.copyFromHost(firstPicks, chunk, first);
-    provider.forEachDistance(window.data(), static_cast<int>(chunk), hitsOp, stream);
+    provider.accumulateDistances(window.data(), static_cast<int>(chunk), hitsOp, stream);
     launchResolveLeaderWindow(state, static_cast<int>(chunk), true, limit, {}, stream);
     launchApplyLeaderWindow(state, numItems, stream);
   }
@@ -144,7 +153,7 @@ PickerResult leaderPick(Provider&               provider,
   if (static_cast<int>(firstPicks.size()) < limit) {
     const ConditionalLoopGraph loop([&](cudaStream_t captureStream, cudaGraphConditionalHandle handle) {
       launchGatherLeaderWindow(state, numItems, windowSize, captureStream);
-      provider.forEachDistance(window.data(), windowSize, hitsOp, captureStream);
+      provider.accumulateDistances(window.data(), windowSize, hitsOp, captureStream);
       launchResolveLeaderWindow(state, windowSize, false, limit, handle, captureStream);
       launchApplyLeaderWindow(state, numItems, captureStream);
     });

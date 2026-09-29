@@ -49,8 +49,12 @@ def leader(
     Args:
         distance_matrix: Square float32 or float64 matrix of shape ``(N, N)``.
             Element ``[i, j]`` is the distance from item ``i`` to item ``j``.
-        cutoff: Inclusive exclusion distance. Must be finite and non-negative.
-        pick_size: Maximum number of leaders, or ``0`` for no limit.
+            Values are converted to float32 for comparisons. Values that
+            overflow float32 during conversion become infinity.
+        cutoff: Inclusive exclusion distance, rounded to float32. Must be
+            between zero and the largest finite float32 value.
+        pick_size: Maximum number of leaders, or ``0`` for no limit. All
+            ``first_picks`` are retained even if they exceed this limit.
         first_picks: Unique indices selected as leaders, in order, before the
             input-order pass.
         stream: CUDA stream to use. If None, uses the current stream.
@@ -62,11 +66,12 @@ def leader(
     """
     _validate_output(output)
     matrix, active_stream = _prepare_distance_matrix(distance_matrix, stream)
-    result = _clustering.leader(
-        matrix.__cuda_array_interface__,
-        cutoff,
-        operator.index(pick_size),
-        _index_tuple("first_picks", first_picks),
-        active_stream.cuda_stream,
-    )
-    return _resolve_selection_output(result, output)
+    with torch.cuda.stream(active_stream):
+        result = _clustering.leader(
+            matrix.__cuda_array_interface__,
+            cutoff,
+            operator.index(pick_size),
+            _index_tuple("first_picks", first_picks),
+            active_stream.cuda_stream,
+        )
+        return _resolve_selection_output(result, output)

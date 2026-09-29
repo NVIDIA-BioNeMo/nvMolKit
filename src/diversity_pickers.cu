@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cub/block/block_scan.cuh>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -136,7 +137,7 @@ template <typename Scalar> class MatrixDistanceProvider {
   int leaderWindow() const { return kMaxLeaderWindow; }
 
   template <typename Op>
-  void forEachDistance(const int* sources, const int numSources, const Op& op, cudaStream_t stream) const {
+  void accumulateDistances(const int* sources, const int numSources, const Op& op, cudaStream_t stream) const {
     if (numItems_ == 0 || numSources == 0) {
       return;
     }
@@ -161,8 +162,8 @@ void validateDistanceMatrix(const cuda::std::span<const Scalar> distanceMatrix, 
 }
 
 void validateMatrixCutoff(const double cutoff) {
-  if (!std::isfinite(cutoff) || cutoff < 0.0) {
-    throw std::invalid_argument("cutoff must be finite and non-negative");
+  if (!std::isfinite(cutoff) || cutoff < 0.0 || cutoff > std::numeric_limits<float>::max()) {
+    throw std::invalid_argument("cutoff must be finite, non-negative, and no larger than the maximum float32 value");
   }
 }
 
