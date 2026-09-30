@@ -13,13 +13,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <optional>
+#include <type_traits>
 #include <unordered_map>
 
 #include "rdkit_extensions/dist_geom_flattened_builder.h"
 #include "src/etkdg_stage_etk_minimization.h"
 #include "src/forcefields/etk_batched_forcefield.h"
 #include "src/minimizer/bfgs_minimize.h"
+#include "src/utils/device_convert.cuh"
 
 namespace nvMolKit {
 namespace detail {
@@ -29,12 +30,13 @@ constexpr int dim = 4;
 namespace {
 
 // TODO: Only run on active systems.
+template <typename Scalar>
 __global__ void updateReferencePositionsKernel(const int      numTerms,
                                                const double*  refPos,
                                                const int*     idx1,
                                                const int*     idx2,
-                                               double*        lowerBound,
-                                               double*        upperBound,
+                                               Scalar*        lowerBound,
+                                               Scalar*        upperBound,
                                                const uint8_t* isImproperConstrainedTerm = nullptr) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < numTerms) {
@@ -58,13 +60,14 @@ __global__ void updateReferencePositionsKernel(const int      numTerms,
 
     const double dist = sqrt((p1x - p2x) * (p1x - p2x) + (p1y - p2y) * (p1y - p2y) + (p1z - p2z) * (p1z - p2z));
 
-    lowerBound[idx] = dist - boundDelta;
-    upperBound[idx] = dist + boundDelta;
+    lowerBound[idx] = static_cast<Scalar>(dist - boundDelta);
+    upperBound[idx] = static_cast<Scalar>(dist + boundDelta);
   }
 }
 
+template <typename Scalar>
 __global__ void planarToleranceCheck(const int      numSystems,
-                                     const double*  energies,
+                                     const Scalar*  energies,
                                      const int*     numImpropers,
                                      const uint8_t* activeThisStage,
                                      uint8_t*       failedThisStage) {
@@ -78,7 +81,7 @@ __global__ void planarToleranceCheck(const int      numSystems,
   const int        numTermsForSystem = numImpropers[sysIdx];
   constexpr double toleranceFactor   = 0.7;
   const double     tolerance         = toleranceFactor * numTermsForSystem;
-  const double     e                 = energies[sysIdx];
+  const Scalar     e                 = energies[sysIdx];
 
   if (e > tolerance) {
     // If the energy is too high, mark the system as failed.
@@ -86,7 +89,8 @@ __global__ void planarToleranceCheck(const int      numSystems,
   }
 }
 
-void runPlanarToleranceCheck(const AsyncDeviceVector<double>& planarEnergies,
+template <typename Scalar>
+void runPlanarToleranceCheck(const AsyncDeviceVector<Scalar>& planarEnergies,
                              const int*                       numImpropers,
                              const ETKDGContext&              ctx,
                              cudaStream_t                     stream) {
@@ -101,12 +105,13 @@ void runPlanarToleranceCheck(const AsyncDeviceVector<double>& planarEnergies,
 
 }  // namespace
 
-ETKMinimizationStage::ETKMinimizationStage(
+template <typename real>
+ETKMinimizationStageT<real>::ETKMinimizationStageT(
   const std::vector<const RDKit::ROMol*>&                                                 mols,
   const std::vector<EmbedArgs>&                                                           eargs,
   const RDKit::DGeomHelpers::EmbedParameters&                                             embedParam,
   const ETKDGContext&                                                                     ctx,
-  BfgsBatchMinimizer&                                                                     minimizer,
+  BfgsBatchMinimizerT<real>&                                                              minimizer,
   cudaStream_t                                                                            stream,
   std::unordered_map<const RDKit::ROMol*, nvMolKit::DistGeom::Energy3DForceContribsHost>* cache)
     : embedParam_(embedParam),
@@ -173,8 +178,9 @@ ETKMinimizationStage::ETKMinimizationStage(
   }
 }
 
-void ETKMinimizationStage::setReferenceValues(const ETKDGContext&                          ctx,
-                                              const DistGeom::Energy3DForceContribsDevice& contribs) {
+template <typename real>
+void ETKMinimizationStageT<real>::setReferenceValues(const ETKDGContext&                                 ctx,
+                                                     const DistGeom::Energy3DForceContribsDeviceT<real>& contribs) {
   const int numTerms12 = contribs.dist12Terms.idx1.size();
   const int numTerms13 = contribs.dist13Terms.idx1.size();
 
@@ -201,69 +207,118 @@ void ETKMinimizationStage::setReferenceValues(const ETKDGContext&               
   }
 }
 
-void ETKMinimizationStage::execute(ETKDGContext& ctx) {
+template <typename real> void ETKMinimizationStageT<real>::execute(ETKDGContext& ctx) {
   const auto effectiveBackend = minimizer_.resolveBackend(ctx.systemHost.atomStarts);
 
   // 1. Update reference positions for start of loop.
-  constexpr int                             maxIters = 300;  // Taken from hard-coded RDKit value.
-  DistGeom::BatchedMolecular3DDeviceBuffers molSystemDevice;
-  std::optional<ETKBatchedForcefield>       forcefield;
-  AsyncDeviceVector<double>*                planarEnergies = nullptr;
-  const int*                                numImpropers   = nullptr;
+  constexpr int maxIters = 300;  // Taken from hard-coded RDKit value.
 
   if (effectiveBackend == BfgsBackend::BATCHED) {
-    forcefield.emplace(molSystemHost, ctx.systemHost.atomStarts, embedParam_.useBasicKnowledge, metadata_, stream_);
-    setReferenceValues(ctx, forcefield->contribs());
+    ETKBatchedForcefield forcefield(molSystemHost,
+                                    ctx.systemHost.atomStarts,
+                                    embedParam_.useBasicKnowledge,
+                                    metadata_,
+                                    stream_,
+                                    BfgsBatchMinimizerT<real>::kPrecision);
+    const auto&          contribs = [&]() -> const DistGeom::Energy3DForceContribsDeviceT<real>& {
+      if constexpr (std::is_same_v<real, double>) {
+        return forcefield.contribs();
+      } else {
+        return forcefield.singleContribs();
+      }
+    }();
+    setReferenceValues(ctx, contribs);
+    const int* numImpropers = contribs.improperTorsionTerms.numImpropers.data();
     grad_.resize(ctx.systemHost.positions.size());
     grad_.zero();
     energyOuts_.resize(ctx.systemHost.atomStarts.size() - 1);
     energyOuts_.zero();
     minimizer_.minimize(maxIters,
                         embedParam_.optimizerForceTol,
-                        *forcefield,
+                        forcefield,
                         ctx.systemDevice.positions,
                         grad_,
                         energyOuts_,
                         ctx.activeThisStage.data());
-    planarEnergies = &energyOuts_;
-    numImpropers   = forcefield->contribs().improperTorsionTerms.numImpropers.data();
     if (embedParam_.useBasicKnowledge) {
-      planarEnergies->zero();
-      forcefield->computePlanarEnergy(planarEnergies->data(),
-                                      ctx.systemDevice.positions.data(),
-                                      ctx.activeThisStage.data(),
-                                      stream_);
+      energyOuts_.zero();
+      forcefield.computePlanarEnergy(energyOuts_.data(),
+                                     ctx.systemDevice.positions.data(),
+                                     ctx.activeThisStage.data(),
+                                     stream_);
+      runPlanarToleranceCheck(energyOuts_, numImpropers, ctx, stream_);
     }
   } else {
-    setStreams(molSystemDevice, stream_);
-    std::vector<double> positions(ctx.systemHost.atomStarts.back() * dim, 0.0);
-    setupDeviceBuffers3D(molSystemHost, molSystemDevice, positions, ctx.systemHost.atomStarts.size() - 1);
-    DistGeom::sendContribsAndIndicesToDevice3D(molSystemHost, molSystemDevice);
-    setReferenceValues(ctx, molSystemDevice.contribs);
+    auto minimizePerMolecule = [&](auto& device, auto& positions) {
+      using Scalar = std::remove_pointer_t<decltype(positions.data())>;
+      DistGeom::setStreams(device, stream_);
+      DistGeom::sendContribsAndIndicesToDevice3D(molSystemHost, device);
+      if constexpr (std::is_same_v<Scalar, double>) {
+        DistGeom::allocateIntermediateBuffers3D(molSystemHost, device);
+      } else {
+        device.energyOuts.resize(ctx.systemHost.atomStarts.size() - 1);
+        device.energyOuts.zero();
+      }
+      device.grad.resize(positions.size());
+      device.grad.zero();
+      setReferenceValues(ctx, device.contribs);
 
-    minimizer_.minimizeWithETK(maxIters,
-                               embedParam_.optimizerForceTol,
-                               ctx.systemHost.atomStarts,
-                               ctx.systemDevice.atomStarts,
-                               ctx.systemDevice.positions,
-                               molSystemDevice,
-                               ctx.activeThisStage.data());
-    planarEnergies = &molSystemDevice.energyOuts;
-    numImpropers   = molSystemDevice.contribs.improperTorsionTerms.numImpropers.data();
-    if (embedParam_.useBasicKnowledge) {
-      DistGeom::computePlanarEnergy(molSystemDevice,
-                                    ctx.systemDevice.atomStarts,
-                                    ctx.systemDevice.positions,
-                                    ctx.activeThisStage.data(),
-                                    nullptr,
-                                    stream_);
+      minimizer_.minimizeWithETK(maxIters,
+                                 embedParam_.optimizerForceTol,
+                                 ctx.systemHost.atomStarts,
+                                 ctx.systemDevice.atomStarts,
+                                 positions,
+                                 device,
+                                 ctx.activeThisStage.data());
+      if (embedParam_.useBasicKnowledge) {
+        device.energyOuts.zero();
+        if constexpr (std::is_same_v<Scalar, float>) {
+          cudaCheckError(DistGeom::launchPlanarEnergyKernelETK(
+            static_cast<int>(ctx.systemHost.atomStarts.size() - 1),
+            DistGeom::toEnergy3DForceContribsDevicePtr(device),
+            DistGeom::toBatchedIndices3DDevicePtr(device, ctx.systemDevice.atomStarts.data()),
+            positions.data(),
+            device.energyOuts.data(),
+            ctx.activeThisStage.data(),
+            stream_));
+        } else {
+          cudaCheckError(DistGeom::computePlanarEnergy(device,
+                                                       device.energyOuts.data(),
+                                                       ctx.systemDevice.atomStarts.data(),
+                                                       positions.data(),
+                                                       ctx.activeThisStage.data(),
+                                                       positions.data(),
+                                                       stream_));
+        }
+        runPlanarToleranceCheck(device.energyOuts,
+                                device.contribs.improperTorsionTerms.numImpropers.data(),
+                                ctx,
+                                stream_);
+      }
+    };
+
+    typename BfgsBatchMinimizerT<real>::ETKDeviceBuffers device;
+    if constexpr (std::is_same_v<real, double>) {
+      minimizePerMolecule(device, ctx.systemDevice.positions);
+    } else {
+      AsyncDeviceVector<real> positions;
+      positions.setStream(stream_);
+      positions.resize(ctx.systemDevice.positions.size());
+      cudaCheckError(nvMolKit::detail::convertDeviceArray(positions.data(),
+                                                          ctx.systemDevice.positions.data(),
+                                                          positions.size(),
+                                                          stream_));
+      minimizePerMolecule(device, positions);
+      cudaCheckError(nvMolKit::detail::convertDeviceArray(ctx.systemDevice.positions.data(),
+                                                          positions.data(),
+                                                          positions.size(),
+                                                          stream_));
     }
   }
-
-  if (embedParam_.useBasicKnowledge) {
-    runPlanarToleranceCheck(*planarEnergies, numImpropers, ctx, stream_);
-  }
 }
+
+template class ETKMinimizationStageT<double>;
+template class ETKMinimizationStageT<float>;
 
 }  // namespace detail
 }  // namespace nvMolKit

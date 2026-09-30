@@ -84,6 +84,24 @@ cudaError_t launchBfgsMinimizePerMolKernelETK(int                               
                                               int16_t*                                        statuses = nullptr,
                                               cudaStream_t                                    stream   = nullptr);
 
+cudaError_t launchBfgsMinimizePerMolKernelETK(int                                                   numMols,
+                                              const int*                                            molIds,
+                                              int                                                   maxAtoms,
+                                              const int*                                            atomStarts,
+                                              const int*                                            hessianStarts,
+                                              int                                                   numIters,
+                                              double                                                gradTol,
+                                              bool                                                  scaleGrads,
+                                              const DistGeom::Energy3DForceContribsDevicePtrSingle& terms,
+                                              const DistGeom::BatchedIndices3DDevicePtr&            systemIndices,
+                                              float*                                                positions,
+                                              float*                                                grad,
+                                              float*                                                inverseHessian,
+                                              float**                                               scratchBuffers,
+                                              float*                                                energyOuts,
+                                              int16_t*                                              statuses = nullptr,
+                                              cudaStream_t                                          stream   = nullptr);
+
 /// Launch per-molecule BFGS minimization kernel - DG  specialization
 cudaError_t launchBfgsMinimizePerMolKernelDG(int                                           numMols,
                                              const int*                                    molIds,
@@ -104,6 +122,26 @@ cudaError_t launchBfgsMinimizePerMolKernelDG(int                                
                                              double                                        fourthDimWeight,
                                              int16_t*                                      statuses = nullptr,
                                              cudaStream_t                                  stream   = nullptr);
+
+cudaError_t launchBfgsMinimizePerMolKernelDG(int                                                 numMols,
+                                             const int*                                          molIds,
+                                             int                                                 maxAtoms,
+                                             const int*                                          atomStarts,
+                                             const int*                                          hessianStarts,
+                                             int                                                 numIters,
+                                             double                                              gradTol,
+                                             bool                                                scaleGrads,
+                                             const DistGeom::EnergyForceContribsDevicePtrSingle& terms,
+                                             const DistGeom::BatchedIndicesDevicePtr&            systemIndices,
+                                             float*                                              positions,
+                                             float*                                              grad,
+                                             float*                                              inverseHessian,
+                                             float**                                             scratchBuffers,
+                                             float*                                              energyOuts,
+                                             double                                              chiralWeight,
+                                             double                                              fourthDimWeight,
+                                             int16_t*                                            statuses = nullptr,
+                                             cudaStream_t                                        stream   = nullptr);
 }  // namespace nvMolKit
 
 #endif  // NVMOLKIT_BFGS_MINIMIZE_PERMOL_KERNELS_H

@@ -513,7 +513,8 @@ namespace {
 void testEnergyImprovement(const std::vector<RDKit::ROMol*>&    mols,
                            int                                  confsPerMolecule = 1,
                            RDKit::DGeomHelpers::EmbedParameters params           = RDKit::DGeomHelpers::ETKDGv3,
-                           nvMolKit::BfgsBackend                backend = nvMolKit::BfgsBackend::PER_MOLECULE) {
+                           nvMolKit::BfgsBackend                backend          = nvMolKit::BfgsBackend::PER_MOLECULE,
+                           nvMolKit::PrecisionMode              precision        = nvMolKit::PrecisionMode::FULL) {
   // Store initial energies for each molecule
   std::vector<double> initialEnergies;
   initialEnergies.reserve(mols.size());
@@ -526,6 +527,16 @@ void testEnergyImprovement(const std::vector<RDKit::ROMol*>&    mols,
     nvMolKit::detail::EmbedArgs                 eargs;
     std::vector<std::unique_ptr<RDGeom::Point>> positions;
     std::unique_ptr<ForceFields::ForceField>    field;
+
+    // Embedding starts from random coordinates, so measure the starting energy at a random-coordinate start.
+    // An eigenvector-embedded reference can already sit below a legitimate DG local minimum.
+    auto randomOption            = RDKit::DGeomHelpers::ETKDGv3;
+    randomOption.useRandomCoords = true;
+    {
+      nvMolKit::detail::EmbedArgs              randomEargs;
+      std::unique_ptr<ForceFields::ForceField> randomField;
+      nvMolKit::DGeomHelpers::setupRDKitFFWithPos(mol, randomOption, randomField, randomEargs, positions);
+    }
 
     // Use RDKit's default first minimization force field for energy comparison
     auto option = RDKit::DGeomHelpers::ETKDGv3;
@@ -546,7 +557,17 @@ void testEnergyImprovement(const std::vector<RDKit::ROMol*>&    mols,
   hardwareOptions.batchSize            = 100;
   hardwareOptions.batchesPerGpu        = 10;
 
-  nvMolKit::embedMolecules(mols, params, confsPerMolecule, -1, true, nullptr, hardwareOptions, backend);
+  nvMolKit::embedMolecules(mols,
+                           params,
+                           confsPerMolecule,
+                           -1,
+                           true,
+                           nullptr,
+                           hardwareOptions,
+                           backend,
+                           nvMolKit::CoordinateOutput::RDKIT_CONFORMERS,
+                           -1,
+                           precision);
 
   // Calculate and verify final energies for each molecule and conformer
   for (size_t i = 0; i < mols.size(); ++i) {
@@ -580,6 +601,22 @@ void testEnergyImprovement(const std::vector<RDKit::ROMol*>&    mols,
         << ") should be less than initial energy (" << initialEnergies[i] << ")";
     }
   }
+}
+
+TEST(DGPrecisionModes, SinglePrecisionPerMoleculePipelineImprovesEnergy) {
+  std::vector<std::unique_ptr<RDKit::ROMol>> ownedMols;
+  getMols(getTestDataFolderPath() + "/MMFF94_dative.sdf", ownedMols, /*count=*/3);
+  ASSERT_EQ(ownedMols.size(), 3);
+  std::vector<RDKit::ROMol*> mols;
+  for (auto& mol : ownedMols) {
+    mol->clearConformers();
+    mols.push_back(mol.get());
+  }
+  testEnergyImprovement(mols,
+                        1,
+                        RDKit::DGeomHelpers::ETKDGv3,
+                        nvMolKit::BfgsBackend::PER_MOLECULE,
+                        nvMolKit::PrecisionMode::SINGLE);
 }
 
 // Helper function to compare conformer energies between RDKit and nvMolKit

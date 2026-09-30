@@ -16,8 +16,12 @@
 #ifndef NVMOLKIT_ETK_BATCHED_FORCEFIELD_H
 #define NVMOLKIT_ETK_BATCHED_FORCEFIELD_H
 
+#include <variant>
+
 #include "src/forcefields/batched_forcefield.h"
 #include "src/forcefields/dist_geom.h"
+#include "src/forcefields/precision_workspace.h"
+#include "src/precision/precision_mode.h"
 
 namespace nvMolKit {
 
@@ -26,7 +30,7 @@ namespace nvMolKit {
 //! This wrapper exposes ETK host-side data through the generic
 //! `BatchedForcefield` interface so batched BFGS can evaluate ETK energies and
 //! gradients without ETK-specific dispatch in the minimizer.
-class ETKBatchedForcefield final : public BatchedForcefield {
+class ETKBatchedForcefield final : public BatchedForcefield, public SinglePrecisionBatchedForcefield {
  public:
   //! \brief Builds a generic batched-forcefield view over ETK host data.
   //! \param molSystemHost Flattened ETK host-side system description.
@@ -37,8 +41,9 @@ class ETKBatchedForcefield final : public BatchedForcefield {
   ETKBatchedForcefield(const DistGeom::BatchedMolecularSystem3DHost& molSystemHost,
                        const std::vector<int>&                       atomStartsHost,
                        bool                                          useBasicKnowledge,
-                       BatchedForcefieldMetadata                     metadata = {},
-                       cudaStream_t                                  stream   = nullptr);
+                       BatchedForcefieldMetadata                     metadata  = {},
+                       cudaStream_t                                  stream    = nullptr,
+                       PrecisionMode                                 precision = PrecisionMode::FULL);
 
   //! \brief Computes ETK energies through the generic batched-forcefield API.
   cudaError_t computeEnergy(double*        energyOuts,
@@ -47,10 +52,17 @@ class ETKBatchedForcefield final : public BatchedForcefield {
                             cudaStream_t   stream           = nullptr) override;
 
   //! \brief Computes ETK gradients through the generic batched-forcefield API.
-  cudaError_t computeGradients(double*        grad,
-                               const double*  positions,
-                               const uint8_t* activeSystemMask = nullptr,
-                               cudaStream_t   stream           = nullptr) override;
+  cudaError_t   computeGradients(double*        grad,
+                                 const double*  positions,
+                                 const uint8_t* activeSystemMask = nullptr,
+                                 cudaStream_t   stream           = nullptr) override;
+  cudaError_t   computeEnergy(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
+  cudaError_t   computeGradients(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
+  PrecisionMode precision() const override {
+    return std::holds_alternative<DistGeom::BatchedMolecular3DDeviceBuffersSingle>(systemDevice_) ?
+             PrecisionMode::SINGLE :
+             PrecisionMode::FULL;
+  }
 
   //! \brief Computes the planar ETK subset used by the post-minimization check.
   cudaError_t computePlanarEnergy(double*        energyOuts,
@@ -58,13 +70,24 @@ class ETKBatchedForcefield final : public BatchedForcefield {
                                   const uint8_t* activeSystemMask = nullptr,
                                   cudaStream_t   stream           = nullptr);
 
-  //! \brief Returns the uploaded ETK contribution buffers for auxiliary kernels.
-  const DistGeom::Energy3DForceContribsDevice& contribs() const { return systemDevice_.contribs; }
+  //! \brief Returns the full-precision ETK contribution buffers for auxiliary kernels.
+  //! \pre This force field was constructed with PrecisionMode::FULL.
+  const DistGeom::Energy3DForceContribsDevice& contribs() const {
+    return std::get<DistGeom::BatchedMolecular3DDeviceBuffers>(systemDevice_).contribs;
+  }
+
+  //! \brief Returns the single-precision ETK contribution buffers for auxiliary kernels.
+  //! \pre This force field was constructed with PrecisionMode::SINGLE.
+  const DistGeom::Energy3DForceContribsDeviceSingle& singleContribs() const {
+    return std::get<DistGeom::BatchedMolecular3DDeviceBuffersSingle>(systemDevice_).contribs;
+  }
 
  private:
-  DistGeom::BatchedMolecular3DDeviceBuffers systemDevice_;
-  AsyncDeviceVector<int>                    atomStartsDevice_;
-  DistGeom::ETKTerm                         term_ = DistGeom::ETKTerm::ALL;
+  std::variant<DistGeom::BatchedMolecular3DDeviceBuffers, DistGeom::BatchedMolecular3DDeviceBuffersSingle>
+                                      systemDevice_;
+  AsyncDeviceVector<int>              atomStartsDevice_;
+  SingleForcefieldConversionWorkspace singleConversion_;
+  DistGeom::ETKTerm                   term_ = DistGeom::ETKTerm::ALL;
 };
 
 }  // namespace nvMolKit

@@ -1265,15 +1265,13 @@ bool BfgsBatchMinimizerT<real>::minimizeWithMMFF(const int               numIter
 }
 
 template <typename real>
-bool BfgsBatchMinimizerT<real>::minimizeWithETK(const int                                  numIters,
-                                                const double                               gradTol,
-                                                const std::vector<int>&                    atomStartsHost,
-                                                const AsyncDeviceVector<int>&              atomStarts,
-                                                AsyncDeviceVector<double>&                 positions,
-                                                DistGeom::BatchedMolecular3DDeviceBuffers& systemDevice,
-                                                const uint8_t*                             activeThisStage)
-  requires std::is_same_v<real, double>
-{
+bool BfgsBatchMinimizerT<real>::minimizeWithETK(const int                     numIters,
+                                                const double                  gradTol,
+                                                const std::vector<int>&       atomStartsHost,
+                                                const AsyncDeviceVector<int>& atomStarts,
+                                                AsyncDeviceVector<real>&      positions,
+                                                ETKDeviceBuffers&             systemDevice,
+                                                const uint8_t*                activeThisStage) {
   const int         numSystems       = atomStartsHost.size() - 1;
   const BfgsBackend effectiveBackend = resolveBackend(atomStartsHost);
 
@@ -1281,15 +1279,7 @@ bool BfgsBatchMinimizerT<real>::minimizeWithETK(const int                       
     throw std::runtime_error("Use minimize(..., BatchedForcefield&) for batched ETK minimization");
   }
 
-  initialize(atomStartsHost,
-             atomStarts.data(),
-             positions.data(),
-             systemDevice.grad.data(),
-             systemDevice.energyOuts.data(),
-             effectiveBackend,
-             activeThisStage);
-
-  setHessianToIdentity();
+  initialize(atomStartsHost, atomStarts.data(), nullptr, nullptr, nullptr, effectiveBackend, activeThisStage);
 
   const ScopedNvtxRange bfgsPerMoleculeETK("BfgsBatchMinimizer::perMoleculeMinimizeETK");
 
@@ -1331,17 +1321,15 @@ bool BfgsBatchMinimizerT<real>::minimizeWithETK(const int                       
 }
 
 template <typename real>
-bool BfgsBatchMinimizerT<real>::minimizeWithDG(const int                                numIters,
-                                               const double                             gradTol,
-                                               const std::vector<int>&                  atomStartsHost,
-                                               const AsyncDeviceVector<int>&            atomStarts,
-                                               AsyncDeviceVector<double>&               positions,
-                                               DistGeom::BatchedMolecularDeviceBuffers& systemDevice,
-                                               double                                   chiralWeight,
-                                               double                                   fourthDimWeight,
-                                               const uint8_t*                           activeThisStage)
-  requires std::is_same_v<real, double>
-{
+bool BfgsBatchMinimizerT<real>::minimizeWithDG(const int                     numIters,
+                                               const double                  gradTol,
+                                               const std::vector<int>&       atomStartsHost,
+                                               const AsyncDeviceVector<int>& atomStarts,
+                                               AsyncDeviceVector<real>&      positions,
+                                               DGDeviceBuffers&              systemDevice,
+                                               const double                  chiralWeight,
+                                               const double                  fourthDimWeight,
+                                               const uint8_t*                activeThisStage) {
   const int numSystems = atomStartsHost.size() - 1;
 
   if (dataDim_ != 4) {
@@ -1354,15 +1342,7 @@ bool BfgsBatchMinimizerT<real>::minimizeWithDG(const int                        
     throw std::runtime_error("Use minimize(..., BatchedForcefield&) for batched DG minimization");
   }
 
-  initialize(atomStartsHost,
-             atomStarts.data(),
-             positions.data(),
-             systemDevice.grad.data(),
-             systemDevice.energyOuts.data(),
-             effectiveBackend,
-             activeThisStage);
-
-  setHessianToIdentity();
+  initialize(atomStartsHost, atomStarts.data(), nullptr, nullptr, nullptr, effectiveBackend, activeThisStage);
 
   const ScopedNvtxRange bfgsPerMoleculeDG("BfgsBatchMinimizer::perMoleculeMinimizeDG");
 

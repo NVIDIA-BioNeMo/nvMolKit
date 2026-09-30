@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include <cub/cub.cuh>
+#include <type_traits>
 
 #include "src/forcefields/dist_geom_kernels_device_dispatch.cuh"
 #include "src/forcefields/mmff_kernels.h"
@@ -560,10 +561,29 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
   if constexpr (FFType == ForceFieldType::MMFF) {
     threadEnergy = MMFF::molEnergy<BLOCK_SIZE, HasConstraints>(*terms, *systemIndices, localPos, molIdx, tid);
   } else if constexpr (FFType == ForceFieldType::ETK) {
-    threadEnergy = DistGeom::molEnergyETK(*terms, *systemIndices, localPos, molIdx, tid);
+    if constexpr (std::is_same_v<storageT, float>) {
+      threadEnergy = DistGeom::fp32::molEnergyETK(*terms, *systemIndices, localPos, molIdx, tid);
+    } else {
+      threadEnergy = DistGeom::fp64::molEnergyETK(*terms, *systemIndices, localPos, molIdx, tid);
+    }
   } else {  // DG
-    threadEnergy =
-      DistGeom::molEnergyDG<dataDim>(*terms, *systemIndices, localPos, molIdx, chiralWeight, fourthDimWeight, tid);
+    if constexpr (std::is_same_v<storageT, float>) {
+      threadEnergy = DistGeom::fp32::molEnergyDG<dataDim>(*terms,
+                                                          *systemIndices,
+                                                          localPos,
+                                                          molIdx,
+                                                          chiralWeight,
+                                                          fourthDimWeight,
+                                                          tid);
+    } else {
+      threadEnergy = DistGeom::fp64::molEnergyDG<dataDim>(*terms,
+                                                          *systemIndices,
+                                                          localPos,
+                                                          molIdx,
+                                                          chiralWeight,
+                                                          fourthDimWeight,
+                                                          tid);
+    }
   }
   const storageT blockEnergy = BlockReduce(tempStorage).Sum(threadEnergy);
 
@@ -581,16 +601,31 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
   if constexpr (FFType == ForceFieldType::MMFF) {
     MMFF::molGrad<BLOCK_SIZE, HasConstraints>(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
   } else if constexpr (FFType == ForceFieldType::ETK) {
-    DistGeom::molGradETK(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
+    if constexpr (std::is_same_v<storageT, float>) {
+      DistGeom::fp32::molGradETK(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
+    } else {
+      DistGeom::fp64::molGradETK(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
+    }
   } else {  // DG
-    DistGeom::molGradDG<dataDim>(*terms,
-                                 *systemIndices,
-                                 localPos,
-                                 localGrad,
-                                 molIdx,
-                                 chiralWeight,
-                                 fourthDimWeight,
-                                 tid);
+    if constexpr (std::is_same_v<storageT, float>) {
+      DistGeom::fp32::molGradDG<dataDim>(*terms,
+                                         *systemIndices,
+                                         localPos,
+                                         localGrad,
+                                         molIdx,
+                                         chiralWeight,
+                                         fourthDimWeight,
+                                         tid);
+    } else {
+      DistGeom::fp64::molGradDG<dataDim>(*terms,
+                                         *systemIndices,
+                                         localPos,
+                                         localGrad,
+                                         molIdx,
+                                         chiralWeight,
+                                         fourthDimWeight,
+                                         tid);
+    }
   }
   __syncthreads();
 
@@ -650,15 +685,29 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
       if constexpr (FFType == ForceFieldType::MMFF) {
         lsThreadEnergy = MMFF::molEnergy<BLOCK_SIZE, HasConstraints>(*terms, *systemIndices, scratchPos, molIdx, tid);
       } else if constexpr (FFType == ForceFieldType::ETK) {
-        lsThreadEnergy = DistGeom::molEnergyETK(*terms, *systemIndices, scratchPos, molIdx, tid);
+        if constexpr (std::is_same_v<storageT, float>) {
+          lsThreadEnergy = DistGeom::fp32::molEnergyETK(*terms, *systemIndices, scratchPos, molIdx, tid);
+        } else {
+          lsThreadEnergy = DistGeom::fp64::molEnergyETK(*terms, *systemIndices, scratchPos, molIdx, tid);
+        }
       } else {  // DG
-        lsThreadEnergy = DistGeom::molEnergyDG<dataDim>(*terms,
-                                                        *systemIndices,
-                                                        scratchPos,
-                                                        molIdx,
-                                                        chiralWeight,
-                                                        fourthDimWeight,
-                                                        tid);
+        if constexpr (std::is_same_v<storageT, float>) {
+          lsThreadEnergy = DistGeom::fp32::molEnergyDG<dataDim>(*terms,
+                                                                *systemIndices,
+                                                                scratchPos,
+                                                                molIdx,
+                                                                chiralWeight,
+                                                                fourthDimWeight,
+                                                                tid);
+        } else {
+          lsThreadEnergy = DistGeom::fp64::molEnergyDG<dataDim>(*terms,
+                                                                *systemIndices,
+                                                                scratchPos,
+                                                                molIdx,
+                                                                chiralWeight,
+                                                                fourthDimWeight,
+                                                                tid);
+        }
       }
       const storageT lsBlockEnergy = BlockReduce(tempStorage).Sum(lsThreadEnergy);
 
@@ -705,16 +754,31 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
     if constexpr (FFType == ForceFieldType::MMFF) {
       MMFF::molGrad<BLOCK_SIZE, HasConstraints>(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
     } else if constexpr (FFType == ForceFieldType::ETK) {
-      DistGeom::molGradETK(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
+      if constexpr (std::is_same_v<storageT, float>) {
+        DistGeom::fp32::molGradETK(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
+      } else {
+        DistGeom::fp64::molGradETK(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
+      }
     } else {  // DG
-      DistGeom::molGradDG<dataDim>(*terms,
-                                   *systemIndices,
-                                   localPos,
-                                   localGrad,
-                                   molIdx,
-                                   chiralWeight,
-                                   fourthDimWeight,
-                                   tid);
+      if constexpr (std::is_same_v<storageT, float>) {
+        DistGeom::fp32::molGradDG<dataDim>(*terms,
+                                           *systemIndices,
+                                           localPos,
+                                           localGrad,
+                                           molIdx,
+                                           chiralWeight,
+                                           fourthDimWeight,
+                                           tid);
+      } else {
+        DistGeom::fp64::molGradDG<dataDim>(*terms,
+                                           *systemIndices,
+                                           localPos,
+                                           localGrad,
+                                           molIdx,
+                                           chiralWeight,
+                                           fourthDimWeight,
+                                           tid);
+      }
     }
     __syncthreads();
 
@@ -1069,29 +1133,30 @@ NVMOLKIT_DEFINE_MMFF_PER_MOL_LAUNCHER(MMFF::EnergyForceContribsDevicePtr, double
 NVMOLKIT_DEFINE_MMFF_PER_MOL_LAUNCHER(MMFF::EnergyForceContribsDevicePtrSingle, float)
 
 #undef NVMOLKIT_DEFINE_MMFF_PER_MOL_LAUNCHER
-cudaError_t launchBfgsMinimizePerMolKernelETK(int                                             numMols,
-                                              const int*                                      molIds,
-                                              int                                             maxAtoms,
-                                              const int*                                      atomStarts,
-                                              const int*                                      hessianStarts,
-                                              int                                             numIters,
-                                              double                                          gradTol,
-                                              bool                                            scaleGrads,
-                                              const DistGeom::Energy3DForceContribsDevicePtr& terms,
-                                              const DistGeom::BatchedIndices3DDevicePtr&      systemIndices,
-                                              double*                                         positions,
-                                              double*                                         grad,
-                                              double*                                         inverseHessian,
-                                              double**                                        scratchBuffers,
-                                              double*                                         energyOuts,
-                                              int16_t*                                        statuses,
-                                              cudaStream_t                                    stream) {
+template <typename Terms, typename storageT>
+cudaError_t launchBfgsMinimizePerMolKernelETKImpl(int                                        numMols,
+                                                  const int*                                 molIds,
+                                                  int                                        maxAtoms,
+                                                  const int*                                 atomStarts,
+                                                  const int*                                 hessianStarts,
+                                                  int                                        numIters,
+                                                  double                                     gradTol,
+                                                  bool                                       scaleGrads,
+                                                  const Terms&                               terms,
+                                                  const DistGeom::BatchedIndices3DDevicePtr& systemIndices,
+                                                  storageT*                                  positions,
+                                                  storageT*                                  grad,
+                                                  storageT*                                  inverseHessian,
+                                                  storageT**                                 scratchBuffers,
+                                                  storageT*                                  energyOuts,
+                                                  int16_t*                                   statuses,
+                                                  cudaStream_t                               stream) {
   if (numMols == 0) {
     return cudaSuccess;
   }
 
-  const AsyncDevicePtr<DistGeom::Energy3DForceContribsDevicePtr> devTerms(terms, stream);
-  const AsyncDevicePtr<DistGeom::BatchedIndices3DDevicePtr>      devSysIdx(systemIndices, stream);
+  const AsyncDevicePtr<Terms>                               devTerms(terms, stream);
+  const AsyncDevicePtr<DistGeom::BatchedIndices3DDevicePtr> devSysIdx(systemIndices, stream);
 
   return dispatchByMaxAtoms<ForceFieldType::ETK, false>(numMols,
                                                         molIds,
@@ -1114,31 +1179,32 @@ cudaError_t launchBfgsMinimizePerMolKernelETK(int                               
                                                         1.0);
 }
 
-cudaError_t launchBfgsMinimizePerMolKernelDG(int                                           numMols,
-                                             const int*                                    molIds,
-                                             int                                           maxAtoms,
-                                             const int*                                    atomStarts,
-                                             const int*                                    hessianStarts,
-                                             int                                           numIters,
-                                             double                                        gradTol,
-                                             bool                                          scaleGrads,
-                                             const DistGeom::EnergyForceContribsDevicePtr& terms,
-                                             const DistGeom::BatchedIndicesDevicePtr&      systemIndices,
-                                             double*                                       positions,
-                                             double*                                       grad,
-                                             double*                                       inverseHessian,
-                                             double**                                      scratchBuffers,
-                                             double*                                       energyOuts,
-                                             double                                        chiralWeight,
-                                             double                                        fourthDimWeight,
-                                             int16_t*                                      statuses,
-                                             cudaStream_t                                  stream) {
+template <typename Terms, typename storageT>
+cudaError_t launchBfgsMinimizePerMolKernelDGImpl(int                                      numMols,
+                                                 const int*                               molIds,
+                                                 int                                      maxAtoms,
+                                                 const int*                               atomStarts,
+                                                 const int*                               hessianStarts,
+                                                 int                                      numIters,
+                                                 double                                   gradTol,
+                                                 bool                                     scaleGrads,
+                                                 const Terms&                             terms,
+                                                 const DistGeom::BatchedIndicesDevicePtr& systemIndices,
+                                                 storageT*                                positions,
+                                                 storageT*                                grad,
+                                                 storageT*                                inverseHessian,
+                                                 storageT**                               scratchBuffers,
+                                                 storageT*                                energyOuts,
+                                                 double                                   chiralWeight,
+                                                 double                                   fourthDimWeight,
+                                                 int16_t*                                 statuses,
+                                                 cudaStream_t                             stream) {
   if (numMols == 0) {
     return cudaSuccess;
   }
 
-  const AsyncDevicePtr<DistGeom::EnergyForceContribsDevicePtr> devTerms(terms, stream);
-  const AsyncDevicePtr<DistGeom::BatchedIndicesDevicePtr>      devSysIdx(systemIndices, stream);
+  const AsyncDevicePtr<Terms>                             devTerms(terms, stream);
+  const AsyncDevicePtr<DistGeom::BatchedIndicesDevicePtr> devSysIdx(systemIndices, stream);
 
   return dispatchByMaxAtoms<ForceFieldType::DG, false>(numMols,
                                                        molIds,
@@ -1160,5 +1226,91 @@ cudaError_t launchBfgsMinimizePerMolKernelDG(int                                
                                                        chiralWeight,
                                                        fourthDimWeight);
 }
+
+#define NVMOLKIT_DEFINE_ETK_PER_MOL_LAUNCHER(TERMS_TYPE, STORAGE_TYPE)                                     \
+  cudaError_t launchBfgsMinimizePerMolKernelETK(int                                        numMols,        \
+                                                const int*                                 molIds,         \
+                                                int                                        maxAtoms,       \
+                                                const int*                                 atomStarts,     \
+                                                const int*                                 hessianStarts,  \
+                                                int                                        numIters,       \
+                                                double                                     gradTol,        \
+                                                bool                                       scaleGrads,     \
+                                                const TERMS_TYPE&                          terms,          \
+                                                const DistGeom::BatchedIndices3DDevicePtr& systemIndices,  \
+                                                STORAGE_TYPE*                              positions,      \
+                                                STORAGE_TYPE*                              grad,           \
+                                                STORAGE_TYPE*                              inverseHessian, \
+                                                STORAGE_TYPE**                             scratchBuffers, \
+                                                STORAGE_TYPE*                              energyOuts,     \
+                                                int16_t*                                   statuses,       \
+                                                cudaStream_t                               stream) {                                     \
+    return launchBfgsMinimizePerMolKernelETKImpl(numMols,                                                  \
+                                                 molIds,                                                   \
+                                                 maxAtoms,                                                 \
+                                                 atomStarts,                                               \
+                                                 hessianStarts,                                            \
+                                                 numIters,                                                 \
+                                                 gradTol,                                                  \
+                                                 scaleGrads,                                               \
+                                                 terms,                                                    \
+                                                 systemIndices,                                            \
+                                                 positions,                                                \
+                                                 grad,                                                     \
+                                                 inverseHessian,                                           \
+                                                 scratchBuffers,                                           \
+                                                 energyOuts,                                               \
+                                                 statuses,                                                 \
+                                                 stream);                                                  \
+  }
+
+NVMOLKIT_DEFINE_ETK_PER_MOL_LAUNCHER(DistGeom::Energy3DForceContribsDevicePtr, double)
+NVMOLKIT_DEFINE_ETK_PER_MOL_LAUNCHER(DistGeom::Energy3DForceContribsDevicePtrSingle, float)
+#undef NVMOLKIT_DEFINE_ETK_PER_MOL_LAUNCHER
+
+#define NVMOLKIT_DEFINE_DG_PER_MOL_LAUNCHER(TERMS_TYPE, STORAGE_TYPE)                                    \
+  cudaError_t launchBfgsMinimizePerMolKernelDG(int                                      numMols,         \
+                                               const int*                               molIds,          \
+                                               int                                      maxAtoms,        \
+                                               const int*                               atomStarts,      \
+                                               const int*                               hessianStarts,   \
+                                               int                                      numIters,        \
+                                               double                                   gradTol,         \
+                                               bool                                     scaleGrads,      \
+                                               const TERMS_TYPE&                        terms,           \
+                                               const DistGeom::BatchedIndicesDevicePtr& systemIndices,   \
+                                               STORAGE_TYPE*                            positions,       \
+                                               STORAGE_TYPE*                            grad,            \
+                                               STORAGE_TYPE*                            inverseHessian,  \
+                                               STORAGE_TYPE**                           scratchBuffers,  \
+                                               STORAGE_TYPE*                            energyOuts,      \
+                                               double                                   chiralWeight,    \
+                                               double                                   fourthDimWeight, \
+                                               int16_t*                                 statuses,        \
+                                               cudaStream_t                             stream) {                                    \
+    return launchBfgsMinimizePerMolKernelDGImpl(numMols,                                                 \
+                                                molIds,                                                  \
+                                                maxAtoms,                                                \
+                                                atomStarts,                                              \
+                                                hessianStarts,                                           \
+                                                numIters,                                                \
+                                                gradTol,                                                 \
+                                                scaleGrads,                                              \
+                                                terms,                                                   \
+                                                systemIndices,                                           \
+                                                positions,                                               \
+                                                grad,                                                    \
+                                                inverseHessian,                                          \
+                                                scratchBuffers,                                          \
+                                                energyOuts,                                              \
+                                                chiralWeight,                                            \
+                                                fourthDimWeight,                                         \
+                                                statuses,                                                \
+                                                stream);                                                 \
+  }
+
+NVMOLKIT_DEFINE_DG_PER_MOL_LAUNCHER(DistGeom::EnergyForceContribsDevicePtr, double)
+NVMOLKIT_DEFINE_DG_PER_MOL_LAUNCHER(DistGeom::EnergyForceContribsDevicePtrSingle, float)
+#undef NVMOLKIT_DEFINE_DG_PER_MOL_LAUNCHER
 
 }  // namespace nvMolKit

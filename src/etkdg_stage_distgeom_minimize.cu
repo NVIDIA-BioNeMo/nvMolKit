@@ -15,6 +15,7 @@
 
 #include <GraphMol/DistGeomHelpers/Embedder.h>
 
+#include <type_traits>
 #include <unordered_map>
 
 #include "rdkit_extensions/dist_geom_flattened_builder.h"
@@ -23,6 +24,7 @@
 #include "src/forcefields/dg_batched_forcefield.h"
 #include "src/forcefields/dist_geom.h"
 #include "src/forcefields/kernel_utils.cuh"
+#include "src/utils/device_convert.cuh"
 #include "src/utils/nvtx.h"
 
 using ::nvMolKit::detail::ETKDGContext;
@@ -33,8 +35,9 @@ namespace nvMolKit {
 namespace {
 constexpr int kBlockSize = 256;
 
+template <typename Scalar>
 __global__ void checkMinimizedEnergiesKernel(const int     molNum,
-                                             const double* energyOuts,
+                                             const Scalar* energyOuts,
                                              const int*    atomStarts,
                                              uint8_t*      failedThisStage) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -43,7 +46,7 @@ __global__ void checkMinimizedEnergiesKernel(const int     molNum,
   }
 
   const int    numAtoms      = atomStarts[idx + 1] - atomStarts[idx];
-  const double energyPerAtom = energyOuts[idx] / numAtoms;
+  const Scalar energyPerAtom = energyOuts[idx] / numAtoms;
 
   if (energyPerAtom >= nvMolKit::detail::MAX_MINIMIZED_E_PER_ATOM) {
     failedThisStage[idx] = 1;
@@ -57,7 +60,8 @@ template <typename MinimizeStep> void repeatUntilConverged(MinimizeStep&& minimi
   }
 }
 
-void checkMinimizedEnergies(const AsyncDeviceVector<double>& energyOuts,
+template <typename Scalar>
+void checkMinimizedEnergies(const AsyncDeviceVector<Scalar>& energyOuts,
                             const AsyncDeviceVector<int>&    atomStarts,
                             AsyncDeviceVector<uint8_t>&      failedThisStage,
                             cudaStream_t                     stream) {
@@ -76,12 +80,13 @@ void checkMinimizedEnergies(const AsyncDeviceVector<double>& energyOuts,
 
 namespace detail {
 
-DistGeomMinimizeStage::DistGeomMinimizeStage(
+template <typename real>
+DistGeomMinimizeStageT<real>::DistGeomMinimizeStageT(
   const std::vector<const RDKit::ROMol*>&                                               mols,
   const std::vector<EmbedArgs>&                                                         eargs,
   const RDKit::DGeomHelpers::EmbedParameters&                                           embedParam,
   ETKDGContext&                                                                         ctx,
-  BfgsBatchMinimizer&                                                                   minimizer,
+  BfgsBatchMinimizerT<real>&                                                            minimizer,
   double                                                                                chiralWeight,
   double                                                                                fourthDimWeight,
   int                                                                                   maxIters,
@@ -172,13 +177,15 @@ DistGeomMinimizeStage::DistGeomMinimizeStage(
   DistGeom::setStreams(molSystemDevice, stream_);
   grad_.setStream(stream_);
   energyOuts_.setStream(stream_);
+  positionsScratch_.setStream(stream_);
 }
 
-void DistGeomMinimizeStage::executeImpl(ETKDGContext& ctx,
-                                        double        chiralWeight,
-                                        double        fourthDimWeight,
-                                        int           maxIters,
-                                        bool          checkEnergy) {
+template <typename real>
+void DistGeomMinimizeStageT<real>::executeImpl(ETKDGContext& ctx,
+                                               double        chiralWeight,
+                                               double        fourthDimWeight,
+                                               int           maxIters,
+                                               bool          checkEnergy) {
   const auto effectiveBackend = minimizer_.resolveBackend(ctx.systemHost.atomStarts);
 
   if (effectiveBackend == BfgsBackend::BATCHED) {
@@ -187,7 +194,8 @@ void DistGeomMinimizeStage::executeImpl(ETKDGContext& ctx,
                                    chiralWeight,
                                    fourthDimWeight,
                                    metadata_,
-                                   stream_);
+                                   stream_,
+                                   BfgsBatchMinimizerT<real>::kPrecision);
     grad_.resize(ctx.systemHost.positions.size());
     grad_.zero();
     energyOuts_.resize(ctx.systemHost.atomStarts.size() - 1);
@@ -209,44 +217,77 @@ void DistGeomMinimizeStage::executeImpl(ETKDGContext& ctx,
     }
 
     molSystemDevice.energyOuts.resize(energyOuts_.size());
-    cudaCheckError(cudaMemcpyAsync(molSystemDevice.energyOuts.data(),
-                                   energyOuts_.data(),
-                                   energyOuts_.size() * sizeof(double),
-                                   cudaMemcpyDeviceToDevice,
-                                   stream_));
+    if constexpr (std::is_same_v<real, double>) {
+      cudaCheckError(cudaMemcpyAsync(molSystemDevice.energyOuts.data(),
+                                     energyOuts_.data(),
+                                     energyOuts_.size() * sizeof(double),
+                                     cudaMemcpyDeviceToDevice,
+                                     stream_));
+    } else {
+      cudaCheckError(nvMolKit::detail::convertDeviceArray(molSystemDevice.energyOuts.data(),
+                                                          energyOuts_.data(),
+                                                          energyOuts_.size(),
+                                                          stream_));
+    }
   } else {
-    DistGeom::setStreams(molSystemDevice, stream_);
-    nvMolKit::DistGeom::sendContribsAndIndicesToDevice(molSystemHost, molSystemDevice);
-    DistGeom::setupDeviceBuffers(molSystemHost,
-                                 molSystemDevice,
-                                 ctx.systemHost.positions,
-                                 static_cast<int>(ctx.systemHost.atomStarts.size() - 1));
+    auto minimizePerMolecule = [&](auto& device, auto& positions) {
+      using Scalar = std::remove_pointer_t<decltype(positions.data())>;
+      DistGeom::setStreams(device, stream_);
+      DistGeom::sendContribsAndIndicesToDevice(molSystemHost, device);
+      device.dimension = molSystemHost.dimension;
+      device.grad.resize(positions.size());
+      device.grad.zero();
+      device.energyOuts.resize(ctx.systemHost.atomStarts.size() - 1);
+      device.energyOuts.zero();
 
-    repeatUntilConverged([&]() {
-      return minimizer_.minimizeWithDG(maxIters,
-                                       embedParam_.optimizerForceTol,
-                                       ctx.systemHost.atomStarts,
-                                       ctx.systemDevice.atomStarts,
-                                       ctx.systemDevice.positions,
-                                       molSystemDevice,
-                                       chiralWeight,
-                                       fourthDimWeight,
-                                       ctx.activeThisStage.data());
-    });
+      repeatUntilConverged([&]() {
+        return minimizer_.minimizeWithDG(maxIters,
+                                         embedParam_.optimizerForceTol,
+                                         ctx.systemHost.atomStarts,
+                                         ctx.systemDevice.atomStarts,
+                                         positions,
+                                         device,
+                                         chiralWeight,
+                                         fourthDimWeight,
+                                         ctx.activeThisStage.data());
+      });
 
-    if (checkEnergy) {
-      nvMolKit::DistGeom::computeEnergy(molSystemDevice,
-                                        ctx.systemDevice.atomStarts,
-                                        ctx.systemDevice.positions,
-                                        chiralWeight,
-                                        fourthDimWeight,
-                                        nullptr,
-                                        nullptr,
-                                        stream_);
-      checkMinimizedEnergies(molSystemDevice.energyOuts, ctx.systemDevice.atomStarts, ctx.failedThisStage, stream_);
+      if (checkEnergy) {
+        device.energyOuts.zero();
+        cudaCheckError(DistGeom::launchBlockPerMolEnergyKernel(
+          static_cast<int>(ctx.systemHost.atomStarts.size() - 1),
+          DistGeom::toEnergyForceContribsDevicePtr(device),
+          DistGeom::toBatchedIndicesDevicePtr(device, ctx.systemDevice.atomStarts.data()),
+          positions.data(),
+          device.energyOuts.data(),
+          molSystemHost.dimension,
+          static_cast<Scalar>(chiralWeight),
+          static_cast<Scalar>(fourthDimWeight),
+          nullptr,
+          stream_));
+        checkMinimizedEnergies(device.energyOuts, ctx.systemDevice.atomStarts, ctx.failedThisStage, stream_);
+      }
+    };
+
+    if constexpr (std::is_same_v<real, double>) {
+      minimizePerMolecule(molSystemDevice, ctx.systemDevice.positions);
+    } else {
+      positionsScratch_.resize(ctx.systemDevice.positions.size());
+      cudaCheckError(nvMolKit::detail::convertDeviceArray(positionsScratch_.data(),
+                                                          ctx.systemDevice.positions.data(),
+                                                          positionsScratch_.size(),
+                                                          stream_));
+      minimizePerMolecule(molSystemDevice, positionsScratch_);
+      cudaCheckError(nvMolKit::detail::convertDeviceArray(ctx.systemDevice.positions.data(),
+                                                          positionsScratch_.data(),
+                                                          positionsScratch_.size(),
+                                                          stream_));
     }
   }
 }
+
+template class DistGeomMinimizeStageT<double>;
+template class DistGeomMinimizeStageT<float>;
 
 }  // namespace detail
 
