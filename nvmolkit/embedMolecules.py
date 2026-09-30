@@ -26,8 +26,11 @@ if TYPE_CHECKING:
 
 __all__ = ["EmbedMolecules"]
 
+# nvmolkit.types registers PrecisionMode, which _embedMolecules exposes as a default argument.
+# isort: off
+from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions, PrecisionMode
 from nvmolkit import _embedMolecules  # type: ignore
-from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions
+# isort: on
 
 
 @overload
@@ -39,6 +42,7 @@ def EmbedMolecules(
     hardwareOptions: Optional[HardwareOptions] = None,
     output: Literal[CoordinateOutput.RDKIT_CONFORMERS] = CoordinateOutput.RDKIT_CONFORMERS,
     targetGpu: int = -1,
+    precision: PrecisionMode = PrecisionMode.FULL,
 ) -> None: ...
 @overload
 def EmbedMolecules(
@@ -50,6 +54,7 @@ def EmbedMolecules(
     *,
     output: Literal[CoordinateOutput.DEVICE],
     targetGpu: int = -1,
+    precision: PrecisionMode = PrecisionMode.FULL,
 ) -> Device3DResult: ...
 def EmbedMolecules(
     molecules: list["Mol"],
@@ -59,6 +64,7 @@ def EmbedMolecules(
     hardwareOptions: Optional[HardwareOptions] = None,
     output: CoordinateOutput = CoordinateOutput.RDKIT_CONFORMERS,
     targetGpu: int = -1,
+    precision: PrecisionMode = PrecisionMode.FULL,
 ):
     """Embed multiple molecules with multiple conformers on GPUs.
 
@@ -87,6 +93,8 @@ def EmbedMolecules(
             ``params.pruneRmsThresh > 0``, conformers are pruned on the target GPU before return.
         targetGpu: In DEVICE mode, the GPU to consolidate the result onto. ``-1`` selects the
             first configured execution GPU.
+        precision: ``PrecisionMode.FULL`` (default) or
+            ``PrecisionMode.SINGLE``.
 
     Returns:
         For ``RDKIT_CONFORMERS``: ``None``; input molecules are modified in-place with
@@ -145,7 +153,7 @@ def EmbedMolecules(
 
     if output == CoordinateOutput.DEVICE:
         return _embedMolecules.EmbedMoleculesDevice(
-            molecules, params, confsPerMolecule, maxIterations, native_options, int(targetGpu)
+            molecules, params, confsPerMolecule, maxIterations, native_options, int(targetGpu), precision
         )
-    _embedMolecules.EmbedMolecules(molecules, params, confsPerMolecule, maxIterations, native_options)
+    _embedMolecules.EmbedMolecules(molecules, params, confsPerMolecule, maxIterations, native_options, precision)
     return None

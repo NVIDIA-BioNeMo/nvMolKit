@@ -1,18 +1,24 @@
 .. SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 .. SPDX-License-Identifier: Apache-2.0
 
-FIRE minimizer
-==============
+3D minimizers
+=============
 
-nvMolKit provides the Fast Inertial Relaxation Engine (FIRE) as an
-alternative to BFGS for MMFF94 and UFF geometry optimization.
+nvMolKit supports BFGS and the Fast Inertial Relaxation Engine (FIRE) for
+MMFF94 and UFF geometry optimization. BFGS is the default.
+
+FIRE
+----
+
+FIRE is an alternative to BFGS for workloads where iteration throughput is
+more important than minimizing the number of iterations.
 
 The implementation follows the FIRE 2.0 update scheme. See the original
 `FIRE paper <https://doi.org/10.1103/PhysRevLett.97.170201>`_, and the
 `FIRE 2.0 paper <https://doi.org/10.1016/j.commatsci.2020.109584>`_
 
 Using FIRE
-----------
+~~~~~~~~~~
 
 Select FIRE with ``minimizerKind="FIRE"``. BFGS remains the default.
 The return value and in-place coordinate updates are the same for both
@@ -65,12 +71,12 @@ than ``gradTol``. Independent conformers are batched on the GPU; the adaptive
 state and the convergence decision remain per conformer.
 
 Performance
------------
+~~~~~~~~~~~
 
 At an equal iteration count, FIRE is roughly 2x faster than BFGS on all tested hardware.
 
 Parameters and tuning
----------------------
+~~~~~~~~~~~~~~~~~~~~~
 
 The default values in :class:`nvmolkit.types.FireOptions` were selected with
 an `Optuna <https://optuna.org/>`_ study at a fixed budget of 200 iterations.
@@ -81,7 +87,7 @@ for UFF optimization and distance-geometry embedding.
 .. _fire-validation:
 
 Validation
-----------
+~~~~~~~~~~
 
 We validated FIRE on 10,000 noise-perturbed MMFF94 conformers sampled from the
 Enamine REAL 10M collection. RDKit MMFF94, nvMolKit BFGS, and nvMolKit FIRE all
@@ -118,4 +124,51 @@ Taken together, at an equal iteration budget, FIRE's bulk distribution is
 slightly looser than BFGS's, while FIRE reaches the lower minimum on most of
 the conformers where the two minimizers end up in different basins.
 
+Precision modes
+---------------
 
+``PrecisionMode.FULL`` uses double precision for coordinates, force-field
+arithmetic, minimizer state, the BFGS inverse Hessian, and reductions.
+Force-field parameters retain their defined storage types. ``PrecisionMode.SINGLE``
+uses single precision for all of those values. ``FULL`` is the default.
+
+.. code-block:: python
+
+    from nvmolkit.mmffOptimization import MMFFOptimizeMoleculesConfs
+    from nvmolkit.types import PrecisionMode
+
+    energies = MMFFOptimizeMoleculesConfs(
+        mols,
+        maxIters=200,
+        precision=PrecisionMode.SINGLE,
+    )
+
+The same ``precision`` argument is available for UFF, FIRE, embedding, and
+batched force-field minimization. Public coordinates and energies retain their
+float64 API representation. ``SINGLE`` supports the same minimizer backends as
+``FULL``.
+
+Validation
+~~~~~~~~~~
+
+We compared both precision modes against RDKit on a subset of the Enamine REAL
+collection. For ETKDG conformer generation, ``SINGLE`` is equivalent to
+``FULL``: the MMFF94 energies of the generated conformers agree with RDKit
+equally well in both modes.
+
+.. figure:: _static/precision_validation_etkdg.png
+   :alt: Scatter plots of MMFF94 energies of ETKDG conformers from nvMolKit full precision and FP32 against RDKit.
+   :width: 100%
+
+   MMFF94 energies of ETKDG conformers, nvMolKit against RDKit.
+
+For MMFF94 minimization run for up to 500 BFGS steps, ``SINGLE`` converges to
+the same minimum as RDKit for nearly all conformers, with a small number of
+outliers reaching a different minimum. Final ``SINGLE`` energies sit slightly
+above RDKit's, with a drift on the order of :math:`10^{-5}` kcal/mol/atom.
+
+.. figure:: _static/precision_validation_minimization.png
+   :alt: Scatter plot of FP32 against RDKit final MMFF94 energies and histograms of final energy differences for full precision and FP32.
+   :width: 100%
+
+   Final energies after MMFF94 minimization, nvMolKit against RDKit.

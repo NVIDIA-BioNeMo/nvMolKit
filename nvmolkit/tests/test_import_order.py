@@ -22,8 +22,10 @@ import pytest
 @pytest.mark.parametrize(
     "module_name",
     [
+        "nvmolkit.embedMolecules",
         "nvmolkit.mmffOptimization",
         "nvmolkit.uffOptimization",
+        "nvmolkit.batchedForcefield",
     ],
 )
 def test_module_imports_as_first_nvmolkit_import(module_name):
