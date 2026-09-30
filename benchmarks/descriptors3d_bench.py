@@ -14,7 +14,7 @@ Example:
 """
 
 import argparse
-import pickle
+import json
 from pathlib import Path
 
 import numpy as np
@@ -73,6 +73,46 @@ def _calc_rdkit_property(mol: Chem.Mol, conf_id: int, prop: Property3D) -> float
     if prop == Property3D.MORSE:
         return rdMolDescriptors.CalcMORSE(mol, confId=conf_id)
     return RDKIT_CALCULATORS[prop](mol, confId=conf_id, useAtomicMasses=True)
+
+
+_CACHE_FORMAT = "nvmolkit-descriptors3d-bench-cache/1"
+
+
+def _cache_key(smiles_path: str, seed: int, num_mols: int, confs_per_mol: int) -> dict[str, str | int]:
+    """Everything that determines the prepared conformers; a cache is reused only for an identical key."""
+    return {
+        "format": _CACHE_FORMAT,
+        "smiles": str(Path(smiles_path).resolve()),
+        "seed": seed,
+        "num_mols": num_mols,
+        "confs_per_mol": confs_per_mol,
+    }
+
+
+def _write_prepared_cache(path: Path, key: dict[str, str | int], mols: list[Chem.Mol]) -> None:
+    """Write a JSON key header and length-prefixed RDKit binary molecules (no pickle)."""
+    with path.open("wb") as handle:
+        for payload in (json.dumps(key).encode(), *(mol.ToBinary() for mol in mols)):
+            handle.write(len(payload).to_bytes(8, "little"))
+            handle.write(payload)
+
+
+def _read_prepared_cache(path: Path, key: dict[str, str | int]) -> list[Chem.Mol]:
+    """Read a cache written by :func:`_write_prepared_cache`, rejecting one prepared with a different key."""
+    data = path.read_bytes()
+    payloads = []
+    offset = 0
+    while offset < len(data):
+        size = int.from_bytes(data[offset : offset + 8], "little")
+        payloads.append(data[offset + 8 : offset + 8 + size])
+        offset += 8 + size
+    try:
+        cached_key = json.loads(payloads[0])
+    except (IndexError, ValueError) as error:
+        raise ValueError(f"{path} is not a prepared-conformer cache") from error
+    if cached_key != key:
+        raise ValueError(f"{path} was prepared with {cached_key}, but this run needs {key}; use another cache path")
+    return [Chem.Mol(payload) for payload in payloads[1:]]
 
 
 def _pack_device_coordinates(mols: list[Chem.Mol]) -> Device3DResult:
@@ -176,15 +216,23 @@ def run(
     if any(count < 1 for count in conformers_per_mol_list):
         raise ValueError("every --confs_per_mol value must be positive")
 
+    unknown = sorted(set(exclude) - {prop.value for prop in Property3D})
+    if unknown:
+        raise ValueError(f"--exclude names unknown properties: {', '.join(unknown)}")
+    selections = {
+        name: tuple(prop for prop in PROPERTY_SETS[name] if prop.value not in exclude) for name in property_set_names
+    }
+    emptied = [name for name, properties in selections.items() if not properties]
+    if emptied:
+        raise ValueError(f"--exclude removes every property from: {', '.join(emptied)}")
+
     max_mols = max(num_mols_list)
     max_conformers = max(conformers_per_mol_list)
     cache_path = Path(prepared_cache) if prepared_cache else None
+    cache_key = _cache_key(smiles_path, seed, max_mols, max_conformers)
     if cache_path is not None and cache_path.exists():
-        with cache_path.open("rb") as handle:
-            prepared = [Chem.Mol(binary) for binary in pickle.load(handle)]
+        prepared = _read_prepared_cache(cache_path, cache_key)
         print(f"Loaded {len(prepared)} prepared molecules from {cache_path}")
-        if len(prepared) < max_mols:
-            raise ValueError(f"{cache_path} holds {len(prepared)} molecules; {max_mols} requested")
     else:
         raw_mols = load_smiles(smiles_path, max_count=max_mols, sanitize=True, seed=seed)
         workers = prep_workers if prep_workers > 0 else max(1, available_cpu_count() // 2)
@@ -198,8 +246,7 @@ def run(
             desc=f"Embed + perturb ({max_conformers} confs)",
         )
         if cache_path is not None:
-            with cache_path.open("wb") as handle:
-                pickle.dump([mol.ToBinary() for mol in prepared], handle)
+            _write_prepared_cache(cache_path, cache_key, prepared)
             print(f"Saved {len(prepared)} prepared molecules to {cache_path}")
     if not prepared:
         raise RuntimeError("no molecules survived conformer preparation")
@@ -213,7 +260,8 @@ def run(
             coordinates = _pack_device_coordinates(mols) if device_input and not no_nvmolkit else None
 
             for property_set_name in property_set_names:
-                properties = tuple(prop for prop in PROPERTY_SETS[property_set_name] if prop.value not in exclude)
+                properties = selections[property_set_name]
+                excluded = [prop.value for prop in PROPERTY_SETS[property_set_name] if prop.value in exclude]
                 print(
                     f"\n=== {len(mols)} mols, {num_conformers} conformers, "
                     f"{avg_atoms:.1f} atoms/mol, properties={property_set_name} ==="
@@ -228,7 +276,7 @@ def run(
                     "conformers_per_mol": requested_conformers,
                     "num_conformers": num_conformers,
                     "avg_atoms": avg_atoms,
-                    "property_set": property_set_name + "".join(f"-{name}" for name in exclude),
+                    "property_set": property_set_name + "".join(f"-{name}" for name in excluded),
                     "precision": str(precision),
                     "num_properties": len(properties),
                 }
@@ -305,12 +353,14 @@ def main() -> None:
         "--exclude",
         nargs="+",
         default=[],
+        choices=[prop.value for prop in Property3D],
         help="Property names to drop from every property set, e.g. to time 'all' without a new feature",
     )
     parser.add_argument(
         "--prepared_cache",
         default=None,
-        help="Pickle of prepared conformers: loaded when it exists, otherwise written after embedding",
+        help="Prepared-conformer cache: loaded when it exists (it must match --smiles, --seed and the largest "
+        "--num_mols and --confs_per_mol), otherwise written after embedding",
     )
     parser.add_argument("--output", default=None, help="Optional CSV output path")
     add_backend_selection_args(parser)
