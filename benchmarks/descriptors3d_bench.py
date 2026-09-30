@@ -14,11 +14,14 @@ Example:
 """
 
 import argparse
+import hashlib
 import json
 import os
+import tempfile
 from pathlib import Path
 
 import numpy as np
+import rdkit
 import torch
 from bench_utils import (
     add_backend_selection_args,
@@ -80,10 +83,15 @@ _CACHE_FORMAT = "nvmolkit-descriptors3d-bench-cache/1"
 
 
 def _cache_key(smiles_path: str, seed: int, num_mols: int, confs_per_mol: int) -> dict[str, str | int]:
-    """Everything that determines the prepared conformers; a cache is reused only for an identical key."""
+    """Everything that determines the prepared conformers; a cache is reused only for an identical key.
+
+    The SMILES file is identified by content, and the RDKit version is included because ETKDG coordinates
+    differ between releases.
+    """
     return {
         "format": _CACHE_FORMAT,
-        "smiles": str(Path(smiles_path).resolve()),
+        "smiles_sha256": hashlib.sha256(Path(smiles_path).read_bytes()).hexdigest(),
+        "rdkit": rdkit.__version__,
         "seed": seed,
         "num_mols": num_mols,
         "confs_per_mol": confs_per_mol,
@@ -93,13 +101,14 @@ def _cache_key(smiles_path: str, seed: int, num_mols: int, confs_per_mol: int) -
 def _write_prepared_cache(path: Path, key: dict[str, str | int], mols: list[Chem.Mol]) -> None:
     """Write a JSON header (key and molecule count) and length-prefixed RDKit binary molecules (no pickle).
 
-    The file is written beside ``path`` and renamed into place when complete, so an interrupted run never
-    leaves a partial cache at ``path``.
+    The file is written to a new, exclusively created temporary file beside ``path`` and renamed into place
+    when complete, so an interrupted run never leaves a partial cache at ``path``.
     """
     header = json.dumps({"key": key, "num_records": len(mols)}).encode()
-    partial = path.with_name(f"{path.name}.partial-{os.getpid()}")
+    descriptor, partial_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".partial")
+    partial = Path(partial_name)
     try:
-        with partial.open("wb") as handle:
+        with os.fdopen(descriptor, "wb") as handle:
             for payload in (header, *(mol.ToBinary() for mol in mols)):
                 handle.write(len(payload).to_bytes(8, "little"))
                 handle.write(payload)
@@ -133,7 +142,10 @@ def _read_prepared_cache(path: Path, key: dict[str, str | int]) -> list[Chem.Mol
         raise ValueError(f"{path} was prepared with {cached_key}, but this run needs {key}; use another cache path")
     if len(payloads) - 1 != num_records:
         raise ValueError(f"{path} holds {len(payloads) - 1} of {num_records} molecules; delete it to rebuild")
-    return [Chem.Mol(payload) for payload in payloads[1:]]
+    try:
+        return [Chem.Mol(payload) for payload in payloads[1:]]
+    except RuntimeError as error:
+        raise ValueError(f"{path} holds a corrupt molecule record; delete it to rebuild") from error
 
 
 def _pack_device_coordinates(mols: list[Chem.Mol]) -> Device3DResult:
@@ -380,8 +392,8 @@ def main() -> None:
     parser.add_argument(
         "--prepared_cache",
         default=None,
-        help="Prepared-conformer cache: loaded when it exists (it must match --smiles, --seed and the largest "
-        "--num_mols and --confs_per_mol), otherwise written after embedding",
+        help="Prepared-conformer cache: loaded when it exists (it must match the --smiles file contents, --seed, "
+        "the largest --num_mols and --confs_per_mol, and the RDKit version), otherwise written after embedding",
     )
     parser.add_argument("--output", default=None, help="Optional CSV output path")
     add_backend_selection_args(parser)
