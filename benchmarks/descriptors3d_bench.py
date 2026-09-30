@@ -15,6 +15,7 @@ Example:
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -90,28 +91,48 @@ def _cache_key(smiles_path: str, seed: int, num_mols: int, confs_per_mol: int) -
 
 
 def _write_prepared_cache(path: Path, key: dict[str, str | int], mols: list[Chem.Mol]) -> None:
-    """Write a JSON key header and length-prefixed RDKit binary molecules (no pickle)."""
-    with path.open("wb") as handle:
-        for payload in (json.dumps(key).encode(), *(mol.ToBinary() for mol in mols)):
-            handle.write(len(payload).to_bytes(8, "little"))
-            handle.write(payload)
+    """Write a JSON header (key and molecule count) and length-prefixed RDKit binary molecules (no pickle).
+
+    The file is written beside ``path`` and renamed into place when complete, so an interrupted run never
+    leaves a partial cache at ``path``.
+    """
+    header = json.dumps({"key": key, "num_records": len(mols)}).encode()
+    partial = path.with_name(f"{path.name}.partial-{os.getpid()}")
+    try:
+        with partial.open("wb") as handle:
+            for payload in (header, *(mol.ToBinary() for mol in mols)):
+                handle.write(len(payload).to_bytes(8, "little"))
+                handle.write(payload)
+        partial.replace(path)
+    finally:
+        partial.unlink(missing_ok=True)
 
 
 def _read_prepared_cache(path: Path, key: dict[str, str | int]) -> list[Chem.Mol]:
-    """Read a cache written by :func:`_write_prepared_cache`, rejecting one prepared with a different key."""
+    """Read a cache written by :func:`_write_prepared_cache`.
+
+    Raises:
+        ValueError: If the file is not a complete cache (truncated record, missing molecules or trailing
+            bytes) or was prepared with a different key.
+    """
     data = path.read_bytes()
     payloads = []
     offset = 0
     while offset < len(data):
         size = int.from_bytes(data[offset : offset + 8], "little")
+        if offset + 8 > len(data) or offset + 8 + size > len(data):
+            raise ValueError(f"{path} is truncated or not a prepared-conformer cache; delete it to rebuild")
         payloads.append(data[offset + 8 : offset + 8 + size])
         offset += 8 + size
     try:
-        cached_key = json.loads(payloads[0])
-    except (IndexError, ValueError) as error:
+        header = json.loads(payloads[0])
+        cached_key, num_records = header["key"], header["num_records"]
+    except (IndexError, KeyError, TypeError, ValueError) as error:
         raise ValueError(f"{path} is not a prepared-conformer cache") from error
     if cached_key != key:
         raise ValueError(f"{path} was prepared with {cached_key}, but this run needs {key}; use another cache path")
+    if len(payloads) - 1 != num_records:
+        raise ValueError(f"{path} holds {len(payloads) - 1} of {num_records} molecules; delete it to rebuild")
     return [Chem.Mol(payload) for payload in payloads[1:]]
 
 
