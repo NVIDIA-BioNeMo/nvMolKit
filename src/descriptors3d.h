@@ -143,8 +143,9 @@ template <typename Real> using Property3DResults = std::unordered_map<Property3D
  * disagrees with the molecule's atom range produce NaN for every requested property.
  *
  * @throws std::invalid_argument if @p properties is empty, contains duplicates, or contains a value
- *                               outside kAllProperty3D; if `options.whim.threshold` is negative or not
- *                               finite; or if a required input is null.
+ *                               outside kAllProperty3D; if WHIM is requested and
+ *                               `options.whim.threshold` is negative or not finite; or if a required
+ *                               input is null.
  */
 template <typename Real>
 Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coordinates,

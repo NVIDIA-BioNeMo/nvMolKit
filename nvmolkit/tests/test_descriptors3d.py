@@ -449,6 +449,9 @@ def test_property_and_coordinate_contract_errors_are_clear():
         Calc3DProperties(mol, ["PMI1"], hardwareOptions=HardwareOptions(preprocessingThreads=0))
     with pytest.raises(TypeError, match="HardwareOptions"):
         Calc3DProperties(mol, ["PMI1"], hardwareOptions=WhimOptions())
+    # Options for families that are not requested are ignored, even when invalid.
+    invalid_whim = Property3DOptions(whim=WhimOptions(threshold=float("nan")))
+    assert Calc3DProperties(mol, ["PMI1"], options=invalid_whim)["PMI1"].torch().shape == (1,)
     with pytest.raises(TypeError, match="Property3DOptions"):
         Calc3DProperties(mol, ["PMI1"], options=WhimOptions())
     with pytest.raises(ValueError, match="WHIM threshold"):

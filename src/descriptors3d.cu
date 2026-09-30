@@ -266,9 +266,6 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
   if (coordinates.numConformers < 0 || coordinates.nMols < 0) {
     throw std::invalid_argument("Batch dimensions must not be negative");
   }
-  if (!std::isfinite(options.whim.threshold) || options.whim.threshold < 0) {
-    throw std::invalid_argument("WHIM threshold must be finite and non-negative");
-  }
 
   Property3DResults<Real> results;
   Property3DWork<Real>    work{};
@@ -294,6 +291,11 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
         (property == Property3D::PBF ? pbfOutput : whimOutput) = it->second.data();
         break;
     }
+  }
+
+  // Options are validated only for requested families; the rest are ignored.
+  if (whimOutput != nullptr && (!std::isfinite(options.whim.threshold) || options.whim.threshold < 0)) {
+    throw std::invalid_argument("WHIM threshold must be finite and non-negative");
   }
 
   if (coordinates.numConformers == 0) {
