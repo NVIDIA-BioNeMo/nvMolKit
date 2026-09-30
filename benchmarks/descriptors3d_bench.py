@@ -14,6 +14,7 @@ Example:
 """
 
 import argparse
+import pickle
 from pathlib import Path
 
 import numpy as np
@@ -164,6 +165,8 @@ def run(
     no_rdkit: bool,
     no_nvmolkit: bool,
     output: str | None,
+    exclude: tuple[str, ...] = (),
+    prepared_cache: str | None = None,
 ) -> list[dict[str, float | int | str]]:
     """Prepare one maximum-size batch and benchmark requested sweep points."""
     if no_rdkit and no_nvmolkit:
@@ -175,17 +178,29 @@ def run(
 
     max_mols = max(num_mols_list)
     max_conformers = max(conformers_per_mol_list)
-    raw_mols = load_smiles(smiles_path, max_count=max_mols, sanitize=True, seed=seed)
-    workers = prep_workers if prep_workers > 0 else max(1, available_cpu_count() // 2)
-    prepared = embed_and_jitter(
-        raw_mols,
-        confs_per_mol=max_conformers,
-        seed=seed,
-        num_workers=workers,
-        add_hs=True,
-        min_atoms=1,
-        desc=f"Embed + perturb ({max_conformers} confs)",
-    )
+    cache_path = Path(prepared_cache) if prepared_cache else None
+    if cache_path is not None and cache_path.exists():
+        with cache_path.open("rb") as handle:
+            prepared = [Chem.Mol(binary) for binary in pickle.load(handle)]
+        print(f"Loaded {len(prepared)} prepared molecules from {cache_path}")
+        if len(prepared) < max_mols:
+            raise ValueError(f"{cache_path} holds {len(prepared)} molecules; {max_mols} requested")
+    else:
+        raw_mols = load_smiles(smiles_path, max_count=max_mols, sanitize=True, seed=seed)
+        workers = prep_workers if prep_workers > 0 else max(1, available_cpu_count() // 2)
+        prepared = embed_and_jitter(
+            raw_mols,
+            confs_per_mol=max_conformers,
+            seed=seed,
+            num_workers=workers,
+            add_hs=True,
+            min_atoms=1,
+            desc=f"Embed + perturb ({max_conformers} confs)",
+        )
+        if cache_path is not None:
+            with cache_path.open("wb") as handle:
+                pickle.dump([mol.ToBinary() for mol in prepared], handle)
+            print(f"Saved {len(prepared)} prepared molecules to {cache_path}")
     if not prepared:
         raise RuntimeError("no molecules survived conformer preparation")
 
@@ -198,7 +213,7 @@ def run(
             coordinates = _pack_device_coordinates(mols) if device_input and not no_nvmolkit else None
 
             for property_set_name in property_set_names:
-                properties = PROPERTY_SETS[property_set_name]
+                properties = tuple(prop for prop in PROPERTY_SETS[property_set_name] if prop.value not in exclude)
                 print(
                     f"\n=== {len(mols)} mols, {num_conformers} conformers, "
                     f"{avg_atoms:.1f} atoms/mol, properties={property_set_name} ==="
@@ -213,7 +228,7 @@ def run(
                     "conformers_per_mol": requested_conformers,
                     "num_conformers": num_conformers,
                     "avg_atoms": avg_atoms,
-                    "property_set": property_set_name,
+                    "property_set": property_set_name + "".join(f"-{name}" for name in exclude),
                     "precision": str(precision),
                     "num_properties": len(properties),
                 }
@@ -286,6 +301,17 @@ def main() -> None:
         action="store_true",
         help="Also time calculation from pre-staged device coordinates (chained-workflow path)",
     )
+    parser.add_argument(
+        "--exclude",
+        nargs="+",
+        default=[],
+        help="Property names to drop from every property set, e.g. to time 'all' without a new feature",
+    )
+    parser.add_argument(
+        "--prepared_cache",
+        default=None,
+        help="Pickle of prepared conformers: loaded when it exists, otherwise written after embedding",
+    )
     parser.add_argument("--output", default=None, help="Optional CSV output path")
     add_backend_selection_args(parser)
     args = parser.parse_args()
@@ -305,6 +331,8 @@ def main() -> None:
         no_rdkit=args.no_rdkit,
         no_nvmolkit=args.no_nvmolkit,
         output=args.output,
+        exclude=tuple(args.exclude),
+        prepared_cache=args.prepared_cache,
     )
 
 
