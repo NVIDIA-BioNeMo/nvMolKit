@@ -46,6 +46,12 @@ def leader(
     excluded becomes a leader and excludes every remaining candidate within
     ``cutoff`` of it, as in RDKit's ``LeaderPicker``.
 
+    Distances are compared with ``cutoff`` in float32, so a distance within
+    float32 rounding of the cutoff can be classified differently than by
+    RDKit's ``LeaderPicker``, which compares in double precision. For Tanimoto
+    distances this can happen at cutoffs that float32 cannot represent exactly,
+    such as 0.3.
+
     Args:
         distance_matrix: Square float32 or float64 matrix of shape ``(N, N)``.
             Element ``[i, j]`` is the distance from item ``i`` to item ``j``.
