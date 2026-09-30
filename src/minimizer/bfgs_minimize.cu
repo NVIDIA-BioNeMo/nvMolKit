@@ -447,6 +447,7 @@ BfgsBatchMinimizerT<real>::BfgsBatchMinimizerT(const int    dataDim,
     gradScales_.setStream(stream_);
     inverseHessian_.setStream(stream_);
     hessDGrad_.setStream(stream_);
+    hessianPassScratch_.setStream(stream_);
     ownedPositions_.setStream(stream_);
     ownedGrad_.setStream(stream_);
     ownedEnergies_.setStream(stream_);
@@ -566,6 +567,8 @@ void BfgsBatchMinimizerT<real>::initialize(const std::vector<int>& atomStartsHos
   hessDGrad_.zero();
 
   if (effectiveBackend == BfgsBackend::PER_MOLECULE) {
+    // Only the per-molecule kernels use the inverse-Hessian pass scratch.
+    hessianPassScratch_.resize(4 * numStateTerms);
     return;
   }
 
@@ -706,20 +709,26 @@ void prepareScratchBuffers(AsyncDeviceVector<storageT>&  grad,
                            AsyncDeviceVector<storageT>&  scratchPositions,
                            AsyncDeviceVector<storageT>&  hessDGrad,
                            AsyncDeviceVector<storageT>&  scratchGrad,
+                           AsyncDeviceVector<storageT>&  hessianPassScratch,
                            AsyncDeviceVector<storageT*>& scratchBuffersDevice,
                            PinnedHostVector<storageT*>&  scratchBufferPointersHost,
                            cudaStream_t                  stream) {
-  scratchBuffersDevice.resize(5);
-  scratchBufferPointersHost.resize(5);
+  constexpr int kNumBuffers = 9;
+  scratchBuffersDevice.resize(kNumBuffers);
+  scratchBufferPointersHost.resize(kNumBuffers);
   scratchBufferPointersHost[0] = grad.data();
   scratchBufferPointersHost[1] = lineSearchDir.data();
   scratchBufferPointersHost[2] = scratchPositions.data();
   scratchBufferPointersHost[3] = hessDGrad.data();
   scratchBufferPointersHost[4] = scratchGrad.data();
+  const size_t passTerms       = hessianPassScratch.size() / 4;
+  for (int k = 0; k < 4; ++k) {
+    scratchBufferPointersHost[5 + k] = hessianPassScratch.data() + k * passTerms;
+  }
 
   cudaCheckError(cudaMemcpyAsync(scratchBuffersDevice.data(),
                                  scratchBufferPointersHost.data(),
-                                 5 * sizeof(storageT*),
+                                 kNumBuffers * sizeof(storageT*),
                                  cudaMemcpyHostToDevice,
                                  stream));
 }
@@ -1231,6 +1240,7 @@ bool BfgsBatchMinimizerT<real>::minimizeWithMMFF(const int               numIter
                         scratchPositions_,
                         hessDGrad_,
                         scratchGrad_,
+                        hessianPassScratch_,
                         scratchBuffersDevice_,
                         scratchBufferPointersHost_,
                         stream_);
@@ -1288,6 +1298,7 @@ bool BfgsBatchMinimizerT<real>::minimizeWithETK(const int                     nu
                         scratchPositions_,
                         hessDGrad_,
                         scratchGrad_,
+                        hessianPassScratch_,
                         scratchBuffersDevice_,
                         scratchBufferPointersHost_,
                         stream_);
@@ -1351,6 +1362,7 @@ bool BfgsBatchMinimizerT<real>::minimizeWithDG(const int                     num
                         scratchPositions_,
                         hessDGrad_,
                         scratchGrad_,
+                        hessianPassScratch_,
                         scratchBuffersDevice_,
                         scratchBufferPointersHost_,
                         stream_);

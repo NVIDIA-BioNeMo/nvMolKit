@@ -316,108 +316,196 @@ __device__ void updateDGrad(const int                                           
   __syncthreads();
 }
 
-template <typename storageT>
-__device__ void updateInverseHessian(const int                                                     numTerms,
-                                     storageT*                                                     invHessian,
-                                     storageT*                                                     dGrad,
-                                     storageT*                                                     xi,
-                                     storageT*                                                     hessDGrad,
-                                     storageT*                                                     grad,
-                                     typename cub::BlockReduce<storageT, BLOCK_SIZE>::TempStorage& tempStorage) {
-  using BlockReduce = cub::BlockReduce<storageT, BLOCK_SIZE>;
+//! Rank-3 BFGS inverse-Hessian update carried over from the previous iteration. The update is applied lazily during
+//! the next pass over the matrix, so each iteration reads and writes the (global-memory) inverse Hessian once instead
+//! of three reads and one write.
+template <typename storageT> struct PendingHessianUpdate {
+  storageT fac;  //!< 1 / (dGrad . xi)
+  storageT fad;  //!< 1 / (dGrad . H dGrad)
+  storageT fae;  //!< dGrad . H dGrad
+  bool     active;
+};
 
-  // Compute hessDGrad = invHessian * dGrad
-  for (int row = threadIdx.x; row < numTerms; row += blockDim.x) {
-    storageT dotProduct = 0;
-    for (int col = 0; col < numTerms; col++) {
-      dotProduct += invHessian[col * numTerms + row] * dGrad[col];
-    }
-    hessDGrad[row] = dotProduct;
-  }
-  __syncthreads();
+//! Applies the pending update (if any) to the inverse Hessian while computing H dGrad and H grad in the same pass.
+//! Rows are processed in chunks of 32 (one per lane). Within a chunk each warp owns a contiguous range of columns, so
+//! all loads and stores are coalesced and the warps get equal work. Per-warp partial sums go through a small shared
+//! buffer and are added in warp order, which keeps the result deterministic.
+template <bool ApplyPending, typename storageT>
+__device__ void hessianPass(const int                             numTerms,
+                            storageT*                             invHessian,
+                            const storageT*                       dGrad,
+                            const storageT*                       grad,
+                            const storageT*                       pendXi,
+                            const storageT*                       pendHd,
+                            const storageT*                       pendU,
+                            const PendingHessianUpdate<storageT>& pending,
+                            storageT*                             hessDGrad,
+                            storageT*                             hessGrad,
+                            storageT (*partials)[2][BLOCK_SIZE / 32][32]) {
+  constexpr int kNumWarps = BLOCK_SIZE / 32;
+  // Rows are handled one per lane and the two products are finished by threads 0-63.
+  static_assert(BLOCK_SIZE % 32 == 0 && BLOCK_SIZE >= 64, "hessianPass needs whole warps and at least two of them");
+  const int warpId   = threadIdx.x / 32;
+  const int laneId   = threadIdx.x % 32;
+  const int colStart = (numTerms * warpId) / kNumWarps;
+  const int colEnd   = (numTerms * (warpId + 1)) / kNumWarps;
 
-  // Compute BFGS sums
-  __shared__ storageT fac, fae, fad, sumDGrad, sumXi;
-  __shared__ bool     needUpdate;
-
-  storageT sumFac = 0;
-  for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
-    sumFac += dGrad[i] * xi[i];
-  }
-  const storageT facReduced = BlockReduce(tempStorage).Sum(sumFac);
-  if (threadIdx.x == 0)
-    fac = facReduced;
-  __syncthreads();
-
-  storageT sumFae = 0;
-  for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
-    sumFae += dGrad[i] * hessDGrad[i];
-  }
-  const storageT faeReduced = BlockReduce(tempStorage).Sum(sumFae);
-  if (threadIdx.x == 0)
-    fae = faeReduced;
-  __syncthreads();
-
-  storageT sumDGradSq = 0;
-  for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
-    sumDGradSq += dGrad[i] * dGrad[i];
-  }
-  const storageT sumDGradReduced = BlockReduce(tempStorage).Sum(sumDGradSq);
-  if (threadIdx.x == 0)
-    sumDGrad = sumDGradReduced;
-  __syncthreads();
-
-  storageT sumXiSq = 0;
-  for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
-    sumXiSq += xi[i] * xi[i];
-  }
-  const storageT sumXiReduced = BlockReduce(tempStorage).Sum(sumXiSq);
-  if (threadIdx.x == 0)
-    sumXi = sumXiReduced;
-  __syncthreads();
-
-  if (threadIdx.x == 0) {
-    constexpr storageT EPS = static_cast<storageT>(3e-8);
-    needUpdate             = (fac > 0) && ((fac * fac) > (EPS * sumDGrad * sumXi));
-
-    if (needUpdate) {
-      fac = 1.0 / fac;
-      fad = 1.0 / fae;
-    }
-  }
-  __syncthreads();
-
-  if (needUpdate) {
-    // Update dGrad for Hessian update
-    for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
-      dGrad[i] = fac * xi[i] - fad * hessDGrad[i];
-    }
-    __syncthreads();
-
-    // Update inverse Hessian
-    for (int row = threadIdx.x; row < numTerms; row += blockDim.x) {
-      const storageT pxi  = fac * xi[row];
-      const storageT hdgi = fad * hessDGrad[row];
-      const storageT dgi  = fae * dGrad[row];
-
-      for (int col = 0; col < numTerms; col++) {
-        const storageT pxj    = xi[col];
-        const storageT hdgj   = hessDGrad[col];
-        const storageT dgj    = dGrad[col];
-        const storageT update = pxi * pxj - hdgi * hdgj + dgi * dgj;
-        invHessian[col * numTerms + row] += update;
+  int buffer = 0;
+  for (int rowBase = 0; rowBase < numTerms; rowBase += 32, buffer ^= 1) {
+    const int  row   = rowBase + laneId;
+    const bool valid = row < numTerms;
+    storageT   pxi   = 0;
+    storageT   hdgi  = 0;
+    storageT   dgi   = 0;
+    if constexpr (ApplyPending) {
+      if (valid) {
+        pxi  = pending.fac * pendXi[row];
+        hdgi = pending.fad * pendHd[row];
+        dgi  = pending.fae * pendU[row];
       }
     }
+    storageT accDGrad = 0;
+    storageT accGrad  = 0;
+    if (valid) {
+      // Loads are issued in groups before the (possibly aliasing) stores so several are in flight per warp.
+      constexpr int kGroup   = 8;
+      storageT*     rowBaseH = invHessian + row;
+      int           col      = colStart;
+      for (; col + kGroup <= colEnd; col += kGroup) {
+        storageT h[kGroup];
+#pragma unroll
+        for (int k = 0; k < kGroup; ++k) {
+          h[k] = rowBaseH[(col + k) * numTerms];
+        }
+#pragma unroll
+        for (int k = 0; k < kGroup; ++k) {
+          if constexpr (ApplyPending) {
+            const int      c      = col + k;
+            const storageT update = pxi * pendXi[c] - hdgi * pendHd[c] + dgi * pendU[c];
+            h[k] += update;
+            rowBaseH[c * numTerms] = h[k];
+          }
+          accDGrad += h[k] * dGrad[col + k];
+          accGrad += h[k] * grad[col + k];
+        }
+      }
+      for (; col < colEnd; ++col) {
+        storageT h = rowBaseH[col * numTerms];
+        if constexpr (ApplyPending) {
+          const storageT update = pxi * pendXi[col] - hdgi * pendHd[col] + dgi * pendU[col];
+          h += update;
+          rowBaseH[col * numTerms] = h;
+        }
+        accDGrad += h * dGrad[col];
+        accGrad += h * grad[col];
+      }
+    }
+    partials[buffer][0][warpId][laneId] = accDGrad;
+    partials[buffer][1][warpId][laneId] = accGrad;
     __syncthreads();
+    // Threads 0-31 finish H dGrad, threads 32-63 finish H grad for this chunk. The other buffer is used by the next
+    // chunk, so one barrier per chunk suffices.
+    if (threadIdx.x < 64) {
+      const int product = threadIdx.x / 32;
+      const int outRow  = rowBase + laneId;
+      if (outRow < numTerms) {
+        storageT total = partials[buffer][product][0][laneId];
+#pragma unroll
+        for (int w = 1; w < kNumWarps; ++w) {
+          total += partials[buffer][product][w][laneId];
+        }
+        (product == 0 ? hessDGrad : hessGrad)[outRow] = total;
+      }
+    }
+  }
+  __syncthreads();
+}
+
+//! BFGS step: new direction xi = -H_{k+1} grad, with the rank-3 update of H_k deferred to the next call (applied
+//! during that call's single pass over the matrix). H_{k+1} grad is formed as H_k grad plus the rank-3 correction
+//! applied to grad.
+template <typename storageT>
+__device__ void updateInverseHessian(const int                       numTerms,
+                                     storageT*                       invHessian,
+                                     const storageT*                 dGrad,
+                                     storageT*                       xi,
+                                     storageT*                       hessDGrad,
+                                     const storageT*                 grad,
+                                     storageT*                       hessGrad,
+                                     storageT*                       pendXi,
+                                     storageT*                       pendHd,
+                                     storageT*                       pendU,
+                                     PendingHessianUpdate<storageT>& pending,
+                                     storageT (*partials)[2][BLOCK_SIZE / 32][32],
+                                     typename cub::BlockReduce<storageT, BLOCK_SIZE>::TempStorage& tempStorage) {
+  if (pending.active) {
+    hessianPass<true>(numTerms, invHessian, dGrad, grad, pendXi, pendHd, pendU, pending, hessDGrad, hessGrad, partials);
+  } else {
+    hessianPass<
+      false>(numTerms, invHessian, dGrad, grad, pendXi, pendHd, pendU, pending, hessDGrad, hessGrad, partials);
   }
 
-  // Update xi = -invHessian * grad
-  for (int row = threadIdx.x; row < numTerms; row += blockDim.x) {
-    storageT dotProduct = 0;
-    for (int col = 0; col < numTerms; col++) {
-      dotProduct += invHessian[col * numTerms + row] * grad[col];
+  // 0: dGrad.xi  1: dGrad.hessDGrad  2: dGrad.dGrad  3: xi.xi  4: xi.grad  5: hessDGrad.grad
+  storageT sums[6] = {0, 0, 0, 0, 0, 0};
+  for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
+    const storageT dg = dGrad[i];
+    const storageT x  = xi[i];
+    const storageT hd = hessDGrad[i];
+    const storageT g  = grad[i];
+    sums[0] += dg * x;
+    sums[1] += dg * hd;
+    sums[2] += dg * dg;
+    sums[3] += x * x;
+    sums[4] += x * g;
+    sums[5] += hd * g;
+  }
+  using BlockReduce = cub::BlockReduce<storageT, BLOCK_SIZE>;
+  __shared__ storageT sumsShared[6];
+  for (int k = 0; k < 6; ++k) {
+    const storageT total = BlockReduce(tempStorage).Sum(sums[k]);
+    if (threadIdx.x == 0) {
+      sumsShared[k] = total;
     }
-    xi[row] = -dotProduct;
+    __syncthreads();
+  }
+  for (int k = 0; k < 6; ++k) {
+    sums[k] = sumsShared[k];
+  }
+
+  constexpr storageT EPS        = static_cast<storageT>(3e-8);
+  const storageT     fac        = sums[0];
+  const storageT     fae        = sums[1];
+  const bool         needUpdate = (fac > 0) && ((fac * fac) > (EPS * sums[2] * sums[3]));
+
+  if (needUpdate) {
+    const storageT facInv = static_cast<storageT>(1) / fac;
+    const storageT fadInv = static_cast<storageT>(1) / fae;
+    const storageT xiG    = sums[4];
+    const storageT hdG    = sums[5];
+    const storageT uG     = facInv * xiG - fadInv * hdG;
+    for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
+      const storageT x  = xi[i];
+      const storageT hd = hessDGrad[i];
+      const storageT u  = facInv * x - fadInv * hd;
+      pendXi[i]         = x;
+      pendHd[i]         = hd;
+      pendU[i]          = u;
+      xi[i]             = -(hessGrad[i] + facInv * x * xiG - fadInv * hd * hdG + fae * u * uG);
+    }
+  } else {
+    for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
+      xi[i] = -hessGrad[i];
+    }
+  }
+  // All threads read pending.active above (inside hessianPass selection) before this point.
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    pending.active = needUpdate;
+    if (needUpdate) {
+      pending.fac = static_cast<storageT>(1) / fac;
+      pending.fad = static_cast<storageT>(1) / fae;
+      pending.fae = fae;
+    }
   }
   __syncthreads();
 }
@@ -475,12 +563,14 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
   const int16_t     numTerms = dataDim * numAtoms;
 
   // Pointers to working memory (either shared or global)
-  storageT* localPos;
-  storageT* localGrad;
-  storageT* localDir;
-  storageT* scratchPos;
-  storageT* dGrad;
-  storageT* oldPos;
+  storageT*  localPos;
+  storageT*  localGrad;
+  storageT*  localDir;
+  storageT*  scratchPos;
+  storageT*  dGrad;
+  storageT*  oldPos;
+  __shared__ PendingHessianUpdate<storageT> pendingUpdate;
+  __shared__ storageT                       hessPartials[2][2][BLOCK_SIZE / 32][32];
 
   if constexpr (UseSharedMem) {
     // Shared memory for small molecules (≤64 atoms)
@@ -508,6 +598,11 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
     dGrad               = scratchBuffers[3] + termStart;    // hessDGrad
     oldPos              = scratchBuffers[4] + termStart;    // scratchGrad (used as oldPos)
   }
+  // Inverse-Hessian pass scratch: H grad and the three vectors of the pending rank-3 update.
+  storageT* hessGrad = scratchBuffers[5] + atomStart * dataDim;
+  storageT* pendXi   = scratchBuffers[6] + atomStart * dataDim;
+  storageT* pendHd   = scratchBuffers[7] + atomStart * dataDim;
+  storageT* pendU    = scratchBuffers[8] + atomStart * dataDim;
 
   // Shared scalars
   __shared__ storageT maxStep;
@@ -548,7 +643,8 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
   }
 
   if (tid == 0) {
-    converged = false;
+    converged            = false;
+    pendingUpdate.active = false;
   }
   __syncthreads();
 
@@ -804,7 +900,19 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
     }
 
     // Update Hessian and compute new direction (reuses scratchPos as hessDGrad)
-    updateInverseHessian(numTerms, invHessian, dGrad, localDir, scratchPos, localGrad, tempStorage);
+    updateInverseHessian(numTerms,
+                         invHessian,
+                         dGrad,
+                         localDir,
+                         scratchPos,
+                         localGrad,
+                         hessGrad,
+                         pendXi,
+                         pendHd,
+                         pendU,
+                         pendingUpdate,
+                         hessPartials,
+                         tempStorage);
 
     if (tid == 0) {
       currIter++;
