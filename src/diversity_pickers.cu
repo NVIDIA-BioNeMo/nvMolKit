@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <boost/random/mersenne_twister.hpp>
+#include <boost/random/uniform_int.hpp>
+#include <boost/random/variate_generator.hpp>
 #include <cmath>
 #include <cstdint>
 #include <cub/block/block_scan.cuh>
 #include <limits>
 #include <numeric>
+#include <random>
 #include <stdexcept>
 #include <vector>
 
@@ -118,11 +122,44 @@ __global__ void applyLeaderWindowKernel(const LeaderState state, const int numIt
   }
 }
 
+__global__ void fillFloatsKernel(float* values, const int numItems, const float value) {
+  const int index = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (index < numItems) {
+    values[index] = value;
+  }
+}
+
 __global__ void markIndicesKernel(const int* indices, const int count, std::uint8_t* flags) {
   const int index = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
   if (index < count) {
     flags[indices[index]] = 1;
   }
+}
+
+__global__ void recordMaxMinPickKernel(std::uint64_t*                   best,
+                                       const float                      threshold,
+                                       const int                        pickSize,
+                                       int*                             picks,
+                                       int*                             count,
+                                       int*                             currentPick,
+                                       float*                           lastDistance,
+                                       const cudaGraphConditionalHandle loop) {
+  const std::uint64_t key = *best;
+  *best                   = 0;
+  const int   position    = *count;
+  const auto  ordered     = static_cast<std::uint32_t>(key >> 32);
+  const float distance    = __uint_as_float((ordered & 0x80000000U) != 0U ? ordered & 0x7FFFFFFFU : ~ordered);
+  if (key == 0 || position >= pickSize || (threshold >= 0.0F && distance <= threshold)) {
+    *currentPick = -1;
+    cudaGraphSetConditional(loop, 0);
+    return;
+  }
+  const auto pick = static_cast<int>(0xFFFFFFFFU - static_cast<std::uint32_t>(key));
+  picks[position] = pick;
+  *currentPick    = pick;
+  *lastDistance   = distance;
+  *count          = position + 1;
+  cudaGraphSetConditional(loop, position + 1 < pickSize ? 1 : 0);
 }
 
 __device__ __forceinline__ bool validSource(const int source, const int numItems) {
@@ -452,6 +489,20 @@ PickerResult leaderFromMatrix(const cuda::std::span<const Scalar> distanceMatrix
 }
 
 template <typename Scalar>
+PickerResult maxMinFromMatrix(const cuda::std::span<const Scalar> distanceMatrix,
+                              const int                           numItems,
+                              const int                           pickSize,
+                              const std::vector<int>&             firstPicks,
+                              const int                           seed,
+                              const double                        threshold,
+                              cudaStream_t                        stream) {
+  validateDistanceMatrix(distanceMatrix, numItems);
+  validateMaxMinThreshold(threshold, std::numeric_limits<float>::max());
+  MatrixDistanceProvider<Scalar> provider(distanceMatrix, numItems);
+  return maxMinPick(provider, pickSize, firstPicks, seed, static_cast<float>(threshold), stream);
+}
+
+template <typename Scalar>
 ClusteringResult diseFromMatrix(const cuda::std::span<const Scalar> distanceMatrix,
                                 const int                           numItems,
                                 const double                        cutoff,
@@ -485,11 +536,32 @@ void launchApplyLeaderWindow(const LeaderState& state, const int numItems, cudaS
   cudaCheckError(cudaGetLastError());
 }
 
+void launchFillFloats(float* values, const int numItems, const float value, cudaStream_t stream) {
+  if (numItems == 0) {
+    return;
+  }
+  fillFloatsKernel<<<pickerGridSize(numItems), kPickerBlockSize, 0, stream>>>(values, numItems, value);
+  cudaCheckError(cudaGetLastError());
+}
+
 void launchMarkIndices(const int* indices, const int count, std::uint8_t* flags, cudaStream_t stream) {
   if (count == 0) {
     return;
   }
   markIndicesKernel<<<pickerGridSize(count), kPickerBlockSize, 0, stream>>>(indices, count, flags);
+  cudaCheckError(cudaGetLastError());
+}
+
+void launchRecordMaxMinPick(std::uint64_t*                   best,
+                            const float                      threshold,
+                            const int                        pickSize,
+                            int*                             picks,
+                            int*                             count,
+                            int*                             currentPick,
+                            float*                           lastDistance,
+                            const cudaGraphConditionalHandle loop,
+                            cudaStream_t                     stream) {
+  recordMaxMinPickKernel<<<1, 1, 0, stream>>>(best, threshold, pickSize, picks, count, currentPick, lastDistance, loop);
   cudaCheckError(cudaGetLastError());
 }
 
@@ -506,10 +578,32 @@ void validateFirstPicks(const std::vector<int>& firstPicks, const int numItems) 
   }
 }
 
+void validateMaxMinThreshold(const double threshold, const double maximum) {
+  if (threshold == -1.0) {
+    return;
+  }
+  if (!std::isfinite(threshold) || threshold < 0.0 || threshold > maximum) {
+    throw std::invalid_argument("threshold must be finite and in the supported distance range");
+  }
+}
+
 void validateUnitCutoff(const double cutoff) {
   if (!(cutoff >= 0.0 && cutoff <= 1.0)) {
     throw std::invalid_argument("cutoff must be in [0, 1]");
   }
+}
+
+int randomFirstPick(const int poolSize, const int seed) {
+  // Matches RDKit's MaxMinPicker so seeded runs select the same first item.
+  boost::mt19937 generator;
+  if (seed >= 0) {
+    generator.seed(static_cast<boost::mt19937::result_type>(seed));
+  } else {
+    generator.seed(std::random_device()());
+  }
+  boost::uniform_int<>                                            distribution(0, poolSize - 1);
+  boost::variate_generator<boost::mt19937&, boost::uniform_int<>> source(generator, distribution);
+  return source();
 }
 
 ClusteringResult buildClusteringResult(const std::vector<int>& labels, const std::vector<int>& centroids) {
@@ -564,6 +658,26 @@ PickerResult leaderFromDistanceMatrix(const cuda::std::span<const double> distan
   return detail::leaderFromMatrix(distanceMatrix, numItems, cutoff, pickSize, firstPicks, stream);
 }
 
+PickerResult maxMinFromDistanceMatrix(const cuda::std::span<const float> distanceMatrix,
+                                      const int                          numItems,
+                                      const int                          pickSize,
+                                      const std::vector<int>&            firstPicks,
+                                      const int                          seed,
+                                      const double                       threshold,
+                                      cudaStream_t                       stream) {
+  return detail::maxMinFromMatrix(distanceMatrix, numItems, pickSize, firstPicks, seed, threshold, stream);
+}
+
+PickerResult maxMinFromDistanceMatrix(const cuda::std::span<const double> distanceMatrix,
+                                      const int                           numItems,
+                                      const int                           pickSize,
+                                      const std::vector<int>&             firstPicks,
+                                      const int                           seed,
+                                      const double                        threshold,
+                                      cudaStream_t                        stream) {
+  return detail::maxMinFromMatrix(distanceMatrix, numItems, pickSize, firstPicks, seed, threshold, stream);
+}
+
 ClusteringResult diseFromDistanceMatrix(const cuda::std::span<const float> distanceMatrix,
                                         const int                          numItems,
                                         const double                       cutoff,
@@ -591,6 +705,21 @@ PickerResult fusedLeaderGpu(const cuda::std::span<const std::uint32_t> fingerpri
   detail::validateUnitCutoff(cutoff);
   return detail::withFingerprintProvider(fingerprints, numFingerprints, numWords, metric, stream, [&](auto& provider) {
     return detail::leaderPick(provider, static_cast<float>(cutoff), pickSize, firstPicks, nullptr, stream);
+  });
+}
+
+PickerResult fusedMaxMinGpu(const cuda::std::span<const std::uint32_t> fingerprints,
+                            const int                                  numFingerprints,
+                            const int                                  numWords,
+                            const int                                  pickSize,
+                            const FingerprintSimilarityMetric          metric,
+                            const std::vector<int>&                    firstPicks,
+                            const int                                  seed,
+                            const double                               threshold,
+                            cudaStream_t                               stream) {
+  detail::validateMaxMinThreshold(threshold, 1.0);
+  return detail::withFingerprintProvider(fingerprints, numFingerprints, numWords, metric, stream, [&](auto& provider) {
+    return detail::maxMinPick(provider, pickSize, firstPicks, seed, static_cast<float>(threshold), stream);
   });
 }
 

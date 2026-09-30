@@ -110,6 +110,8 @@ Diversity Selection
 
    pickers.leader
    pickers.fused_leader
+   pickers.maxmin
+   pickers.fused_maxmin
 
 Maximum Common Substructure (MCS)
 ---------------------------------

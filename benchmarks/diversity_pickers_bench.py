@@ -1,17 +1,18 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Benchmark Leader and DISE selection against RDKit.
+"""Benchmark Leader, DISE, and MaxMin selection against RDKit.
 
-RDKit selects from Morgan bit vectors with ``LeaderPicker``. RDKit has no
-DISE, so the DISE reference is RDKit Leader followed by nearest-centroid
+RDKit selects from Morgan bit vectors with ``LeaderPicker`` and ``MaxMinPicker``.
+The DISE reference is RDKit's ``LeaderPicker`` followed by nearest-centroid
 assignment with ``BulkTanimotoSimilarity``.
 
 nvMolKit is timed in two forms, both starting from nvMolKit Morgan
 fingerprints on the GPU. The fused form selects directly from fingerprints.
 The matrix form builds the Tanimoto distance matrix and selects from it;
 ``nvmolkit_matrix_select`` times the selection alone on a prebuilt matrix.
-Fingerprint generation is outside every timed region.
+For MaxMin, ``rdkit_matrix_select`` times ``MaxMinPicker.Pick`` on a prebuilt
+condensed matrix. Fingerprint generation is outside every timed region.
 
 nvMolKit compares distances in single precision, so a cutoff that is not a
 dyadic fraction can classify a boundary distance differently than RDKit. The
@@ -19,7 +20,7 @@ dyadic fraction can classify a boundary distance differently than RDKit. The
 
 Example:
     python diversity_pickers_bench.py --smiles data/chembl_10k.smi \
-        --sizes 1000 10000 --cutoffs 0.25 0.5
+        --sizes 1000 10000 --cutoffs 0.25 0.5 --pick_sizes 100
 """
 
 import argparse
@@ -45,7 +46,7 @@ from rdkit.SimDivFilters import rdSimDivPickers
 
 from nvmolkit.clustering import OutputMode, dise, fused_dise
 from nvmolkit.fingerprints import MorganFingerprintGenerator
-from nvmolkit.pickers import fused_leader, leader
+from nvmolkit.pickers import fused_leader, fused_maxmin, leader, maxmin
 from nvmolkit.similarity import crossTanimotoSimilarity
 
 FORMS = ("fused", "matrix")
@@ -59,10 +60,18 @@ class Inputs:
     rdkit_fps: list | None
     fingerprints: torch.Tensor | None
     matrix: torch.Tensor | None
+    condensed: np.ndarray | None
+    seed: int
 
 
 def _distance_matrix(fingerprints: torch.Tensor) -> torch.Tensor:
     return 1.0 - crossTanimotoSimilarity(fingerprints).torch()
+
+
+def _condensed(matrix: torch.Tensor) -> np.ndarray:
+    """Lower triangle in the row order of RDKit's condensed distance matrices."""
+    dense = matrix.cpu().numpy().astype(np.float64)
+    return dense[np.tril_indices(len(dense), -1)]
 
 
 def _clusters(centroids, assignments) -> tuple[tuple[int, ...], ...]:
@@ -76,40 +85,63 @@ def _canonical_clusters(clusters) -> tuple[tuple[int, ...], ...]:
     return tuple(sorted(tuple(sorted(cluster)) for cluster in clusters))
 
 
-def _rdkit_leader(fps: list, cutoff: float):
+def _rdkit_leader(inputs: Inputs, cutoff: float):
+    fps = inputs.rdkit_fps
     return tuple(rdSimDivPickers.LeaderPicker().LazyBitVectorPick(fps, len(fps), cutoff))
 
 
-def _rdkit_dise(fps: list, cutoff: float):
-    centroids = _rdkit_leader(fps, cutoff)
-    centroid_fps = [fps[index] for index in centroids]
+def _rdkit_dise(inputs: Inputs, cutoff: float):
+    centroids = _rdkit_leader(inputs, cutoff)
+    centroid_fps = [inputs.rdkit_fps[index] for index in centroids]
     assignments = [
-        int(np.argmin(DataStructs.BulkTanimotoSimilarity(fp, centroid_fps, returnDistance=True))) for fp in fps
+        int(np.argmin(DataStructs.BulkTanimotoSimilarity(fp, centroid_fps, returnDistance=True)))
+        for fp in inputs.rdkit_fps
     ]
     return _clusters(centroids, assignments)
+
+
+def _rdkit_maxmin(inputs: Inputs, pick_size: int):
+    fps = inputs.rdkit_fps
+    return tuple(rdSimDivPickers.MaxMinPicker().LazyBitVectorPick(fps, len(fps), pick_size, seed=inputs.seed))
+
+
+def _rdkit_maxmin_matrix(inputs: Inputs, pick_size: int):
+    size = len(inputs.rdkit_fps)
+    return tuple(rdSimDivPickers.MaxMinPicker().Pick(inputs.condensed, size, pick_size, seed=inputs.seed))
 
 
 @dataclass(frozen=True)
 class Operation:
     """RDKit and nvMolKit implementations of one selection algorithm."""
 
+    parameter: str
     rdkit: Callable
     fused: Callable
     matrix: Callable
+    rdkit_matrix: Callable | None = None
     canonical: Callable = tuple
 
 
 OPERATIONS = {
     "leader": Operation(
+        parameter="cutoff",
         rdkit=_rdkit_leader,
-        fused=lambda fps, cutoff: fused_leader(fps, cutoff, output=OutputMode.RDKIT),
-        matrix=lambda matrix, cutoff: leader(matrix, cutoff, output=OutputMode.RDKIT),
+        fused=lambda fps, cutoff, seed: fused_leader(fps, cutoff, output=OutputMode.RDKIT),
+        matrix=lambda matrix, cutoff, seed: leader(matrix, cutoff, output=OutputMode.RDKIT),
     ),
     "dise": Operation(
+        parameter="cutoff",
         rdkit=_rdkit_dise,
-        fused=lambda fps, cutoff: fused_dise(fps, cutoff, output=OutputMode.RDKIT),
-        matrix=lambda matrix, cutoff: dise(matrix, cutoff, output=OutputMode.RDKIT),
+        fused=lambda fps, cutoff, seed: fused_dise(fps, cutoff, output=OutputMode.RDKIT),
+        matrix=lambda matrix, cutoff, seed: dise(matrix, cutoff, output=OutputMode.RDKIT),
         canonical=_canonical_clusters,
+    ),
+    "maxmin": Operation(
+        parameter="pick_size",
+        rdkit=_rdkit_maxmin,
+        fused=lambda fps, pick_size, seed: fused_maxmin(fps, pick_size, seed=seed, output=OutputMode.RDKIT)[0],
+        matrix=lambda matrix, pick_size, seed: maxmin(matrix, pick_size, seed=seed, output=OutputMode.RDKIT)[0],
+        rdkit_matrix=_rdkit_maxmin_matrix,
     ),
 }
 
@@ -141,7 +173,7 @@ def _validate_fingerprints(rdkit_fps: list, fingerprints: torch.Tensor) -> None:
 def _benchmark_point(
     name: str,
     operation: Operation,
-    cutoff: float,
+    value: float | int,
     inputs: Inputs,
     forms: list[str],
     runs: int,
@@ -154,12 +186,12 @@ def _benchmark_point(
     row: dict[str, float | int | str | bool] = {
         "operation": name,
         "num_mols": inputs.num_mols,
-        "cutoff": cutoff,
+        operation.parameter: value,
     }
     rdkit_timing = rdkit_result = None
     if not no_rdkit:
         rdkit_timing, rdkit_result = _time(
-            f"rdkit_{name}", lambda: operation.rdkit(inputs.rdkit_fps, cutoff), runs, warmups, gpu=False
+            f"rdkit_{name}", lambda: operation.rdkit(inputs, value), runs, warmups, gpu=False
         )
         row["rdkit_num_selected"] = len(rdkit_result)
         row.update(_timing_fields("rdkit", rdkit_timing))
@@ -177,7 +209,7 @@ def _benchmark_point(
             "fused",
             *_time(
                 f"nvmolkit_fused_{name}",
-                lambda: operation.fused(inputs.fingerprints, cutoff),
+                lambda: operation.fused(inputs.fingerprints, value, inputs.seed),
                 runs,
                 warmups,
                 gpu=True,
@@ -189,7 +221,7 @@ def _benchmark_point(
             "matrix",
             *_time(
                 f"nvmolkit_matrix_{name}",
-                lambda: operation.matrix(_distance_matrix(inputs.fingerprints), cutoff),
+                lambda: operation.matrix(_distance_matrix(inputs.fingerprints), value, inputs.seed),
                 runs,
                 warmups,
                 gpu=True,
@@ -197,12 +229,18 @@ def _benchmark_point(
         )
         select_timing, _ = _time(
             f"nvmolkit_matrix_select_{name}",
-            lambda: operation.matrix(inputs.matrix, cutoff),
+            lambda: operation.matrix(inputs.matrix, value, inputs.seed),
             runs,
             warmups,
             gpu=True,
         )
         row.update(_timing_fields("nvmolkit_matrix_select", select_timing))
+        if inputs.condensed is not None and operation.rdkit_matrix is not None:
+            rdkit_select_timing, _ = _time(
+                f"rdkit_matrix_select_{name}", lambda: operation.rdkit_matrix(inputs, value), runs, warmups, gpu=False
+            )
+            row.update(_timing_fields("rdkit_matrix_select", rdkit_select_timing))
+            row["matrix_select_speedup"] = rdkit_select_timing.median_ms / select_timing.median_ms
 
     if row.get("fused_matches_rdkit") is False or row.get("matrix_matches_rdkit") is False:
         print(f"WARNING: nvMolKit {name} differs from RDKit", file=sys.stderr, flush=True)
@@ -215,6 +253,7 @@ def run(
     operations: list[str],
     forms: list[str],
     cutoffs: list[float],
+    pick_sizes: list[int],
     matrix_max_size: int,
     radius: int,
     fp_size: int,
@@ -232,6 +271,8 @@ def run(
         raise ValueError("cannot disable both RDKit and nvMolKit")
     if any(size < 1 for size in sizes):
         raise ValueError("every --sizes value must be positive")
+    if "maxmin" in operations and any(pick_size < 1 or pick_size >= min(sizes) for pick_size in pick_sizes):
+        raise ValueError("every --pick_sizes value must be positive and smaller than every size")
 
     max_size = max(sizes)
     mols = load_smiles(smiles_path, max_count=max_size + 100, sanitize=True, seed=seed)[:max_size]
@@ -265,22 +306,16 @@ def run(
                 rdkit_fps=None if all_rdkit_fps is None else list(all_rdkit_fps[:size]),
                 fingerprints=fingerprints,
                 matrix=matrix,
+                condensed=_condensed(matrix) if use_matrix and not no_rdkit and "maxmin" in operations else None,
+                seed=seed,
             )
             for name in operations:
-                for cutoff in cutoffs:
-                    print(f"\n=== {name}, {size} molecules, cutoff={cutoff} ===", flush=True)
+                operation = OPERATIONS[name]
+                for value in cutoffs if operation.parameter == "cutoff" else pick_sizes:
+                    print(f"\n=== {name}, {size} molecules, {operation.parameter}={value} ===", flush=True)
                     rows.append(
                         _benchmark_point(
-                            name,
-                            OPERATIONS[name],
-                            cutoff,
-                            inputs,
-                            forms,
-                            runs,
-                            warmups,
-                            validate,
-                            no_rdkit,
-                            no_nvmolkit,
+                            name, operation, value, inputs, forms, runs, warmups, validate, no_rdkit, no_nvmolkit
                         )
                     )
     finally:
@@ -295,7 +330,7 @@ def run(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Leader and DISE selection benchmark")
+    parser = argparse.ArgumentParser(description="Leader, DISE, and MaxMin selection benchmark")
     parser.add_argument("--smiles", required=True, help="Path to a SMILES file")
     parser.add_argument("--sizes", type=int, nargs="+", default=[1000, 10000])
     parser.add_argument("--operations", choices=tuple(OPERATIONS), nargs="+", default=list(OPERATIONS))
@@ -303,6 +338,7 @@ def main() -> None:
     parser.add_argument(
         "--cutoffs", type=float, nargs="+", default=[0.25, 0.5], help="Leader and DISE distance cutoffs"
     )
+    parser.add_argument("--pick_sizes", type=int, nargs="+", default=[100], help="MaxMin selection sizes")
     parser.add_argument(
         "--matrix_max_size", type=int, default=10000, help="Largest size benchmarked in the matrix form"
     )
@@ -322,6 +358,7 @@ def main() -> None:
         operations=args.operations,
         forms=args.forms,
         cutoffs=args.cutoffs,
+        pick_sizes=args.pick_sizes,
         matrix_max_size=args.matrix_max_size,
         radius=args.radius,
         fp_size=args.fp_size,

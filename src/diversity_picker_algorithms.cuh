@@ -4,6 +4,8 @@
 #ifndef NVMOLKIT_DIVERSITY_PICKER_ALGORITHMS_CUH
 #define NVMOLKIT_DIVERSITY_PICKER_ALGORITHMS_CUH
 
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
 #include <cuda_runtime.h>
 
 #include <algorithm>
@@ -19,7 +21,7 @@
 #include "src/utils/device_vector.h"
 #include "src/utils/host_vector.h"
 
-// Leader and DISE are written once against a distance provider. A provider implements
+// Leader, MaxMin, and DISE are written once against a distance provider. A provider implements
 //
 //   int size() const;
 //   int leaderWindow() const;
@@ -60,6 +62,49 @@ struct LeaderHitsOp {
     }
   }
   __device__ void finish(const int candidate, const State state) const { hits[candidate] = state; }
+};
+
+//! Orders a MaxMin candidate by larger distance, then by lower index; 0 means no candidate.
+__device__ __forceinline__ std::uint64_t maxMinKey(const float distance, const int candidate) {
+  const auto bits    = __float_as_uint(distance);
+  const auto ordered = (bits & 0x80000000U) != 0U ? ~bits : bits | 0x80000000U;
+  return (static_cast<std::uint64_t>(ordered) << 32) | (0xFFFFFFFFU - static_cast<std::uint32_t>(candidate));
+}
+
+//! Folds new picks into each unselected candidate's distance to its nearest pick and reduces the next pick into
+//! @c best, so no separate pass over the distances is needed.
+struct MinDistanceOp {
+  float*         minimumDistances;
+  std::uint8_t*  selected;
+  std::uint64_t* best;
+
+  struct State {
+    float distance;
+    bool  picked;
+  };
+  __device__ bool  skip(const int candidate) const { return selected[candidate] != 0; }
+  __device__ State start(const int candidate) const { return {minimumDistances[candidate], false}; }
+  __device__ void  visit(State& state, const int /*ordinal*/, const bool self, const float distance) const {
+    if (self) {
+      state.picked = true;
+    } else {
+      state.distance = fminf(state.distance, distance);
+    }
+  }
+  __device__ void finish(const int candidate, const State state) const {
+    std::uint64_t key = 0;
+    if (state.picked) {
+      selected[candidate] = 1;
+    } else {
+      minimumDistances[candidate] = state.distance;
+      key                         = maxMinKey(state.distance, candidate);
+    }
+    const auto group = cooperative_groups::coalesced_threads();
+    key              = cooperative_groups::reduce(group, key, cooperative_groups::greater<std::uint64_t>());
+    if (group.thread_rank() == 0 && key != 0) {
+      atomicMax(reinterpret_cast<unsigned long long*>(best), static_cast<unsigned long long>(key));
+    }
+  }
 };
 
 //! Assigns each non-centroid to its nearest centroid; ties keep the earlier centroid.
@@ -105,14 +150,31 @@ void             launchResolveLeaderWindow(const LeaderState&         state,
                                            cudaGraphConditionalHandle loop,
                                            cudaStream_t               stream);
 void             launchApplyLeaderWindow(const LeaderState& state, int numItems, cudaStream_t stream);
+void             launchFillFloats(float* values, int numItems, float value, cudaStream_t stream);
 void             launchMarkIndices(const int* indices, int count, std::uint8_t* flags, cudaStream_t stream);
+//! Records the pick encoded in @p best as @p currentPick, or -1 once selection stops, and decides whether to
+//! continue. Resets @p best for the next pass.
+void             launchRecordMaxMinPick(std::uint64_t*             best,
+                                        float                      threshold,
+                                        int                        pickSize,
+                                        int*                       picks,
+                                        int*                       count,
+                                        int*                       currentPick,
+                                        float*                     lastDistance,
+                                        cudaGraphConditionalHandle loop,
+                                        cudaStream_t               stream);
 void             validateFirstPicks(const std::vector<int>& firstPicks, int numItems);
+void             validateMaxMinThreshold(double threshold, double maximum);
 void             validateUnitCutoff(double cutoff);
+int              randomFirstPick(int poolSize, int seed);
 ClusteringResult buildClusteringResult(const std::vector<int>& labels, const std::vector<int>& centroids);
 
 //! Returns the first @p count picks as an exactly sized result.
-inline PickerResult makePickerResult(const AsyncDeviceVector<int>& picks, const int count, cudaStream_t stream) {
-  PickerResult result{AsyncDeviceVector<int>(count, stream)};
+inline PickerResult makePickerResult(const AsyncDeviceVector<int>& picks,
+                                     const int                     count,
+                                     const float                   lastDistance,
+                                     cudaStream_t                  stream) {
+  PickerResult result{AsyncDeviceVector<int>(count, stream), lastDistance};
   if (count > 0) {
     cudaCheckError(
       cudaMemcpyAsync(result.indices.data(), picks.data(), count * sizeof(int), cudaMemcpyDeviceToDevice, stream));
@@ -141,13 +203,13 @@ PickerResult leaderPick(Provider&               provider,
     throw std::invalid_argument("pick_size must be between 0 and the input size");
   }
   if (numItems == 0) {
-    return PickerResult{AsyncDeviceVector<int>(0, stream)};
+    return PickerResult{AsyncDeviceVector<int>(0, stream), -1.0F};
   }
 
   const int limit = pickSize == 0 ? numItems : pickSize;
   if (labels == nullptr && (limit == 1 || firstPicks.size() >= static_cast<std::size_t>(limit))) {
     const std::vector<int> initial = firstPicks.empty() ? std::vector<int>{0} : firstPicks;
-    PickerResult           result{AsyncDeviceVector<int>(initial.size(), stream)};
+    PickerResult           result{AsyncDeviceVector<int>(initial.size(), stream), -1.0F};
     result.indices.copyFromHost(initial);
     cudaCheckError(cudaStreamSynchronize(stream));
     return result;
@@ -197,7 +259,61 @@ PickerResult leaderPick(Provider&               provider,
   int countHost = 0;
   count.get(countHost);
   cudaCheckError(cudaStreamSynchronize(stream));
-  return makePickerResult(picks, countHost, stream);
+  return makePickerResult(picks, countHost, -1.0F, stream);
+}
+
+template <typename Provider>
+PickerResult maxMinPick(Provider&               provider,
+                        const int               pickSize,
+                        const std::vector<int>& firstPicks,
+                        const int               seed,
+                        const float             threshold,
+                        cudaStream_t            stream) {
+  const int numItems = provider.size();
+  validateFirstPicks(firstPicks, numItems);
+  if (pickSize <= 0 || pickSize > numItems) {
+    throw std::invalid_argument("pick_size must be positive and no larger than the input size");
+  }
+
+  const std::vector<int> initial = firstPicks.empty() ? std::vector<int>{randomFirstPick(numItems, seed)} : firstPicks;
+  const int              numInitial = static_cast<int>(initial.size());
+  AsyncDeviceVector<int> picks(std::max(pickSize, numInitial), stream);
+  picks.copyFromHost(initial, initial.size());
+
+  AsyncDeviceVector<float>        minimumDistances(numItems, stream);
+  AsyncDeviceVector<std::uint8_t> selected(numItems, stream);
+  AsyncDevicePtr<std::uint64_t>   best(0, stream);
+  AsyncDevicePtr<int>             count(numInitial, stream);
+  AsyncDevicePtr<int>             currentPick(-1, stream);
+  AsyncDevicePtr<float>           lastDistance(-1.0F, stream);
+  launchFillFloats(minimumDistances.data(), numItems, FLT_MAX, stream);
+  cudaCheckError(cudaMemsetAsync(selected.data(), 0, numItems, stream));
+  const MinDistanceOp op{minimumDistances.data(), selected.data(), best.data()};
+  provider.accumulateDistances(picks.data(), numInitial, op, stream);
+
+  // Selection runs on the device until pickSize picks are made or the threshold stops it.
+  if (numInitial < pickSize) {
+    const ConditionalLoopGraph loop([&](cudaStream_t captureStream, cudaGraphConditionalHandle handle) {
+      launchRecordMaxMinPick(best.data(),
+                             threshold,
+                             pickSize,
+                             picks.data(),
+                             count.data(),
+                             currentPick.data(),
+                             lastDistance.data(),
+                             handle,
+                             captureStream);
+      provider.accumulateDistances(currentPick.data(), 1, op, captureStream);
+    });
+    loop.launch(stream);
+  }
+
+  int   countHost        = numInitial;
+  float lastDistanceHost = -1.0F;
+  count.get(countHost);
+  lastDistance.get(lastDistanceHost);
+  cudaCheckError(cudaStreamSynchronize(stream));
+  return makePickerResult(picks, countHost, lastDistanceHost, stream);
 }
 
 template <typename Provider>

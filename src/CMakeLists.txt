@@ -150,6 +150,8 @@ target_link_libraries(
   diversity_pickers
   PUBLIC device_vector
   PRIVATE cuda_error_check)
+target_include_directories(diversity_pickers SYSTEM
+                           PRIVATE ${Boost_INCLUDE_DIRS})
 
 add_library(conformer_rmsd conformer_rmsd.cu)
 target_link_libraries(
