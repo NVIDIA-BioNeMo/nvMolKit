@@ -145,5 +145,30 @@ uses single precision for all of those values. ``FULL`` is the default.
 
 The same ``precision`` argument is available for UFF, FIRE, embedding, and
 batched force-field minimization. Public coordinates and energies retain their
-float64 API representation. BFGS and FIRE use the batched backend in ``SINGLE``
-mode because their per-molecule kernels operate in double precision.
+float64 API representation. ``SINGLE`` supports the same minimizer backends as
+``FULL``.
+
+Validation
+~~~~~~~~~~
+
+We compared both precision modes against RDKit on a subset of the Enamine REAL
+collection. For ETKDG conformer generation, ``SINGLE`` is equivalent to
+``FULL``: the MMFF94 energies of the generated conformers agree with RDKit
+equally well in both modes.
+
+.. figure:: _static/precision_validation_etkdg.png
+   :alt: Scatter plots of MMFF94 energies of ETKDG conformers from nvMolKit full precision and FP32 against RDKit.
+   :width: 100%
+
+   MMFF94 energies of ETKDG conformers, nvMolKit against RDKit.
+
+For MMFF94 minimization run for up to 500 BFGS steps, ``SINGLE`` converges to
+the same minimum as RDKit for nearly all conformers, with a small number of
+outliers reaching a different minimum. Final ``SINGLE`` energies sit slightly
+above RDKit's, with a drift on the order of :math:`10^{-5}` kcal/mol/atom.
+
+.. figure:: _static/precision_validation_minimization.png
+   :alt: Scatter plot of FP32 against RDKit final MMFF94 energies and histograms of final energy differences for full precision and FP32.
+   :width: 100%
+
+   Final energies after MMFF94 minimization, nvMolKit against RDKit.
