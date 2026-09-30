@@ -14,14 +14,9 @@ Example:
 """
 
 import argparse
-import hashlib
-import json
-import os
-import tempfile
 from pathlib import Path
 
 import numpy as np
-import rdkit
 import torch
 from bench_utils import (
     add_backend_selection_args,
@@ -77,75 +72,6 @@ def _calc_rdkit_property(mol: Chem.Mol, conf_id: int, prop: Property3D) -> float
     if prop == Property3D.MORSE:
         return rdMolDescriptors.CalcMORSE(mol, confId=conf_id)
     return RDKIT_CALCULATORS[prop](mol, confId=conf_id, useAtomicMasses=True)
-
-
-_CACHE_FORMAT = "nvmolkit-descriptors3d-bench-cache/1"
-
-
-def _cache_key(smiles_path: str, seed: int, num_mols: int, confs_per_mol: int) -> dict[str, str | int]:
-    """Everything that determines the prepared conformers; a cache is reused only for an identical key.
-
-    The SMILES file is identified by content, and the RDKit version is included because ETKDG coordinates
-    differ between releases.
-    """
-    return {
-        "format": _CACHE_FORMAT,
-        "smiles_sha256": hashlib.sha256(Path(smiles_path).read_bytes()).hexdigest(),
-        "rdkit": rdkit.__version__,
-        "seed": seed,
-        "num_mols": num_mols,
-        "confs_per_mol": confs_per_mol,
-    }
-
-
-def _write_prepared_cache(path: Path, key: dict[str, str | int], mols: list[Chem.Mol]) -> None:
-    """Write a JSON header (key and molecule count) and length-prefixed RDKit binary molecules (no pickle).
-
-    The file is written to a new, exclusively created temporary file beside ``path`` and renamed into place
-    when complete, so an interrupted run never leaves a partial cache at ``path``.
-    """
-    header = json.dumps({"key": key, "num_records": len(mols)}).encode()
-    descriptor, partial_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".partial")
-    partial = Path(partial_name)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            for payload in (header, *(mol.ToBinary() for mol in mols)):
-                handle.write(len(payload).to_bytes(8, "little"))
-                handle.write(payload)
-        partial.replace(path)
-    finally:
-        partial.unlink(missing_ok=True)
-
-
-def _read_prepared_cache(path: Path, key: dict[str, str | int]) -> list[Chem.Mol]:
-    """Read a cache written by :func:`_write_prepared_cache`.
-
-    Raises:
-        ValueError: If the file is not a complete cache (truncated record, missing molecules or trailing
-            bytes) or was prepared with a different key.
-    """
-    data = path.read_bytes()
-    payloads = []
-    offset = 0
-    while offset < len(data):
-        size = int.from_bytes(data[offset : offset + 8], "little")
-        if offset + 8 > len(data) or offset + 8 + size > len(data):
-            raise ValueError(f"{path} is truncated or not a prepared-conformer cache; delete it to rebuild")
-        payloads.append(data[offset + 8 : offset + 8 + size])
-        offset += 8 + size
-    try:
-        header = json.loads(payloads[0])
-        cached_key, num_records = header["key"], header["num_records"]
-    except (IndexError, KeyError, TypeError, ValueError) as error:
-        raise ValueError(f"{path} is not a prepared-conformer cache") from error
-    if cached_key != key:
-        raise ValueError(f"{path} was prepared with {cached_key}, but this run needs {key}; use another cache path")
-    if len(payloads) - 1 != num_records:
-        raise ValueError(f"{path} holds {len(payloads) - 1} of {num_records} molecules; delete it to rebuild")
-    try:
-        return [Chem.Mol(payload) for payload in payloads[1:]]
-    except RuntimeError as error:
-        raise ValueError(f"{path} holds a corrupt molecule record; delete it to rebuild") from error
 
 
 def _pack_device_coordinates(mols: list[Chem.Mol]) -> Device3DResult:
@@ -239,7 +165,6 @@ def run(
     no_nvmolkit: bool,
     output: str | None,
     exclude: tuple[str, ...] = (),
-    prepared_cache: str | None = None,
 ) -> list[dict[str, float | int | str]]:
     """Prepare one maximum-size batch and benchmark requested sweep points."""
     if no_rdkit and no_nvmolkit:
@@ -261,26 +186,17 @@ def run(
 
     max_mols = max(num_mols_list)
     max_conformers = max(conformers_per_mol_list)
-    cache_path = Path(prepared_cache) if prepared_cache else None
-    cache_key = _cache_key(smiles_path, seed, max_mols, max_conformers)
-    if cache_path is not None and cache_path.exists():
-        prepared = _read_prepared_cache(cache_path, cache_key)
-        print(f"Loaded {len(prepared)} prepared molecules from {cache_path}")
-    else:
-        raw_mols = load_smiles(smiles_path, max_count=max_mols, sanitize=True, seed=seed)
-        workers = prep_workers if prep_workers > 0 else max(1, available_cpu_count() // 2)
-        prepared = embed_and_jitter(
-            raw_mols,
-            confs_per_mol=max_conformers,
-            seed=seed,
-            num_workers=workers,
-            add_hs=True,
-            min_atoms=1,
-            desc=f"Embed + perturb ({max_conformers} confs)",
-        )
-        if cache_path is not None:
-            _write_prepared_cache(cache_path, cache_key, prepared)
-            print(f"Saved {len(prepared)} prepared molecules to {cache_path}")
+    raw_mols = load_smiles(smiles_path, max_count=max_mols, sanitize=True, seed=seed)
+    workers = prep_workers if prep_workers > 0 else max(1, available_cpu_count() // 2)
+    prepared = embed_and_jitter(
+        raw_mols,
+        confs_per_mol=max_conformers,
+        seed=seed,
+        num_workers=workers,
+        add_hs=True,
+        min_atoms=1,
+        desc=f"Embed + perturb ({max_conformers} confs)",
+    )
     if not prepared:
         raise RuntimeError("no molecules survived conformer preparation")
 
@@ -389,12 +305,6 @@ def main() -> None:
         choices=[prop.value for prop in Property3D],
         help="Property names to drop from every property set, e.g. to time 'all' without a new feature",
     )
-    parser.add_argument(
-        "--prepared_cache",
-        default=None,
-        help="Prepared-conformer cache: loaded when it exists (it must match the --smiles file contents, --seed, "
-        "the largest --num_mols and --confs_per_mol, and the RDKit version), otherwise written after embedding",
-    )
     parser.add_argument("--output", default=None, help="Optional CSV output path")
     add_backend_selection_args(parser)
     args = parser.parse_args()
@@ -415,7 +325,6 @@ def main() -> None:
         no_nvmolkit=args.no_nvmolkit,
         output=args.output,
         exclude=tuple(args.exclude),
-        prepared_cache=args.prepared_cache,
     )
 
 
