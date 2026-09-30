@@ -29,21 +29,22 @@ template <typename Real>
 __device__ __forceinline__ void computeInertiaTensor(const ConformerAtoms& atoms,
                                                      const int             laneInGroup,
                                                      MomentState<Real>&    state) {
-  Real weightedX   = 0;
-  Real weightedY   = 0;
-  Real weightedZ   = 0;
-  Real totalWeight = 0;
+  // float64 centroid for every Real; see centeredPosition().
+  double weightedX   = 0;
+  double weightedY   = 0;
+  double weightedZ   = 0;
+  double totalWeight = 0;
   for (int atomIdx = laneInGroup; atomIdx < atoms.numAtoms; atomIdx += kGroupSize) {
-    const Real weight = atoms.weights == nullptr ? Real(1) : static_cast<Real>(atoms.weights[atomIdx]);
-    weightedX += weight * static_cast<Real>(atoms.positions[atomIdx * 3 + 0]);
-    weightedY += weight * static_cast<Real>(atoms.positions[atomIdx * 3 + 1]);
-    weightedZ += weight * static_cast<Real>(atoms.positions[atomIdx * 3 + 2]);
+    const double weight = atoms.weights == nullptr ? 1.0 : atoms.weights[atomIdx];
+    weightedX += weight * atoms.positions[atomIdx * 3 + 0];
+    weightedY += weight * atoms.positions[atomIdx * 3 + 1];
+    weightedZ += weight * atoms.positions[atomIdx * 3 + 2];
     totalWeight += weight;
   }
-  totalWeight          = groupAllReduceSum(totalWeight);
-  const Real centroidX = groupAllReduceSum(weightedX) / totalWeight;
-  const Real centroidY = groupAllReduceSum(weightedY) / totalWeight;
-  const Real centroidZ = groupAllReduceSum(weightedZ) / totalWeight;
+  totalWeight            = groupAllReduceSum(totalWeight);
+  const double centroidX = groupAllReduceSum(weightedX) / totalWeight;
+  const double centroidY = groupAllReduceSum(weightedY) / totalWeight;
+  const double centroidZ = groupAllReduceSum(weightedZ) / totalWeight;
 
   Real inertiaXX = 0;
   Real inertiaXY = 0;
@@ -53,9 +54,10 @@ __device__ __forceinline__ void computeInertiaTensor(const ConformerAtoms& atoms
   Real inertiaZZ = 0;
   for (int atomIdx = laneInGroup; atomIdx < atoms.numAtoms; atomIdx += kGroupSize) {
     const Real weight = atoms.weights == nullptr ? Real(1) : static_cast<Real>(atoms.weights[atomIdx]);
-    const Real x      = static_cast<Real>(atoms.positions[atomIdx * 3 + 0]) - centroidX;
-    const Real y      = static_cast<Real>(atoms.positions[atomIdx * 3 + 1]) - centroidY;
-    const Real z      = static_cast<Real>(atoms.positions[atomIdx * 3 + 2]) - centroidZ;
+    Real       x;
+    Real       y;
+    Real       z;
+    centeredPosition(atoms.positions, atomIdx, centroidX, centroidY, centroidZ, x, y, z);
     inertiaXX += weight * (y * y + z * z);
     inertiaXY -= weight * x * y;
     inertiaXZ -= weight * x * z;
@@ -69,7 +71,7 @@ __device__ __forceinline__ void computeInertiaTensor(const ConformerAtoms& atoms
   state.inertiaYY   = groupAllReduceSum(inertiaYY);
   state.inertiaYZ   = groupAllReduceSum(inertiaYZ);
   state.inertiaZZ   = groupAllReduceSum(inertiaZZ);
-  state.totalWeight = totalWeight;
+  state.totalWeight = static_cast<Real>(totalWeight);
 }
 
 template <typename Real> __device__ __forceinline__ void computePrincipalMoments(MomentState<Real>& state) {

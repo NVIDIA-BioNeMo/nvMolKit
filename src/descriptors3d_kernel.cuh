@@ -60,6 +60,28 @@ template <typename Real> __device__ __forceinline__ Real groupAllReduceSum(Real 
   return value;
 }
 
+/**
+ * @brief Coordinate position minus a centroid, converted to @p Real after the subtraction.
+ *
+ * FP64 required: centroids and centering. Casting coordinates to float32 before centering keeps only
+ * 24 bits relative to the distance from the origin, so a conformer translated to 1e4 A loses ~1e-3 A of
+ * interatomic detail and translation-invariant descriptors drift by ~1e-4 relative (PBF, PMI and
+ * RadiusOfGyration, measured). Centered values are small, so everything after this step is float32-safe.
+ */
+template <typename Real>
+__device__ __forceinline__ void centeredPosition(const double* positions,
+                                                 const int     atomIdx,
+                                                 const double  centroidX,
+                                                 const double  centroidY,
+                                                 const double  centroidZ,
+                                                 Real&         x,
+                                                 Real&         y,
+                                                 Real&         z) {
+  x = static_cast<Real>(positions[atomIdx * 3 + 0] - centroidX);
+  y = static_cast<Real>(positions[atomIdx * 3 + 1] - centroidY);
+  z = static_cast<Real>(positions[atomIdx * 3 + 2] - centroidZ);
+}
+
 }  // namespace nvMolKit::descriptors3d_detail
 
 #endif  // NVMOLKIT_DESCRIPTORS3D_KERNEL_CUH

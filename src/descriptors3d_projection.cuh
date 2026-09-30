@@ -16,13 +16,14 @@ namespace nvMolKit::descriptors3d_detail {
 
 //! Coordinate PCA of one conformer. Every lane of a group holds an identical copy.
 template <typename Real> struct ProjectionState {
-  Real centroidX;
-  Real centroidY;
-  Real centroidZ;
+  //! float64 for every Real; see centeredPosition().
+  double centroidX;
+  double centroidY;
+  double centroidZ;
   //! Covariance eigenvalue magnitudes in descending order.
-  Real eigenvalues[3];
+  Real   eigenvalues[3];
   //! Row-major; column i is the unit axis of eigenvalues[i].
-  Real eigenvectors[9];
+  Real   eigenvectors[9];
 };
 
 //! Group-collective. Unweighted centroid, shared by every PCA channel.
@@ -30,18 +31,18 @@ template <typename Real>
 __device__ __forceinline__ void computeProjectionCentroid(const ConformerAtoms&  atoms,
                                                           const int              laneInGroup,
                                                           ProjectionState<Real>& state) {
-  Real sumX = 0;
-  Real sumY = 0;
-  Real sumZ = 0;
+  double sumX = 0;
+  double sumY = 0;
+  double sumZ = 0;
   for (int atomIdx = laneInGroup; atomIdx < atoms.numAtoms; atomIdx += kGroupSize) {
-    sumX += static_cast<Real>(atoms.positions[atomIdx * 3 + 0]);
-    sumY += static_cast<Real>(atoms.positions[atomIdx * 3 + 1]);
-    sumZ += static_cast<Real>(atoms.positions[atomIdx * 3 + 2]);
+    sumX += atoms.positions[atomIdx * 3 + 0];
+    sumY += atoms.positions[atomIdx * 3 + 1];
+    sumZ += atoms.positions[atomIdx * 3 + 2];
   }
-  const Real inverseAtoms = Real(1) / static_cast<Real>(atoms.numAtoms > 0 ? atoms.numAtoms : 1);
-  state.centroidX         = groupAllReduceSum(sumX) * inverseAtoms;
-  state.centroidY         = groupAllReduceSum(sumY) * inverseAtoms;
-  state.centroidZ         = groupAllReduceSum(sumZ) * inverseAtoms;
+  const double inverseAtoms = 1.0 / static_cast<double>(atoms.numAtoms > 0 ? atoms.numAtoms : 1);
+  state.centroidX           = groupAllReduceSum(sumX) * inverseAtoms;
+  state.centroidY           = groupAllReduceSum(sumY) * inverseAtoms;
+  state.centroidZ           = groupAllReduceSum(sumZ) * inverseAtoms;
 }
 
 template <typename Real>
@@ -51,9 +52,7 @@ __device__ __forceinline__ void centeredCoordinates(const ConformerAtoms&       
                                                     Real&                        x,
                                                     Real&                        y,
                                                     Real&                        z) {
-  x = static_cast<Real>(atoms.positions[atomIdx * 3 + 0]) - state.centroidX;
-  y = static_cast<Real>(atoms.positions[atomIdx * 3 + 1]) - state.centroidY;
-  z = static_cast<Real>(atoms.positions[atomIdx * 3 + 2]) - state.centroidZ;
+  centeredPosition(atoms.positions, atomIdx, state.centroidX, state.centroidY, state.centroidZ, x, y, z);
 }
 
 template <typename Real>

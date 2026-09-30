@@ -276,6 +276,27 @@ def test_spherocity_ignores_atomic_mass_option(precision):
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)
+def test_scalar_properties_are_translation_invariant_far_from_origin(precision):
+    mols = [_embed("CC(=O)Nc1ccc(O)cc1", 2, 59), _embed("c1ccc2ccccc2c1", 1, 61)]
+    translated = []
+    for mol in mols:
+        moved = Chem.Mol(mol)
+        for conf in moved.GetConformers():
+            for atom_idx in range(moved.GetNumAtoms()):
+                position = conf.GetAtomPosition(atom_idx)
+                conf.SetAtomPosition(atom_idx, Point3D(position.x + 1e4, position.y - 4e3, position.z + 6e3))
+        translated.append(moved)
+
+    near = Calc3DProperties(mols, SCALAR_PROPERTIES, precision=precision)
+    far = Calc3DProperties(translated, SCALAR_PROPERTIES, precision=precision)
+
+    for prop in SCALAR_PROPERTIES:
+        expected = near[prop].numpy()
+        scale = max(float(np.abs(expected).max(initial=0.0)), 1.0)
+        np.testing.assert_allclose(far[prop].numpy(), expected, rtol=2e-6, atol=2e-6 * scale, err_msg=prop.value)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
 def test_projection_family_matches_rdkit_and_preserves_vector_shape(precision):
     mols = [_embed("CCCO", 3, 47), _embed("c1ccncc1", 2, 53)]
     threshold = 0.01
