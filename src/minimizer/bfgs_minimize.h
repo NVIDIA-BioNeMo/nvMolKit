@@ -237,6 +237,8 @@ template <typename real> struct BfgsBatchMinimizerT {
   AsyncDeviceVector<real> gradScales_;
   AsyncDeviceVector<real> inverseHessian_;
   AsyncDeviceVector<real> hessDGrad_;
+  //! Per-molecule inverse-Hessian pass scratch: H grad and the three pending-update vectors (4 x numStateTerms).
+  AsyncDeviceVector<real> hessianPassScratch_;
 
   // Batched-backend state storage used when `real` differs from the double-precision
   // buffers passed to minimize(). Unused (empty) for double precision.
