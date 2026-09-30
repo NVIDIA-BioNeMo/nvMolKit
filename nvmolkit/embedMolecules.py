@@ -150,13 +150,10 @@ def EmbedMolecules(
     if hardwareOptions is None:
         hardwareOptions = HardwareOptions()
     native_options = hardwareOptions._as_native()
-    native_precision = precision
 
     if output == CoordinateOutput.DEVICE:
         return _embedMolecules.EmbedMoleculesDevice(
-            molecules, params, confsPerMolecule, maxIterations, native_options, int(targetGpu), native_precision
+            molecules, params, confsPerMolecule, maxIterations, native_options, int(targetGpu), precision
         )
-    _embedMolecules.EmbedMolecules(
-        molecules, params, confsPerMolecule, maxIterations, native_options, native_precision
-    )
+    _embedMolecules.EmbedMolecules(molecules, params, confsPerMolecule, maxIterations, native_options, precision)
     return None
