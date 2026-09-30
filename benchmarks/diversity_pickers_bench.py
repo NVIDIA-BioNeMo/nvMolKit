@@ -48,10 +48,11 @@ from nvmolkit.similarity import crossTanimotoSimilarity
 
 @dataclass
 class Inputs:
-    """Inputs for one problem size."""
+    """Inputs for one problem size; a disabled backend's fingerprints are None."""
 
-    rdkit_fps: list
-    fingerprints: torch.Tensor
+    num_mols: int
+    rdkit_fps: list | None
+    fingerprints: torch.Tensor | None
     matrix: torch.Tensor | None
 
 
@@ -117,7 +118,7 @@ def _benchmark_point(
     """Time every requested implementation at one sweep point."""
     row: dict[str, float | int | str | bool] = {
         "operation": name,
-        "num_mols": len(inputs.rdkit_fps),
+        "num_mols": inputs.num_mols,
         "cutoff": cutoff,
     }
     rdkit_timing = rdkit_result = None
@@ -125,11 +126,11 @@ def _benchmark_point(
         rdkit_timing, rdkit_result = _time(
             f"rdkit_{name}", lambda: operation.rdkit(inputs.rdkit_fps, cutoff), runs, warmups, gpu=False
         )
-        row["num_selected"] = len(rdkit_result)
+        row["rdkit_num_selected"] = len(rdkit_result)
         row.update(_timing_fields("rdkit", rdkit_timing))
 
     def compare(form: str, timing, result) -> None:
-        row["num_selected"] = len(result)
+        row[f"nvmolkit_{form}_num_selected"] = len(result)
         row.update(_timing_fields(f"nvmolkit_{form}", timing))
         if rdkit_timing is not None:
             row[f"{form}_speedup"] = rdkit_timing.median_ms / timing.median_ms
@@ -189,13 +190,19 @@ def run(
     if len(mols) < max_size:
         raise ValueError(f"requested {max_size} molecules, but only {len(mols)} valid molecules were loaded")
     workers = prep_workers if prep_workers > 0 else available_cpu_count()
-    all_rdkit_fps = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=fp_size).GetFingerprints(
-        mols, numThreads=workers
-    )
-    all_fingerprints = (
-        MorganFingerprintGenerator(radius=radius, fpSize=fp_size).GetFingerprints(mols, num_threads=workers).torch()
-    )
-    if validate:
+    all_rdkit_fps = None
+    if not no_rdkit:
+        all_rdkit_fps = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=fp_size).GetFingerprints(
+            mols, numThreads=workers
+        )
+    all_fingerprints = None
+    if not no_nvmolkit:
+        all_fingerprints = (
+            MorganFingerprintGenerator(radius=radius, fpSize=fp_size)
+            .GetFingerprints(mols, num_threads=workers)
+            .torch()
+        )
+    if validate and all_rdkit_fps is not None and all_fingerprints is not None:
         _validate_fingerprints(all_rdkit_fps, all_fingerprints)
 
     rows: list[dict[str, float | int | str | bool]] = []
@@ -203,10 +210,11 @@ def run(
         for size in sorted(set(sizes)):
             inputs = None  # Release the previous size's matrix before building the next.
             use_matrix = not no_nvmolkit and size <= matrix_max_size
-            fingerprints = all_fingerprints[:size].contiguous()
+            fingerprints = None if all_fingerprints is None else all_fingerprints[:size].contiguous()
             matrix = _distance_matrix(fingerprints) if use_matrix else None
             inputs = Inputs(
-                rdkit_fps=list(all_rdkit_fps[:size]),
+                num_mols=size,
+                rdkit_fps=None if all_rdkit_fps is None else list(all_rdkit_fps[:size]),
                 fingerprints=fingerprints,
                 matrix=matrix,
             )
