@@ -25,10 +25,13 @@
 #include <vector>
 
 #include "src/utils/cuda_error_check.h"
+#include "src/utils/openmp_helpers.h"
 
 namespace nvMolKit {
 
-DeviceCoordResult uploadConformerCoordinates(const std::vector<const RDKit::ROMol*>& mols, cudaStream_t stream) {
+DeviceCoordResult uploadConformerCoordinates(const std::vector<const RDKit::ROMol*>& mols,
+                                             cudaStream_t                            stream,
+                                             const int                               numThreads) {
   const int numMols = static_cast<int>(mols.size());
 
   // Serial prefix sums over molecules give each molecule a fixed output window, so the coordinate
@@ -67,26 +70,41 @@ DeviceCoordResult uploadConformerCoordinates(const std::vector<const RDKit::ROMo
   std::vector<int32_t> hostConfIndices(numConformers);
   hostAtomStarts[numConformers] = static_cast<int32_t>(totalAtoms);
 
-#pragma omp parallel for schedule(dynamic)
+  detail::OpenMPExceptionRegistry exceptionRegistry;
+#pragma omp parallel for num_threads(detail::resolveNumThreads(numThreads)) schedule(dynamic) default(none) \
+  shared(numMols,                                                                                           \
+           mols,                                                                                            \
+           molConformerStarts,                                                                              \
+           molAtomStarts,                                                                                   \
+           hostAtomStarts,                                                                                  \
+           hostMolIndices,                                                                                  \
+           hostConfIndices,                                                                                 \
+           hostPositions,                                                                                   \
+           exceptionRegistry)
   for (int molIdx = 0; molIdx < numMols; ++molIdx) {
-    const RDKit::ROMol& mol        = *mols[molIdx];
-    const int           numAtoms   = static_cast<int>(mol.getNumAtoms());
-    size_t              rowIdx     = static_cast<size_t>(molConformerStarts[molIdx]);
-    size_t              atomOffset = static_cast<size_t>(molAtomStarts[molIdx]);
-    int                 confIdx    = 0;
-    for (auto confIt = mol.beginConformers(); confIt != mol.endConformers(); ++confIt, ++confIdx, ++rowIdx) {
-      hostAtomStarts[rowIdx]       = static_cast<int32_t>(atomOffset);
-      hostMolIndices[rowIdx]       = molIdx;
-      hostConfIndices[rowIdx]      = confIdx;
-      const RDKit::Conformer& conf = **confIt;
-      for (int atomIdx = 0; atomIdx < numAtoms; ++atomIdx, ++atomOffset) {
-        const auto& pos                   = conf.getAtomPos(atomIdx);
-        hostPositions[atomOffset * 3 + 0] = pos.x;
-        hostPositions[atomOffset * 3 + 1] = pos.y;
-        hostPositions[atomOffset * 3 + 2] = pos.z;
+    try {
+      const RDKit::ROMol& mol        = *mols[molIdx];
+      const int           numAtoms   = static_cast<int>(mol.getNumAtoms());
+      size_t              rowIdx     = static_cast<size_t>(molConformerStarts[molIdx]);
+      size_t              atomOffset = static_cast<size_t>(molAtomStarts[molIdx]);
+      int                 confIdx    = 0;
+      for (auto confIt = mol.beginConformers(); confIt != mol.endConformers(); ++confIt, ++confIdx, ++rowIdx) {
+        hostAtomStarts[rowIdx]       = static_cast<int32_t>(atomOffset);
+        hostMolIndices[rowIdx]       = molIdx;
+        hostConfIndices[rowIdx]      = confIdx;
+        const RDKit::Conformer& conf = **confIt;
+        for (int atomIdx = 0; atomIdx < numAtoms; ++atomIdx, ++atomOffset) {
+          const auto& pos                   = conf.getAtomPos(atomIdx);
+          hostPositions[atomOffset * 3 + 0] = pos.x;
+          hostPositions[atomOffset * 3 + 1] = pos.y;
+          hostPositions[atomOffset * 3 + 2] = pos.z;
+        }
       }
+    } catch (...) {
+      exceptionRegistry.store(std::current_exception());
     }
   }
+  exceptionRegistry.rethrow();
 
   // Pageable cudaMemcpyAsync returns once the source is staged, so the vectors may go out of scope.
   if (totalAtoms > 0) {

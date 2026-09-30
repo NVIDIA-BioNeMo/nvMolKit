@@ -79,7 +79,8 @@ add_library(descriptors3d_mol descriptors3d_mol.cpp)
 target_link_libraries(
   descriptors3d_mol
   PUBLIC descriptors3d
-  PRIVATE conformer_coord_upload ${RDKit_LIBS} OpenMP::OpenMP_CXX)
+  PRIVATE conformer_coord_upload openmp_helpers ${RDKit_LIBS}
+          OpenMP::OpenMP_CXX)
 
 add_library(triangle_smooth triangle_smooth.cu)
 target_link_libraries(triangle_smooth PRIVATE ${RDKit_LIBS} device_vector)

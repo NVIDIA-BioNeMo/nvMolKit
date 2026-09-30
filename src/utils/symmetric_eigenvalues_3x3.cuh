@@ -62,9 +62,11 @@ __device__ __forceinline__ void symmetricEigenvalues3x3(const double a00,
 
 namespace detail {
 
-//! Jacobi rotation annihilating apq of a symmetric 3x3 matrix; r is the remaining index.
-template <typename Real>
-__device__ __forceinline__ void jacobiRotate3x3(Real& app, Real& aqq, Real& apq, Real& arp, Real& arq) {
+//! Jacobi rotation annihilating apq of a symmetric 3x3 matrix; r is the remaining index. With
+//! @p kVectors, columns @p p and @p q of the row-major eigenvector matrix rotate with it.
+template <typename Real, bool kVectors>
+__device__ __forceinline__ void
+jacobiRotate3x3(Real& app, Real& aqq, Real& apq, Real& arp, Real& arq, Real* eigenvectors, const int p, const int q) {
   if (apq == Real(0)) {
     return;
   }
@@ -81,6 +83,40 @@ __device__ __forceinline__ void jacobiRotate3x3(Real& app, Real& aqq, Real& apq,
   const Real rq = arq;
   arp           = c * rp - s * rq;
   arq           = s * rp + c * rq;
+  if constexpr (kVectors) {
+    for (int row = 0; row < 3; ++row) {
+      const Real vp             = eigenvectors[row * 3 + p];
+      const Real vq             = eigenvectors[row * 3 + q];
+      eigenvectors[row * 3 + p] = c * vp - s * vq;
+      eigenvectors[row * 3 + q] = s * vp + c * vq;
+    }
+  }
+}
+
+//! Cyclic Jacobi sweeps until the off-diagonal part is negligible; leaves the eigenvalues on the
+//! diagonal (a00, a11, a22), unsorted. With @p kVectors, @p eigenvectors starts as the identity and
+//! ends with column i paired to the i-th diagonal entry.
+template <typename Real, bool kVectors>
+__device__ __forceinline__ void
+jacobiDiagonalize3x3(Real& a00, Real& a01, Real& a02, Real& a11, Real& a12, Real& a22, Real* eigenvectors) {
+  if constexpr (kVectors) {
+    for (int i = 0; i < 9; ++i) {
+      eigenvectors[i] = (i % 4 == 0) ? Real(1) : Real(0);
+    }
+  }
+  // Quadratic convergence reaches rounding level within a few sweeps; the cap bounds non-finite input.
+  constexpr int  kMaxSweeps = 16;
+  constexpr Real kEpsilon   = cuda::std::numeric_limits<Real>::epsilon();
+  for (int sweep = 0; sweep < kMaxSweeps; ++sweep) {
+    const Real offDiagonal = a01 * a01 + a02 * a02 + a12 * a12;
+    const Real diagonal    = a00 * a00 + a11 * a11 + a22 * a22;
+    if (!(offDiagonal > kEpsilon * kEpsilon * diagonal)) {
+      break;
+    }
+    jacobiRotate3x3<Real, kVectors>(a00, a11, a01, a02, a12, eigenvectors, 0, 1);  // r = 2
+    jacobiRotate3x3<Real, kVectors>(a00, a22, a02, a01, a12, eigenvectors, 0, 2);  // r = 1
+    jacobiRotate3x3<Real, kVectors>(a11, a22, a12, a01, a02, eigenvectors, 1, 2);  // r = 0
+  }
 }
 
 }  // namespace detail
@@ -101,23 +137,32 @@ __device__ __forceinline__ void symmetricEigenvaluesJacobi3x3(Real  a00,
                                                               Real& largest,
                                                               Real& middle,
                                                               Real& smallest) {
-  // Quadratic convergence reaches rounding level within a few sweeps; the cap bounds non-finite input.
-  constexpr int  kMaxSweeps = 16;
-  constexpr Real kEpsilon   = cuda::std::numeric_limits<Real>::epsilon();
-  for (int sweep = 0; sweep < kMaxSweeps; ++sweep) {
-    const Real offDiagonal = a01 * a01 + a02 * a02 + a12 * a12;
-    const Real diagonal    = a00 * a00 + a11 * a11 + a22 * a22;
-    if (!(offDiagonal > kEpsilon * kEpsilon * diagonal)) {
-      break;
-    }
-    detail::jacobiRotate3x3(a00, a11, a01, a02, a12);  // p = 0, q = 1, r = 2
-    detail::jacobiRotate3x3(a00, a22, a02, a01, a12);  // p = 0, q = 2, r = 1
-    detail::jacobiRotate3x3(a11, a22, a12, a01, a02);  // p = 1, q = 2, r = 0
-  }
-
+  detail::jacobiDiagonalize3x3<Real, false>(a00, a01, a02, a11, a12, a22, nullptr);
   largest  = fmax(a00, fmax(a11, a22));
   smallest = fmin(a00, fmin(a11, a22));
   middle   = fmax(fmin(a00, a11), fmin(fmax(a00, a11), a22));  // Median of three, exact.
+}
+
+/**
+ * @brief Eigenvalues and eigenvectors of a real symmetric 3x3 matrix, via cyclic Jacobi rotations.
+ *
+ * Backward stable like symmetricEigenvaluesJacobi3x3(). The pairs are returned unsorted:
+ * @p eigenvalues[i] belongs to column i of the row-major @p eigenvectors (`eigenvectors[row * 3 + i]`),
+ * and the columns are orthonormal.
+ */
+template <typename Real>
+__device__ __forceinline__ void symmetricEigensystemJacobi3x3(Real a00,
+                                                              Real a01,
+                                                              Real a02,
+                                                              Real a11,
+                                                              Real a12,
+                                                              Real a22,
+                                                              Real (&eigenvalues)[3],
+                                                              Real (&eigenvectors)[9]) {
+  detail::jacobiDiagonalize3x3<Real, true>(a00, a01, a02, a11, a12, a22, eigenvectors);
+  eigenvalues[0] = a00;
+  eigenvalues[1] = a11;
+  eigenvalues[2] = a22;
 }
 
 }  // namespace nvMolKit

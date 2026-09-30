@@ -29,9 +29,11 @@ enum class Property3D : int {
   Eccentricity        = 7,
   Asphericity         = 8,
   SpherocityIndex     = 9,
+  PBF                 = 10,
+  WHIM                = 11,
 };
 
-inline constexpr std::array<Property3D, 10> kAllProperty3D = {
+inline constexpr std::array<Property3D, 12> kAllProperty3D = {
   Property3D::PMI1,
   Property3D::PMI2,
   Property3D::PMI3,
@@ -42,7 +44,11 @@ inline constexpr std::array<Property3D, 10> kAllProperty3D = {
   Property3D::Eccentricity,
   Property3D::Asphericity,
   Property3D::SpherocityIndex,
+  Property3D::PBF,
+  Property3D::WHIM,
 };
+
+inline constexpr int kNumWhimProperties = 114;
 
 //! Canonical name of @p property, e.g. "PMI1" or "RadiusOfGyration".
 std::string_view property3DName(Property3D property);
@@ -50,30 +56,101 @@ std::string_view property3DName(Property3D property);
 //! Parse a canonical property name. @throws std::invalid_argument for unknown names.
 Property3D property3DFromName(std::string_view name);
 
-//! One device vector of length numConformers per requested property. @p Real is float
-//! (PrecisionMode::SINGLE) or double (PrecisionMode::FULL).
+//! Number of values emitted per conformer. Scalar properties have width one.
+constexpr int property3DWidth(const Property3D property) {
+  return property == Property3D::WHIM ? kNumWhimProperties : 1;
+}
+
+//! Properties computed together because they share per-conformer work; each family has its own kernel,
+//! device inputs and options.
+enum class Property3DFamily : int {
+  Moments,     //!< Inertia/gyration tensor eigenvalues: PMI, NPR, RadiusOfGyration and derived shape indices.
+  Projection,  //!< Coordinate PCA and projections onto its axes: PBF and WHIM.
+};
+
+constexpr Property3DFamily property3DFamily(const Property3D property) {
+  switch (property) {
+    case Property3D::PMI1:
+    case Property3D::PMI2:
+    case Property3D::PMI3:
+    case Property3D::RadiusOfGyration:
+    case Property3D::NPR1:
+    case Property3D::NPR2:
+    case Property3D::InertialShapeFactor:
+    case Property3D::Eccentricity:
+    case Property3D::Asphericity:
+    case Property3D::SpherocityIndex:
+      return Property3DFamily::Moments;
+    case Property3D::PBF:
+    case Property3D::WHIM:
+      return Property3DFamily::Projection;
+  }
+  return Property3DFamily::Moments;
+}
+
+//! Options for the Moments family.
+struct MomentOptions {
+  //! Weight atoms by mass (RDKit's default) instead of unit weights. SpherocityIndex is always unweighted.
+  bool useAtomicMasses = true;
+};
+
+//! Options for WHIM.
+struct WhimOptions {
+  //! Maximum projected-coordinate difference counted as symmetric; RDKit's default. Must be finite and
+  //! non-negative.
+  double threshold = 0.001;
+};
+
+//! Per-family options; each family reads only its own member. PBF has no options.
+struct Property3DOptions {
+  MomentOptions moments;
+  WhimOptions   whim;
+};
+
+/**
+ * @brief Device inputs for calc3DPropertiesGpu(). Per-atom arrays are stored once per molecule, indexed
+ *        through @ref moleculeAtomStarts, and resolved per conformer via DeviceCoordView::molIndices.
+ *
+ * Each member is read only when a property of the family noted beside it is requested.
+ */
+struct Property3DDeviceInputs {
+  //! All families: CSR offsets of each molecule's atoms, length `nMols + 1`. Required for a non-empty batch.
+  const int32_t* moleculeAtomStarts = nullptr;
+  //! Moments: one weight per atom; null gives every atom unit weight.
+  const double*  momentWeights      = nullptr;
+  //! WHIM: six atom-property channels (mass, van der Waals volume, electronegativity, polarizability,
+  //! ionization potential, I-state), channel-major with one value per atom. Required when WHIM is requested.
+  const double*  whimWeights        = nullptr;
+  //! PBF: per-conformer RDKit is3D flags (one per coordinate row); null treats every row as 3D.
+  const int8_t*  conformerIs3D      = nullptr;
+  //! WHIM: largest molecule atom count in the batch (host value); sizes the per-conformer symmetry-search
+  //! scratch. Rows with more atoms produce NaN.
+  int32_t        maxMoleculeAtoms   = 0;
+};
+
+//! One row-major device vector of length numConformers * property3DWidth(property) per property.
+//! @p Real is float (PrecisionMode::SINGLE) or double (PrecisionMode::FULL).
 template <typename Real> using Property3DResults = std::unordered_map<Property3D, AsyncDeviceVector<Real>>;
 
 /**
  * @brief Calculate the requested 3D properties for every conformer in a coordinate batch.
  *
- * All arithmetic, reductions, and outputs use @p Real (float or double); double-precision inputs
- * are converted on load. Optional atom weights used by mass-sensitive properties are stored once
- * per molecule in CSR form (@p moleculeAtomStarts, length `coordinates.nMols + 1`) and resolved per
- * conformer through `coordinates.molIndices`. A null @p atomWeights pointer gives every atom unit
- * weight. SpherocityIndex follows RDKit and always uses unit weights. Conformers whose molecule
- * index is out of range, whose atom range lies
- * outside `coordinates.numAtoms`, or whose atom count disagrees with the molecule's weight range
- * produce NaN for every requested property.
+ * Each requested family runs as one kernel launch and returns @p Real (float or double), computing in
+ * @p Real except WHIM's PCA, which is always float64 (see descriptors3d_detail::WhimReal).
+ * `options.moments` is expressed through `inputs.momentWeights` at this level. Conformers whose molecule
+ * index is out of range, whose atom range lies outside `coordinates.numAtoms`, or whose atom count
+ * disagrees with the molecule's atom range produce NaN for every requested property.
  *
  * @throws std::invalid_argument if @p properties is empty, contains duplicates, or contains a value
- *                               outside kAllProperty3D.
+ *                               outside kAllProperty3D; if WHIM is requested and
+ *                               `options.whim.threshold` is negative or not finite; or if a required
+ *                               input is null.
  */
 template <typename Real>
 Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coordinates,
-                                            const double*                  atomWeights,
-                                            const int32_t*                 moleculeAtomStarts,
+                                            const Property3DDeviceInputs&  inputs,
                                             const std::vector<Property3D>& properties,
+                                            const Property3DOptions&       options,
                                             cudaStream_t                   stream);
 
 }  // namespace nvMolKit

@@ -17,7 +17,7 @@ from typing import Sequence
 import torch
 
 from nvmolkit import _descriptors3d
-from nvmolkit.types import AsyncGpuResult, Device3DResult, PrecisionMode, _resolve_cuda_stream
+from nvmolkit.types import AsyncGpuResult, Device3DResult, HardwareOptions, PrecisionMode, _resolve_cuda_stream
 
 
 class Property3D(Enum):
@@ -38,6 +38,59 @@ class Property3D(Enum):
     ECCENTRICITY = "Eccentricity"
     ASPHERICITY = "Asphericity"
     SPHEROCITY_INDEX = "SpherocityIndex"
+    PBF = "PBF"
+    WHIM = "WHIM"
+
+
+@dataclass(frozen=True)
+class MomentOptions:
+    """Options for the moment-based properties (PMI, NPR, radius of gyration and derived shape indices).
+
+    Attributes:
+        useAtomicMasses: Weight atoms by mass, RDKit's default; ``False`` gives every atom unit weight.
+            ``SpherocityIndex`` is always unweighted, as in RDKit.
+    """
+
+    useAtomicMasses: bool = True
+
+
+@dataclass(frozen=True)
+class WhimOptions:
+    """Options for :attr:`Property3D.WHIM`.
+
+    Attributes:
+        threshold: Maximum projected-coordinate difference counted as symmetric, RDKit's default
+            ``0.001``. Must be finite and non-negative.
+    """
+
+    threshold: float = 0.001
+
+
+@dataclass(frozen=True)
+class Property3DOptions:
+    """Per-family options for :func:`Calc3DProperties`; each family reads only its own member.
+
+    Set only the families you want to change; the others keep RDKit's defaults. Options for a family
+    that is not requested are ignored, so one options object can be reused across different
+    selections. The classes are frozen; derive variants with :func:`dataclasses.replace`. ``PBF`` has
+    no options.
+
+    Example:
+
+    .. code-block:: python
+
+       import dataclasses
+
+       options = Property3DOptions(whim=WhimOptions(threshold=0.01))  # moments keep useAtomicMasses=True
+       unweighted = dataclasses.replace(options, moments=MomentOptions(useAtomicMasses=False))
+
+    Attributes:
+        moments: Options for the moment-based properties.
+        whim: Options for ``WHIM``.
+    """
+
+    moments: MomentOptions = MomentOptions()
+    whim: WhimOptions = WhimOptions()
 
 
 @dataclass(frozen=True)
@@ -45,8 +98,9 @@ class Dense3DPropertyResult:
     """Dense padded view of a :class:`Device3DPropertyResult`.
 
     Attributes:
-        values: One tensor of shape ``(n_mols, max_confs)`` per property, in request order, with the
-            dtype of the source result. Padded slots hold the ``pad_value`` passed to
+        values: One tensor of shape ``(n_mols, max_confs, *property_shape)`` per property, in request
+            order, with the dtype of the source result. Scalar properties have no trailing dimensions;
+            WHIM has ``property_shape == (114,)``. Padded slots hold the ``pad_value`` passed to
             :meth:`Device3DPropertyResult.dense`.
         conf_mask: bool ``(n_mols, max_confs)``; ``True`` where a real conformer exists.
     """
@@ -59,7 +113,8 @@ class Device3DPropertyResult(Mapping[str, AsyncGpuResult]):
     """Per-conformer 3D properties on the GPU, labeled by molecule and conformer.
 
     Behaves as a read-only mapping from property name to an :class:`~nvmolkit.types.AsyncGpuResult`
-    of shape ``(n_conformers,)``, in request order. Values are float32 for
+    whose first dimension is ``n_conformers``, in request order. Scalar properties have shape
+    ``(n_conformers,)`` and WHIM has shape ``(n_conformers, 114)``. Values are float32 for
     :attr:`~nvmolkit.types.PrecisionMode.SINGLE` and float64 for
     :attr:`~nvmolkit.types.PrecisionMode.FULL`. Keys may be given as names or
     :class:`Property3D` members.
@@ -113,7 +168,7 @@ class Device3DPropertyResult(Mapping[str, AsyncGpuResult]):
         return self.mol_indices.torch().numel()
 
     def dense(self, pad_value: float = float("nan")) -> Dense3DPropertyResult:
-        """Materialize padded ``(n_mols, max_confs)`` tensors for every property.
+        """Materialize padded molecule/conformer tensors for every property.
 
         Molecules with fewer than ``max_confs`` conformers (including none) receive ``pad_value``.
         Reading the index tensors synchronizes implicitly.
@@ -128,7 +183,9 @@ class Device3DPropertyResult(Mapping[str, AsyncGpuResult]):
         values = {}
         for name, result in self._properties.items():
             source = result.torch()
-            dense_values = torch.full((self.n_mols, max_confs), pad_value, dtype=source.dtype, device=device)
+            dense_values = torch.full(
+                (self.n_mols, max_confs, *source.shape[1:]), pad_value, dtype=source.dtype, device=device
+            )
             dense_values[mol_indices, conf_indices] = source
             values[name] = dense_values
         return Dense3DPropertyResult(values=values, conf_mask=conf_mask)
@@ -211,8 +268,9 @@ def Calc3DProperties(
     properties: Property3D | str | Sequence[Property3D | str],
     *,
     coordinates: Device3DResult | None = None,
-    useAtomicMasses: bool = True,
+    options: Property3DOptions | None = None,
     precision: PrecisionMode = PrecisionMode.SINGLE,
+    hardwareOptions: HardwareOptions | None = None,
     stream: torch.cuda.Stream | None = None,
 ) -> Device3DPropertyResult:
     """Calculate selected 3D properties for every conformer in a molecule batch.
@@ -227,13 +285,18 @@ def Calc3DProperties(
             is out of range, whose ``atom_starts`` range falls outside
             ``values``, or whose atom count differs from their molecule's
             produce NaN rather than an error, so no host synchronization is
-            needed.
-        useAtomicMasses: Match RDKit's mass-weighted default. ``False`` gives
-            every atom unit weight. RDKit defines ``SpherocityIndex`` as
-            unweighted, so this option does not affect it.
+            needed. Device coordinate rows are treated as three-dimensional;
+            molecule conformers preserve their RDKit ``is3D`` flag for PBF.
+        options: Per-family options; defaults to :class:`Property3DOptions`
+            (RDKit's defaults).
         precision: ``PrecisionMode.SINGLE`` (default) computes and returns
-            float32 values; ``PrecisionMode.FULL`` uses float64 throughout and
-            matches RDKit to near double-precision rounding.
+            float32; ``PrecisionMode.FULL`` computes and returns float64.
+            WHIM's PCA always computes in float64: its inverse-kurtosis
+            terms on near-planar conformers depend on out-of-plane
+            deviations below float32 resolution.
+        hardwareOptions: Only ``preprocessingThreads`` applies: the CPU
+            threads used to extract coordinates and atom weights from the
+            molecules (default ``-1``, all threads).
         stream: CUDA stream used for transfers and calculation. Defaults to the
             coordinate device's current stream, or the current CUDA stream.
 
@@ -242,9 +305,62 @@ def Calc3DProperties(
         in request order, to a device vector with one row per conformer, plus
         the molecule and conformer labels of every row. Without ``coordinates``,
         rows follow input-molecule order, then RDKit conformer order.
+
+    Any subset of :class:`Property3D` can be requested in one call, mixing
+    families and giving members or names. Each requested family runs once for
+    the whole batch, and a property's values do not depend on what else is
+    requested. ``options`` configures each family independently, and
+    ``precision`` applies to every requested property.
+
+    Example:
+
+    .. code-block:: python
+
+       from rdkit import Chem
+       from rdkit.Chem import rdDistGeom
+
+       from nvmolkit.descriptors3d import (
+           Calc3DProperties,
+           MomentOptions,
+           Property3D,
+           Property3DOptions,
+           WhimOptions,
+       )
+       from nvmolkit.types import PrecisionMode
+
+       mols = [Chem.AddHs(Chem.MolFromSmiles(s)) for s in ("CCO", "c1ccccc1O", "CC(=O)Nc1ccc(O)cc1")]
+       for mol in mols:
+           rdDistGeom.EmbedMultipleConfs(mol, numConfs=4, randomSeed=42)
+
+       result = Calc3DProperties(
+           mols,
+           [Property3D.NPR1, "NPR2", Property3D.PBF, "WHIM"],
+           options=Property3DOptions(
+               moments=MomentOptions(useAtomicMasses=False),  # unit-weighted NPR1 and NPR2
+               whim=WhimOptions(threshold=0.01),  # looser WHIM symmetry matching
+           ),
+           precision=PrecisionMode.FULL,
+       )
+
+       result["NPR1"].torch()  # float64, shape (12,): one row per conformer
+       result[Property3D.WHIM].torch()  # shape (12, 114)
+       result.mol_indices.torch()  # [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2]
+       result.conf_indices.torch()  # [0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3]
+
+       dense = result.dense()
+       dense.values["NPR1"].shape  # (3, 4): molecules x conformers
+       dense.values["WHIM"].shape  # (3, 4, 114)
     """
     normalized_mols = _normalize_molecules(mols)
     normalized_properties = _normalize_properties(properties)
+    if options is None:
+        options = Property3DOptions()
+    elif not isinstance(options, Property3DOptions):
+        raise TypeError(f"options must be a Property3DOptions or None, got {type(options).__name__}")
+    if hardwareOptions is None:
+        hardwareOptions = HardwareOptions()
+    elif not isinstance(hardwareOptions, HardwareOptions):
+        raise TypeError(f"hardwareOptions must be a HardwareOptions or None, got {type(hardwareOptions).__name__}")
     if coordinates is not None and not isinstance(coordinates, Device3DResult):
         raise TypeError(f"coordinates must be a Device3DResult or None, got {type(coordinates).__name__}")
     input_values = () if coordinates is None else (coordinates.values,)
@@ -258,9 +374,11 @@ def Calc3DProperties(
     raw_results, raw_mol_indices, raw_conf_indices = _descriptors3d.Calc3DProperties(
         normalized_mols,
         [prop.value for prop in normalized_properties],
-        useAtomicMasses,
+        options.moments.useAtomicMasses,
+        options.whim.threshold,
         coordinate_interfaces,
         precision,
+        hardwareOptions.preprocessingThreads,
         active_stream.cuda_stream,
     )
     gpu_id = active_stream.device.index

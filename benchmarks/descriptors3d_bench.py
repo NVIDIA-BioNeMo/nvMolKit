@@ -57,10 +57,16 @@ RDKIT_CALCULATORS = {
 }
 
 
-def _calc_rdkit_property(mol: Chem.Mol, conf_id: int, prop: Property3D) -> float:
+def _calc_rdkit_property(mol: Chem.Mol, conf_id: int, prop: Property3D) -> float | list[float]:
     """Calculate one property using the options mirrored by the benchmark."""
     if prop == Property3D.SPHEROCITY_INDEX:
         return rdMolDescriptors.CalcSpherocityIndex(mol, confId=conf_id)
+    if prop == Property3D.PBF:
+        reference_mol = Chem.Mol(mol)
+        reference_mol.ClearComputedProps()
+        return rdMolDescriptors.CalcPBF(reference_mol, confId=conf_id)
+    if prop == Property3D.WHIM:
+        return rdMolDescriptors.CalcWHIM(mol, confId=conf_id)
     return RDKIT_CALCULATORS[prop](mol, confId=conf_id, useAtomicMasses=True)
 
 
@@ -95,14 +101,15 @@ def _pack_device_coordinates(mols: list[Chem.Mol]) -> Device3DResult:
     )
 
 
-def _calc_rdkit(mols: list[Chem.Mol], properties: tuple[Property3D, ...]) -> np.ndarray:
-    """Calculate a dense reference array in molecule/conformer order."""
-    rows = [
-        [_calc_rdkit_property(mol, conf.GetId(), prop) for prop in properties]
-        for mol in mols
-        for conf in mol.GetConformers()
-    ]
-    return np.asarray(rows, dtype=np.float64)
+def _calc_rdkit(mols: list[Chem.Mol], properties: tuple[Property3D, ...]) -> dict[Property3D, np.ndarray]:
+    """Calculate reference arrays in molecule/conformer order."""
+    return {
+        prop: np.asarray(
+            [_calc_rdkit_property(mol, conf.GetId(), prop) for mol in mols for conf in mol.GetConformers()],
+            dtype=np.float64,
+        )
+        for prop in properties
+    }
 
 
 def _validate(
@@ -125,8 +132,8 @@ def _validate(
     rtol, default_atol = VALIDATION_TOLERANCES[precision]
     atol = default_atol if tolerance is None else tolerance
     for result in results:
-        for column, prop in enumerate(properties):
-            np.testing.assert_allclose(result[prop.value].numpy(), expected[:, column], rtol=rtol, atol=atol)
+        for prop in properties:
+            np.testing.assert_allclose(result[prop.value].numpy(), expected[prop], rtol=rtol, atol=atol)
 
 
 def _timing_fields(prefix: str, result, num_conformers: int) -> dict[str, float]:

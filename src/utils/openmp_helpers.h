@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -43,6 +43,10 @@ class OpenMPExceptionRegistry {
   std::mutex         mutex_;
   std::exception_ptr exception_;
 };
+
+//! Resolve a caller's CPU thread count: -1 selects every available OpenMP thread; other values must be
+//! positive. @throws std::invalid_argument for 0 or values below -1.
+int resolveNumThreads(int requested);
 
 }  // namespace detail
 }  // namespace nvMolKit

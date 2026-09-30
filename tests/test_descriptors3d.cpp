@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <GraphMol/Conformer.h>
+#include <GraphMol/Descriptors/PBF.h>
+#include <GraphMol/Descriptors/WHIM.h>
 #include <GraphMol/RWMol.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
@@ -22,6 +24,19 @@ using nvMolKit::Property3D;
 namespace {
 
 using Point = std::array<double, 3>;
+
+constexpr std::array<Property3D, 10> kMomentProperties = {
+  Property3D::PMI1,
+  Property3D::PMI2,
+  Property3D::PMI3,
+  Property3D::RadiusOfGyration,
+  Property3D::NPR1,
+  Property3D::NPR2,
+  Property3D::InertialShapeFactor,
+  Property3D::Eccentricity,
+  Property3D::Asphericity,
+  Property3D::SpherocityIndex,
+};
 
 std::unique_ptr<RDKit::RWMol> molWithConformers(const char* smiles, const std::vector<std::vector<Point>>& confs) {
   std::unique_ptr<RDKit::RWMol> mol(RDKit::SmilesToMol(smiles));
@@ -49,6 +64,12 @@ bool isNanBits(const double value) {
   constexpr uint64_t kExponentMask = 0x7ff0000000000000ULL;
   constexpr uint64_t kMantissaMask = 0x000fffffffffffffULL;
   return (bits & kExponentMask) == kExponentMask && (bits & kMantissaMask) != 0;
+}
+
+nvMolKit::Property3DOptions unitWeightOptions() {
+  nvMolKit::Property3DOptions options;
+  options.moments.useAtomicMasses = false;
+  return options;
 }
 
 class Descriptors3DTest : public ::testing::Test {
@@ -83,12 +104,14 @@ TEST(Property3DNames, RoundTripAndRejectUnknown) {
     EXPECT_EQ(nvMolKit::property3DFromName(nvMolKit::property3DName(property)), property);
   }
   EXPECT_EQ(nvMolKit::property3DName(Property3D::RadiusOfGyration), "RadiusOfGyration");
+  EXPECT_EQ(nvMolKit::property3DWidth(Property3D::PBF), 1);
+  EXPECT_EQ(nvMolKit::property3DWidth(Property3D::WHIM), 114);
   EXPECT_THROW(nvMolKit::property3DFromName("PMI4"), std::invalid_argument);
 }
 
 TEST_F(Descriptors3DTest, UnitWeightMomentsMatchClosedForm) {
-  const std::vector<Property3D> properties(nvMolKit::kAllProperty3D.begin(), nvMolKit::kAllProperty3D.end());
-  auto results = nvMolKit::calc3DProperties<double>(mols_, properties, /*useAtomicMasses=*/false, nullptr);
+  const std::vector<Property3D> properties(kMomentProperties.begin(), kMomentProperties.end());
+  auto results = nvMolKit::calc3DProperties<double>(mols_, properties, unitWeightOptions(), nullptr);
   ASSERT_EQ(results.properties.size(), properties.size());
 
   const auto pmi1 = toHost(results.properties.at(Property3D::PMI1));
@@ -134,7 +157,7 @@ TEST_F(Descriptors3DTest, UnitWeightMomentsMatchClosedForm) {
 
 TEST_F(Descriptors3DTest, SinglePrecisionMatchesClosedForm) {
   const std::vector<Property3D> properties = {Property3D::PMI1, Property3D::PMI3, Property3D::RadiusOfGyration};
-  auto results = nvMolKit::calc3DProperties<float>(mols_, properties, /*useAtomicMasses=*/false, nullptr);
+  auto results = nvMolKit::calc3DProperties<float>(mols_, properties, unitWeightOptions(), nullptr);
 
   const std::vector<float> pmi1 = toHost(results.properties.at(Property3D::PMI1));
   const std::vector<float> pmi3 = toHost(results.properties.at(Property3D::PMI3));
@@ -165,7 +188,7 @@ TEST(Descriptors3DMass, MassWeightedDiatomicUsesReducedMass) {
   auto                                   results =
     nvMolKit::calc3DProperties<double>(mols,
                                        {Property3D::PMI3, Property3D::RadiusOfGyration, Property3D::SpherocityIndex},
-                                       true,
+                                       nvMolKit::Property3DOptions{},
                                        nullptr);
   EXPECT_EQ(results.properties.count(Property3D::PMI1), 0u);
   EXPECT_NEAR(toHost(results.properties.at(Property3D::PMI3))[0], inertia, 1e-12);
@@ -179,12 +202,108 @@ TEST_F(Descriptors3DTest, DeviceCoordinatesMatchMoleculeCoordinates) {
   ASSERT_EQ(view.numConformers, 3);
   ASSERT_EQ(view.nMols, 3);
 
-  auto fromMols   = nvMolKit::calc3DProperties<double>(mols_, {Property3D::PMI2}, true, nullptr);
-  auto fromDevice = nvMolKit::calc3DProperties<double>(mols_, {Property3D::PMI2}, true, nullptr, &view);
+  auto fromMols = nvMolKit::calc3DProperties<double>(mols_, {Property3D::PMI2}, nvMolKit::Property3DOptions{}, nullptr);
+  auto fromDevice =
+    nvMolKit::calc3DProperties<double>(mols_, {Property3D::PMI2}, nvMolKit::Property3DOptions{}, nullptr, &view);
   EXPECT_EQ(toHost(fromMols.properties.at(Property3D::PMI2)), toHost(fromDevice.properties.at(Property3D::PMI2)));
   // Rows follow the caller's coordinates, so no labels are produced.
   EXPECT_EQ(fromDevice.molIndices.size(), 0u);
   EXPECT_EQ(fromDevice.confIndices.size(), 0u);
+}
+
+TEST(Descriptors3DProjection, MatchesRdkitPbfAndWhim) {
+  auto                                   mol       = molWithConformers("CCCO",
+                                                                       {
+                                 {{-1.3, 0.2, 0.7}, {-0.2, -0.8, 0.1}, {0.9, 0.4, -0.6},  {1.7, 1.1, 0.9}},
+                                 {{2.0, -1.0, 0.5},  {2.7, 0.3, -0.4}, {3.9, -0.2, 0.8}, {4.6, 1.0, -0.7}},
+  });
+  const std::vector<const RDKit::ROMol*> mols      = {mol.get()};
+  constexpr double                       threshold = 0.01;
+  nvMolKit::Property3DOptions            options;
+  options.whim.threshold = threshold;
+  auto results = nvMolKit::calc3DProperties<double>(mols, {Property3D::PBF, Property3D::WHIM}, options, nullptr);
+
+  // PBF shares the unweighted PCA with WHIM; requesting it alone must not change its value.
+  auto       pbfAlone       = nvMolKit::calc3DProperties<double>(mols, {Property3D::PBF}, options, nullptr);
+  const auto pbfAloneValues = toHost(pbfAlone.properties.at(Property3D::PBF));
+  const auto pbfWithWhim    = toHost(results.properties.at(Property3D::PBF));
+  for (size_t confIdx = 0; confIdx < pbfAloneValues.size(); ++confIdx) {
+    EXPECT_NEAR(pbfAloneValues[confIdx], pbfWithWhim[confIdx], 1e-12);
+  }
+
+  const auto pbf  = toHost(results.properties.at(Property3D::PBF));
+  const auto whim = toHost(results.properties.at(Property3D::WHIM));
+  ASSERT_EQ(pbf.size(), 2u);
+  ASSERT_EQ(whim.size(), 2u * nvMolKit::kNumWhimProperties);
+  for (int confIdx = 0; confIdx < 2; ++confIdx) {
+    RDKit::RWMol referenceMol(*mol);
+    referenceMol.clearComputedProps();
+    EXPECT_NEAR(pbf[confIdx], RDKit::Descriptors::PBF(referenceMol, confIdx), 2e-10);
+    std::vector<double> expectedWhim;
+    RDKit::Descriptors::WHIM(*mol, expectedWhim, confIdx, threshold);
+    ASSERT_EQ(expectedWhim.size(), static_cast<size_t>(nvMolKit::kNumWhimProperties));
+    for (int valueIdx = 0; valueIdx < nvMolKit::kNumWhimProperties; ++valueIdx) {
+      EXPECT_NEAR(whim[confIdx * nvMolKit::kNumWhimProperties + valueIdx], expectedWhim[valueIdx], 1.1e-3)
+        << "conformer " << confIdx << ", WHIM value " << valueIdx;
+    }
+  }
+}
+
+TEST(Descriptors3DProjection, PbfMinimumAtomBoundaryAndWhimEmptyShape) {
+  auto                                   threeAtoms = molWithConformers("CCC",
+                                                                        {
+                                        {{0.0, 0.0, 0.0}, {1.0, 0.2, 0.3}, {0.1, 1.0, -0.4}},
+  });
+  const std::vector<const RDKit::ROMol*> mols       = {threeAtoms.get()};
+  auto pbfResults = nvMolKit::calc3DProperties<double>(mols, {Property3D::PBF}, nvMolKit::Property3DOptions{}, nullptr);
+  EXPECT_EQ(toHost(pbfResults.properties.at(Property3D::PBF)), (std::vector<double>{0.0}));
+
+  auto non3D = molWithConformers("CCCC",
+                                 {
+                                   {{0.0, 0.0, 0.0}, {1.0, 0.2, 0.4}, {0.1, 1.3, -0.7}, {1.5, 1.1, 0.8}},
+  });
+  non3D->getConformer().set3D(false);
+  const std::vector<const RDKit::ROMol*> non3DMols = {non3D.get()};
+  auto                                   non3DResults =
+    nvMolKit::calc3DProperties<double>(non3DMols, {Property3D::PBF}, nvMolKit::Property3DOptions{}, nullptr);
+  EXPECT_EQ(toHost(non3DResults.properties.at(Property3D::PBF)), (std::vector<double>{0.0}));
+
+  const std::vector<const RDKit::ROMol*> empty;
+  auto                                   whimResults =
+    nvMolKit::calc3DProperties<double>(empty, {Property3D::WHIM}, nvMolKit::Property3DOptions{}, nullptr);
+  EXPECT_EQ(whimResults.properties.at(Property3D::WHIM).size(), 0u);
+}
+
+TEST_F(Descriptors3DTest, WhimScratchChunkingAndOversizedRows) {
+  // Square conformers (4 atoms) with unit WHIM weights, evaluated directly at the device level.
+  const std::vector<const RDKit::ROMol*> mols     = {square_.get()};
+  const auto                             uploaded = nvMolKit::uploadConformerCoordinates(mols, nullptr);
+  const auto                             view     = nvMolKit::makeDeviceCoordView(uploaded);
+  nvMolKit::AsyncDeviceVector<int32_t>   moleculeAtomStarts(2);
+  moleculeAtomStarts.copyFromHost(std::vector<int32_t>{0, 4});
+  nvMolKit::AsyncDeviceVector<double> whimWeights(4 * 6);
+  whimWeights.copyFromHost(std::vector<double>(4 * 6, 1.0));
+
+  nvMolKit::Property3DDeviceInputs inputs;
+  inputs.moleculeAtomStarts = moleculeAtomStarts.data();
+  inputs.whimWeights        = whimWeights.data();
+  const auto whimFor        = [&](const int32_t maxMoleculeAtoms) {
+    inputs.maxMoleculeAtoms = maxMoleculeAtoms;
+    auto results            = nvMolKit::calc3DPropertiesGpu<double>(view, inputs, {Property3D::WHIM}, {}, nullptr);
+    return toHost(results.at(Property3D::WHIM));
+  };
+
+  const auto reference = whimFor(4);
+  ASSERT_EQ(reference.size(), 2u * nvMolKit::kNumWhimProperties);
+  for (const double value : reference) {
+    EXPECT_FALSE(isNanBits(value));
+  }
+  // A per-conformer scratch slot larger than the 256 MB budget runs one conformer per launch.
+  EXPECT_EQ(whimFor(40'000'000), reference);
+  // Rows longer than the scratch slot are rejected rather than overrunning it.
+  for (const double value : whimFor(3)) {
+    EXPECT_TRUE(isNanBits(value));
+  }
 }
 
 TEST_F(Descriptors3DTest, AtomCountMismatchProducesNaN) {
@@ -194,7 +313,8 @@ TEST_F(Descriptors3DTest, AtomCountMismatchProducesNaN) {
   const auto                             view     = nvMolKit::makeDeviceCoordView(uploaded);
 
   const std::vector<const RDKit::ROMol*> mols = {line_.get(), square_.get()};
-  auto results = nvMolKit::calc3DProperties<double>(mols, {Property3D::RadiusOfGyration}, false, nullptr, &view);
+  auto                                   results =
+    nvMolKit::calc3DProperties<double>(mols, {Property3D::RadiusOfGyration}, unitWeightOptions(), nullptr, &view);
   for (const double value : toHost(results.properties.at(Property3D::RadiusOfGyration))) {
     EXPECT_TRUE(isNanBits(value)) << value;
   }
@@ -218,7 +338,8 @@ TEST_F(Descriptors3DTest, AtomRangesOutsideCoordinatesProduceNaN) {
     auto view       = nvMolKit::makeDeviceCoordView(uploaded);
     view.atomStarts = atomStarts.data();
 
-    auto results      = nvMolKit::calc3DProperties<double>(mols, {Property3D::RadiusOfGyration}, false, nullptr, &view);
+    auto results =
+      nvMolKit::calc3DProperties<double>(mols, {Property3D::RadiusOfGyration}, unitWeightOptions(), nullptr, &view);
     const auto rg     = toHost(results.properties.at(Property3D::RadiusOfGyration));
     const int  badRow = badRows[caseIdx];
     EXPECT_TRUE(isNanBits(rg[badRow])) << rg[badRow];
@@ -231,20 +352,27 @@ TEST_F(Descriptors3DTest, RejectsUnknownPropertyValue) {
                                               Property3D::PMI2,
                                               Property3D::PMI3,
                                               Property3D::RadiusOfGyration,
-                                              static_cast<Property3D>(10)};
-  EXPECT_THROW(nvMolKit::calc3DProperties<double>(mols_, properties, true, nullptr), std::invalid_argument);
-  EXPECT_THROW(nvMolKit::calc3DProperties<float>(mols_, {static_cast<Property3D>(-1)}, true, nullptr),
+                                              static_cast<Property3D>(12)};
+  EXPECT_THROW(nvMolKit::calc3DProperties<double>(mols_, properties, nvMolKit::Property3DOptions{}, nullptr),
                std::invalid_argument);
+  EXPECT_THROW(
+    nvMolKit::calc3DProperties<float>(mols_, {static_cast<Property3D>(-1)}, nvMolKit::Property3DOptions{}, nullptr),
+    std::invalid_argument);
 }
 
 TEST_F(Descriptors3DTest, RejectsInvalidSelectionAndBatchMismatch) {
-  EXPECT_THROW(nvMolKit::calc3DProperties<double>(mols_, {}, true, nullptr), std::invalid_argument);
-  EXPECT_THROW(nvMolKit::calc3DProperties<double>(mols_, {Property3D::PMI1, Property3D::PMI1}, true, nullptr),
+  EXPECT_THROW(nvMolKit::calc3DProperties<double>(mols_, {}, nvMolKit::Property3DOptions{}, nullptr),
+               std::invalid_argument);
+  EXPECT_THROW(nvMolKit::calc3DProperties<double>(mols_,
+                                                  {Property3D::PMI1, Property3D::PMI1},
+                                                  nvMolKit::Property3DOptions{},
+                                                  nullptr),
                std::invalid_argument);
 
   const auto                             uploaded  = nvMolKit::uploadConformerCoordinates(mols_, nullptr);
   const auto                             view      = nvMolKit::makeDeviceCoordView(uploaded);
   const std::vector<const RDKit::ROMol*> fewerMols = {line_.get()};
-  EXPECT_THROW(nvMolKit::calc3DProperties<double>(fewerMols, {Property3D::PMI1}, true, nullptr, &view),
-               std::invalid_argument);
+  EXPECT_THROW(
+    nvMolKit::calc3DProperties<double>(fewerMols, {Property3D::PMI1}, nvMolKit::Property3DOptions{}, nullptr, &view),
+    std::invalid_argument);
 }
