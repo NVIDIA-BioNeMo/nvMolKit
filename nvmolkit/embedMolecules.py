@@ -40,9 +40,9 @@ def EmbedMolecules(
     confsPerMolecule: int = 1,
     maxIterations: int = -1,
     hardwareOptions: Optional[HardwareOptions] = None,
-    precision: PrecisionMode = PrecisionMode.FULL,
     output: Literal[CoordinateOutput.RDKIT_CONFORMERS] = CoordinateOutput.RDKIT_CONFORMERS,
     targetGpu: int = -1,
+    precision: PrecisionMode = PrecisionMode.FULL,
 ) -> None: ...
 @overload
 def EmbedMolecules(
@@ -51,10 +51,10 @@ def EmbedMolecules(
     confsPerMolecule: int = 1,
     maxIterations: int = -1,
     hardwareOptions: Optional[HardwareOptions] = None,
-    precision: PrecisionMode = PrecisionMode.FULL,
     *,
     output: Literal[CoordinateOutput.DEVICE],
     targetGpu: int = -1,
+    precision: PrecisionMode = PrecisionMode.FULL,
 ) -> Device3DResult: ...
 def EmbedMolecules(
     molecules: list["Mol"],
@@ -62,9 +62,9 @@ def EmbedMolecules(
     confsPerMolecule: int = 1,
     maxIterations: int = -1,
     hardwareOptions: Optional[HardwareOptions] = None,
-    precision: PrecisionMode = PrecisionMode.FULL,
     output: CoordinateOutput = CoordinateOutput.RDKIT_CONFORMERS,
     targetGpu: int = -1,
+    precision: PrecisionMode = PrecisionMode.FULL,
 ):
     """Embed multiple molecules with multiple conformers on GPUs.
 
@@ -87,14 +87,14 @@ def EmbedMolecules(
         confsPerMolecule: Number of conformers to generate per molecule (default: 1)
         maxIterations: Maximum ETKDG iterations, -1 for automatic calculation (default: -1)
         hardwareOptions: HardwareOptions with hardware settings. If None, uses defaults.
-        precision: ``PrecisionMode.FULL`` (default) or
-            ``PrecisionMode.SINGLE``.
         output: ``RDKIT_CONFORMERS`` (default) writes generated conformers back into each input
             molecule in-place and returns ``None``. ``DEVICE`` retains conformer coordinates on
             GPU and returns a :class:`Device3DResult`; RDKit conformers are NOT modified. When
             ``params.pruneRmsThresh > 0``, conformers are pruned on the target GPU before return.
         targetGpu: In DEVICE mode, the GPU to consolidate the result onto. ``-1`` selects the
             first configured execution GPU.
+        precision: ``PrecisionMode.FULL`` (default) or
+            ``PrecisionMode.SINGLE``.
 
     Returns:
         For ``RDKIT_CONFORMERS``: ``None``; input molecules are modified in-place with

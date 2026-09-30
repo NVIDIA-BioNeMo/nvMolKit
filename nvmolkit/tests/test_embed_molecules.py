@@ -515,6 +515,21 @@ def test_embed_molecules_device_output_returns_device3d_no_writeback(precision):
         # for this molecule's last conformer.
     assert atom_starts[-1] == cursor
 
+    # Coordinates must be real geometry: finite, with sensible heavy-atom bond lengths.
+    positions = result.values.torch().cpu()
+    assert positions.shape == (atom_starts[-1], 3)
+    assert torch.isfinite(positions).all()
+    for conf_idx, mol_idx in enumerate(mol_indices):
+        conf_positions = positions[atom_starts[conf_idx] : atom_starts[conf_idx + 1]]
+        for bond in mols[mol_idx].GetBonds():
+            begin, end = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+            if mols[mol_idx].GetAtomWithIdx(begin).GetAtomicNum() == 1:
+                continue
+            if mols[mol_idx].GetAtomWithIdx(end).GetAtomicNum() == 1:
+                continue
+            length = torch.linalg.norm(conf_positions[begin] - conf_positions[end]).item()
+            assert 1.3 < length < 1.7
+
     # ETKDG does not produce energies / convergence flags - those Optional fields must be None,
     # not AsyncGpuResults wrapping empty tensors.
     assert result.energies is None
