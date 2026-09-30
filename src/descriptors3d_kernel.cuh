@@ -87,6 +87,41 @@ __device__ __forceinline__ void centeredPosition(const double* positions,
   z = static_cast<Real>(positions[atomIdx * 3 + 2] - centroidZ);
 }
 
+/**
+ * @brief Group-collective. Writes the conformer's coordinates, centered on their unweighted centroid in
+ *        float64 (see centeredPosition()), to @p centered as @p Real, laid out like the coordinate rows.
+ *        Every lane of the group can read all of @p centered on return.
+ * @return The float64 centroid.
+ */
+template <typename Real>
+__device__ __forceinline__ double3
+writeCenteredConformer(const ConformerAtoms& atoms, const int laneInGroup, const unsigned groupMask, Real* centered) {
+  double sumX = 0;
+  double sumY = 0;
+  double sumZ = 0;
+  for (int atomIdx = laneInGroup; atomIdx < atoms.numAtoms; atomIdx += kGroupSize) {
+    sumX += atoms.positions[atomIdx * 3 + 0];
+    sumY += atoms.positions[atomIdx * 3 + 1];
+    sumZ += atoms.positions[atomIdx * 3 + 2];
+  }
+  const double inverseAtoms = 1.0 / static_cast<double>(atoms.numAtoms);
+  const double centroidX    = groupAllReduceSum(sumX) * inverseAtoms;
+  const double centroidY    = groupAllReduceSum(sumY) * inverseAtoms;
+  const double centroidZ    = groupAllReduceSum(sumZ) * inverseAtoms;
+  for (int atomIdx = laneInGroup; atomIdx < atoms.numAtoms; atomIdx += kGroupSize) {
+    centeredPosition(atoms.positions,
+                     atomIdx,
+                     centroidX,
+                     centroidY,
+                     centroidZ,
+                     centered[atomIdx * 3 + 0],
+                     centered[atomIdx * 3 + 1],
+                     centered[atomIdx * 3 + 2]);
+  }
+  __syncwarp(groupMask);
+  return make_double3(centroidX, centroidY, centroidZ);
+}
+
 //! Round to three decimals as RDKit's WHIM, RDF and MORSE do: std::round(1000 * x) / 1000.
 template <typename Real> __device__ __forceinline__ Real roundThousandths(const Real value) {
   return round(value * Real(1000)) / Real(1000);

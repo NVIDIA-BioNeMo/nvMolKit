@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <GraphMol/Conformer.h>
+#include <GraphMol/Descriptors/AUTOCORR3D.h>
 #include <GraphMol/Descriptors/MORSE.h>
 #include <GraphMol/Descriptors/PBF.h>
 #include <GraphMol/Descriptors/RDF.h>
+#include <GraphMol/Descriptors/USRDescriptor.h>
 #include <GraphMol/Descriptors/WHIM.h>
 #include <GraphMol/RWMol.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
@@ -283,6 +285,58 @@ TEST(Descriptors3DPairwise, MatchesRdkitRdfAndMorse) {
         EXPECT_NEAR(values[idx], expected[valueIdx], 1.1e-3)
           << nvMolKit::property3DName(property) << " conformer " << confIdx << ", value " << valueIdx;
         EXPECT_EQ(values[idx], aloneValues[idx]);
+      }
+    }
+  }
+}
+
+TEST(Descriptors3DPairwise, MatchesRdkitAutocorr3D) {
+  auto                                   mol  = molWithConformers("CCCO",
+                                                                  {
+                                 {{-1.3, 0.2, 0.7}, {-0.2, -0.8, 0.1}, {0.9, 0.4, -0.6},  {1.7, 1.1, 0.9}},
+                                 {{2.0, -1.0, 0.5},  {2.7, 0.3, -0.4}, {3.9, -0.2, 0.8}, {4.6, 1.0, -0.7}},
+  });
+  const std::vector<const RDKit::ROMol*> mols = {mol.get()};
+  auto       results = nvMolKit::calc3DProperties<double>(mols, {Property3D::AUTOCORR3D, Property3D::RDF}, {}, nullptr);
+  const auto values  = toHost(results.properties.at(Property3D::AUTOCORR3D));
+  ASSERT_EQ(values.size(), 2u * nvMolKit::kNumAutocorr3DProperties);
+  for (int confIdx = 0; confIdx < 2; ++confIdx) {
+    std::vector<double> expected;
+    RDKit::Descriptors::AUTOCORR3D(*mol, expected, confIdx);
+    ASSERT_EQ(expected.size(), static_cast<size_t>(nvMolKit::kNumAutocorr3DProperties));
+    for (int valueIdx = 0; valueIdx < nvMolKit::kNumAutocorr3DProperties; ++valueIdx) {
+      EXPECT_NEAR(values[confIdx * nvMolKit::kNumAutocorr3DProperties + valueIdx], expected[valueIdx], 1.1e-3)
+        << "conformer " << confIdx << ", value " << valueIdx;
+    }
+  }
+}
+
+TEST(Descriptors3DReferencePoints, MatchesRdkitUsrAndUsrcat) {
+  auto                                   mol  = molWithConformers("CCCO",
+                                                                  {
+                                 {{-1.3, 0.2, 0.7}, {-0.2, -0.8, 0.1}, {0.9, 0.4, -0.6},  {1.7, 1.1, 0.9}},
+                                 {{2.0, -1.0, 0.5},  {2.7, 0.3, -0.4}, {3.9, -0.2, 0.8}, {4.6, 1.0, -0.7}},
+  });
+  const std::vector<const RDKit::ROMol*> mols = {mol.get()};
+  auto       results = nvMolKit::calc3DProperties<double>(mols, {Property3D::USR, Property3D::USRCAT}, {}, nullptr);
+  const auto usr     = toHost(results.properties.at(Property3D::USR));
+  const auto usrcat  = toHost(results.properties.at(Property3D::USRCAT));
+  ASSERT_EQ(usr.size(), 2u * nvMolKit::kNumUsrProperties);
+  ASSERT_EQ(usrcat.size(), 2u * nvMolKit::kNumUsrcatProperties);
+  for (int confIdx = 0; confIdx < 2; ++confIdx) {
+    std::vector<double> expectedUsr(nvMolKit::kNumUsrProperties);
+    RDKit::Descriptors::USR(*mol, expectedUsr, confIdx);
+    std::vector<double>                    expectedUsrcat(nvMolKit::kNumUsrcatProperties);
+    std::vector<std::vector<unsigned int>> atomIds;
+    RDKit::Descriptors::USRCAT(*mol, expectedUsrcat, atomIds, confIdx);
+    for (int valueIdx = 0; valueIdx < nvMolKit::kNumUsrcatProperties; ++valueIdx) {
+      // Skews (every third value) of near-symmetric distance sets are rounding noise; see the Python tests.
+      const double tolerance = valueIdx % 3 == 2 ? 1e-3 : 1e-9;
+      EXPECT_NEAR(usrcat[confIdx * nvMolKit::kNumUsrcatProperties + valueIdx], expectedUsrcat[valueIdx], tolerance)
+        << "conformer " << confIdx << ", USRCAT value " << valueIdx;
+      if (valueIdx < nvMolKit::kNumUsrProperties) {
+        EXPECT_NEAR(usr[confIdx * nvMolKit::kNumUsrProperties + valueIdx], expectedUsr[valueIdx], tolerance)
+          << "conformer " << confIdx << ", USR value " << valueIdx;
       }
     }
   }

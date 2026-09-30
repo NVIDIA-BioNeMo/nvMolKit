@@ -71,6 +71,12 @@ def _calc_rdkit_property(mol: Chem.Mol, conf_id: int, prop: Property3D) -> float
         return rdMolDescriptors.CalcRDF(mol, confId=conf_id)
     if prop == Property3D.MORSE:
         return rdMolDescriptors.CalcMORSE(mol, confId=conf_id)
+    if prop == Property3D.AUTOCORR3D:
+        return rdMolDescriptors.CalcAUTOCORR3D(mol, confId=conf_id)
+    if prop == Property3D.USR:
+        return rdMolDescriptors.GetUSR(mol, confId=conf_id)
+    if prop == Property3D.USRCAT:
+        return rdMolDescriptors.GetUSRCAT(mol, confId=conf_id)
     return RDKIT_CALCULATORS[prop](mol, confId=conf_id, useAtomicMasses=True)
 
 
