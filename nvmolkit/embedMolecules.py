@@ -26,8 +26,11 @@ if TYPE_CHECKING:
 
 __all__ = ["EmbedMolecules"]
 
-from nvmolkit import _embedMolecules  # type: ignore
+# nvmolkit.types registers PrecisionMode, which _embedMolecules exposes as a default argument.
+# isort: off
 from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions, PrecisionMode
+from nvmolkit import _embedMolecules  # type: ignore
+# isort: on
 
 
 @overload
