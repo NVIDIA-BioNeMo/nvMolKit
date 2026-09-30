@@ -142,7 +142,7 @@ target_link_libraries(
 add_library(aap aap.cu)
 target_link_libraries(
   aap
-  PUBLIC device_vector
+  PUBLIC device_vector diversity_pickers
   PRIVATE ${RDKit_LIBS} cuda_error_check pinned_host_allocator)
 
 add_library(diversity_pickers diversity_pickers.cu)

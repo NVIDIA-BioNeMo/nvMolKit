@@ -3,7 +3,7 @@
 Clustering and diversity selection
 ==================================
 
-:mod:`nvmolkit.clustering` provides Butina clustering, and
+:mod:`nvmolkit.clustering` provides Butina and directed sphere exclusion (DISE) clustering, and
 :mod:`nvmolkit.pickers` provides Leader selection.
 
 Matrix and fused forms
@@ -23,6 +23,9 @@ Each algorithm has two forms:
    * - Leader
      - :func:`~nvmolkit.pickers.leader`
      - :func:`~nvmolkit.pickers.fused_leader`
+   * - DISE
+     - :func:`~nvmolkit.clustering.dise`
+     - :func:`~nvmolkit.clustering.fused_dise`
 
 The matrix form takes a precomputed distance matrix, from any source. Its memory
 grows with the square of the number of items.
@@ -80,9 +83,9 @@ format.
 Differences from RDKit
 ----------------------
 
-Leader follows RDKit's ``LeaderPicker``.
+Leader follows RDKit's ``LeaderPicker``. RDKit has no DISE.
 
-Leader compares distances in ``float32``, while RDKit uses double
+Leader and DISE compare distances in ``float32``, while RDKit uses double
 precision, so a distance within ``float32`` rounding of a cutoff can be
 classified differently. For Tanimoto distances this happens only at values that
 ``float32`` cannot represent exactly, such as 0.3; values such as 0.25 and 0.5

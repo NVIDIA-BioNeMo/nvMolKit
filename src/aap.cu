@@ -10,12 +10,12 @@
 #include <cstdint>
 #include <limits>
 #include <map>
-#include <numeric>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "src/aap.h"
+#include "src/diversity_picker_algorithms.cuh"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
 #include "src/utils/host_vector.h"
@@ -429,36 +429,6 @@ CentroidSelection selectCentroids(const AapHostDescriptors&   hostDescriptors,
   return result;
 }
 
-ClusteringResult buildClusteringResult(const std::vector<int>& labels, const std::vector<int>& centroids) {
-  const int        numClusters = static_cast<int>(centroids.size());
-  std::vector<int> sizes(numClusters, 0);
-  for (const int label : labels) {
-    ++sizes[label];
-  }
-  std::vector<int> order(numClusters);
-  std::iota(order.begin(), order.end(), 0);
-  std::stable_sort(order.begin(), order.end(), [&sizes](const int left, const int right) {
-    return sizes[left] > sizes[right];
-  });
-  std::vector<int> remap(numClusters);
-  for (int newId = 0; newId < numClusters; ++newId) {
-    remap[order[newId]] = newId;
-  }
-  ClusteringResult result;
-  result.clusterIds.resize(labels.size());
-  result.centroids.resize(numClusters);
-  result.clusterSizes.resize(numClusters);
-  std::transform(labels.begin(), labels.end(), result.clusterIds.begin(), [&remap](const int label) {
-    return remap[label];
-  });
-  for (int newId = 0; newId < numClusters; ++newId) {
-    const int oldId            = order[newId];
-    result.centroids[newId]    = centroids[oldId];
-    result.clusterSizes[newId] = sizes[oldId];
-  }
-  return result;
-}
-
 }  // namespace
 
 float aapSimilarityGpu(const RDKit::ROMol& left,
@@ -514,7 +484,7 @@ ClusteringResult aapSimilarityClustering(const std::vector<const RDKit::ROMol*>&
                                          candidateHost,
                                          outputHost,
                                          stream);
-  return buildClusteringResult(selection.labels, selection.centroids);
+  return detail::buildClusteringResult(selection.labels, selection.centroids);
 }
 
 ClusteringResult aapDiseClustering(const std::vector<const RDKit::ROMol*>& molecules,
@@ -590,7 +560,7 @@ ClusteringResult aapDiseClustering(const std::vector<const RDKit::ROMol*>& molec
     }
   }
 
-  return buildClusteringResult(labels, centroids);
+  return detail::buildClusteringResult(labels, centroids);
 }
 
 }  // namespace nvMolKit

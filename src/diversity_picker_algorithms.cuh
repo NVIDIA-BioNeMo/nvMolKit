@@ -12,13 +12,14 @@
 #include <stdexcept>
 #include <vector>
 
+#include "src/clustering_result.h"
 #include "src/diversity_pickers.h"
 #include "src/utils/conditional_loop_graph.cuh"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
 #include "src/utils/host_vector.h"
 
-// Leader is written against a distance provider. A provider implements
+// Leader and DISE are written once against a distance provider. A provider implements
 //
 //   int size() const;
 //   int leaderWindow() const;
@@ -61,29 +62,53 @@ struct LeaderHitsOp {
   __device__ void finish(const int candidate, const State state) const { hits[candidate] = state; }
 };
 
+//! Assigns each non-centroid to its nearest centroid; ties keep the earlier centroid.
+struct NearestOp {
+  const std::uint8_t* isCentroid;
+  int*                labels;
+
+  struct State {
+    float distance;
+    int   cluster;
+  };
+  __device__ bool  skip(const int candidate) const { return isCentroid[candidate] != 0; }
+  __device__ State start(const int candidate) const { return {FLT_MAX, labels[candidate]}; }
+  __device__ void  visit(State& state, const int ordinal, const bool /*self*/, const float distance) const {
+    if (distance < state.distance) {
+      state.distance = distance;
+      state.cluster  = ordinal;
+    }
+  }
+  __device__ void finish(const int candidate, const State state) const { labels[candidate] = state.cluster; }
+};
+
 //! Device state for windowed Leader selection.
 struct LeaderState {
   std::uint8_t*  active;
   std::uint32_t* hits;
+  int*           labels;
   int*           picks;
   int*           count;
   int*           window;
+  int*           windowOrdinals;
   std::uint32_t* accepted;
   int*           scanStart;
 };
 
 // Implemented in diversity_pickers.cu.
-void launchGatherLeaderWindow(const LeaderState& state, int numItems, int windowSize, cudaStream_t stream);
+void             launchGatherLeaderWindow(const LeaderState& state, int numItems, int windowSize, cudaStream_t stream);
 //! Forced windows accept every member. Otherwise the resolution also decides whether the selection loop continues.
-void launchResolveLeaderWindow(const LeaderState&         state,
-                               int                        windowSize,
-                               bool                       forced,
-                               int                        limit,
-                               cudaGraphConditionalHandle loop,
-                               cudaStream_t               stream);
-void launchApplyLeaderWindow(const LeaderState& state, int numItems, cudaStream_t stream);
-void validateFirstPicks(const std::vector<int>& firstPicks, int numItems);
-void validateUnitCutoff(double cutoff);
+void             launchResolveLeaderWindow(const LeaderState&         state,
+                                           int                        windowSize,
+                                           bool                       forced,
+                                           int                        limit,
+                                           cudaGraphConditionalHandle loop,
+                                           cudaStream_t               stream);
+void             launchApplyLeaderWindow(const LeaderState& state, int numItems, cudaStream_t stream);
+void             launchMarkIndices(const int* indices, int count, std::uint8_t* flags, cudaStream_t stream);
+void             validateFirstPicks(const std::vector<int>& firstPicks, int numItems);
+void             validateUnitCutoff(double cutoff);
+ClusteringResult buildClusteringResult(const std::vector<int>& labels, const std::vector<int>& centroids);
 
 //! Returns the first @p count picks as an exactly sized result.
 inline PickerResult makePickerResult(const AsyncDeviceVector<int>& picks, const int count, cudaStream_t stream) {
@@ -108,6 +133,7 @@ PickerResult leaderPick(Provider&               provider,
                         const float             cutoff,
                         const int               pickSize,
                         const std::vector<int>& firstPicks,
+                        int*                    labels,
                         cudaStream_t            stream) {
   const int numItems = provider.size();
   validateFirstPicks(firstPicks, numItems);
@@ -119,7 +145,7 @@ PickerResult leaderPick(Provider&               provider,
   }
 
   const int limit = pickSize == 0 ? numItems : pickSize;
-  if (limit == 1 || firstPicks.size() >= static_cast<std::size_t>(limit)) {
+  if (labels == nullptr && (limit == 1 || firstPicks.size() >= static_cast<std::size_t>(limit))) {
     const std::vector<int> initial = firstPicks.empty() ? std::vector<int>{0} : firstPicks;
     PickerResult           result{AsyncDeviceVector<int>(initial.size(), stream)};
     result.indices.copyFromHost(initial);
@@ -127,19 +153,27 @@ PickerResult leaderPick(Provider&               provider,
     return result;
   }
 
-  const int remainingPicks = limit - static_cast<int>(firstPicks.size());
+  const int remainingPicks = std::max(1, limit - static_cast<int>(firstPicks.size()));
   const int windowSize     = std::clamp(provider.leaderWindow(), 1, std::min(kMaxLeaderWindow, remainingPicks));
   AsyncDeviceVector<int>           picks(std::max<std::size_t>(limit, firstPicks.size()), stream);
   AsyncDeviceVector<std::uint8_t>  active(numItems, stream);
   AsyncDeviceVector<std::uint32_t> hits(numItems, stream);
   AsyncDeviceVector<int>           window(kMaxLeaderWindow, stream);
+  AsyncDeviceVector<int>           windowOrdinals(kMaxLeaderWindow, stream);
   AsyncDevicePtr<int>              count(0, stream);
   AsyncDevicePtr<int>              scanStart(0, stream);
   AsyncDevicePtr<std::uint32_t>    accepted(0U, stream);
   cudaCheckError(cudaMemsetAsync(active.data(), 1, numItems, stream));
 
-  const LeaderState
-    state{active.data(), hits.data(), picks.data(), count.data(), window.data(), accepted.data(), scanStart.data()};
+  const LeaderState  state{active.data(),
+                          hits.data(),
+                          labels,
+                          picks.data(),
+                          count.data(),
+                          window.data(),
+                          windowOrdinals.data(),
+                          accepted.data(),
+                          scanStart.data()};
   const LeaderHitsOp hitsOp{active.data(), hits.data(), cutoff};
 
   for (std::size_t first = 0; first < firstPicks.size(); first += kMaxLeaderWindow) {
@@ -164,6 +198,39 @@ PickerResult leaderPick(Provider&               provider,
   count.get(countHost);
   cudaCheckError(cudaStreamSynchronize(stream));
   return makePickerResult(picks, countHost, stream);
+}
+
+template <typename Provider>
+ClusteringResult diseCluster(Provider&    provider,
+                             const float  cutoff,
+                             const bool   nearestAssignment,
+                             cudaStream_t stream) {
+  const int numItems = provider.size();
+  if (numItems == 0) {
+    return {};
+  }
+
+  // Sphere exclusion records the first excluding leader for every item, which is the "first" assignment.
+  AsyncDeviceVector<int> labels(numItems, stream);
+  auto                   leaders      = leaderPick(provider, cutoff, 0, {}, labels.data(), stream);
+  const int              numCentroids = static_cast<int>(leaders.indices.size());
+
+  if (nearestAssignment) {
+    AsyncDeviceVector<std::uint8_t> isCentroid(numItems, stream);
+    cudaCheckError(cudaMemsetAsync(isCentroid.data(), 0, numItems, stream));
+    launchMarkIndices(leaders.indices.data(), numCentroids, isCentroid.data(), stream);
+    provider.accumulateDistances(leaders.indices.data(),
+                                 numCentroids,
+                                 NearestOp{isCentroid.data(), labels.data()},
+                                 stream);
+  }
+
+  std::vector<int> labelsHost(numItems);
+  std::vector<int> centroidsHost(numCentroids);
+  labels.copyToHost(labelsHost);
+  leaders.indices.copyToHost(centroidsHost);
+  cudaCheckError(cudaStreamSynchronize(stream));
+  return buildClusteringResult(labelsHost, centroidsHost);
 }
 
 }  // namespace nvMolKit::detail
