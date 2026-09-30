@@ -293,11 +293,11 @@ clustering provides device and RDKit-style output modes:
 
 ```python
 from rdkit import Chem
-from nvmolkit.clustering import OutputMode, aap_dise
+from nvmolkit.clustering import OutputMode, fused_dise
 
 molecules = [Chem.MolFromSmiles(smiles) for smiles in ["CCCC", "CCCO", "CCOC"]]
-device_result = aap_dise(molecules)
-rdkit_clusters = aap_dise(molecules, output=OutputMode.RDKIT)
+device_result = fused_dise(molecules, 1 - 0.217, metric="aap")
+rdkit_clusters = fused_dise(molecules, 1 - 0.217, metric="aap", output=OutputMode.RDKIT)
 ```
 
 `device_result` has `cluster_ids`, `centroids`, and `cluster_sizes` fields;

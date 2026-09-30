@@ -88,5 +88,22 @@ Generating packed fingerprints from RDKit has extra CPU overhead; for large coll
 
     sims = crossTanimotoSimilarity(packed).torch()  # [n, n]
 
+Atom-Atom Path similarity
+-------------------------
 
+:func:`nvmolkit.similarity.aap_similarity` compares two RDKit molecules with
+approximate Atom-Atom Path (AAP) similarity. Parameters are set with
+:class:`nvmolkit.similarity.AAPMetric`, which is also the ``metric`` accepted by
+the fused clustering functions (see :doc:`clustering`).
 
+.. code-block:: python
+
+    from rdkit import Chem
+
+    from nvmolkit.similarity import AAPMetric, aap_similarity
+
+    score = aap_similarity(
+        Chem.MolFromSmiles("CCCO"),
+        Chem.MolFromSmiles("CCCN"),
+        metric=AAPMetric(max_path_length=7),
+    )

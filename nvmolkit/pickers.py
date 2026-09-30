@@ -14,9 +14,9 @@ import numpy as np
 import torch
 
 from nvmolkit import _clustering
-from nvmolkit._distance_inputs import _packed_metric_name, _prepare_distance_matrix, _prepare_fused_input
+from nvmolkit._distance_inputs import _aap_args, _packed_metric_name, _prepare_distance_matrix, _prepare_fused_input
 from nvmolkit.clustering import OutputMode, _validate_output
-from nvmolkit.similarity import Metric
+from nvmolkit.similarity import AAPMetric, Metric
 from nvmolkit.types import ArrayInput, AsyncGpuResult
 
 
@@ -112,10 +112,10 @@ def fused_leader(
     results can differ slightly from RDKit's double-precision results.
 
     Args:
-        x: Packed int32 or uint32 fingerprints of shape ``(N, num_words)``.
+        x: Packed int32 or uint32 fingerprints of shape ``(N, num_words)`` for
+            Tanimoto and cosine, or a sequence of RDKit molecules for AAP.
         cutoff: Inclusive exclusion distance in ``[0, 1]``, rounded to float32.
-        metric: Similarity metric. :class:`~nvmolkit.similarity.AAPMetric` is not
-            yet supported.
+        metric: Similarity metric.
         pick_size: Maximum number of leaders, or ``0`` for no limit. All
             ``first_picks`` are retained even if they exceed this limit.
         first_picks: Unique indices selected as leaders, in order, before the
@@ -128,18 +128,23 @@ def fused_leader(
         ``OutputMode.DEVICE``, or a tuple of indices for ``OutputMode.RDKIT``.
     """
     _validate_output(output)
-    resolved, inputs, active_stream = _prepare_fused_input(x, metric, stream, "fused_leader")
+    resolved, inputs, active_stream = _prepare_fused_input(x, metric, stream)
     pick_size = operator.index(pick_size)
     first_picks = _index_tuple("first_picks", first_picks)
     with torch.cuda.stream(active_stream):
-        result = _clustering.fused_leader(
-            inputs.__cuda_array_interface__,
-            cutoff,
-            _packed_metric_name(resolved),
-            pick_size,
-            first_picks,
-            active_stream.cuda_stream,
-        )
+        if isinstance(resolved, AAPMetric):
+            result = _clustering.aap_leader(
+                inputs, cutoff, pick_size, first_picks, *_aap_args(resolved), active_stream.cuda_stream
+            )
+        else:
+            result = _clustering.fused_leader(
+                inputs.__cuda_array_interface__,
+                cutoff,
+                _packed_metric_name(resolved),
+                pick_size,
+                first_picks,
+                active_stream.cuda_stream,
+            )
         return _resolve_selection_output(result, output, maxmin=False)
 
 
@@ -220,11 +225,11 @@ def fused_maxmin(
     results can differ slightly from RDKit's double-precision results.
 
     Args:
-        x: Packed int32 or uint32 fingerprints of shape ``(N, num_words)``.
+        x: Packed int32 or uint32 fingerprints of shape ``(N, num_words)`` for
+            Tanimoto and cosine, or a sequence of RDKit molecules for AAP.
         pick_size: Number of items to select, from 1 through ``N``. All
             ``first_picks`` are retained even if they exceed this limit.
-        metric: Similarity metric. :class:`~nvmolkit.similarity.AAPMetric` is not
-            yet supported.
+        metric: Similarity metric.
         first_picks: Unique indices that start the selection, in order. If
             empty, the first pick is drawn at random.
         seed: Seed for the random first pick. Negative values use system
@@ -243,19 +248,24 @@ def fused_maxmin(
         or ``-1`` if none was added after ``first_picks``.
     """
     _validate_output(output)
-    resolved, inputs, active_stream = _prepare_fused_input(x, metric, stream, "fused_maxmin")
+    resolved, inputs, active_stream = _prepare_fused_input(x, metric, stream)
     pick_size = operator.index(pick_size)
     first_picks = _index_tuple("first_picks", first_picks)
     seed = operator.index(seed)
     threshold = _validate_maxmin_threshold(threshold)
     with torch.cuda.stream(active_stream):
-        result = _clustering.fused_maxmin(
-            inputs.__cuda_array_interface__,
-            pick_size,
-            _packed_metric_name(resolved),
-            first_picks,
-            seed,
-            threshold,
-            active_stream.cuda_stream,
-        )
+        if isinstance(resolved, AAPMetric):
+            result = _clustering.aap_maxmin(
+                inputs, pick_size, first_picks, seed, threshold, *_aap_args(resolved), active_stream.cuda_stream
+            )
+        else:
+            result = _clustering.fused_maxmin(
+                inputs.__cuda_array_interface__,
+                pick_size,
+                _packed_metric_name(resolved),
+                first_picks,
+                seed,
+                threshold,
+                active_stream.cuda_stream,
+            )
         return _resolve_selection_output(result, output, maxmin=True)

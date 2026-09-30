@@ -33,9 +33,9 @@ Each algorithm has two forms:
 The matrix form takes a precomputed distance matrix, from any source. Its memory
 grows with the square of the number of items.
 
-The fused form takes fingerprints and a similarity metric, and computes
-distances as it needs them, so its memory grows linearly. Use it when the
-distance matrix would not fit in GPU memory.
+The fused form takes fingerprints or molecules and a similarity metric, and
+computes distances as it needs them, so its memory grows linearly. Use it when
+the distance matrix would not fit in GPU memory.
 
 Both forms return the same result for the same distances. Cutoffs and
 thresholds are distances, ``1 - similarity``: a similarity threshold of 0.7 is a
@@ -59,6 +59,14 @@ metric object:
    * - :class:`~nvmolkit.similarity.CosineMetric`
      - ``"cosine"``
      - Packed ``int32`` or ``uint32`` fingerprints, shape ``(N, num_words)``
+   * - :class:`~nvmolkit.similarity.AAPMetric`
+     - ``"aap"``
+     - Sequence of RDKit molecules
+
+Every fused form accepts every metric, except that
+:func:`~nvmolkit.clustering.fused_butina` does not yet support
+:class:`~nvmolkit.similarity.AAPMetric`. Metric objects carry parameters; for
+example, ``AAPMetric(max_path_length=8)``.
 
 .. code-block:: python
 
@@ -67,6 +75,7 @@ metric object:
     from nvmolkit.clustering import OutputMode
     from nvmolkit.fingerprints import MorganFingerprintGenerator
     from nvmolkit.pickers import fused_leader, fused_maxmin
+    from nvmolkit.similarity import AAPMetric
 
     smiles = ["CCO", "CCN", "CCCC", "c1ccccc1", "c1ccncc1", "CC(=O)O"]
     molecules = [Chem.MolFromSmiles(value) for value in smiles]
@@ -74,6 +83,7 @@ metric object:
 
     leaders = fused_leader(fingerprints, 0.6, metric="tanimoto", output=OutputMode.RDKIT)
     picks, last_distance = fused_maxmin(fingerprints, 3, metric="tanimoto", seed=23, output=OutputMode.RDKIT)
+    aap_leaders = fused_leader(molecules, 0.8, metric=AAPMetric(max_path_length=8), output=OutputMode.RDKIT)
 
 Output modes
 ------------

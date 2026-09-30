@@ -12,7 +12,7 @@ from rdkit import Chem
 from nvmolkit.clustering import (
     ClusterDeviceResult,
     OutputMode,
-    aap_dise,
+    fused_dise,
 )
 from nvmolkit.similarity import AAPMetric, TanimotoMetric, aap_similarity
 
@@ -24,11 +24,11 @@ def _mol(smiles):
 
 
 def _cluster_ids(molecules, similarity_threshold=0.217, assignment="first", stream=None, **options):
-    result = aap_dise(
+    result = fused_dise(
         molecules,
-        similarity_threshold=similarity_threshold,
-        assignment=assignment,
+        cutoff=1.0 - similarity_threshold,
         metric=AAPMetric(**options),
+        assignment=assignment,
         stream=stream,
     )
     return result.cluster_ids.numpy().tolist()
@@ -128,14 +128,15 @@ def test_aap_options_are_validated_for_pair_and_empty_clustering(kwargs, message
     with pytest.raises(ValueError, match=message):
         aap_similarity(molecule, molecule, metric=AAPMetric(**kwargs))
     with pytest.raises(ValueError, match=message):
-        aap_dise([], metric=AAPMetric(**kwargs))
+        fused_dise([], cutoff=1.0 - 0.217, metric=AAPMetric(**kwargs))
 
 
 def test_aap_accepts_smallest_positive_normal_sinkhorn_temperature():
     temperature = float(np.finfo(np.float32).tiny)
     molecules = [_mol("CCO"), _mol("CCN")]
 
-    score = aap_similarity(*molecules, metric=AAPMetric(sinkhorn_temperature=temperature))
+    metric = AAPMetric(sinkhorn_temperature=temperature)
+    score = aap_similarity(*molecules, metric=metric)
 
     assert math.isfinite(score)
     assert 0.0 <= score <= 1.0
@@ -152,11 +153,11 @@ def test_aap_supports_paths_beyond_the_reference_default():
 
 @pytest.mark.parametrize("threshold", [-0.01, 1.01, float("nan"), float("inf"), -float("inf")])
 def test_aap_clustering_rejects_invalid_thresholds(threshold):
-    with pytest.raises(ValueError, match="threshold must be in"):
-        aap_dise([], similarity_threshold=threshold)
+    with pytest.raises(ValueError, match="cutoff must be in"):
+        fused_dise([], cutoff=1.0 - threshold, metric=AAPMetric())
 
 
-def test_aap_rejects_empty_oversized_null_and_unsupported_molecules():
+def test_aap_reports_every_invalid_molecule_by_reason():
     molecule = _mol("CCO")
     empty = Chem.RWMol().GetMol()
     oversized = _mol("C" * 65)
@@ -164,14 +165,17 @@ def test_aap_rejects_empty_oversized_null_and_unsupported_molecules():
     unsupported.AddAtom(Chem.Atom(6))
     unsupported.AddAtom(Chem.Atom(6))
     unsupported.AddBond(0, 1, Chem.BondType.UNSPECIFIED)
+    molecules = [molecule, None, empty, oversized, unsupported.GetMol(), None, molecule]
 
-    with pytest.raises(ValueError, match="does not support empty molecules"):
+    with pytest.raises(ValueError, match="more than 64 atoms at indices \\[3\\]") as caught:
+        fused_dise(molecules, cutoff=0.5, metric=AAPMetric())
+
+    assert caught.value.args[1] == {"none": [1, 5], "empty": [2], "too_many_atoms": [3], "unsupported_bond": [4]}
+    with pytest.raises(ValueError, match="empty molecules"):
         aap_similarity(empty, molecule)
-    with pytest.raises(ValueError, match="at most 64 atoms"):
+    with pytest.raises(ValueError, match="more than 64 atoms"):
         aap_similarity(oversized, oversized)
-    with pytest.raises(ValueError, match="Invalid molecule at index 0"):
-        aap_dise([None])
-    with pytest.raises(ValueError, match="supports only single, double, triple, and aromatic bonds"):
+    with pytest.raises(ValueError, match="bonds other than single, double, triple, or aromatic"):
         aap_similarity(unsupported.GetMol(), molecule)
 
 
@@ -267,10 +271,11 @@ def test_aap_dise_output_modes_share_one_cluster_contract(
 ):
     molecules = [_mol(smiles) for smiles in ("CCCC", "CCCO", "CCOC")]
 
-    device = aap_dise(molecules, similarity_threshold=0.2, assignment=assignment)
-    rdkit = aap_dise(
+    device = fused_dise(molecules, cutoff=0.8, metric=AAPMetric(), assignment=assignment)
+    rdkit = fused_dise(
         molecules,
-        similarity_threshold=0.2,
+        cutoff=0.8,
+        metric=AAPMetric(),
         assignment=assignment,
         output=OutputMode.RDKIT,
     )
@@ -286,24 +291,24 @@ def test_aap_dise_output_modes_share_one_cluster_contract(
 
 
 def test_aap_dise_output_modes_handle_empty_input():
-    device = aap_dise([])
+    device = fused_dise([], cutoff=1.0 - 0.217, metric=AAPMetric())
 
     assert device.cluster_ids.torch().shape == (0,)
     assert device.centroids.torch().shape == (0,)
     assert device.cluster_sizes.torch().shape == (0,)
-    assert aap_dise([], output=OutputMode.RDKIT) == ()
+    assert fused_dise([], cutoff=1.0 - 0.217, metric=AAPMetric(), output=OutputMode.RDKIT) == ()
 
 
 @pytest.mark.parametrize("output", ["device", None, ClusterDeviceResult])
 def test_aap_dise_rejects_invalid_output(output):
     with pytest.raises(TypeError, match="output must be an OutputMode"):
-        aap_dise([], output=output)
+        fused_dise([], cutoff=1.0 - 0.217, metric=AAPMetric(), output=output)
 
 
 @pytest.mark.parametrize("assignment", ["", "closest", None])
 def test_aap_dise_rejects_invalid_assignment(assignment):
     with pytest.raises(ValueError, match="assignment must be one of"):
-        aap_dise([], assignment=assignment)
+        fused_dise([], cutoff=1.0 - 0.217, metric=AAPMetric(), assignment=assignment)
 
 
 def test_aap_similarity_and_clustering_are_deterministic_across_streams():
@@ -320,10 +325,10 @@ def test_aap_similarity_and_clustering_are_deterministic_across_streams():
 
 def test_aap_dise_device_output_on_explicit_stream_matches_default():
     molecules = [_mol(smiles) for smiles in ("CCCC", "CCCO", "CCOC", "c1ccccc1")]
-    expected = aap_dise(molecules, similarity_threshold=0.2)
+    expected = fused_dise(molecules, cutoff=0.8, metric=AAPMetric())
     stream = torch.cuda.Stream()
 
-    actual = aap_dise(molecules, similarity_threshold=0.2, stream=stream)
+    actual = fused_dise(molecules, cutoff=0.8, metric=AAPMetric(), stream=stream)
 
     assert actual.cluster_ids.device == stream.device
     assert actual.centroids.device == stream.device
@@ -389,18 +394,16 @@ def test_aap_metric_name_is_equivalent_to_default_metric_object():
     assert aap_similarity(molecules[0], molecules[1], metric="aap") == aap_similarity(
         molecules[0], molecules[1], metric=AAPMetric()
     )
-    assert aap_dise(molecules, 0.2, metric="aap", output=OutputMode.RDKIT) == aap_dise(
-        molecules, 0.2, metric=AAPMetric(), output=OutputMode.RDKIT
+    assert fused_dise(molecules, 0.8, metric="aap", output=OutputMode.RDKIT) == fused_dise(
+        molecules, 0.8, metric=AAPMetric(), output=OutputMode.RDKIT
     )
 
 
 @pytest.mark.parametrize(
     ("metric", "error"), [("tanimoto", TypeError), (TanimotoMetric(), TypeError), ("euclidean", ValueError)]
 )
-def test_aap_apis_reject_other_metrics(metric, error):
+def test_aap_similarity_rejects_other_metrics(metric, error):
     molecule = _mol("CCO")
 
     with pytest.raises(error, match="metric must be"):
         aap_similarity(molecule, molecule, metric=metric)
-    with pytest.raises(error, match="metric must be"):
-        aap_dise([molecule], metric=metric)
