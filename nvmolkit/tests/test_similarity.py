@@ -110,6 +110,18 @@ def test_nvmolkit_cross_tanimoto_similarity_from_nvmolkit_fp(size_limited_mols):
     torch.testing.assert_close(nvmolkit_sims_direct.torch(), ref_sims)
 
 
+def test_cross_tanimoto_similarity_is_correctly_rounded(size_limited_mols):
+    # Equal similarity fractions must give equal values, so ties in downstream pickers resolve as in RDKit.
+    fpgen = rdFingerprintGenerator.GetMorganGenerator(radius=3, fpSize=1024)
+    fps = [fpgen.GetFingerprint(mol) for mol in size_limited_mols]
+    nvmolkit_fps = MorganFingerprintGenerator(radius=3, fpSize=1024).GetFingerprints(size_limited_mols)
+    expected = np.array([BulkTanimotoSimilarity(fp, fps) for fp in fps])
+
+    actual = crossTanimotoSimilarity(nvmolkit_fps).torch().cpu().numpy()
+
+    assert np.all((actual == expected) | (actual == expected.astype(np.float32)))
+
+
 @pytest.mark.parametrize("nxmdims", ((1, 20), (20, 1), (20, 2), (29, 29)))
 def test_nxm_cross_tanimoto_similarity_from_nvmolkit_fp(size_limited_mols, nxmdims):
     d1, d2 = nxmdims

@@ -7,6 +7,7 @@
 #include <cuda_runtime.h>
 
 #include <cmath>
+#include <type_traits>
 
 #include "src/fingerprint_similarity.h"
 #include "src/utils/cub_helpers.cuh"
@@ -15,10 +16,18 @@ namespace nvMolKit {
 
 namespace detail {
 
+// Single-precision arithmetic uses correctly rounded intrinsics, which --use_fast_math does not replace, so equal
+// similarity fractions produce equal values.
 template <FingerprintSimilarityMetric Metric, typename Real>
 __device__ __forceinline__ Real fingerprintSimilarityFromDenominator(const int intersection, const Real denominator) {
-  return denominator > Real{0} ? static_cast<Real>(intersection) / denominator :
-                                 (Metric == FingerprintSimilarityMetric::Tanimoto ? Real{1} : Real{0});
+  if (!(denominator > Real{0})) {
+    return Metric == FingerprintSimilarityMetric::Tanimoto ? Real{1} : Real{0};
+  }
+  if constexpr (std::is_same_v<Real, float>) {
+    return __fdiv_rn(__int2float_rn(intersection), denominator);
+  } else {
+    return static_cast<Real>(intersection) / denominator;
+  }
 }
 
 template <FingerprintSimilarityMetric Metric, typename Real>
@@ -28,8 +37,12 @@ __device__ __forceinline__ Real fingerprintSimilarityDenominator(const int inter
   if constexpr (Metric == FingerprintSimilarityMetric::Tanimoto) {
     return static_cast<Real>(lhsBitCount + rhsBitCount - intersection);
   } else if constexpr (Metric == FingerprintSimilarityMetric::Cosine) {
-    const Real product = static_cast<Real>(lhsBitCount) * static_cast<Real>(rhsBitCount);
-    return sqrt(product);
+    if constexpr (std::is_same_v<Real, float>) {
+      return __fsqrt_rn(__fmul_rn(__int2float_rn(lhsBitCount), __int2float_rn(rhsBitCount)));
+    } else {
+      const Real product = static_cast<Real>(lhsBitCount) * static_cast<Real>(rhsBitCount);
+      return sqrt(product);
+    }
   } else {
     static_assert(Metric == FingerprintSimilarityMetric::Tanimoto || Metric == FingerprintSimilarityMetric::Cosine,
                   "Unsupported fingerprint similarity metric");
