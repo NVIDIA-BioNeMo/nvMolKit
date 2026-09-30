@@ -289,10 +289,11 @@ def Calc3DProperties(
             molecule conformers preserve their RDKit ``is3D`` flag for PBF.
         options: Per-family options; defaults to :class:`Property3DOptions`
             (RDKit's defaults).
-        precision: ``PrecisionMode.SINGLE`` (default) returns float32 values;
-            ``PrecisionMode.FULL`` returns float64. WHIM uses float64 internally
-            in both modes because its projected symmetry terms are unstable in
-            float32.
+        precision: ``PrecisionMode.SINGLE`` (default) computes and returns
+            float32; ``PrecisionMode.FULL`` computes and returns float64.
+            WHIM's PCA always computes in float64: its inverse-kurtosis
+            terms on near-planar conformers depend on out-of-plane
+            deviations below float32 resolution.
         hardwareOptions: Only ``preprocessingThreads`` applies: the CPU
             threads used to extract coordinates and atom weights from the
             molecules (default ``-1``, all threads).
@@ -308,10 +309,8 @@ def Calc3DProperties(
     Any subset of :class:`Property3D` can be requested in one call, mixing
     families and giving members or names. Each requested family runs once for
     the whole batch, and a property's values do not depend on what else is
-    requested, except that under ``PrecisionMode.SINGLE`` a PBF requested
-    together with WHIM shares WHIM's float64 computation and can differ from
-    PBF alone at float32 rounding level. ``options`` configures each family
-    independently, and ``precision`` sets the dtype of every result.
+    requested. ``options`` configures each family independently, and
+    ``precision`` applies to every requested property.
 
     Example:
 

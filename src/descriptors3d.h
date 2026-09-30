@@ -135,9 +135,8 @@ template <typename Real> using Property3DResults = std::unordered_map<Property3D
 /**
  * @brief Calculate the requested 3D properties for every conformer in a coordinate batch.
  *
- * Each requested family runs as one kernel launch. Outputs use @p Real (float or double); Moments and a
- * PBF requested without WHIM compute in @p Real, while WHIM (and a PBF requested with it) computes in
- * float64 because WHIM's three-decimal rounding and symmetry matching are unstable in float32.
+ * Each requested family runs as one kernel launch and returns @p Real (float or double), computing in
+ * @p Real except WHIM's PCA, which is always float64 (see descriptors3d_detail::WhimReal).
  * `options.moments` is expressed through `inputs.momentWeights` at this level. Conformers whose molecule
  * index is out of range, whose atom range lies outside `coordinates.numAtoms`, or whose atom count
  * disagrees with the molecule's atom range produce NaN for every requested property.

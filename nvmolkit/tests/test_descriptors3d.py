@@ -39,6 +39,16 @@ def _assert_matches_rdkit(actual, expected, precision=PrecisionMode.SINGLE):
         np.testing.assert_allclose(actual, expected, rtol=2e-6, atol=2e-6 * scale)
 
 
+def _assert_whim_matches_rdkit(actual, expected, precision):
+    """Compare WHIM rows, which RDKit rounds to thousandths, against RDKit.
+
+    One rounding unit (0.001) covers a value whose last digit rounds differently. SINGLE additionally
+    allows the float32 conversion of the rounded values.
+    """
+    rtol = 0 if precision == PrecisionMode.FULL else 1e-6
+    np.testing.assert_allclose(actual, expected, rtol=rtol, atol=0.0011, equal_nan=True)
+
+
 def _moment_options(use_atomic_masses):
     return Property3DOptions(moments=MomentOptions(useAtomicMasses=use_atomic_masses))
 
@@ -289,7 +299,7 @@ def test_projection_family_matches_rdkit_and_preserves_vector_shape(precision):
     assert result[Property3D.PBF].torch().shape == (5,)
     assert result[Property3D.WHIM].torch().shape == (5, 114)
     _assert_matches_rdkit(result[Property3D.PBF].numpy(), expected_pbf, precision)
-    np.testing.assert_allclose(result[Property3D.WHIM].numpy(), expected_whim, rtol=0, atol=0.0011, equal_nan=True)
+    _assert_whim_matches_rdkit(result[Property3D.WHIM].numpy(), expected_whim, precision)
 
     dense = result.dense()
     assert dense.values["PBF"].shape == (2, 3)
@@ -298,9 +308,9 @@ def test_projection_family_matches_rdkit_and_preserves_vector_shape(precision):
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)
-def test_whim_matches_rdkit_above_score_cache_capacity(precision):
-    # A 130-atom random-walk chain exceeds the kernel's 128-atom projection cache and takes the
-    # recompute path; the small molecule in the same launch uses the cache.
+def test_whim_matches_rdkit_for_large_molecules(precision):
+    # A 130-atom chain and a small molecule share one launch, so per-conformer symmetry scratch slots of
+    # very different sizes coexist.
     rng = np.random.default_rng(3)
     steps = rng.normal(size=(130, 3))
     chain = np.cumsum(1.5 * steps / np.linalg.norm(steps, axis=1, keepdims=True), axis=0)
@@ -313,7 +323,7 @@ def test_whim_matches_rdkit_above_score_cache_capacity(precision):
     expected_pbf = np.asarray(
         [_rdkit_property(mol, conf.GetId(), Property3D.PBF, True) for mol in mols for conf in mol.GetConformers()]
     )
-    np.testing.assert_allclose(result[Property3D.WHIM].numpy(), expected_whim, rtol=0, atol=0.0011)
+    _assert_whim_matches_rdkit(result[Property3D.WHIM].numpy(), expected_whim, precision)
     _assert_matches_rdkit(result[Property3D.PBF].numpy(), expected_pbf, precision)
 
 
@@ -343,7 +353,7 @@ def test_whim_degenerate_geometries_match_rdkit(precision):
     result = Calc3DProperties(mols, Property3D.WHIM, precision=precision)
     expected = np.asarray([rdMolDescriptors.CalcWHIM(mol) for mol in mols])
 
-    np.testing.assert_allclose(result[Property3D.WHIM].numpy(), expected, rtol=0, atol=0.0011, equal_nan=True)
+    _assert_whim_matches_rdkit(result[Property3D.WHIM].numpy(), expected, precision)
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)

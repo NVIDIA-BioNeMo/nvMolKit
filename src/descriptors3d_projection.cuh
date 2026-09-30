@@ -162,12 +162,49 @@ template <typename Real> __device__ __forceinline__ Real roundWhim(const Real va
 }
 
 /**
- * @brief Group-collective. WHIM symmetry term along principal axis @p axis: atoms whose rounded
- *        projection is centered, or mirrored by another atom within @p threshold, count as symmetric.
+ * @brief RDKit's symmetry comparisons on projections rounded to thousandths.
  *
- * The pairwise search compares every atom with every other, so each rounded projection is computed once
- * into @p scores (this conformer's slots, at least `atoms.numAtoms` long; @p groupMask selects the
- * group's lanes).
+ * RDKit compares `fabs(a + b) <= threshold` and `fabs(a) < threshold` on float64 values `k / 1000.0`.
+ * On integer thousandths the outcome is decided exactly unless the value lies on the threshold.
+ *
+ * FP64 required: the threshold and the on-threshold evaluation. Rounded projections live on the same
+ * 0.001 grid as the default threshold, so many pair sums land exactly on it, and RDKit's result there
+ * depends on how `k / 1000.0` is represented in float64. Evaluating those cases in float32 flips them.
+ */
+struct WhimThreshold {
+  double value;        //!< Threshold in the projection's units.
+  double thousandths;  //!< value * 1000.
+
+  __device__ __forceinline__ bool nearBoundary(const double magnitude, const double scale) const {
+    return fabs(magnitude - thousandths) <= 1e-9 * (scale + 1.0);
+  }
+
+  //! `fabs(a / 1000.0 + b / 1000.0) <= value` for rounded projections @p a and @p b.
+  __device__ __forceinline__ bool mirrored(const int32_t a, const int32_t b) const {
+    const double sum = fabs(static_cast<double>(a) + static_cast<double>(b));
+    if (!nearBoundary(sum, fabs(static_cast<double>(a)) + fabs(static_cast<double>(b)))) {
+      return sum <= thousandths;
+    }
+    return fabs(static_cast<double>(a) / 1000.0 + static_cast<double>(b) / 1000.0) <= value;
+  }
+
+  //! `fabs(a / 1000.0) < value` for rounded projection @p a.
+  __device__ __forceinline__ bool centered(const int32_t a) const {
+    const double magnitude = fabs(static_cast<double>(a));
+    if (!nearBoundary(magnitude, magnitude)) {
+      return magnitude < thousandths;
+    }
+    return fabs(static_cast<double>(a) / 1000.0) < value;
+  }
+};
+
+/**
+ * @brief Group-collective. WHIM symmetry term along principal axis @p axis: atoms whose rounded
+ *        projection is centered, or mirrored by another atom within the threshold, count as symmetric.
+ *
+ * The pairwise search compares every atom with every other, so each projection is rounded once to
+ * integer thousandths in @p scores (this conformer's slots, at least `atoms.numAtoms` long; @p groupMask
+ * selects the group's lanes).
  */
 template <typename Real>
 __device__ __forceinline__ Real computeWhimGamma(const ConformerAtoms&        atoms,
@@ -175,25 +212,25 @@ __device__ __forceinline__ Real computeWhimGamma(const ConformerAtoms&        at
                                                  const unsigned               groupMask,
                                                  const ProjectionState<Real>& state,
                                                  const int                    axis,
-                                                 const Real                   threshold,
-                                                 Real*                        scores) {
+                                                 const WhimThreshold&         threshold,
+                                                 int32_t*                     scores) {
   for (int atomIdx = laneInGroup; atomIdx < atoms.numAtoms; atomIdx += kGroupSize) {
-    scores[atomIdx] = roundWhim(projectionScore(atoms, atomIdx, state, axis));
+    scores[atomIdx] = static_cast<int32_t>(round(projectionScore(atoms, atomIdx, state, axis) * Real(1000)));
   }
   __syncwarp(groupMask);
 
   Real symmetricCount  = 0;
   Real asymmetricCount = 0;
   for (int atomIdx = laneInGroup; atomIdx < atoms.numAtoms; atomIdx += kGroupSize) {
-    const Real score       = scores[atomIdx];
-    bool       hasOpposite = false;
+    const int32_t score       = scores[atomIdx];
+    bool          hasOpposite = false;
     for (int otherIdx = 0; otherIdx < atoms.numAtoms; ++otherIdx) {
-      if (otherIdx != atomIdx && fabs(score + scores[otherIdx]) <= threshold) {
+      if (otherIdx != atomIdx && threshold.mirrored(score, scores[otherIdx])) {
         hasOpposite = true;
         break;
       }
     }
-    if (hasOpposite || fabs(score) < threshold) {
+    if (hasOpposite || threshold.centered(score)) {
       symmetricCount += Real(1);
     } else {
       asymmetricCount += Real(1);
@@ -226,11 +263,11 @@ __device__ __forceinline__ void writeWhimChannel(const ConformerAtoms&        at
                                                  const int                    laneInGroup,
                                                  const unsigned               groupMask,
                                                  const int                    channel,
-                                                 const Real                   threshold,
+                                                 const WhimThreshold&         threshold,
                                                  const ProjectionState<Real>& state,
                                                  const bool                   writeRow,
                                                  OutputReal*                  row,
-                                                 Real*                        scores) {
+                                                 int32_t*                     scores) {
   const Real first  = state.eigenvalues[0];
   const Real second = state.eigenvalues[1];
   const Real third  = state.eigenvalues[2];
@@ -293,24 +330,35 @@ __device__ __forceinline__ void writeWhimChannel(const ConformerAtoms&        at
 constexpr int kNumWhimWeightChannels = 6;
 
 /**
+ * @brief Arithmetic type of WHIM's PCA and projections, in every precision mode.
+ *
+ * FP64 required: WHIM's inverse kurtosis, `n * lambda^2 / sum(score^4)` per axis, is scale-invariant.
+ * On the near-zero axis of a planar or near-planar conformer it depends only on out-of-plane deviations
+ * far below float32 resolution relative to the molecule's extent, so a float32 covariance, eigensystem or
+ * projection turns it (and the kurtosis means built from it) into rounding noise. Every other WHIM term is
+ * accurate in float32.
+ */
+using WhimReal = double;
+
+/**
  * @brief PBF and WHIM for conformers [@p conformerBegin, @p conformerEnd); one group of lanes per conformer.
  *
- * Both share the unweighted PCA. WHIM then repeats the PCA for each atom-property channel, whose weights
- * are stored channel-major in `inputs.whimWeights` (`kNumWhimWeightChannels` blocks of one value per
- * molecule atom), and uses @p whimScores as symmetry-search scratch: @p whimScoreStride slots per
- * conformer of the range. Rows longer than @p whimScoreStride are treated as invalid. @p ComputeReal is
- * the arithmetic type; outputs are converted to @p OutputReal.
+ * PBF uses an unweighted PCA in @p OutputReal. WHIM runs its own PCA in WhimReal for the unweighted channel
+ * and each atom-property channel, whose weights are stored channel-major in `inputs.whimWeights`
+ * (`kNumWhimWeightChannels` blocks of one value per molecule atom), and uses @p whimScores as
+ * symmetry-search scratch: @p whimScoreStride slots per conformer of the range. Rows longer than
+ * @p whimScoreStride are treated as invalid. Outputs are @p OutputReal.
  */
-template <typename OutputReal, typename ComputeReal, bool kComputeWhim>
+template <typename OutputReal, bool kComputeWhim>
 __global__ void projection3DKernel(const DeviceCoordView        coordinates,
                                    const Property3DDeviceInputs inputs,
                                    const int                    conformerBegin,
                                    const int                    conformerEnd,
                                    OutputReal* __restrict__ pbfOutput,
                                    OutputReal* __restrict__ whimOutput,
-                                   ComputeReal* __restrict__ whimScores,
-                                   const int         whimScoreStride,
-                                   const ComputeReal whimThreshold) {
+                                   int32_t* __restrict__ whimScores,
+                                   const int    whimScoreStride,
+                                   const double whimThreshold) {
   const int lane        = static_cast<int>(threadIdx.x) % kWarpSize;
   const int laneInGroup = lane % kGroupSize;
   const int warpStart =
@@ -329,41 +377,37 @@ __global__ void projection3DKernel(const DeviceCoordView        coordinates,
       atoms = ConformerAtoms{};
     }
   }
-  ProjectionState<ComputeReal> state;
-  computeProjectionCentroid(atoms, laneInGroup, state);
-  computeProjectionPca(atoms, nullptr, laneInGroup, state);
 
   if (pbfOutput != nullptr) {
-    const ComputeReal pbf = computePbf(atoms, laneInGroup, state);
+    ProjectionState<OutputReal> pbfState;
+    computeProjectionCentroid(atoms, laneInGroup, pbfState);
+    computeProjectionPca(atoms, nullptr, laneInGroup, pbfState);
+    const OutputReal pbf = computePbf(atoms, laneInGroup, pbfState);
     if (writeRow) {
       const bool is3D         = inputs.conformerIs3D == nullptr || inputs.conformerIs3D[conformerIdx] != 0;
       pbfOutput[conformerIdx] = !atoms.valid                ? static_cast<OutputReal>(nan("")) :
                                 atoms.numAtoms < 4 || !is3D ? OutputReal(0) :
-                                                              static_cast<OutputReal>(pbf);
+                                                              pbf;
     }
   }
 
   if constexpr (kComputeWhim) {
-    const unsigned groupMask = 0xffu << (lane - laneInGroup);
-    ComputeReal*   scores =
+    const unsigned      groupMask = 0xffu << (lane - laneInGroup);
+    const WhimThreshold threshold{whimThreshold, whimThreshold * 1000.0};
+    int32_t*            scores =
       inRange ? whimScores + static_cast<size_t>(conformerIdx - conformerBegin) * whimScoreStride : nullptr;
     OutputReal* row = inRange ? whimOutput + static_cast<size_t>(conformerIdx) * kNumWhimProperties : nullptr;
-    writeWhimChannel(atoms, laneInGroup, groupMask, 0, whimThreshold, state, writeRow && atoms.valid, row, scores);
+    ProjectionState<WhimReal> state;
+    computeProjectionCentroid(atoms, laneInGroup, state);
+    computeProjectionPca(atoms, nullptr, laneInGroup, state);
+    writeWhimChannel(atoms, laneInGroup, groupMask, 0, threshold, state, writeRow && atoms.valid, row, scores);
     const int moleculeIdx       = atoms.valid ? coordinates.molIndices[conformerIdx] : 0;
     const int moleculeAtomStart = atoms.valid ? inputs.moleculeAtomStarts[moleculeIdx] : 0;
     const int totalAtoms        = inputs.moleculeAtomStarts[coordinates.nMols];
     for (int channel = 1; channel <= kNumWhimWeightChannels; ++channel) {
       const double* weights = inputs.whimWeights + static_cast<size_t>(channel - 1) * totalAtoms + moleculeAtomStart;
       computeProjectionPca(atoms, weights, laneInGroup, state);
-      writeWhimChannel(atoms,
-                       laneInGroup,
-                       groupMask,
-                       channel,
-                       whimThreshold,
-                       state,
-                       writeRow && atoms.valid,
-                       row,
-                       scores);
+      writeWhimChannel(atoms, laneInGroup, groupMask, channel, threshold, state, writeRow && atoms.valid, row, scores);
     }
     if (inRange && !atoms.valid) {
       for (int valueIdx = laneInGroup; valueIdx < kNumWhimProperties; valueIdx += kGroupSize) {
@@ -377,11 +421,8 @@ __global__ void projection3DKernel(const DeviceCoordView        coordinates,
 constexpr size_t kWhimScratchBudgetBytes = size_t{256} << 20;
 
 /**
- * @brief Launches the projection kernel when PBF or WHIM is requested.
- *
- * WHIM computes in float64 in both precision modes: its three-decimal rounding and symmetry matching
- * change discrete outcomes under float32 rounding. A PBF requested together with WHIM shares that float64
- * PCA; alone, it computes in @p Real.
+ * @brief Launches the projection kernel when PBF or WHIM is requested. PBF computes in @p Real; WHIM's
+ *        PCA computes in WhimReal. Both write @p Real outputs.
  */
 template <typename Real>
 void launchProjectionProperties(const DeviceCoordView&        coordinates,
@@ -396,35 +437,36 @@ void launchProjectionProperties(const DeviceCoordView&        coordinates,
   }
   if (whimOutput == nullptr) {
     const int numBlocks = (numConformers + kConformersPerBlock - 1) / kConformersPerBlock;
-    projection3DKernel<Real, Real, false><<<numBlocks, kBlockSize, 0, stream>>>(coordinates,
-                                                                                inputs,
-                                                                                0,
-                                                                                numConformers,
-                                                                                pbfOutput,
-                                                                                nullptr,
-                                                                                nullptr,
-                                                                                0,
-                                                                                static_cast<Real>(whim.threshold));
+    projection3DKernel<Real, false><<<numBlocks, kBlockSize, 0, stream>>>(coordinates,
+                                                                          inputs,
+                                                                          0,
+                                                                          numConformers,
+                                                                          pbfOutput,
+                                                                          nullptr,
+                                                                          nullptr,
+                                                                          0,
+                                                                          whim.threshold);
     cudaCheckError(cudaGetLastError());
     return;
   }
 
-  const int    scoreStride = std::max(inputs.maxMoleculeAtoms, 1);
-  const size_t chunkSize =
-    std::clamp<size_t>(kWhimScratchBudgetBytes / (sizeof(double) * scoreStride), 1, static_cast<size_t>(numConformers));
-  AsyncDeviceVector<double> scores(chunkSize * scoreStride, stream);
+  const int                  scoreStride = std::max(inputs.maxMoleculeAtoms, 1);
+  const size_t               chunkSize   = std::clamp<size_t>(kWhimScratchBudgetBytes / (sizeof(int32_t) * scoreStride),
+                                              1,
+                                              static_cast<size_t>(numConformers));
+  AsyncDeviceVector<int32_t> scores(chunkSize * scoreStride, stream);
   for (int begin = 0; begin < numConformers; begin += static_cast<int>(chunkSize)) {
     const int end       = std::min(numConformers, begin + static_cast<int>(chunkSize));
     const int numBlocks = (end - begin + kConformersPerBlock - 1) / kConformersPerBlock;
-    projection3DKernel<Real, double, true><<<numBlocks, kBlockSize, 0, stream>>>(coordinates,
-                                                                                 inputs,
-                                                                                 begin,
-                                                                                 end,
-                                                                                 pbfOutput,
-                                                                                 whimOutput,
-                                                                                 scores.data(),
-                                                                                 scoreStride,
-                                                                                 whim.threshold);
+    projection3DKernel<Real, true><<<numBlocks, kBlockSize, 0, stream>>>(coordinates,
+                                                                         inputs,
+                                                                         begin,
+                                                                         end,
+                                                                         pbfOutput,
+                                                                         whimOutput,
+                                                                         scores.data(),
+                                                                         scoreStride,
+                                                                         whim.threshold);
     cudaCheckError(cudaGetLastError());
   }
 }
