@@ -87,25 +87,37 @@ void hasSubstructMatch(const std::vector<const RDKit::ROMol*>& targets,
                        const SubstructSearchConfig&            config = SubstructSearchConfig{});
 
 /**
- * @brief Check one query against targets whose packed representation is already resident on the GPU.
- *
- * The target pointers and packed target batches must describe the same molecules
- * in the same order. This entry point is intended for persistent collections;
- * callers retain ownership of all three target representations for the duration
- * of the synchronous call. A workspace, if given, keeps executors and pinned
- * buffers alive across calls on its device. When results already holds
- * targets.size() zeros it is reused without being cleared; otherwise it is
- * reallocated.
+ * Targets already packed and resident on one GPU, with the per-target shapes a resident search needs.
+ * Immutable: build one per packed batch with makeResidentTargetBatch().
  */
-void hasSubstructMatchResident(const std::vector<const RDKit::ROMol*>& targets,
-                               const MoleculesHost&                    targetsHost,
-                               const MoleculesDevice&                  targetsDevice,
-                               const RDKit::ROMol&                     query,
-                               std::vector<uint8_t>&                   results,
-                               SubstructAlgorithm                      algorithm,
-                               cudaStream_t                            stream,
-                               const SubstructSearchConfig&            config    = SubstructSearchConfig{},
-                               ResidentSubstructSearchWorkspace*       workspace = nullptr);
+struct ResidentTargetBatch;
+
+/**
+ * @brief Describe packed targets resident on the current GPU for hasSubstructMatchResident().
+ *
+ * targets, targetsHost, and targetsDevice must describe the same molecules in the same order, stay alive and
+ * unmodified while the batch is used, and targetsDevice must be fully uploaded. Every target must fit the GPU
+ * representation: none may need the RDKit fallback (see requiresRDKitFallback()), and targets above
+ * kMaxTargetAtoms atoms are rejected with std::invalid_argument.
+ */
+std::shared_ptr<const ResidentTargetBatch> makeResidentTargetBatch(const std::vector<const RDKit::ROMol*>& targets,
+                                                                   const MoleculesHost&                    targetsHost,
+                                                                   const MoleculesDevice& targetsDevice);
+
+/**
+ * @brief Check one query against a resident target batch.
+ *
+ * Runs on the GPU holding the batch; config.gpuIds must be empty or name that GPU, and a workspace must belong to
+ * it. A workspace keeps executors and pinned buffers alive across calls and serves one call at a time. results is
+ * resized to the batch size and holds one flag per target.
+ */
+void hasSubstructMatchResident(const ResidentTargetBatch&        batch,
+                               const RDKit::ROMol&               query,
+                               std::vector<uint8_t>&             results,
+                               SubstructAlgorithm                algorithm,
+                               cudaStream_t                      stream,
+                               const SubstructSearchConfig&      config    = SubstructSearchConfig{},
+                               ResidentSubstructSearchWorkspace* workspace = nullptr);
 
 /** Create reusable search state bound to one GPU for hasSubstructMatchResident(). */
 std::shared_ptr<ResidentSubstructSearchWorkspace> makeResidentSubstructSearchWorkspace(int deviceId);
