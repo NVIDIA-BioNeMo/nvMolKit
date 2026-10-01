@@ -18,6 +18,7 @@
 
 #include <cuda_runtime.h>
 
+#include <memory>
 #include <vector>
 
 #include "src/substruct/substruct_types.h"
@@ -27,6 +28,10 @@ class ROMol;
 }  // namespace RDKit
 
 namespace nvMolKit {
+
+struct MoleculesHost;
+class MoleculesDevice;
+struct ResidentSubstructSearchWorkspace;
 
 /**
  * @brief Perform batch substructure matching on GPU.
@@ -80,6 +85,41 @@ void hasSubstructMatch(const std::vector<const RDKit::ROMol*>& targets,
                        SubstructAlgorithm                      algorithm,
                        cudaStream_t                            stream,
                        const SubstructSearchConfig&            config = SubstructSearchConfig{});
+
+/**
+ * Targets already packed and resident on one GPU, with the per-target shapes a resident search needs.
+ * Immutable: build one per packed batch with makeResidentTargetBatch().
+ */
+struct ResidentTargetBatch;
+
+/**
+ * @brief Describe packed targets resident on the current GPU for hasSubstructMatchResident().
+ *
+ * targets, targetsHost, and targetsDevice must describe the same molecules in the same order, stay alive and
+ * unmodified while the batch is used, and targetsDevice must be fully uploaded. Targets above kMaxTargetAtoms atoms
+ * or needing the RDKit fallback (see requiresRDKitFallback()) are rejected with std::invalid_argument.
+ */
+std::shared_ptr<const ResidentTargetBatch> makeResidentTargetBatch(const std::vector<const RDKit::ROMol*>& targets,
+                                                                   const MoleculesHost&                    targetsHost,
+                                                                   const MoleculesDevice& targetsDevice);
+
+/**
+ * @brief Check one query against a resident target batch.
+ *
+ * Runs on the GPU holding the batch; config.gpuIds must be empty or name that GPU, and a workspace must belong to
+ * it. A workspace keeps executors and pinned buffers alive across calls and serves one call at a time. results is
+ * resized to the batch size and holds one flag per target.
+ */
+void hasSubstructMatchResident(const ResidentTargetBatch&        batch,
+                               const RDKit::ROMol&               query,
+                               std::vector<uint8_t>&             results,
+                               SubstructAlgorithm                algorithm,
+                               cudaStream_t                      stream,
+                               const SubstructSearchConfig&      config    = SubstructSearchConfig{},
+                               ResidentSubstructSearchWorkspace* workspace = nullptr);
+
+/** Create reusable search state bound to one GPU for hasSubstructMatchResident(). */
+std::shared_ptr<ResidentSubstructSearchWorkspace> makeResidentSubstructSearchWorkspace(int deviceId);
 
 }  // namespace nvMolKit
 
