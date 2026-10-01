@@ -199,3 +199,38 @@ TEST(MiniBatchPlannerTest, BuildsScheduleAndRecursiveEntries) {
 
   pool.release(buffer);
 }
+
+TEST(PinnedHostBufferPoolTest, ReusesAllocationsAfterPrepare) {
+  PinnedHostBufferPool pool;
+  pool.initialize(1, 32, 0, 8);
+  PinnedHostBuffer* first = pool.acquire();
+  ASSERT_NE(first, nullptr);
+  auto* firstData = first->pairIndices.data();
+  pool.release(first);
+
+  pool.prepare(1, 32, 0, 8);
+  PinnedHostBuffer* reused = pool.acquire();
+  ASSERT_NE(reused, nullptr);
+  EXPECT_EQ(reused->pairIndices.data(), firstData);
+  pool.release(reused);
+
+  pool.shutdown();
+  pool.prepare(1, 32, 0, 8);
+  EXPECT_NE(pool.acquire(), nullptr);
+}
+
+TEST(PinnedHostBufferPoolTest, PrepareGrowsUndersizedBuffers) {
+  PinnedHostBufferPool pool;
+  pool.initialize(1, 32, 0, 8);
+
+  pool.prepare(2, 64, 0, 8);
+  PinnedHostBuffer* first  = pool.acquire();
+  PinnedHostBuffer* second = pool.acquire();
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_NE(first, second);
+  EXPECT_GE(first->pairIndices.size(), 64U);
+  EXPECT_GE(second->pairIndices.size(), 64U);
+  pool.release(first);
+  pool.release(second);
+}

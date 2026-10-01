@@ -44,6 +44,7 @@ void MiniBatchResultsDevice::setStream(cudaStream_t stream) {
   overflowBuffer_.setStream(stream);
   recursiveMatchBits_.setStream(stream);
   labelMatrixBuffer_.setStream(stream);
+  overflowFlags_.setStream(stream);
 }
 
 void MiniBatchResultsDevice::allocateMiniBatch(int        miniBatchSize,

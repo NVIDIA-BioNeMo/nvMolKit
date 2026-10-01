@@ -18,6 +18,7 @@
 
 #include <cuda_runtime.h>
 
+#include <memory>
 #include <vector>
 
 #include "src/substruct/substruct_types.h"
@@ -27,6 +28,10 @@ class ROMol;
 }  // namespace RDKit
 
 namespace nvMolKit {
+
+struct MoleculesHost;
+class MoleculesDevice;
+struct ResidentSubstructSearchWorkspace;
 
 /**
  * @brief Perform batch substructure matching on GPU.
@@ -80,6 +85,30 @@ void hasSubstructMatch(const std::vector<const RDKit::ROMol*>& targets,
                        SubstructAlgorithm                      algorithm,
                        cudaStream_t                            stream,
                        const SubstructSearchConfig&            config = SubstructSearchConfig{});
+
+/**
+ * @brief Check one query against targets whose packed representation is already resident on the GPU.
+ *
+ * The target pointers and packed target batches must describe the same molecules
+ * in the same order. This entry point is intended for persistent collections;
+ * callers retain ownership of all three target representations for the duration
+ * of the synchronous call. A workspace, if given, keeps executors and pinned
+ * buffers alive across calls on its device. When results already holds
+ * targets.size() zeros it is reused without being cleared; otherwise it is
+ * reallocated.
+ */
+void hasSubstructMatchResident(const std::vector<const RDKit::ROMol*>& targets,
+                               const MoleculesHost&                    targetsHost,
+                               const MoleculesDevice&                  targetsDevice,
+                               const RDKit::ROMol&                     query,
+                               std::vector<uint8_t>&                   results,
+                               SubstructAlgorithm                      algorithm,
+                               cudaStream_t                            stream,
+                               const SubstructSearchConfig&            config    = SubstructSearchConfig{},
+                               ResidentSubstructSearchWorkspace*       workspace = nullptr);
+
+/** Create reusable search state bound to one GPU for hasSubstructMatchResident(). */
+std::shared_ptr<ResidentSubstructSearchWorkspace> makeResidentSubstructSearchWorkspace(int deviceId);
 
 }  // namespace nvMolKit
 

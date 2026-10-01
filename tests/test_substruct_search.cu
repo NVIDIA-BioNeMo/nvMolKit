@@ -15,13 +15,17 @@
 
 #include <GraphMol/MolOps.h>
 #include <GraphMol/ROMol.h>
+#include <GraphMol/SmilesParse/SmartsWrite.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <memory>
 #include <set>
 #include <vector>
 
+#include "src/substruct/molecules.h"
 #include "src/substruct/substruct_search.h"
 #include "src/testutils/substruct_validation.h"
 #include "src/utils/cuda_error_check.h"
@@ -2115,6 +2119,72 @@ TEST_P(RecursiveSubstructureSearchTest, DeepRecursionMixedWithNormalQueries) {
       auto rdkitMatches = getRDKitSubstructMatches(*targetMols[t], *queryMols[q], false);
       EXPECT_EQ(results.matchCount(t, q), static_cast<int>(rdkitMatches.size()))
         << "Target " << t << ", Query " << q << " should match RDKit results";
+    }
+  }
+}
+
+class ResidentSubstructureSearchTest : public SubstructureSearchTest {};
+
+INSTANTIATE_TEST_SUITE_P(ResidentAlgorithms,
+                         ResidentSubstructureSearchTest,
+                         ::testing::Values(SubstructAlgorithm::GSI, SubstructAlgorithm::DFS),
+                         [](const ::testing::TestParamInfo<SubstructAlgorithm>& info) {
+                           return algorithmName(info.param);
+                         });
+
+TEST_P(ResidentSubstructureSearchTest, MatchesBatchSearchAcrossCallsSharingAWorkspace) {
+  std::vector<std::unique_ptr<RDKit::ROMol>> targetMols;
+  std::vector<std::unique_ptr<RDKit::ROMol>> queryMols;
+  parseMolecules({"CCO", "c1ccccc1O", "CC(=O)O", "CC(=O)NC", "c1ccncc1", "CCCCCC", "OC(=O)c1ccccc1N", "C1CCNCC1"},
+                 {"c1ccccc1", "[OX2H]", "C(=O)[OH]", "[$([NX3]C=O)]", "[$(c[OH])]", "[#7;R]", "N#N"},
+                 targetMols,
+                 queryMols);
+  std::vector<const RDKit::ROMol*> targets;
+  for (const auto& mol : targetMols) {
+    targets.push_back(mol.get());
+  }
+
+  nvMolKit::MoleculesHost targetsHost;
+  nvMolKit::buildTargetBatchParallelInto(targetsHost, 1, targets, {});
+  nvMolKit::MoleculesDevice targetsDevice(stream_.stream());
+  targetsDevice.copyFromHost(targetsHost);
+  cudaCheckError(cudaStreamSynchronize(stream_.stream()));
+
+  int deviceId = 0;
+  cudaCheckError(cudaGetDevice(&deviceId));
+  const auto workspace = nvMolKit::makeResidentSubstructSearchWorkspace(deviceId);
+
+  // The first call reallocates the empty buffer; later calls reuse it once zeroed.
+  std::vector<uint8_t> withWorkspace;
+  for (const auto& query : queryMols) {
+    HasSubstructMatchResults expected;
+    hasSubstructMatch(targets, {query.get()}, expected, algorithm(), stream_.stream());
+
+    std::fill(withWorkspace.begin(), withWorkspace.end(), 0);
+    nvMolKit::hasSubstructMatchResident(targets,
+                                        targetsHost,
+                                        targetsDevice,
+                                        *query,
+                                        withWorkspace,
+                                        algorithm(),
+                                        stream_.stream(),
+                                        SubstructSearchConfig{},
+                                        workspace.get());
+    std::vector<uint8_t> withoutWorkspace;
+    nvMolKit::hasSubstructMatchResident(targets,
+                                        targetsHost,
+                                        targetsDevice,
+                                        *query,
+                                        withoutWorkspace,
+                                        algorithm(),
+                                        stream_.stream());
+
+    ASSERT_EQ(withWorkspace.size(), targets.size());
+    ASSERT_EQ(withoutWorkspace.size(), targets.size());
+    for (size_t t = 0; t < targets.size(); ++t) {
+      const bool matches = expected.hasMatch[t] != 0;
+      EXPECT_EQ(withWorkspace[t] != 0, matches) << "target " << t << ", query " << RDKit::MolToSmarts(*query);
+      EXPECT_EQ(withoutWorkspace[t] != 0, matches) << "target " << t << ", query " << RDKit::MolToSmarts(*query);
     }
   }
 }
