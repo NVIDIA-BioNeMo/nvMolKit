@@ -401,7 +401,7 @@ target_link_libraries(
 add_executable(test_descriptors3d test_descriptors3d.cpp)
 target_link_libraries(
   test_descriptors3d PRIVATE ${RDKit_LIBS} descriptors3d_mol
-                             conformer_coord_upload)
+                             conformer_coord_upload device)
 
 add_executable(test_descriptors3d_whim_arithmetic
                test_descriptors3d_whim_arithmetic.cu)

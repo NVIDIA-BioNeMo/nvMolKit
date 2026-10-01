@@ -522,12 +522,13 @@ __device__ __forceinline__ void computeWhim(const ConformerAtoms&         atoms,
     }
   }
   diagonalizeProjection(ownCovariance, state);
+  __syncwarp(groupMask);  // Channel eigensolvers can finish after different numbers of sweeps.
 
   WhimChannelSums ownSums{};
   for (int channel = 0; channel < kNumWhimChannels; ++channel) {
     WhimReal axes[9];
     for (int i = 0; i < 9; ++i) {
-      axes[i] = __shfl_sync(__activemask(), state.eigenvectors[i], channel, kGroupSize);
+      axes[i] = __shfl_sync(groupMask, state.eigenvectors[i], channel, kGroupSize);
     }
     const WhimChannelSums sums = accumulateWhimChannel(atoms, laneInGroup, groupMask, axes, threshold, scratch);
     if (laneInGroup == channel) {

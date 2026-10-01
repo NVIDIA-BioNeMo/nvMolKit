@@ -15,11 +15,13 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <random>
 #include <stdexcept>
 #include <vector>
 
 #include "src/conformer/conformer_coord_upload.h"
 #include "src/descriptors3d_mol.h"
+#include "src/utils/device.h"
 
 using nvMolKit::Property3D;
 
@@ -248,6 +250,59 @@ TEST(Descriptors3DProjection, MatchesRdkitPbfAndWhim) {
       EXPECT_NEAR(whim[confIdx * nvMolKit::kNumWhimProperties + valueIdx], expectedWhim[valueIdx], 1.1e-3)
         << "conformer " << confIdx << ", WHIM value " << valueIdx;
     }
+  }
+}
+
+TEST(Descriptors3DProjection, WhimChannelBroadcastMatchesRdkitAcrossMixedGeometries) {
+  // Unequal atom weights give channel lanes different covariance matrices and Jacobi paths.
+  // Cross group/warp/block boundaries, including a partially occupied final warp.
+  std::mt19937                               rng(346);
+  std::uniform_real_distribution<double>     coordinate(-3.0, 3.0);
+  std::vector<std::unique_ptr<RDKit::RWMol>> owned;
+  std::vector<const RDKit::ROMol*>           mols;
+  nvMolKit::ScopedStream                     stream;
+  for (const char* smiles : {"CCCO", "CCNCCOCCF", "CCOC(=O)NCCSCCCl"}) {
+    std::unique_ptr<RDKit::RWMol>   shape(RDKit::SmilesToMol(smiles));
+    std::vector<std::vector<Point>> conformers;
+    for (int confIdx = 0; confIdx < 23; ++confIdx) {
+      std::vector<Point> points;
+      for (unsigned atomIdx = 0; atomIdx < shape->getNumAtoms(); ++atomIdx) {
+        const double x = coordinate(rng);
+        const double y = coordinate(rng);
+        // Include planar and nearly planar matrices alongside fully 3D matrices.
+        const double z = confIdx % 3 == 0 ? 0.0 : coordinate(rng) * (confIdx % 3 == 1 ? 1e-5 : 1.0);
+        points.push_back({x, y, z});
+      }
+      conformers.push_back(std::move(points));
+    }
+    owned.push_back(molWithConformers(smiles, conformers));
+    mols.push_back(owned.back().get());
+  }
+  for (const double threshold : {0.001, 0.01, 0.0105}) {
+    SCOPED_TRACE(threshold);
+    nvMolKit::Property3DOptions options;
+    options.whim.threshold = threshold;
+    std::vector<double> expected;
+    for (const auto* mol : mols) {
+      for (unsigned confIdx = 0; confIdx < mol->getNumConformers(); ++confIdx) {
+        std::vector<double> row;
+        RDKit::Descriptors::WHIM(*mol, row, confIdx, threshold);
+        expected.insert(expected.end(), row.begin(), row.end());
+      }
+    }
+    const auto results = nvMolKit::calc3DProperties<double>(mols, {Property3D::WHIM}, options, nullptr);
+    const auto actual  = toHost(results.properties.at(Property3D::WHIM));
+    const auto floatResults =
+      nvMolKit::calc3DProperties<float>(mols, {Property3D::PBF, Property3D::WHIM}, options, stream.stream());
+    const auto floatActual = toHost(floatResults.properties.at(Property3D::WHIM));
+    ASSERT_EQ(actual.size(), expected.size());
+    ASSERT_EQ(floatActual.size(), expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+      EXPECT_NEAR(actual[i], expected[i], 1.1e-3) << "WHIM value " << i;
+      EXPECT_NEAR(floatActual[i], expected[i], 1.1e-3) << "float WHIM value " << i;
+    }
+    const auto repeated = nvMolKit::calc3DProperties<double>(mols, {Property3D::WHIM}, options, stream.stream());
+    EXPECT_EQ(toHost(repeated.properties.at(Property3D::WHIM)), actual);
   }
 }
 

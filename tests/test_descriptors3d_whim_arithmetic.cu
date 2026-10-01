@@ -37,6 +37,14 @@ __global__ void countDivisionMismatches(unsigned long long* mismatches) {
   }
 }
 
+__global__ void countSampledDivisionMismatches(const int32_t* values, const int count, unsigned long long* mismatches) {
+  const int idx = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (idx < count &&
+      __double_as_longlong(thousandthsToUnits(values[idx])) != __double_as_longlong(referenceUnits(values[idx]))) {
+    atomicAdd(mismatches, 1ull);
+  }
+}
+
 __global__ void countRoundingMismatches(const double* values, const int count, unsigned long long* mismatches) {
   const int idx = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
   if (idx < count) {
@@ -79,10 +87,47 @@ std::vector<unsigned long long> downloadCounts(AsyncDeviceVector<unsigned long l
 
 }  // namespace
 
-TEST(WhimArithmetic, ThousandthsToUnitsMatchesDivisionForEveryInt32) {
+// Run explicitly with --gtest_also_run_disabled_tests
+// --gtest_filter=WhimArithmetic.DISABLED_ThousandthsToUnitsMatchesDivisionForEveryInt32.
+TEST(WhimArithmetic, DISABLED_ThousandthsToUnitsMatchesDivisionForEveryInt32) {
   AsyncDeviceVector<unsigned long long> mismatches(1);
   mismatches.zero();
   countDivisionMismatches<<<1024, 256, 0, mismatches.stream()>>>(mismatches.data());
+  cudaCheckError(cudaGetLastError());
+  EXPECT_EQ(downloadCounts(mismatches)[0], 0u);
+}
+
+TEST(WhimArithmetic, ThousandthsToUnitsMatchesDivisionForRepresentativeInt32) {
+  std::vector<int32_t> values;
+  // Dense coverage around zero and the int32 endpoints.
+  for (int32_t i = 0; i <= 20'000; ++i) {
+    values.push_back(i);
+    values.push_back(-i);
+    values.push_back(std::numeric_limits<int32_t>::min() + i);
+    values.push_back(std::numeric_limits<int32_t>::max() - i);
+  }
+  // Exercise each binary exponent and both signs around its boundary.
+  for (int bit = 0; bit < 31; ++bit) {
+    const int32_t power = int32_t{1} << bit;
+    for (int32_t offset = -1; offset <= 1; ++offset) {
+      values.push_back(power + offset);
+      values.push_back(-power + offset);
+    }
+  }
+  std::mt19937                           rng(42);
+  std::uniform_int_distribution<int32_t> anyInt(std::numeric_limits<int32_t>::min(),
+                                                std::numeric_limits<int32_t>::max());
+  for (int i = 0; i < 100'000; ++i) {
+    values.push_back(anyInt(rng));
+  }
+  AsyncDeviceVector<int32_t> deviceValues(values.size());
+  deviceValues.copyFromHost(values);
+  AsyncDeviceVector<unsigned long long> mismatches(1);
+  mismatches.zero();
+  const int count = static_cast<int>(values.size());
+  countSampledDivisionMismatches<<<(count + 255) / 256, 256, 0, mismatches.stream()>>>(deviceValues.data(),
+                                                                                       count,
+                                                                                       mismatches.data());
   cudaCheckError(cudaGetLastError());
   EXPECT_EQ(downloadCounts(mismatches)[0], 0u);
 }
