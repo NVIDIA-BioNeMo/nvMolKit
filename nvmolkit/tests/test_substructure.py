@@ -34,9 +34,29 @@ MAX_ATOMS = 128
 NUM_SMILES = 300
 
 
+PLAIN_QUERY_TARGETS = [
+    "Cn1ccc2ccccc21",
+    "c1ccc2[nH]ccc2c1",
+    "CN(C)C",
+    "CNC",
+    "CC[O-]",
+    "CCO",
+    "[13CH3]O",
+    "CO",
+    "C[CH2]",
+    "CC",
+    "*C",
+    "[1*]C",
+    "[2*]C",
+]
+# Plain (SMILES) query atoms follow RDKit's Atom::Match: hydrogen counts are ignored, set charges, isotopes, and
+# radicals must match, and dummy isotopes only conflict when both atoms carry one.
+PLAIN_QUERIES = ["c1ccc2[nH]ccc2c1", "[NH2]C", "C[O-]", "[13CH3]O", "C[CH2]", "*C", "[1*]C", "[300CH4]"]
+
+
 def get_rdkit_matches(target: Chem.Mol, query: Chem.Mol, uniquify: bool = False) -> list[tuple[int, ...]]:
     """Get RDKit substructure matches for comparison."""
-    return list(target.GetSubstructMatches(query, uniquify=uniquify))
+    return [tuple(match) for match in target.GetSubstructMatches(query, uniquify=uniquify)]
 
 
 def matches_equal(gpu_matches: list, rdkit_matches: list[tuple[int, ...]]) -> bool:
@@ -69,6 +89,21 @@ class TestBasicSubstructureSearch:
 
         rdkit_matches = get_rdkit_matches(targets[0], queries[0])
         assert len(results[0][0]) == len(rdkit_matches)
+
+    @pytest.mark.parametrize("algorithm", ["gsi", "dfs"])
+    def test_plain_molecule_query_preserves_atom_constraints(self, algorithm: str):
+        """Plain molecule queries must not be packed as wildcard atoms."""
+        targets = [
+            Chem.MolFromSmiles("CCC(C)CNc1cccc2c1COCC2"),
+            Chem.MolFromSmiles("CC[C@H](CO)NCc1cccc2c1OCCO2"),
+            Chem.MolFromSmiles("C[C@@H]1CCN(c2ncnc3c2OCCO3)C1"),
+        ]
+        query = Chem.MolFromSmiles("CCC(C)CNc1cccc2c1COCC2")
+        config = SubstructSearchConfig(algorithm=algorithm, workerThreads=1, preprocessingThreads=2)
+
+        expected = [target.HasSubstructMatch(query, useChirality=False) for target in targets]
+        assert expected == [True, False, False]
+        assert hasSubstructMatch(targets, [query], config=config).reshape(-1).tolist() == expected
 
     def test_multiple_targets_single_query(self):
         """Test multiple targets with single query."""
@@ -1313,3 +1348,13 @@ class TestIntegrationConfig:
 
         validation = validate_against_rdkit(targets, queries, results)
         assert len(validation.count_mismatches) == 0
+
+
+@pytest.mark.parametrize("query_smiles", PLAIN_QUERIES)
+def test_plain_molecule_query_atoms_match_like_rdkit(query_smiles):
+    targets = [Chem.MolFromSmiles(smiles) for smiles in PLAIN_QUERY_TARGETS]
+    query = Chem.MolFromSmiles(query_smiles)
+
+    results = hasSubstructMatch(targets, [query])
+
+    assert results[:, 0].astype(bool).tolist() == [target.HasSubstructMatch(query) for target in targets]
