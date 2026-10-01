@@ -103,7 +103,7 @@ void appendActive(const AsyncDeviceVector<double>&  srcPositions,
       if (activeHost[static_cast<size_t>(batchSlot)] != 1) {
         continue;
       }
-      const int molId = batchGlobalMolIds[batchSlot];
+      const int molId     = batchGlobalMolIds[batchSlot];
       const int attemptId = batchAttemptIds[batchSlot];
       if (cap.maxConformersPerMol > 0) {
         auto& kept = cap.keptAttemptIds[molId];

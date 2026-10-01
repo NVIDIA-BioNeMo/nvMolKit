@@ -301,8 +301,8 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
 
       while (!workComplete.load()) {
         // Dispatch work for this thread
-        std::vector<int> attemptIds;
-        std::vector<int> molIds = Scheduler.dispatch(effectiveBatchSize, &attemptIds);
+        std::vector<int>       attemptIds;
+        std::vector<int>       molIds              = Scheduler.dispatch(effectiveBatchSize, &attemptIds);
         // Writeback keeps the lowest successful attempt IDs per molecule; the coord-gen stage consumes its own copy.
         const std::vector<int> writebackAttemptIds = attemptIds;
 
@@ -443,12 +443,11 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
           for (size_t i = 0; i < molIds.size(); ++i) {
             originalMolIds[i] = sortedToOriginal[static_cast<size_t>(molIds[i])];
           }
-          stages.push_back(
-            std::make_unique<ETKDGCollectDeviceCoordsStage>(std::move(originalMolIds),
-                                                           writebackAttemptIds,
-                                                           dim,
-                                                           collectorsCap,
-                                                           collector));
+          stages.push_back(std::make_unique<ETKDGCollectDeviceCoordsStage>(std::move(originalMolIds),
+                                                                           writebackAttemptIds,
+                                                                           dim,
+                                                                           collectorsCap,
+                                                                           collector));
         } else {
           stages.push_back(std::make_unique<detail::ETKDGUpdateConformersStage>(batchMolsWithConfs,
                                                                                 batchEargs,
@@ -510,7 +509,8 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
 
   if (deviceOutput) {
     // Gather the results on one GPU before pruning.
-    auto result = detail::finalizeOnTarget(collectorsPerThread, targetGpu, static_cast<int>(mols.size()), confsPerMolecule);
+    auto result =
+      detail::finalizeOnTarget(collectorsPerThread, targetGpu, static_cast<int>(mols.size()), confsPerMolecule);
     return detail::pruneDeviceConformers(std::move(result), mols, params);
   }
 

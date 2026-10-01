@@ -131,12 +131,12 @@ DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors
     }
 
     // Copy each contiguous run of kept conformers in one go. Without filtering this is a single run.
-    int srcAtomCursor = 0;
-    int runSrcAtom    = 0;
-    int runSrcConf    = 0;
-    int runAtoms      = 0;
-    int runConfs      = 0;
-    const auto flushRun = [&]() {
+    int        srcAtomCursor = 0;
+    int        runSrcAtom    = 0;
+    int        runSrcConf    = 0;
+    int        runAtoms      = 0;
+    int        runConfs      = 0;
+    const auto flushRun      = [&]() {
       if (runConfs == 0) {
         return;
       }

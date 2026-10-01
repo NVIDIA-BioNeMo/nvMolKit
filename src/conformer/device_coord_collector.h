@@ -76,7 +76,7 @@ struct DeviceCoordCollector {
  * A conformer displaced by a lower ID stays in its collector until @ref finalizeOnTarget drops it.
  */
 struct DeviceCoordCollectorCap {
-  std::mutex                   mutex;
+  std::mutex                                        mutex;
   //! Max-heap of the lowest attempt IDs accepted so far, per molecule.
   std::unordered_map<int, std::priority_queue<int>> keptAttemptIds;
   int                                               maxConformersPerMol = -1;

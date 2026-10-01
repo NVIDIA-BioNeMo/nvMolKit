@@ -207,7 +207,12 @@ TEST(EmbedMoleculesDeviceOutput, FinalizeKeepsLowestAttemptIdsPerMolecule) {
     kept.push_back({molIndices[i], confIdx[i], static_cast<int>(positions[atomStarts[i] * 3])});
   }
   std::sort(kept.begin(), kept.end());
-  const std::vector<std::array<int, 3>> expected = {{0, 0, 0}, {0, 1, 1}, {1, 0, 0}, {1, 1, 4}};
+  const std::vector<std::array<int, 3>> expected = {
+    {0, 0, 0},
+    {0, 1, 1},
+    {1, 0, 0},
+    {1, 1, 4}
+  };
   EXPECT_EQ(kept, expected);
 }
 

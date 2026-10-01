@@ -436,15 +436,15 @@ TEST_F(ETKDGPipelineUpdateConformersTestFixture, UpdateConformersStage) {
 TEST_F(ETKDGPipelineUpdateConformersTestFixture, UpdateConformersStageKeepsLowestAttemptIds) {
   // Three attempts for the same molecule succeed in one batch, in an order unrelated to their attempt IDs. With room
   // for two conformers, the two lowest IDs must survive regardless of arrival order.
-  RDKit::ROMol*                            mol      = mols_[0];
-  const std::vector<RDKit::ROMol*>         batchMols = {mol, mol, mol};
+  RDKit::ROMol*                            mol        = mols_[0];
+  const std::vector<RDKit::ROMol*>         batchMols  = {mol, mol, mol};
   const std::vector<int>                   attemptIds = {7, 2, 5};
   std::vector<nvMolKit::detail::EmbedArgs> eargs(batchMols.size());
   for (auto& earg : eargs) {
     earg.dim = 3;
   }
 
-  const int nAtoms = static_cast<int>(mol->getNumAtoms());
+  const int    nAtoms = static_cast<int>(mol->getNumAtoms());
   ETKDGContext context;
   context.nTotalSystems = batchMols.size();
   context.activeThisStage.resize(context.nTotalSystems);
@@ -466,14 +466,14 @@ TEST_F(ETKDGPipelineUpdateConformersTestFixture, UpdateConformersStageKeepsLowes
   nvMolKit::PinnedHostVector<uint8_t>                                              activeScratch(batchMols.size());
   std::mutex                                                                       mutex;
   nvMolKit::detail::ETKDGUpdateConformersStage                                     stage(batchMols,
-                                                                     eargs,
-                                                                     conformers,
-                                                                     positionsScratch,
-                                                                     activeScratch,
-                                                                     nullptr,
-                                                                     &mutex,
-                                                                     /*maxConformersPerMol=*/2,
-                                                                     attemptIds);
+                                                     eargs,
+                                                     conformers,
+                                                     positionsScratch,
+                                                     activeScratch,
+                                                     nullptr,
+                                                     &mutex,
+                                                     /*maxConformersPerMol=*/2,
+                                                     attemptIds);
   stage.execute(context);
 
   const auto& kept = conformers.at(mol);
