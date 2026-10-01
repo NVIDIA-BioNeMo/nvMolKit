@@ -33,9 +33,12 @@ enum class Property3D : int {
   WHIM                = 11,
   RDF                 = 12,
   MORSE               = 13,
+  AUTOCORR3D          = 14,
+  USR                 = 15,
+  USRCAT              = 16,
 };
 
-inline constexpr std::array<Property3D, 14> kAllProperty3D = {
+inline constexpr std::array<Property3D, 17> kAllProperty3D = {
   Property3D::PMI1,
   Property3D::PMI2,
   Property3D::PMI3,
@@ -50,11 +53,17 @@ inline constexpr std::array<Property3D, 14> kAllProperty3D = {
   Property3D::WHIM,
   Property3D::RDF,
   Property3D::MORSE,
+  Property3D::AUTOCORR3D,
+  Property3D::USR,
+  Property3D::USRCAT,
 };
 
-inline constexpr int kNumWhimProperties  = 114;
-inline constexpr int kNumRdfProperties   = 210;  //!< 7 atom-property channels x 30 radii.
-inline constexpr int kNumMorseProperties = 224;  //!< 7 atom-property channels x 32 scattering values.
+inline constexpr int kNumWhimProperties       = 114;
+inline constexpr int kNumRdfProperties        = 210;  //!< 7 atom-property channels x 30 radii.
+inline constexpr int kNumMorseProperties      = 224;  //!< 7 atom-property channels x 32 scattering values.
+inline constexpr int kNumAutocorr3DProperties = 80;   //!< 8 atom-property channels x 10 topological lags.
+inline constexpr int kNumUsrProperties        = 12;   //!< 3 distance moments x 4 reference points.
+inline constexpr int kNumUsrcatProperties     = 60;   //!< USR of all atoms, then of each of 4 atom classes.
 
 //! Canonical name of @p property, e.g. "PMI1" or "RadiusOfGyration".
 std::string_view property3DName(Property3D property);
@@ -71,6 +80,12 @@ constexpr int property3DWidth(const Property3D property) {
       return kNumRdfProperties;
     case Property3D::MORSE:
       return kNumMorseProperties;
+    case Property3D::AUTOCORR3D:
+      return kNumAutocorr3DProperties;
+    case Property3D::USR:
+      return kNumUsrProperties;
+    case Property3D::USRCAT:
+      return kNumUsrcatProperties;
     default:
       return 1;
   }
@@ -81,7 +96,8 @@ constexpr int property3DWidth(const Property3D property) {
 enum class Property3DFamily : int {
   Moments,     //!< Inertia/gyration tensor eigenvalues: PMI, NPR, RadiusOfGyration and derived shape indices.
   Projection,  //!< Coordinate PCA and projections onto its axes: PBF and WHIM.
-  Pairwise,    //!< Sums over interatomic distances weighted by atom-property pairs: RDF and MORSE.
+  Pairwise,    //!< Sums over atom pairs weighted by atom-property pairs: RDF, MORSE and AUTOCORR3D.
+  Usr,         //!< Distance moments from four reference points: USR and USRCAT.
 };
 
 constexpr Property3DFamily property3DFamily(const Property3D property) {
@@ -102,7 +118,11 @@ constexpr Property3DFamily property3DFamily(const Property3D property) {
       return Property3DFamily::Projection;
     case Property3D::RDF:
     case Property3D::MORSE:
+    case Property3D::AUTOCORR3D:
       return Property3DFamily::Pairwise;
+    case Property3D::USR:
+    case Property3D::USRCAT:
+      return Property3DFamily::Usr;
   }
   return Property3DFamily::Moments;
 }
@@ -120,7 +140,8 @@ struct WhimOptions {
   double threshold = 0.001;
 };
 
-//! Per-family options; each family reads only its own member. PBF, RDF and MORSE have no options.
+//! Per-family options; each family reads only its own member. PBF, RDF, MORSE, AUTOCORR3D, USR and
+//! USRCAT have no options.
 struct Property3DOptions {
   MomentOptions moments;
   WhimOptions   whim;
@@ -134,21 +155,32 @@ struct Property3DOptions {
  */
 struct Property3DDeviceInputs {
   //! All families: CSR offsets of each molecule's atoms, length `nMols + 1`. Required for a non-empty batch.
-  const int32_t* moleculeAtomStarts  = nullptr;
+  const int32_t* moleculeAtomStarts    = nullptr;
   //! Moments: one weight per atom; null gives every atom unit weight.
-  const double*  momentWeights       = nullptr;
-  //! WHIM, RDF, MORSE: six atom-property channels (RDKit's relative mass, van der Waals volume,
+  const double*  momentWeights         = nullptr;
+  //! WHIM, RDF, MORSE, AUTOCORR3D: six atom-property channels (RDKit's relative mass, van der Waals volume,
   //! electronegativity, polarizability and ionization potential, then I-state), channel-major with one
   //! value per atom. Required when any of them is requested.
-  const double*  atomPropertyWeights = nullptr;
+  const double*  atomPropertyWeights   = nullptr;
   //! RDF: RDKit's I-state (GetIStateDrag), one value per atom, used in place of the I-state channel.
   //! Required when RDF is requested.
-  const double*  iStateDragWeights   = nullptr;
+  const double*  iStateDragWeights     = nullptr;
+  //! AUTOCORR3D: RDKit's relative covalent radius (GetRelativeRcov), one value per atom.
+  const double*  covalentRadiusWeights = nullptr;
+  //! AUTOCORR3D: bond adjacency in CSR form, both required (with `bondNeighbors` non-null even when no
+  //! molecule has a bond). Atom g (indexed like @ref moleculeAtomStarts, `totalAtoms + 1` starts) has
+  //! neighbors `bondNeighbors[bondNeighborStarts[g] .. bondNeighborStarts[g + 1])`, stored as atom indices
+  //! within its molecule.
+  const int32_t* bondNeighborStarts    = nullptr;
+  const int32_t* bondNeighbors         = nullptr;
+  //! USRCAT: per atom, bit c set when the atom is in RDKit's USRCAT class c (hydrophobic, aromatic,
+  //! acceptor, donor).
+  const uint8_t* usrcatAtomClasses     = nullptr;
   //! PBF: per-conformer RDKit is3D flags (one per coordinate row); null treats every row as 3D.
-  const int8_t*  conformerIs3D       = nullptr;
+  const int8_t*  conformerIs3D         = nullptr;
   //! WHIM: largest molecule atom count in the batch (host value); sizes the per-conformer symmetry-search
   //! scratch. Rows with more atoms produce NaN.
-  int32_t        maxMoleculeAtoms    = 0;
+  int32_t        maxMoleculeAtoms      = 0;
 };
 
 //! One row-major device vector of length numConformers * property3DWidth(property) per property.
@@ -160,8 +192,9 @@ template <typename Real> using Property3DResults = std::unordered_map<Property3D
  *
  * Each requested family runs as one kernel launch and returns @p Real (float or double), computing in
  * @p Real except for steps where float32 measurably loses accuracy, which are always float64: coordinate
- * centering (descriptors3d_detail::centeredPosition), WHIM's PCA (descriptors3d_detail::WhimReal) and
- * MORSE's zero-scattering bin (descriptors3d_detail::computeMorseZeroBin).
+ * centering (descriptors3d_detail::centeredPosition), WHIM's PCA (descriptors3d_detail::WhimReal),
+ * MORSE's zero-scattering bin (descriptors3d_detail::computeMorseZeroBin) and USR's reference-atom selection
+ * (descriptors3d_detail::extremeAtom).
  * `options.moments` is expressed through `inputs.momentWeights` at this level. Conformers whose molecule
  * index is out of range, whose atom range lies outside `coordinates.numAtoms`, or whose atom count
  * disagrees with the molecule's atom range produce NaN for every requested property.

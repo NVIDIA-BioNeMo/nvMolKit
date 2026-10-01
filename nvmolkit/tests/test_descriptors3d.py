@@ -23,10 +23,23 @@ from nvmolkit.embedMolecules import EmbedMolecules
 from nvmolkit.types import AsyncGpuResult, CoordinateOutput, Device3DResult, HardwareOptions, PrecisionMode
 
 PRECISIONS = [PrecisionMode.SINGLE, PrecisionMode.FULL]
-VECTOR_PROPERTIES = (Property3D.WHIM, Property3D.RDF, Property3D.MORSE)
+VECTOR_PROPERTIES = (
+    Property3D.WHIM,
+    Property3D.RDF,
+    Property3D.MORSE,
+    Property3D.AUTOCORR3D,
+    Property3D.USR,
+    Property3D.USRCAT,
+)
 SCALAR_PROPERTIES = tuple(prop for prop in Property3D if prop not in VECTOR_PROPERTIES)
-PAIRWISE_PROPERTIES = (Property3D.RDF, Property3D.MORSE)
-RDKIT_PAIRWISE = {Property3D.RDF: rdMolDescriptors.CalcRDF, Property3D.MORSE: rdMolDescriptors.CalcMORSE}
+PAIRWISE_PROPERTIES = (Property3D.RDF, Property3D.MORSE, Property3D.AUTOCORR3D)
+RDKIT_PAIRWISE = {
+    Property3D.RDF: rdMolDescriptors.CalcRDF,
+    Property3D.MORSE: rdMolDescriptors.CalcMORSE,
+    Property3D.AUTOCORR3D: rdMolDescriptors.CalcAUTOCORR3D,
+}
+USR_PROPERTIES = (Property3D.USR, Property3D.USRCAT)
+RDKIT_USR = {Property3D.USR: rdMolDescriptors.GetUSR, Property3D.USRCAT: rdMolDescriptors.GetUSRCAT}
 
 
 def _assert_matches_rdkit(actual, expected, precision=PrecisionMode.SINGLE):
@@ -302,6 +315,15 @@ def test_scalar_properties_are_translation_invariant_far_from_origin(precision):
     far_pairwise = Calc3DProperties(translated, PAIRWISE_PROPERTIES, precision=precision)
     for prop in PAIRWISE_PROPERTIES:
         _assert_rounded_matches_rdkit(far_pairwise[prop].numpy(), near_pairwise[prop].numpy(), precision)
+    near_usr = Calc3DProperties(mols, USR_PROPERTIES, precision=precision)
+    far_usr = Calc3DProperties(translated, USR_PROPERTIES, precision=precision)
+    for prop in USR_PROPERTIES:
+        _assert_usr_matches(
+            far_usr[prop].numpy(),
+            near_usr[prop].numpy(),
+            precision,
+            class_blocks=prop == Property3D.USRCAT,
+        )
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)
@@ -394,20 +416,27 @@ def test_pairwise_family_matches_rdkit_and_preserves_vector_shape(precision):
     rng = np.random.default_rng(5)
     steps = rng.normal(size=(130, 3))
     chain = np.cumsum(1.5 * steps / np.linalg.norm(steps, axis=1, keepdims=True), axis=0)
-    mols = [_embed("CC(=O)Nc1ccc(O)cc1", 3, 67), _embed("c1ccncc1", 2, 71), _mol_with_conformers("C" * 130, [chain])]
+    mols = [
+        _embed("CC(=O)Nc1ccc(O)cc1", 3, 67),
+        _embed("c1ccncc1", 2, 71),
+        _mol_with_conformers("C" * 130, [chain]),
+        # Bromine gives RDKit NaN weights (MORSE NaN, AUTOCORR3D 0); the salt adds disconnected pairs.
+        _embed("CC(=O)Nc1ccc(Br)cc1.Cl", 2, 73),
+    ]
     result = Calc3DProperties(mols, PAIRWISE_PROPERTIES, precision=precision)
 
-    assert result[Property3D.RDF].torch().shape == (6, 210)
-    assert result[Property3D.MORSE].torch().shape == (6, 224)
+    assert result[Property3D.RDF].torch().shape == (8, 210)
+    assert result[Property3D.MORSE].torch().shape == (8, 224)
+    assert result[Property3D.AUTOCORR3D].torch().shape == (8, 80)
     for prop in PAIRWISE_PROPERTIES:
         _assert_rounded_matches_rdkit(result[prop].numpy(), _rdkit_pairwise_rows(mols, prop), precision)
-        # One pass over atom pairs serves both properties; requesting one alone must not change it.
+        # One pass over atom pairs serves every pairwise property; requesting one alone must not change it.
         alone = Calc3DProperties(mols, prop, precision=precision)
         np.testing.assert_array_equal(alone[prop].numpy(), result[prop].numpy())
 
     dense = result.dense()
-    assert dense.values["RDF"].shape == (3, 3, 210)
-    assert dense.values["MORSE"].shape == (3, 3, 224)
+    assert dense.values["RDF"].shape == (4, 3, 210)
+    assert dense.values["AUTOCORR3D"].shape == (4, 3, 80)
     assert torch.isnan(dense.values["MORSE"][1, 2]).all()
 
 
@@ -422,6 +451,112 @@ def test_pairwise_degenerate_geometries_match_rdkit(precision):
     for prop in PAIRWISE_PROPERTIES:
         _assert_rounded_matches_rdkit(result[prop].numpy(), _rdkit_pairwise_rows(mols, prop), precision)
     np.testing.assert_array_equal(result[Property3D.RDF].numpy()[0], 0)
+
+
+def _assert_usr_matches(actual, expected, precision, *, class_blocks):
+    """Compare USR-layout rows (blocks of 4 reference points x mean, standard deviation, skew).
+
+    The skew is the cube root of the standardized third moment, so near-symmetric distance
+    distributions turn rounding noise into visible values: a two-atom USRCAT class has an exact skew
+    of 0, yet RDKit reports float64 noise and SINGLE float32 noise (measured up to 0.08). Means and
+    standard deviations are compared tightly; the skew tolerance covers that noise.
+    """
+    actual = np.asarray(actual, dtype=np.float64).reshape(len(expected), -1, 4, 3)
+    expected = np.asarray(expected).reshape(actual.shape)
+    single = precision == PrecisionMode.SINGLE
+    np.testing.assert_allclose(
+        actual[..., :2], expected[..., :2], rtol=1e-5 if single else 1e-9, atol=1e-5 if single else 1e-9
+    )
+    whole_molecule_skew = 5e-3 if single else 1e-4
+    np.testing.assert_allclose(actual[:, 0, :, 2], expected[:, 0, :, 2], rtol=0, atol=whole_molecule_skew)
+    if class_blocks:
+        np.testing.assert_allclose(actual[:, 1:, :, 2], expected[:, 1:, :, 2], rtol=0, atol=0.1 if single else 1e-3)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_usr_family_matches_rdkit(precision):
+    mols = [
+        _embed("CC(=O)Nc1ccc(O)cc1", 3, 79),
+        _embed("c1ccncc1", 2, 83),
+        # Atom 1 is closer to the centroid than atom 0 by 5e-9 A, which float32 distances tie (picking atom
+        # 0); the closest reference atom must come from float64 comparisons, as in RDKit.
+        _mol_with_conformers(
+            "C.C.C.C", [[(0.6656854354786497, 0.0, 0.0), (-0.5, 0.0, 0.1), (0.4, 3.0, 0.0), (-0.2, -3.2, 0.5)]]
+        ),
+    ]
+    result = Calc3DProperties(mols, USR_PROPERTIES, precision=precision)
+    assert result[Property3D.USR].torch().shape == (6, 12)
+    assert result[Property3D.USRCAT].torch().shape == (6, 60)
+
+    for prop in USR_PROPERTIES:
+        expected = np.asarray(
+            [RDKIT_USR[prop](mol, confId=conf.GetId()) for mol in mols for conf in mol.GetConformers()]
+        )
+        _assert_usr_matches(result[prop].numpy(), expected, precision, class_blocks=prop == Property3D.USRCAT)
+        alone = Calc3DProperties(mols, prop, precision=precision)
+        np.testing.assert_array_equal(alone[prop].numpy(), result[prop].numpy())
+    # USRCAT starts with USR.
+    np.testing.assert_array_equal(result[Property3D.USRCAT].numpy()[:, :12], result[Property3D.USR].numpy())
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_usr_needs_three_atoms(precision):
+    mols = [
+        _mol_with_conformers("CO", [[(0.0, 0.0, 0.0), (1.4, 0.0, 0.0)]]),
+        _mol_with_conformers("CCO", [[(0.0, 0.0, 0.0), (1.5, 0.0, 0.0), (2.0, 1.4, 0.0)]]),
+    ]
+    result = Calc3DProperties(mols, USR_PROPERTIES, precision=precision)
+    # RDKit raises for fewer than three atoms; nvMolKit reports NaN for that row.
+    with pytest.raises(ValueError):
+        rdMolDescriptors.GetUSR(mols[0])
+    for prop in USR_PROPERTIES:
+        values = result[prop].numpy()
+        assert np.isnan(values[0]).all()
+        _assert_usr_matches(
+            values[1:],
+            np.asarray([RDKIT_USR[prop](mols[1])]),
+            precision,
+            class_blocks=prop == Property3D.USRCAT,
+        )
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_usr_nan_coordinates_give_nan(precision):
+    # A NaN coordinate makes the centroid, and so every centered coordinate, NaN: every value of a non-empty
+    # atom subset is NaN, which covers every value RDKit reports as NaN (RDKit measures from raw coordinates,
+    # so some of its subsets stay finite). Empty USRCAT classes stay 0 in both.
+    mol = _mol_with_conformers("CCO", [[(0.0, 0.0, 0.0), (1.5, float("nan"), 0.0), (2.0, 1.4, 0.0)]])
+    result = Calc3DProperties([mol], USR_PROPERTIES, precision=precision)
+    assert np.isnan(result[Property3D.USR].numpy()).all()
+    usrcat = result[Property3D.USRCAT].numpy()[0]
+    rdkit_usrcat = np.asarray(RDKIT_USR[Property3D.USRCAT](mol))
+    assert np.isnan(usrcat[np.isnan(rdkit_usrcat)]).all()
+    np.testing.assert_array_equal(usrcat[~np.isnan(usrcat)], 0)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_autocorr3d_non_finite_coordinates_match_rdkit(precision):
+    mols = [
+        _mol_with_conformers("CCCO", [[(0.0, 0.0, 0.0), (1.5, float("nan"), 0.0), (2.0, 1.4, 0.0), (3.4, 1.5, 0.2)]]),
+        _mol_with_conformers("CCCO", [[(0.0, 0.0, 0.0), (1.5, 0.2, 0.0), (2.0, 1.4, float("inf")), (3.4, 1.5, 0.2)]]),
+        _embed("CCCO", 1, 47),
+    ]
+    result = Calc3DProperties(mols, Property3D.AUTOCORR3D, precision=precision)
+    _assert_rounded_matches_rdkit(
+        result[Property3D.AUTOCORR3D].numpy(), _rdkit_pairwise_rows(mols, Property3D.AUTOCORR3D), precision
+    )
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_autocorr3d_accepts_batches_without_bonds(precision):
+    mols = [
+        _mol_with_conformers("[He]", [[(4.0, -3.0, 2.0)]]),
+        _mol_with_conformers("[Na+].[Cl-]", [[(0.0, 0.0, 0.0), (2.8, 0.0, 0.0)]]),
+    ]
+    result = Calc3DProperties(mols, Property3D.AUTOCORR3D, precision=precision)
+    _assert_rounded_matches_rdkit(
+        result[Property3D.AUTOCORR3D].numpy(), _rdkit_pairwise_rows(mols, Property3D.AUTOCORR3D), precision
+    )
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)

@@ -24,14 +24,22 @@ class Property3D(Enum):
     """3D properties implemented by :func:`Calc3DProperties`.
 
     Names and values match the corresponding functions in RDKit's
-    ``rdMolDescriptors`` module. Wherever a property is accepted, its string
-    value may be used instead.
+    ``rdMolDescriptors`` module (``CalcWHIM``, ``GetUSR``, ...). Wherever a
+    property is accepted, its string value may be used instead.
 
-    ``WHIM`` (114 values), ``RDF`` (210) and ``MORSE`` (224) are vectors in RDKit's
-    order; every other property is a scalar. ``RDF`` and ``MORSE`` hold seven
-    channels (unweighted, mass, van der Waals volume, electronegativity,
-    polarizability, ionization potential, I-state) of 30 radii and 32 scattering
-    values respectively.
+    Vector properties, in RDKit's order; every other property is a scalar:
+
+    - ``WHIM``: 114 values.
+    - ``RDF``: 210 values, 7 atom-property channels (unweighted, mass, van der
+      Waals volume, electronegativity, polarizability, ionization potential,
+      I-state) of 30 radii.
+    - ``MORSE``: 224 values, the same 7 channels of 32 scattering values.
+    - ``AUTOCORR3D``: 80 values, the same 7 channels plus covalent radius, of
+      10 topological lags.
+    - ``USR``: 12 values, 3 distance moments from each of 4 reference points.
+      Conformers with fewer than 3 atoms, which RDKit rejects, produce NaN.
+    - ``USRCAT``: 60 values, ``USR`` for all atoms and then for RDKit's
+      hydrophobic, aromatic, acceptor and donor atoms. Same atom-count rule.
     """
 
     PMI1 = "PMI1"
@@ -48,6 +56,9 @@ class Property3D(Enum):
     WHIM = "WHIM"
     RDF = "RDF"
     MORSE = "MORSE"
+    AUTOCORR3D = "AUTOCORR3D"
+    USR = "USR"
+    USRCAT = "USRCAT"
 
 
 @dataclass(frozen=True)
@@ -80,8 +91,8 @@ class Property3DOptions:
 
     Set only the families you want to change; the others keep RDKit's defaults. Options for a family
     that is not requested are ignored, so one options object can be reused across different
-    selections. The classes are frozen; derive variants with :func:`dataclasses.replace`. ``PBF``,
-    ``RDF`` and ``MORSE`` have no options.
+    selections. The classes are frozen; derive variants with :func:`dataclasses.replace`. Properties
+    without a member here have no options.
 
     Example:
 
@@ -108,8 +119,8 @@ class Dense3DPropertyResult:
     Attributes:
         values: One tensor of shape ``(n_mols, max_confs, *property_shape)`` per property, in request
             order, with the dtype of the source result. Scalar properties have no trailing dimensions;
-            WHIM, RDF and MORSE have ``property_shape`` ``(114,)``, ``(210,)`` and ``(224,)``. Padded slots hold the ``pad_value`` passed to
-            :meth:`Device3DPropertyResult.dense`.
+            vector properties have ``property_shape == (width,)`` (widths listed on :class:`Property3D`).
+            Padded slots hold the ``pad_value`` passed to :meth:`Device3DPropertyResult.dense`.
         conf_mask: bool ``(n_mols, max_confs)``; ``True`` where a real conformer exists.
     """
 
@@ -122,8 +133,8 @@ class Device3DPropertyResult(Mapping[str, AsyncGpuResult]):
 
     Behaves as a read-only mapping from property name to an :class:`~nvmolkit.types.AsyncGpuResult`
     whose first dimension is ``n_conformers``, in request order. Scalar properties have shape
-    ``(n_conformers,)``; WHIM, RDF and MORSE have shape ``(n_conformers, 114)``, ``(n_conformers, 210)``
-    and ``(n_conformers, 224)``. Values are float32 for
+    ``(n_conformers,)`` and vector properties ``(n_conformers, width)``, with widths listed on
+    :class:`Property3D`. Values are float32 for
     :attr:`~nvmolkit.types.PrecisionMode.SINGLE` and float64 for
     :attr:`~nvmolkit.types.PrecisionMode.FULL`. Keys may be given as names or
     :class:`Property3D` members.
@@ -302,8 +313,9 @@ def Calc3DProperties(
             float32; ``PrecisionMode.FULL`` computes and returns float64.
             Steps where float32 measurably loses accuracy always compute in
             float64: coordinate centering (conformers far from the origin),
-            WHIM's PCA (inverse kurtosis of near-planar conformers) and
-            MORSE's first scattering value (a large sum of positive terms).
+            WHIM's PCA (inverse kurtosis of near-planar conformers),
+            MORSE's first scattering value (a large sum of positive terms)
+            and USR's reference-atom choice (near-equidistant atoms).
         hardwareOptions: Only ``preprocessingThreads`` applies: the CPU
             threads used to extract coordinates and atom weights from the
             molecules (default ``-1``, all threads).
