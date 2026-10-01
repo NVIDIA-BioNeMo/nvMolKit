@@ -158,7 +158,9 @@ def _validate(
             actual = np.asarray(actual, dtype=np.float64).reshape(len(actual), -1, 4, 3)
             reference = np.asarray(expected[prop]).reshape(actual.shape)
             np.testing.assert_allclose(actual[..., :2], reference[..., :2], rtol=rtol, atol=atol)
-            whole_molecule_skew, class_skew = USR_SKEW_TOLERANCES[precision]
+            whole_molecule_skew, class_skew = (
+                USR_SKEW_TOLERANCES[precision] if tolerance is None else (tolerance, tolerance)
+            )
             np.testing.assert_allclose(actual[:, :1, :, 2], reference[:, :1, :, 2], rtol=0, atol=whole_molecule_skew)
             np.testing.assert_allclose(actual[:, 1:, :, 2], reference[:, 1:, :, 2], rtol=0, atol=class_skew)
 

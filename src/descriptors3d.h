@@ -167,9 +167,10 @@ struct Property3DDeviceInputs {
   const double*  iStateDragWeights     = nullptr;
   //! AUTOCORR3D: RDKit's relative covalent radius (GetRelativeRcov), one value per atom.
   const double*  covalentRadiusWeights = nullptr;
-  //! AUTOCORR3D: bond adjacency in CSR form. Atom g (indexed like @ref moleculeAtomStarts, `totalAtoms + 1`
-  //! starts) has neighbors `bondNeighbors[bondNeighborStarts[g] .. bondNeighborStarts[g + 1])`, stored as atom
-  //! indices within its molecule. `bondNeighbors` may be null when no molecule in the batch has a bond.
+  //! AUTOCORR3D: bond adjacency in CSR form, both required (with `bondNeighbors` non-null even when no
+  //! molecule has a bond). Atom g (indexed like @ref moleculeAtomStarts, `totalAtoms + 1` starts) has
+  //! neighbors `bondNeighbors[bondNeighborStarts[g] .. bondNeighborStarts[g + 1])`, stored as atom indices
+  //! within its molecule.
   const int32_t* bondNeighborStarts    = nullptr;
   const int32_t* bondNeighbors         = nullptr;
   //! USRCAT: per atom, bit c set when the atom is in RDKit's USRCAT class c (hydrophobic, aromatic,

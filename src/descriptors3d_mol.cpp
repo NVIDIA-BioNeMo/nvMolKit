@@ -130,7 +130,8 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
   std::vector<double>  iStateDragWeights(needs.iStateDragWeights ? static_cast<size_t>(totalAtoms) : 0);
   std::vector<double>  covalentRadiusWeights(needs.covalentRadiusWeights ? static_cast<size_t>(totalAtoms) : 0);
   std::vector<int32_t> bondNeighborStarts(needs.bondAdjacency ? static_cast<size_t>(totalAtoms) + 1 : 0);
-  std::vector<int32_t> bondNeighbors(needs.bondAdjacency ? static_cast<size_t>(neighborOffsets.back()) : 0);
+  // At least one entry, so a batch without bonds still uploads a non-null (unread) neighbor buffer.
+  std::vector<int32_t> bondNeighbors(needs.bondAdjacency ? std::max<size_t>(neighborOffsets.back(), 1) : 0);
   if (needs.bondAdjacency) {
     bondNeighborStarts[totalAtoms] = neighborOffsets.back();
   }
