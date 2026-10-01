@@ -18,6 +18,7 @@
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <memory>
@@ -159,6 +160,55 @@ TEST(EmbedMoleculesDeviceOutput, EmptyDeviceResultInitializesAtomStarts) {
   EXPECT_EQ(result.confIndices.size(), 0u);
   ASSERT_EQ(atomStarts.size(), 1u);
   EXPECT_EQ(atomStarts[0], 0);
+}
+
+TEST(EmbedMoleculesDeviceOutput, FinalizeKeepsLowestAttemptIdsPerMolecule) {
+  // Two collectors each hold surplus successes for molecule 0, with attempt IDs interleaved across them. Only the two
+  // lowest IDs may survive, ranked by ID, whichever collector holds them. One-atom conformers carry their attempt ID
+  // as the x coordinate so the surviving data can be identified.
+  const WithDevice withDevice(0);
+  ScopedStream     streamA;
+  ScopedStream     streamB;
+
+  const auto fill = [](detail::DeviceCoordCollector& collector,
+                       cudaStream_t                  stream,
+                       const std::vector<int>&       molIds,
+                       const std::vector<int>&       attemptIds) {
+    collector.gpuId  = 0;
+    collector.stream = stream;
+    collector.positions.setStream(stream);
+    std::vector<double> positions;
+    for (const int attemptId : attemptIds) {
+      positions.insert(positions.end(), {static_cast<double>(attemptId), 0.0, 0.0});
+    }
+    collector.positions.resize(positions.size());
+    collector.positions.copyFromHost(positions);
+    cudaCheckError(cudaStreamSynchronize(stream));
+    collector.atomCounts.assign(attemptIds.size(), 1);
+    collector.molIds     = molIds;
+    collector.attemptIds = attemptIds;
+  };
+  std::vector<detail::DeviceCoordCollector> collectors(2);
+  fill(collectors[0], streamA.stream(), {0, 0, 1}, {5, 1, 0});
+  fill(collectors[1], streamB.stream(), {0, 0, 1}, {3, 0, 4});
+
+  const auto result     = detail::finalizeOnTarget(collectors, /*targetGpu=*/0, /*nMols=*/2, /*maxConformersPerMol=*/2);
+  const auto positions  = downloadDeviceVector(result.positions);
+  const auto atomStarts = downloadDeviceVector(result.atomStarts);
+  const auto molIndices = downloadDeviceVector(result.molIndices);
+  const auto confIdx    = downloadDeviceVector(result.confIndices);
+
+  // Molecule 0 keeps attempts 1 (collector 0) and 0 (collector 1); molecule 1 has only two attempts and keeps both.
+  ASSERT_EQ(molIndices.size(), 4u);
+  ASSERT_EQ(atomStarts.size(), 5u);
+  ASSERT_EQ(positions.size(), 12u);
+  std::vector<std::array<int, 3>> kept;  // {mol, confIndex, attemptId}
+  for (size_t i = 0; i < molIndices.size(); ++i) {
+    kept.push_back({molIndices[i], confIdx[i], static_cast<int>(positions[atomStarts[i] * 3])});
+  }
+  std::sort(kept.begin(), kept.end());
+  const std::vector<std::array<int, 3>> expected = {{0, 0, 0}, {0, 1, 1}, {1, 0, 0}, {1, 1, 4}};
+  EXPECT_EQ(kept, expected);
 }
 
 TEST(EmbedMoleculesDeviceOutput, MultipleMoleculesProduceCorrectIndexing) {

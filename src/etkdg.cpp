@@ -45,10 +45,12 @@ namespace {
 class ETKDGCollectDeviceCoordsStage final : public detail::ETKDGStage {
  public:
   ETKDGCollectDeviceCoordsStage(std::vector<int>                 batchGlobalMolIds,
+                                std::vector<int>                 batchAttemptIds,
                                 int                              dim,
                                 detail::DeviceCoordCollectorCap& cap,
                                 detail::DeviceCoordCollector&    collector)
       : batchGlobalMolIds_(std::move(batchGlobalMolIds)),
+        batchAttemptIds_(std::move(batchAttemptIds)),
         dim_(dim),
         cap_(cap),
         collector_(collector) {}
@@ -59,6 +61,7 @@ class ETKDGCollectDeviceCoordsStage final : public detail::ETKDGStage {
                          ctx.activeThisStage,
                          dim_,
                          batchGlobalMolIds_,
+                         batchAttemptIds_,
                          cap_,
                          collector_);
   }
@@ -66,6 +69,7 @@ class ETKDGCollectDeviceCoordsStage final : public detail::ETKDGStage {
 
  private:
   std::vector<int>                 batchGlobalMolIds_;
+  std::vector<int>                 batchAttemptIds_;
   int                              dim_;
   detail::DeviceCoordCollectorCap& cap_;
   detail::DeviceCoordCollector&    collector_;
@@ -299,6 +303,8 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
         // Dispatch work for this thread
         std::vector<int> attemptIds;
         std::vector<int> molIds = Scheduler.dispatch(effectiveBatchSize, &attemptIds);
+        // Writeback keeps the lowest successful attempt IDs per molecule; the coord-gen stage consumes its own copy.
+        const std::vector<int> writebackAttemptIds = attemptIds;
 
         if (molIds.empty()) {
           workComplete.store(true);
@@ -438,7 +444,11 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
             originalMolIds[i] = sortedToOriginal[static_cast<size_t>(molIds[i])];
           }
           stages.push_back(
-            std::make_unique<ETKDGCollectDeviceCoordsStage>(std::move(originalMolIds), dim, collectorsCap, collector));
+            std::make_unique<ETKDGCollectDeviceCoordsStage>(std::move(originalMolIds),
+                                                           writebackAttemptIds,
+                                                           dim,
+                                                           collectorsCap,
+                                                           collector));
         } else {
           stages.push_back(std::make_unique<detail::ETKDGUpdateConformersStage>(batchMolsWithConfs,
                                                                                 batchEargs,
@@ -447,7 +457,8 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
                                                                                 activeScratch,
                                                                                 streamPtr,
                                                                                 &conformer_mutex,
-                                                                                confsPerMolecule));
+                                                                                confsPerMolecule,
+                                                                                writebackAttemptIds));
         }
 
         // Create and run driver
@@ -499,7 +510,7 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
 
   if (deviceOutput) {
     // Gather the results on one GPU before pruning.
-    auto result = detail::finalizeOnTarget(collectorsPerThread, targetGpu, static_cast<int>(mols.size()));
+    auto result = detail::finalizeOnTarget(collectorsPerThread, targetGpu, static_cast<int>(mols.size()), confsPerMolecule);
     return detail::pruneDeviceConformers(std::move(result), mols, params);
   }
 
@@ -510,6 +521,10 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
     try {
       auto iter = conformers.find(mol);
       if (iter != conformers.end()) {
+        // Attempt-ID order, so RMS pruning sees conformers in a timing-independent order.
+        std::stable_sort(iter->second.begin(), iter->second.end(), [](const auto& a, const auto& b) {
+          return a->getId() < b->getId();
+        });
         nvmolkit::addConformersToMoleculeWithPruning(*mol, iter->second, params);
       }
     } catch (...) {

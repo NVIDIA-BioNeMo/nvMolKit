@@ -20,6 +20,7 @@
 
 #include <cstdint>
 #include <mutex>
+#include <queue>
 #include <unordered_map>
 #include <vector>
 
@@ -44,6 +45,9 @@ namespace detail {
  *   pairs from the host), @ref finalizeOnTarget uses these directly. When left empty (e.g. ETKDG),
  *   @ref finalizeOnTarget assigns per-molecule conformer indices deterministically by walking
  *   partials in the supplied order and counting per molecule.
+ * - @ref attemptIds: per-molecule attempt number of each conformer (ETKDG). When populated,
+ *   @ref finalizeOnTarget keeps only the lowest @c maxConformersPerMol IDs per molecule and uses each
+ *   conformer's rank among them as its conformer index, independent of collection order.
  * - @ref energies and @ref converged: populated by FF; left empty by ETKDG. @ref finalizeOnTarget
  *   only allocates the matching result fields when at least one collector populates them.
  */
@@ -56,6 +60,7 @@ struct DeviceCoordCollector {
   std::vector<int>          atomCounts;  //!< One per accumulated conformer
   std::vector<int>          molIds;      //!< Global molecule index per accumulated conformer
   std::vector<int>          confIds;     //!< Optional; length = atomCounts.size() when populated
+  std::vector<int>          attemptIds;  //!< Optional; length = atomCounts.size() when populated
 };
 
 /**
@@ -64,13 +69,17 @@ struct DeviceCoordCollector {
  * Producers can dispatch many parallel attempts for a single molecule and they may all
  * succeed in the same iteration; only @c maxConformersPerMol of them should appear in the final
  * output. This struct provides shared bookkeeping so that worker threads collectively keep at
- * most that many conformers per molecule. The mutex guards reads/writes to @ref keptPerMol; an
- * @c -1 value of @ref maxConformersPerMol disables the cap.
+ * most that many conformers per molecule. Conformers are identified by attempt ID and the lowest IDs win,
+ * so the retained set does not depend on which worker finished first. The mutex guards reads/writes to
+ * @ref keptAttemptIds; an @c -1 value of @ref maxConformersPerMol disables the cap.
+ *
+ * A conformer displaced by a lower ID stays in its collector until @ref finalizeOnTarget drops it.
  */
 struct DeviceCoordCollectorCap {
   std::mutex                   mutex;
-  std::unordered_map<int, int> keptPerMol;
-  int                          maxConformersPerMol = -1;
+  //! Max-heap of the lowest attempt IDs accepted so far, per molecule.
+  std::unordered_map<int, std::priority_queue<int>> keptAttemptIds;
+  int                                               maxConformersPerMol = -1;
 };
 
 /**
@@ -83,11 +92,17 @@ struct DeviceCoordCollectorCap {
  * concatenated only when at least one collector populates them. All resulting buffers are
  * allocated on @p targetGpu and bound to the default stream of that GPU before returning.
  *
+ * When collectors carry @ref DeviceCoordCollector::attemptIds, at most @p maxConformersPerMol conformers with the
+ * lowest attempt IDs are kept per molecule (no limit if <= 0).
+ *
  * @note This call is synchronous on the target stream by the time it returns: every contributing
  *       partial stream has been waited on via cross-stream events, and a final
  *       `cudaStreamSynchronize` ensures the result is visible.
  */
-DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors, int targetGpu, int nMols);
+DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors,
+                                   int                                targetGpu,
+                                   int                                nMols,
+                                   int                                maxConformersPerMol = -1);
 
 }  // namespace detail
 }  // namespace nvMolKit

@@ -17,7 +17,9 @@
 
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <stdexcept>
 #include <unordered_map>
 
 #include "src/utils/cuda_error_check.h"
@@ -29,7 +31,8 @@ namespace detail {
 
 DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors,
                                    const int                          targetGpu,
-                                   const int                          nMols) {
+                                   const int                          nMols,
+                                   const int                          maxConformersPerMol) {
   // Pre-enable peer access from target to every contributing GPU once.
   for (const auto& collector : collectors) {
     if (collector.gpuId != targetGpu && !collector.atomCounts.empty()) {
@@ -37,14 +40,57 @@ DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors
     }
   }
 
+  // Collectors carrying attempt IDs may hold more conformers than a molecule needs (parallel attempts that all
+  // succeeded, or entries displaced by a lower ID). Keep the lowest IDs per molecule and rank them, so the result
+  // does not depend on which collector got which attempt. rank < 0 marks a dropped conformer.
+  struct AttemptRef {
+    int molId;
+    int attemptId;
+    int collectorIdx;
+    int confIdx;
+  };
+  const bool filterByAttempt = std::any_of(collectors.begin(), collectors.end(), [](const auto& collector) {
+    return !collector.attemptIds.empty();
+  });
+  std::vector<std::vector<int>> ranks(collectors.size());
+  if (filterByAttempt) {
+    std::vector<AttemptRef> refs;
+    for (size_t c = 0; c < collectors.size(); ++c) {
+      const auto& collector = collectors[c];
+      if (collector.attemptIds.size() != collector.atomCounts.size()) {
+        throw std::invalid_argument("attemptIds must be populated for every conformer or none");
+      }
+      ranks[c].assign(collector.atomCounts.size(), -1);
+      for (size_t j = 0; j < collector.atomCounts.size(); ++j) {
+        refs.push_back({collector.molIds[j], collector.attemptIds[j], static_cast<int>(c), static_cast<int>(j)});
+      }
+    }
+    std::sort(refs.begin(), refs.end(), [](const AttemptRef& a, const AttemptRef& b) {
+      return a.molId != b.molId ? a.molId < b.molId : a.attemptId < b.attemptId;
+    });
+    int rank = 0;
+    for (size_t r = 0; r < refs.size(); ++r) {
+      rank = (r > 0 && refs[r].molId == refs[r - 1].molId) ? rank + 1 : 0;
+      if (maxConformersPerMol <= 0 || rank < maxConformersPerMol) {
+        ranks[refs[r].collectorIdx][refs[r].confIdx] = rank;
+      }
+    }
+  }
+  const auto isKept = [&](const size_t collectorIdx, const int confIdx) {
+    return !filterByAttempt || ranks[collectorIdx][confIdx] >= 0;
+  };
+
   int  totalConformers = 0;
   int  totalAtoms      = 0;
   bool hasEnergies     = false;
   bool hasConverged    = false;
-  for (const auto& collector : collectors) {
-    totalConformers += static_cast<int>(collector.atomCounts.size());
-    for (const int natoms : collector.atomCounts) {
-      totalAtoms += natoms;
+  for (size_t c = 0; c < collectors.size(); ++c) {
+    const auto& collector = collectors[c];
+    for (size_t j = 0; j < collector.atomCounts.size(); ++j) {
+      if (isKept(c, static_cast<int>(j))) {
+        ++totalConformers;
+        totalAtoms += collector.atomCounts[j];
+      }
     }
     if (collector.energies.size() > 0) {
       hasEnergies = true;
@@ -77,48 +123,81 @@ DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors
   std::unordered_map<int, int> perMolCounter;
   int                          confCursor = 0;
   int                          atomCursor = 0;
-  for (auto& collector : collectors) {
-    const int numConfs = static_cast<int>(collector.atomCounts.size());
+  for (size_t c = 0; c < collectors.size(); ++c) {
+    auto&     collector = collectors[c];
+    const int numConfs  = static_cast<int>(collector.atomCounts.size());
     if (numConfs == 0) {
       continue;
     }
 
-    copyDeviceToDeviceAsync(result.positions.data() + static_cast<size_t>(atomCursor) * 3,
-                            collector.positions.data(),
-                            collector.positions.size() * sizeof(double),
-                            collector.gpuId,
-                            collector.stream,
-                            targetGpu,
-                            targetStream.stream());
-    if (hasEnergies && collector.energies.size() > 0) {
-      copyDeviceToDeviceAsync(result.energies.data() + confCursor,
-                              collector.energies.data(),
-                              collector.energies.size() * sizeof(double),
+    // Copy each contiguous run of kept conformers in one go. Without filtering this is a single run.
+    int srcAtomCursor = 0;
+    int runSrcAtom    = 0;
+    int runSrcConf    = 0;
+    int runAtoms      = 0;
+    int runConfs      = 0;
+    const auto flushRun = [&]() {
+      if (runConfs == 0) {
+        return;
+      }
+      copyDeviceToDeviceAsync(result.positions.data() + static_cast<size_t>(atomCursor - runAtoms) * 3,
+                              collector.positions.data() + static_cast<size_t>(runSrcAtom) * 3,
+                              static_cast<size_t>(runAtoms) * 3 * sizeof(double),
                               collector.gpuId,
                               collector.stream,
                               targetGpu,
                               targetStream.stream());
-    }
-    if (hasConverged && collector.converged.size() > 0) {
-      copyDeviceToDeviceAsync(result.converged.data() + confCursor,
-                              collector.converged.data(),
-                              collector.converged.size() * sizeof(int8_t),
-                              collector.gpuId,
-                              collector.stream,
-                              targetGpu,
-                              targetStream.stream());
-    }
+      if (hasEnergies && collector.energies.size() > 0) {
+        copyDeviceToDeviceAsync(result.energies.data() + (confCursor - runConfs),
+                                collector.energies.data() + runSrcConf,
+                                static_cast<size_t>(runConfs) * sizeof(double),
+                                collector.gpuId,
+                                collector.stream,
+                                targetGpu,
+                                targetStream.stream());
+      }
+      if (hasConverged && collector.converged.size() > 0) {
+        copyDeviceToDeviceAsync(result.converged.data() + (confCursor - runConfs),
+                                collector.converged.data() + runSrcConf,
+                                static_cast<size_t>(runConfs) * sizeof(int8_t),
+                                collector.gpuId,
+                                collector.stream,
+                                targetGpu,
+                                targetStream.stream());
+      }
+      runAtoms = 0;
+      runConfs = 0;
+    };
 
     const bool useExplicitConfIds = !collector.confIds.empty();
     for (int conformerIdx = 0; conformerIdx < numConfs; ++conformerIdx) {
+      const int natoms = collector.atomCounts[conformerIdx];
+      if (!isKept(c, conformerIdx)) {
+        flushRun();
+        srcAtomCursor += natoms;
+        continue;
+      }
+      if (runConfs == 0) {
+        runSrcAtom = srcAtomCursor;
+        runSrcConf = conformerIdx;
+      }
       atomStartsHost[static_cast<size_t>(confCursor)] = atomCursor;
       const int molId                                 = collector.molIds[conformerIdx];
       molIndicesHost[static_cast<size_t>(confCursor)] = molId;
-      confIndicesHost[static_cast<size_t>(confCursor)] =
-        useExplicitConfIds ? collector.confIds[conformerIdx] : perMolCounter[molId]++;
-      atomCursor += collector.atomCounts[conformerIdx];
+      if (useExplicitConfIds) {
+        confIndicesHost[static_cast<size_t>(confCursor)] = collector.confIds[conformerIdx];
+      } else if (filterByAttempt) {
+        confIndicesHost[static_cast<size_t>(confCursor)] = ranks[c][conformerIdx];
+      } else {
+        confIndicesHost[static_cast<size_t>(confCursor)] = perMolCounter[molId]++;
+      }
+      atomCursor += natoms;
+      srcAtomCursor += natoms;
+      runAtoms += natoms;
+      ++runConfs;
       ++confCursor;
     }
+    flushRun();
   }
   atomStartsHost[static_cast<size_t>(totalConformers)] = atomCursor;
 
