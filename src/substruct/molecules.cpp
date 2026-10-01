@@ -47,6 +47,21 @@ namespace nvMolKit {
 
 namespace {
 
+constexpr unsigned int kMaxTargetIsotope = 255;
+
+// ONEANDAHALF (7) is excluded: packed bonds treat it as aromatic, but RDKit does not.
+bool isSupportedTargetBondType(const int bondType) {
+  switch (bondType) {
+    case 1:
+    case 2:
+    case 3:
+    case 12:
+      return true;
+    default:
+      return false;
+  }
+}
+
 /**
  * @brief Populate non-bond-related atom properties into packed format.
  *
@@ -86,8 +101,9 @@ void populateAtomScalars(const RDKit::Atom* atom, AtomDataPacked& packed, const 
   packed.setNumImplicitHs(numImplicitHs);
 
   const unsigned int isotope = atom->getIsotope();
-  if (isotope > 255) {
-    throw std::runtime_error("Atom isotope " + std::to_string(isotope) + " exceeds maximum supported value of 255");
+  if (isotope > kMaxTargetIsotope) {
+    throw std::runtime_error("Atom isotope " + std::to_string(isotope) + " exceeds maximum supported value of " +
+                             std::to_string(kMaxTargetIsotope));
   }
   packed.setIsotope(static_cast<uint8_t>(isotope));
 
@@ -109,7 +125,6 @@ void incrementBondTypeCount(BondTypeCounts& counts, int bondType) {
     case 3:
       ++counts.triple;
       break;
-    case 7:
     case 12:
       ++counts.aromatic;
       break;
@@ -1201,14 +1216,52 @@ void buildQueryTreeForAtom(const RDKit::Atom*      atom,
                            QueryTreeBuilder&       builder,
                            int&                    nextPatternId,
                            const std::vector<int>* childPatternIds = nullptr) {
+  if (!atom->hasQuery()) {
+    // Mirror RDKit's Atom::Match for plain (e.g. SMILES) atoms: the atomic number must match, non-default charge,
+    // isotope, and radical count must match, and hydrogen counts are ignored.
+    AtomDataPacked packed;
+    AtomQuery      flags = AtomQueryAtomicNum;
+    packed.setAtomicNum(atom->getAtomicNum());
+    // GPU-resident targets never carry isotopes above kMaxTargetIsotope; those targets fall back to RDKit.
+    const unsigned int isotope        = atom->getIsotope();
+    const bool         isotopeInRange = isotope <= kMaxTargetIsotope;
+    if (atom->getAtomicNum() == 0) {
+      // Dummy atoms only conflict on isotope when both atoms set one: [1*] matches [*] and [1*], not [2*].
+      if (isotope == 0) {
+        builder.addLeaf(packed, flags, bondCounts);
+        return;
+      }
+      const uint8_t unlabeled = builder.addLeaf(packed, flags | AtomQueryIsotope, bondCounts);
+      if (isotopeInRange) {
+        packed.setIsotope(static_cast<uint8_t>(isotope));
+        const uint8_t sameLabel = builder.addLeaf(packed, flags | AtomQueryIsotope, bondCounts);
+        builder.addOr(unlabeled, sameLabel);
+      }
+      return;
+    }
+    if (!isotopeInRange) {
+      builder.addLeaf(packed, AtomQueryNeverMatches, bondCounts);
+      return;
+    }
+    if (isotope != 0) {
+      flags |= AtomQueryIsotope;
+      packed.setIsotope(static_cast<uint8_t>(isotope));
+    }
+    if (atom->getFormalCharge() != 0) {
+      flags |= AtomQueryFormalCharge;
+      packed.setFormalCharge(atom->getFormalCharge());
+    }
+    if (atom->getNumRadicalElectrons() != 0) {
+      flags |= AtomQueryNumRadicalElectrons;
+      packed.setNumRadicalElectrons(atom->getNumRadicalElectrons());
+    }
+    builder.addLeaf(packed, flags, bondCounts);
+    return;
+  }
+
   // Check for chirality specified on the atom (SMARTS @/@@ notation)
   if (atom->getChiralTag() != RDKit::Atom::ChiralType::CHI_UNSPECIFIED) {
     throw std::runtime_error("SMARTS chirality query (@/@@) is not supported");
-  }
-
-  if (!atom->hasQuery()) {
-    builder.addLeaf(AtomDataPacked{}, AtomQueryNone, bondCounts);
-    return;
   }
 
   const auto* query = atom->getQuery();
@@ -2033,77 +2086,83 @@ void buildTargetBatchParallelInto(MoleculesHost&                          result
   result.targetAtomBonds.resize(totalAtoms);
 
   // Direct parallel write - each thread writes to its molecules' positions in result
+  detail::OpenMPExceptionRegistry exceptionRegistry;
 #pragma omp parallel num_threads(numThreads)
   {
     ScopedNvtxRange threadRange("Preprocess direct write");
 
 #pragma omp for schedule(static)
     for (int i = 0; i < numMols; ++i) {
-      const int           molIdx     = useSortOrder ? sortOrder[i] : i;
-      const RDKit::ROMol* mol        = molecules[molIdx];
-      const int           atomOffset = atomStarts[i];
-      const auto*         ringInfo   = mol->getRingInfo();
+      try {
+        const int           molIdx     = useSortOrder ? sortOrder[i] : i;
+        const RDKit::ROMol* mol        = molecules[molIdx];
+        const int           atomOffset = atomStarts[i];
+        const auto*         ringInfo   = mol->getRingInfo();
 
-      int localAtomIdx = 0;
-      for (const RDKit::Atom* atom : mol->atoms()) {
-        const int destIdx = atomOffset + localAtomIdx;
+        int localAtomIdx = 0;
+        for (const RDKit::Atom* atom : mol->atoms()) {
+          const int destIdx = atomOffset + localAtomIdx;
 
-        AtomDataPacked&  packed     = result.atomDataPacked[destIdx];
-        BondTypeCounts&  bondCounts = result.bondTypeCounts[destIdx];
-        TargetAtomBonds& tab        = result.targetAtomBonds[destIdx];
+          AtomDataPacked&  packed     = result.atomDataPacked[destIdx];
+          BondTypeCounts&  bondCounts = result.bondTypeCounts[destIdx];
+          TargetAtomBonds& tab        = result.targetAtomBonds[destIdx];
 
-        packed     = AtomDataPacked{};
-        bondCounts = BondTypeCounts{};
-        tab        = TargetAtomBonds{};
+          packed     = AtomDataPacked{};
+          bondCounts = BondTypeCounts{};
+          tab        = TargetAtomBonds{};
 
-        populateAtomScalars(atom, packed, ringInfo);
+          populateAtomScalars(atom, packed, ringInfo);
 
-        const unsigned int atomIdx            = atom->getIdx();
-        int                ringBondCount      = 0;
-        int                numHeteroNeighbors = 0;
-        int                totalBonds         = 0;
-        tab.degree                            = 0;
+          const unsigned int atomIdx            = atom->getIdx();
+          int                ringBondCount      = 0;
+          int                numHeteroNeighbors = 0;
+          int                totalBonds         = 0;
+          tab.degree                            = 0;
 
-        auto [beg, bondEnd] = mol->getAtomBonds(atom);
-        while (beg != bondEnd) {
-          const auto*        bond        = (*mol)[*beg];
-          const unsigned int bondIdx     = bond->getIdx();
-          const int          bondType    = bond->getBondType();
-          const int          otherAtomId = bond->getOtherAtomIdx(atomIdx);
-          const bool         isInRing    = ringInfo->numBondRings(bondIdx) > 0;
+          auto [beg, bondEnd] = mol->getAtomBonds(atom);
+          while (beg != bondEnd) {
+            const auto*        bond        = (*mol)[*beg];
+            const unsigned int bondIdx     = bond->getIdx();
+            const int          bondType    = bond->getBondType();
+            const int          otherAtomId = bond->getOtherAtomIdx(atomIdx);
+            const bool         isInRing    = ringInfo->numBondRings(bondIdx) > 0;
 
-          incrementBondTypeCount(bondCounts, bondType);
-          ringBondCount += isInRing;
+            incrementBondTypeCount(bondCounts, bondType);
+            ringBondCount += isInRing;
 
-          const int neighborAtomicNum = mol->getAtomWithIdx(otherAtomId)->getAtomicNum();
-          numHeteroNeighbors += (neighborAtomicNum != 6 && neighborAtomicNum != 1);
+            const int neighborAtomicNum = mol->getAtomWithIdx(otherAtomId)->getAtomicNum();
+            numHeteroNeighbors += (neighborAtomicNum != 6 && neighborAtomicNum != 1);
 
-          if (tab.degree < kMaxBondsPerAtom) {
-            tab.neighborIdx[tab.degree] = static_cast<uint8_t>(otherAtomId);
-            tab.bondInfo[tab.degree]    = packTargetBondInfo(bondType, isInRing);
-            ++tab.degree;
+            if (tab.degree < kMaxBondsPerAtom) {
+              tab.neighborIdx[tab.degree] = static_cast<uint8_t>(otherAtomId);
+              tab.bondInfo[tab.degree]    = packTargetBondInfo(bondType, isInRing);
+              ++tab.degree;
+            }
+            ++totalBonds;
+            ++beg;
           }
-          ++totalBonds;
-          ++beg;
-        }
 
-        if (totalBonds > kMaxBondsPerAtom) {
-          throw std::runtime_error("Atom has more than " + std::to_string(kMaxBondsPerAtom) + " bonds");
-        }
-        if (ringBondCount > AtomDataPacked::kMax4BitValue) {
-          throw std::runtime_error("Ring bond count exceeds maximum");
-        }
-        if (numHeteroNeighbors > AtomDataPacked::kMax4BitValue) {
-          throw std::runtime_error("Heteroatom neighbor count exceeds maximum");
-        }
+          if (totalBonds > kMaxBondsPerAtom) {
+            throw std::runtime_error("Atom has more than " + std::to_string(kMaxBondsPerAtom) + " bonds");
+          }
+          if (ringBondCount > AtomDataPacked::kMax4BitValue) {
+            throw std::runtime_error("Ring bond count exceeds maximum");
+          }
+          if (numHeteroNeighbors > AtomDataPacked::kMax4BitValue) {
+            throw std::runtime_error("Heteroatom neighbor count exceeds maximum");
+          }
 
-        packed.setRingBondCount(ringBondCount);
-        packed.setNumHeteroatomNeighbors(numHeteroNeighbors);
+          packed.setRingBondCount(ringBondCount);
+          packed.setNumHeteroatomNeighbors(numHeteroNeighbors);
 
-        ++localAtomIdx;
+          ++localAtomIdx;
+        }
+      } catch (...) {
+        exceptionRegistry.store(std::current_exception());
       }
     }
   }
+  exceptionRegistry.rethrow();
 }
 
 MoleculesHost buildQueryBatchParallel(const std::vector<const RDKit::ROMol*>& molecules,
@@ -2201,6 +2260,10 @@ bool requiresRDKitFallback(const RDKit::ROMol* mol) {
       return true;
     }
 
+    if (atom->getIsotope() > kMaxTargetIsotope) {
+      return true;
+    }
+
     if (ringInfo->numAtomRings(idx) > AtomDataPacked::kMax4BitValue) {
       return true;
     }
@@ -2214,6 +2277,9 @@ bool requiresRDKitFallback(const RDKit::ROMol* mol) {
     auto [beg, bondEnd]    = mol->getAtomBonds(atom);
     while (beg != bondEnd) {
       const auto* bond = (*mol)[*beg];
+      if (!isSupportedTargetBondType(bond->getBondType())) {
+        return true;
+      }
       if (ringInfo->numBondRings(bond->getIdx()) > 0) {
         ++ringBondCount;
       }
