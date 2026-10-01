@@ -43,7 +43,9 @@ __device__ __forceinline__ int extremeAtom(const ConformerAtoms& atoms,
                                            const int             laneInGroup,
                                            const unsigned        groupMask,
                                            const double3         point) {
-  ExtremeAtom best{kLargest ? -INFINITY : INFINITY, atoms.numAtoms};
+  // Starting from atom 0 keeps the result in range when no distance compares (NaN coordinates), which is
+  // also the atom RDKit's scans return then.
+  ExtremeAtom best{kLargest ? -INFINITY : INFINITY, 0};
   for (int atomIdx = laneInGroup; atomIdx < atoms.numAtoms; atomIdx += kGroupSize) {
     const double dx       = atoms.positions[atomIdx * 3 + 0] - point.x;
     const double dy       = atoms.positions[atomIdx * 3 + 1] - point.y;

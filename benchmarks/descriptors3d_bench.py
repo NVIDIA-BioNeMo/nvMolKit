@@ -14,6 +14,7 @@ Example:
 """
 
 import argparse
+import math
 from pathlib import Path
 
 import numpy as np
@@ -38,6 +39,9 @@ from nvmolkit.types import AsyncGpuResult, Device3DResult, PrecisionMode
 PRECISIONS = {"single": PrecisionMode.SINGLE, "full": PrecisionMode.FULL}
 # Default (relative, absolute) tolerances against RDKit at each precision's rounding level.
 VALIDATION_TOLERANCES = {PrecisionMode.SINGLE: (2e-6, 1e-3), PrecisionMode.FULL: (2e-10, 2e-8)}
+# Absolute tolerances for USR skews (whole molecule, USRCAT atom classes): the cube root of a near-zero third
+# moment turns rounding noise into visible values, in RDKit as well (a two-atom class has an exact skew of 0).
+USR_SKEW_TOLERANCES = {PrecisionMode.SINGLE: (5e-3, 0.1), PrecisionMode.FULL: (1e-4, 1e-3)}
 
 PROPERTY_SETS = {
     "single": (Property3D.RADIUS_OF_GYRATION,),
@@ -73,6 +77,9 @@ def _calc_rdkit_property(mol: Chem.Mol, conf_id: int, prop: Property3D) -> float
         return rdMolDescriptors.CalcMORSE(mol, confId=conf_id)
     if prop == Property3D.AUTOCORR3D:
         return rdMolDescriptors.CalcAUTOCORR3D(mol, confId=conf_id)
+    if prop in (Property3D.USR, Property3D.USRCAT) and mol.GetNumAtoms() < 3:
+        # RDKit raises for fewer than three atoms; nvMolKit reports a NaN row.
+        return [math.nan] * (12 if prop == Property3D.USR else 60)
     if prop == Property3D.USR:
         return rdMolDescriptors.GetUSR(mol, confId=conf_id)
     if prop == Property3D.USRCAT:
@@ -143,7 +150,17 @@ def _validate(
     atol = default_atol if tolerance is None else tolerance
     for result in results:
         for prop in properties:
-            np.testing.assert_allclose(result[prop.value].numpy(), expected[prop], rtol=rtol, atol=atol)
+            actual = result[prop.value].numpy()
+            if prop not in (Property3D.USR, Property3D.USRCAT):
+                np.testing.assert_allclose(actual, expected[prop], rtol=rtol, atol=atol)
+                continue
+            # Rows of 12-value blocks: 4 reference points x (mean, standard deviation, skew).
+            actual = np.asarray(actual, dtype=np.float64).reshape(len(actual), -1, 4, 3)
+            reference = np.asarray(expected[prop]).reshape(actual.shape)
+            np.testing.assert_allclose(actual[..., :2], reference[..., :2], rtol=rtol, atol=atol)
+            whole_molecule_skew, class_skew = USR_SKEW_TOLERANCES[precision]
+            np.testing.assert_allclose(actual[:, :1, :, 2], reference[:, :1, :, 2], rtol=0, atol=whole_molecule_skew)
+            np.testing.assert_allclose(actual[:, 1:, :, 2], reference[:, 1:, :, 2], rtol=0, atol=class_skew)
 
 
 def _timing_fields(prefix: str, result, num_conformers: int) -> dict[str, float]:

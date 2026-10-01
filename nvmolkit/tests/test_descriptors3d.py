@@ -521,6 +521,32 @@ def test_usr_needs_three_atoms(precision):
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)
+def test_usr_nan_coordinates_give_nan(precision):
+    # A NaN coordinate makes the centroid, and so every centered coordinate, NaN: every value of a non-empty
+    # atom subset is NaN, which covers every value RDKit reports as NaN (RDKit measures from raw coordinates,
+    # so some of its subsets stay finite). Empty USRCAT classes stay 0 in both.
+    mol = _mol_with_conformers("CCO", [[(0.0, 0.0, 0.0), (1.5, float("nan"), 0.0), (2.0, 1.4, 0.0)]])
+    result = Calc3DProperties([mol], USR_PROPERTIES, precision=precision)
+    assert np.isnan(result[Property3D.USR].numpy()).all()
+    usrcat = result[Property3D.USRCAT].numpy()[0]
+    rdkit_usrcat = np.asarray(RDKIT_USR[Property3D.USRCAT](mol))
+    assert np.isnan(usrcat[np.isnan(rdkit_usrcat)]).all()
+    np.testing.assert_array_equal(usrcat[~np.isnan(usrcat)], 0)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_autocorr3d_accepts_batches_without_bonds(precision):
+    mols = [
+        _mol_with_conformers("[He]", [[(4.0, -3.0, 2.0)]]),
+        _mol_with_conformers("[Na+].[Cl-]", [[(0.0, 0.0, 0.0), (2.8, 0.0, 0.0)]]),
+    ]
+    result = Calc3DProperties(mols, Property3D.AUTOCORR3D, precision=precision)
+    _assert_rounded_matches_rdkit(
+        result[Property3D.AUTOCORR3D].numpy(), _rdkit_pairwise_rows(mols, Property3D.AUTOCORR3D), precision
+    )
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
 def test_embed_device_output_chains_directly_into_3d_properties(precision):
     mols = [Chem.AddHs(Chem.MolFromSmiles("CCO")), Chem.AddHs(Chem.MolFromSmiles("CCCO"))]
     params = EmbedParameters()
