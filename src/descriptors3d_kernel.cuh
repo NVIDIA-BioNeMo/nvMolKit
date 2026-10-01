@@ -18,6 +18,10 @@ constexpr int kGroupSize          = 8;
 constexpr int kGroupsPerWarp      = kWarpSize / kGroupSize;
 constexpr int kConformersPerBlock = kWarpsPerBlock * kGroupsPerWarp;
 
+//! Atom-property channels uploaded for WHIM, RDF and MORSE (Property3DDeviceInputs::atomPropertyWeights),
+//! used after their unweighted channel.
+constexpr int kNumAtomPropertyChannels = 6;
+
 struct ConformerAtoms {
   const double* positions = nullptr;
   const double* weights   = nullptr;
@@ -52,9 +56,10 @@ __device__ __forceinline__ ConformerAtoms loadConformer(const DeviceCoordView& c
   return atoms;
 }
 
-template <typename Real> __device__ __forceinline__ Real groupAllReduceSum(Real value) {
+//! Sum over aligned groups of @p kWidth lanes (a conformer group by default, or the whole warp).
+template <int kWidth = kGroupSize, typename Real> __device__ __forceinline__ Real groupAllReduceSum(Real value) {
   const unsigned activeMask = __activemask();
-  for (int offset = kGroupSize / 2; offset > 0; offset >>= 1) {
+  for (int offset = kWidth / 2; offset > 0; offset >>= 1) {
     value += __shfl_xor_sync(activeMask, value, offset);
   }
   return value;
@@ -80,6 +85,11 @@ __device__ __forceinline__ void centeredPosition(const double* positions,
   x = static_cast<Real>(positions[atomIdx * 3 + 0] - centroidX);
   y = static_cast<Real>(positions[atomIdx * 3 + 1] - centroidY);
   z = static_cast<Real>(positions[atomIdx * 3 + 2] - centroidZ);
+}
+
+//! Round to three decimals as RDKit's WHIM, RDF and MORSE do: std::round(1000 * x) / 1000.
+template <typename Real> __device__ __forceinline__ Real roundThousandths(const Real value) {
+  return round(value * Real(1000)) / Real(1000);
 }
 
 }  // namespace nvMolKit::descriptors3d_detail

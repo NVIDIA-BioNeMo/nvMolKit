@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <GraphMol/Conformer.h>
+#include <GraphMol/Descriptors/MORSE.h>
 #include <GraphMol/Descriptors/PBF.h>
+#include <GraphMol/Descriptors/RDF.h>
 #include <GraphMol/Descriptors/WHIM.h>
 #include <GraphMol/RWMol.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
@@ -249,6 +251,43 @@ TEST(Descriptors3DProjection, MatchesRdkitPbfAndWhim) {
   }
 }
 
+TEST(Descriptors3DPairwise, MatchesRdkitRdfAndMorse) {
+  auto                                   mol  = molWithConformers("CCCO",
+                                                                  {
+                                 {{-1.3, 0.2, 0.7}, {-0.2, -0.8, 0.1}, {0.9, 0.4, -0.6},  {1.7, 1.1, 0.9}},
+                                 {{2.0, -1.0, 0.5},  {2.7, 0.3, -0.4}, {3.9, -0.2, 0.8}, {4.6, 1.0, -0.7}},
+  });
+  const std::vector<const RDKit::ROMol*> mols = {mol.get()};
+  auto results = nvMolKit::calc3DProperties<double>(mols, {Property3D::RDF, Property3D::MORSE}, {}, nullptr);
+
+  const std::array<std::pair<Property3D, int>, 2> cases = {
+    std::pair{  Property3D::RDF,   nvMolKit::kNumRdfProperties},
+    std::pair{Property3D::MORSE, nvMolKit::kNumMorseProperties}
+  };
+  for (const auto& [property, width] : cases) {
+    const auto values = toHost(results.properties.at(property));
+    ASSERT_EQ(values.size(), 2u * width);
+    // One pass over atom pairs serves both properties; requesting one alone must not change it.
+    auto       alone       = nvMolKit::calc3DProperties<double>(mols, {property}, {}, nullptr);
+    const auto aloneValues = toHost(alone.properties.at(property));
+    for (int confIdx = 0; confIdx < 2; ++confIdx) {
+      std::vector<double> expected;
+      if (property == Property3D::RDF) {
+        RDKit::Descriptors::RDF(*mol, expected, confIdx);
+      } else {
+        RDKit::Descriptors::MORSE(*mol, expected, confIdx);
+      }
+      ASSERT_EQ(expected.size(), static_cast<size_t>(width));
+      for (int valueIdx = 0; valueIdx < width; ++valueIdx) {
+        const size_t idx = static_cast<size_t>(confIdx) * width + valueIdx;
+        EXPECT_NEAR(values[idx], expected[valueIdx], 1.1e-3)
+          << nvMolKit::property3DName(property) << " conformer " << confIdx << ", value " << valueIdx;
+        EXPECT_EQ(values[idx], aloneValues[idx]);
+      }
+    }
+  }
+}
+
 TEST(Descriptors3DProjection, PbfMinimumAtomBoundaryAndWhimEmptyShape) {
   auto                                   threeAtoms = molWithConformers("CCC",
                                                                         {
@@ -281,13 +320,13 @@ TEST_F(Descriptors3DTest, WhimScratchChunkingAndOversizedRows) {
   const auto                             view     = nvMolKit::makeDeviceCoordView(uploaded);
   nvMolKit::AsyncDeviceVector<int32_t>   moleculeAtomStarts(2);
   moleculeAtomStarts.copyFromHost(std::vector<int32_t>{0, 4});
-  nvMolKit::AsyncDeviceVector<double> whimWeights(4 * 6);
-  whimWeights.copyFromHost(std::vector<double>(4 * 6, 1.0));
+  nvMolKit::AsyncDeviceVector<double> atomPropertyWeights(4 * 6);
+  atomPropertyWeights.copyFromHost(std::vector<double>(4 * 6, 1.0));
 
   nvMolKit::Property3DDeviceInputs inputs;
-  inputs.moleculeAtomStarts = moleculeAtomStarts.data();
-  inputs.whimWeights        = whimWeights.data();
-  const auto whimFor        = [&](const int32_t maxMoleculeAtoms) {
+  inputs.moleculeAtomStarts  = moleculeAtomStarts.data();
+  inputs.atomPropertyWeights = atomPropertyWeights.data();
+  const auto whimFor         = [&](const int32_t maxMoleculeAtoms) {
     inputs.maxMoleculeAtoms = maxMoleculeAtoms;
     auto results            = nvMolKit::calc3DPropertiesGpu<double>(view, inputs, {Property3D::WHIM}, {}, nullptr);
     return toHost(results.at(Property3D::WHIM));
@@ -352,7 +391,7 @@ TEST_F(Descriptors3DTest, RejectsUnknownPropertyValue) {
                                               Property3D::PMI2,
                                               Property3D::PMI3,
                                               Property3D::RadiusOfGyration,
-                                              static_cast<Property3D>(12)};
+                                              static_cast<Property3D>(nvMolKit::kAllProperty3D.size())};
   EXPECT_THROW(nvMolKit::calc3DProperties<double>(mols_, properties, nvMolKit::Property3DOptions{}, nullptr),
                std::invalid_argument);
   EXPECT_THROW(

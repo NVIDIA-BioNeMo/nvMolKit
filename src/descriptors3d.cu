@@ -9,6 +9,7 @@
 #include "src/descriptors3d.h"
 #include "src/descriptors3d_kernel.cuh"
 #include "src/descriptors3d_moments.cuh"
+#include "src/descriptors3d_pairwise.cuh"
 #include "src/descriptors3d_projection.cuh"
 #include "src/utils/cuda_error_check.h"
 
@@ -40,6 +41,10 @@ std::string_view property3DName(const Property3D property) {
       return "PBF";
     case Property3D::WHIM:
       return "WHIM";
+    case Property3D::RDF:
+      return "RDF";
+    case Property3D::MORSE:
+      return "MORSE";
   }
   throw std::invalid_argument("Unknown Property3D value " + std::to_string(static_cast<int>(property)));
 }
@@ -65,6 +70,7 @@ using descriptors3d_detail::kGroupSize;
 using descriptors3d_detail::kGroupsPerWarp;
 using descriptors3d_detail::kWarpSize;
 using descriptors3d_detail::kWarpsPerBlock;
+using descriptors3d_detail::launchPairwiseProperties;
 using descriptors3d_detail::launchProjectionProperties;
 using descriptors3d_detail::loadConformer;
 using descriptors3d_detail::MomentState;
@@ -109,6 +115,8 @@ constexpr SharedStageSet directStages(const Property3D property) {
       return stageBit(SharedStage::InertiaTensor);
     case Property3D::PBF:
     case Property3D::WHIM:
+    case Property3D::RDF:
+    case Property3D::MORSE:
       return 0;
   }
   return 0;
@@ -272,6 +280,8 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
   bool                    hasSpherocity = false;
   Real*                   pbfOutput     = nullptr;
   Real*                   whimOutput    = nullptr;
+  Real*                   rdfOutput     = nullptr;
+  Real*                   morseOutput   = nullptr;
   for (const Property3D property : properties) {
     // Bounds the work arrays, which hold one slot per known property.
     if (std::find(kAllProperty3D.begin(), kAllProperty3D.end(), property) == kAllProperty3D.end()) {
@@ -290,6 +300,9 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
       case Property3DFamily::Projection:
         (property == Property3D::PBF ? pbfOutput : whimOutput) = it->second.data();
         break;
+      case Property3DFamily::Pairwise:
+        (property == Property3D::RDF ? rdfOutput : morseOutput) = it->second.data();
+        break;
     }
   }
 
@@ -305,8 +318,12 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
       inputs.moleculeAtomStarts == nullptr) {
     throw std::invalid_argument("3D property input buffers must not be null for a non-empty batch");
   }
-  if (whimOutput != nullptr && inputs.whimWeights == nullptr) {
-    throw std::invalid_argument("WHIM atom weights must not be null when WHIM is requested");
+  if ((whimOutput != nullptr || rdfOutput != nullptr || morseOutput != nullptr) &&
+      inputs.atomPropertyWeights == nullptr) {
+    throw std::invalid_argument("Atom-property weights must not be null when WHIM, RDF or MORSE is requested");
+  }
+  if (rdfOutput != nullptr && inputs.iStateDragWeights == nullptr) {
+    throw std::invalid_argument("I-state drag weights must not be null when RDF is requested");
   }
 
   const bool    momentWeightsAreUnit    = inputs.momentWeights == nullptr;
@@ -315,6 +332,7 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
   const double* momentWeights           = onlySpherocity ? nullptr : inputs.momentWeights;
   launchMomentProperties(coordinates, momentWeights, inputs.moleculeAtomStarts, work, separateSpherocityState, stream);
   launchProjectionProperties(coordinates, inputs, options.whim, pbfOutput, whimOutput, stream);
+  launchPairwiseProperties(coordinates, inputs, rdfOutput, morseOutput, stream);
   return results;
 }
 

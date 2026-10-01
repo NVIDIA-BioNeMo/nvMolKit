@@ -67,6 +67,10 @@ def _calc_rdkit_property(mol: Chem.Mol, conf_id: int, prop: Property3D) -> float
         return rdMolDescriptors.CalcPBF(reference_mol, confId=conf_id)
     if prop == Property3D.WHIM:
         return rdMolDescriptors.CalcWHIM(mol, confId=conf_id)
+    if prop == Property3D.RDF:
+        return rdMolDescriptors.CalcRDF(mol, confId=conf_id)
+    if prop == Property3D.MORSE:
+        return rdMolDescriptors.CalcMORSE(mol, confId=conf_id)
     return RDKIT_CALCULATORS[prop](mol, confId=conf_id, useAtomicMasses=True)
 
 
@@ -160,6 +164,7 @@ def run(
     no_rdkit: bool,
     no_nvmolkit: bool,
     output: str | None,
+    exclude: tuple[str, ...] = (),
 ) -> list[dict[str, float | int | str]]:
     """Prepare one maximum-size batch and benchmark requested sweep points."""
     if no_rdkit and no_nvmolkit:
@@ -168,6 +173,16 @@ def run(
         raise ValueError("every --num_mols value must be positive")
     if any(count < 1 for count in conformers_per_mol_list):
         raise ValueError("every --confs_per_mol value must be positive")
+
+    unknown = sorted(set(exclude) - {prop.value for prop in Property3D})
+    if unknown:
+        raise ValueError(f"--exclude names unknown properties: {', '.join(unknown)}")
+    selections = {
+        name: tuple(prop for prop in PROPERTY_SETS[name] if prop.value not in exclude) for name in property_set_names
+    }
+    emptied = [name for name, properties in selections.items() if not properties]
+    if emptied:
+        raise ValueError(f"--exclude removes every property from: {', '.join(emptied)}")
 
     max_mols = max(num_mols_list)
     max_conformers = max(conformers_per_mol_list)
@@ -194,7 +209,8 @@ def run(
             coordinates = _pack_device_coordinates(mols) if device_input and not no_nvmolkit else None
 
             for property_set_name in property_set_names:
-                properties = PROPERTY_SETS[property_set_name]
+                properties = selections[property_set_name]
+                excluded = [prop.value for prop in PROPERTY_SETS[property_set_name] if prop.value in exclude]
                 print(
                     f"\n=== {len(mols)} mols, {num_conformers} conformers, "
                     f"{avg_atoms:.1f} atoms/mol, properties={property_set_name} ==="
@@ -209,7 +225,7 @@ def run(
                     "conformers_per_mol": requested_conformers,
                     "num_conformers": num_conformers,
                     "avg_atoms": avg_atoms,
-                    "property_set": property_set_name,
+                    "property_set": property_set_name + "".join(f"-{name}" for name in excluded),
                     "precision": str(precision),
                     "num_properties": len(properties),
                 }
@@ -282,6 +298,13 @@ def main() -> None:
         action="store_true",
         help="Also time calculation from pre-staged device coordinates (chained-workflow path)",
     )
+    parser.add_argument(
+        "--exclude",
+        nargs="+",
+        default=[],
+        choices=[prop.value for prop in Property3D],
+        help="Property names to drop from every property set, e.g. to time 'all' without a new feature",
+    )
     parser.add_argument("--output", default=None, help="Optional CSV output path")
     add_backend_selection_args(parser)
     args = parser.parse_args()
@@ -301,6 +324,7 @@ def main() -> None:
         no_rdkit=args.no_rdkit,
         no_nvmolkit=args.no_nvmolkit,
         output=args.output,
+        exclude=tuple(args.exclude),
     )
 
 

@@ -24,14 +24,16 @@ namespace {
 
 struct DeviceDescriptorInputs {
   AsyncDeviceVector<double>  momentWeights;
-  AsyncDeviceVector<double>  whimWeights;
+  AsyncDeviceVector<double>  atomPropertyWeights;
+  AsyncDeviceVector<double>  iStateDragWeights;
   AsyncDeviceVector<int8_t>  conformerIs3D;
   AsyncDeviceVector<int32_t> moleculeAtomStarts;
 };
 
 DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROMol*>& mols,
                                               const bool                              includeMomentWeights,
-                                              const bool                              includeWhimWeights,
+                                              const bool                              includeAtomPropertyWeights,
+                                              const bool                              includeIStateDragWeights,
                                               const bool                              includeConformerFlags,
                                               const int                               numThreads,
                                               cudaStream_t                            stream) {
@@ -48,7 +50,8 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
   atomStarts[numMols] = static_cast<int32_t>(totalAtoms);
 
   std::vector<double> weights(includeMomentWeights ? static_cast<size_t>(totalAtoms) : 0);
-  std::vector<double> whimWeights(includeWhimWeights ? static_cast<size_t>(totalAtoms) * 6 : 0);
+  std::vector<double> atomPropertyWeights(includeAtomPropertyWeights ? static_cast<size_t>(totalAtoms) * 6 : 0);
+  std::vector<double> iStateDragWeights(includeIStateDragWeights ? static_cast<size_t>(totalAtoms) : 0);
   std::vector<int8_t> conformerIs3D;
   if (includeConformerFlags) {
     for (const RDKit::ROMol* mol : mols) {
@@ -73,25 +76,38 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
     }
     exceptionRegistry.rethrow();
   }
-  if (includeWhimWeights) {
-#pragma omp parallel for num_threads(numThreads) schedule(dynamic) default(none) \
-  shared(numMols, mols, atomStarts, totalAtoms, whimWeights, exceptionRegistry)
+  if (includeAtomPropertyWeights || includeIStateDragWeights) {
+#pragma omp parallel for num_threads(numThreads) schedule(dynamic) default(none) shared(numMols,                      \
+                                                                                          mols,                       \
+                                                                                          atomStarts,                 \
+                                                                                          totalAtoms,                 \
+                                                                                          includeAtomPropertyWeights, \
+                                                                                          includeIStateDragWeights,   \
+                                                                                          atomPropertyWeights,        \
+                                                                                          iStateDragWeights,          \
+                                                                                          exceptionRegistry)
     for (int molIdx = 0; molIdx < numMols; ++molIdx) {
       try {
-        MolData3Ddescriptors                     descriptorData;
-        const std::array<std::vector<double>, 6> moleculeWeights = {
-          descriptorData.GetRelativeMW(*mols[molIdx]),
-          descriptorData.GetRelativeVdW(*mols[molIdx]),
-          descriptorData.GetRelativeENeg(*mols[molIdx]),
-          descriptorData.GetRelativePol(*mols[molIdx]),
-          descriptorData.GetRelativeIonPol(*mols[molIdx]),
-          descriptorData.GetIState(*mols[molIdx]),
-        };
-        const size_t atomStart = static_cast<size_t>(atomStarts[molIdx]);
-        for (size_t channel = 0; channel < moleculeWeights.size(); ++channel) {
-          std::copy(moleculeWeights[channel].begin(),
-                    moleculeWeights[channel].end(),
-                    whimWeights.begin() + static_cast<size_t>(totalAtoms) * channel + atomStart);
+        MolData3Ddescriptors descriptorData;
+        const size_t         atomStart = static_cast<size_t>(atomStarts[molIdx]);
+        if (includeAtomPropertyWeights) {
+          const std::array<std::vector<double>, 6> moleculeWeights = {
+            descriptorData.GetRelativeMW(*mols[molIdx]),
+            descriptorData.GetRelativeVdW(*mols[molIdx]),
+            descriptorData.GetRelativeENeg(*mols[molIdx]),
+            descriptorData.GetRelativePol(*mols[molIdx]),
+            descriptorData.GetRelativeIonPol(*mols[molIdx]),
+            descriptorData.GetIState(*mols[molIdx]),
+          };
+          for (size_t channel = 0; channel < moleculeWeights.size(); ++channel) {
+            std::copy(moleculeWeights[channel].begin(),
+                      moleculeWeights[channel].end(),
+                      atomPropertyWeights.begin() + static_cast<size_t>(totalAtoms) * channel + atomStart);
+          }
+        }
+        if (includeIStateDragWeights) {
+          const std::vector<double> iStateDrag = descriptorData.GetIStateDrag(*mols[molIdx]);
+          std::copy(iStateDrag.begin(), iStateDrag.end(), iStateDragWeights.begin() + atomStart);
         }
       } catch (...) {
         exceptionRegistry.store(std::current_exception());
@@ -101,14 +117,18 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
   }
 
   DeviceDescriptorInputs result{AsyncDeviceVector<double>(weights.size(), stream),
-                                AsyncDeviceVector<double>(whimWeights.size(), stream),
+                                AsyncDeviceVector<double>(atomPropertyWeights.size(), stream),
+                                AsyncDeviceVector<double>(iStateDragWeights.size(), stream),
                                 AsyncDeviceVector<int8_t>(conformerIs3D.size(), stream),
                                 AsyncDeviceVector<int32_t>(atomStarts.size(), stream)};
   if (!weights.empty()) {
     result.momentWeights.copyFromHost(weights);
   }
-  if (!whimWeights.empty()) {
-    result.whimWeights.copyFromHost(whimWeights);
+  if (!atomPropertyWeights.empty()) {
+    result.atomPropertyWeights.copyFromHost(atomPropertyWeights);
+  }
+  if (!iStateDragWeights.empty()) {
+    result.iStateDragWeights.copyFromHost(iStateDragWeights);
   }
   if (!conformerIs3D.empty()) {
     result.conformerIs3D.copyFromHost(conformerIs3D);
@@ -146,24 +166,33 @@ Property3DBatchResult<Real> calc3DProperties(const std::vector<const RDKit::ROMo
     uploaded = uploadConformerCoordinates(mols, stream, numThreads);
     view     = makeDeviceCoordView(uploaded);
   }
-  bool includeMomentWeights  = false;
-  bool includeWhimWeights    = false;
-  bool includeConformerFlags = false;
+  bool includeMomentWeights       = false;
+  bool includeAtomPropertyWeights = false;
+  bool includeIStateDragWeights   = false;
+  bool includeConformerFlags      = false;
   for (const Property3D property : properties) {
     const bool isMoment = property3DFamily(property) == Property3DFamily::Moments;
     includeMomentWeights |= isMoment && options.moments.useAtomicMasses && property != Property3D::SpherocityIndex;
-    includeWhimWeights |= property == Property3D::WHIM;
+    includeAtomPropertyWeights |=
+      property == Property3D::WHIM || property3DFamily(property) == Property3DFamily::Pairwise;
+    includeIStateDragWeights |= property == Property3D::RDF;
     // Device coordinate rows carry no is3D flag and are treated as three-dimensional.
     includeConformerFlags |= property == Property3D::PBF && coordinates == nullptr;
   }
-  const DeviceDescriptorInputs uploadedInputs =
-    uploadDescriptorInputs(mols, includeMomentWeights, includeWhimWeights, includeConformerFlags, numThreads, stream);
+  const DeviceDescriptorInputs uploadedInputs = uploadDescriptorInputs(mols,
+                                                                       includeMomentWeights,
+                                                                       includeAtomPropertyWeights,
+                                                                       includeIStateDragWeights,
+                                                                       includeConformerFlags,
+                                                                       numThreads,
+                                                                       stream);
 
   Property3DDeviceInputs inputs;
-  inputs.moleculeAtomStarts = uploadedInputs.moleculeAtomStarts.data();
-  inputs.momentWeights      = uploadedInputs.momentWeights.data();
-  inputs.whimWeights        = uploadedInputs.whimWeights.data();
-  inputs.conformerIs3D      = uploadedInputs.conformerIs3D.data();
+  inputs.moleculeAtomStarts  = uploadedInputs.moleculeAtomStarts.data();
+  inputs.momentWeights       = uploadedInputs.momentWeights.data();
+  inputs.atomPropertyWeights = uploadedInputs.atomPropertyWeights.data();
+  inputs.iStateDragWeights   = uploadedInputs.iStateDragWeights.data();
+  inputs.conformerIs3D       = uploadedInputs.conformerIs3D.data();
   for (const RDKit::ROMol* mol : mols) {
     inputs.maxMoleculeAtoms = std::max(inputs.maxMoleculeAtoms, static_cast<int32_t>(mol->getNumAtoms()));
   }

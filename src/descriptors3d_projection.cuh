@@ -155,11 +155,6 @@ __device__ __forceinline__ Real computePbf(const ConformerAtoms&        atoms,
   return groupAllReduceSum(distanceSum) / static_cast<Real>(atoms.numAtoms > 0 ? atoms.numAtoms : 1);
 }
 
-//! RDKit rounds every WHIM value and intermediate projection to three decimals.
-template <typename Real> __device__ __forceinline__ Real roundWhim(const Real value) {
-  return round(value * Real(1000)) / Real(1000);
-}
-
 /**
  * @brief RDKit's symmetry comparisons on projections rounded to thousandths.
  *
@@ -293,22 +288,23 @@ __device__ __forceinline__ void writeWhimChannel(const ConformerAtoms&        at
 
   const int channelStart = channel * 11;
   if (writeRow) {
-    row[channelStart + 0]  = roundWhim(first);
-    row[channelStart + 1]  = roundWhim(second);
-    row[channelStart + 2]  = roundWhim(third);
-    row[channelStart + 3]  = roundWhim(first / total);
-    row[channelStart + 4]  = roundWhim(second / total);
-    row[channelStart + 8]  = roundWhim(e1);
-    row[channelStart + 9]  = roundWhim(e2);
-    row[channelStart + 10] = roundWhim(e3);
-    row[77 + channel]      = roundWhim(total);
-    row[84 + channel]      = roundWhim(first * second + first * third + second * third);
+    row[channelStart + 0]  = roundThousandths(first);
+    row[channelStart + 1]  = roundThousandths(second);
+    row[channelStart + 2]  = roundThousandths(third);
+    row[channelStart + 3]  = roundThousandths(first / total);
+    row[channelStart + 4]  = roundThousandths(second / total);
+    row[channelStart + 8]  = roundThousandths(e1);
+    row[channelStart + 9]  = roundThousandths(e2);
+    row[channelStart + 10] = roundThousandths(e3);
+    row[77 + channel]      = roundThousandths(total);
+    row[84 + channel]      = roundThousandths(first * second + first * third + second * third);
     const Real anisotropy =
       Real(0.75) * (fabs(first / total - Real(1) / Real(3)) + fabs(second / total - Real(1) / Real(3)) +
                     fabs(third / total - Real(1) / Real(3)));
-    row[93 + channel]  = roundWhim(anisotropy);
-    row[100 + channel] = roundWhim((e1 + e2 + e3) / Real(3));
-    row[107 + channel] = roundWhim(total + first * second + first * third + second * third + first * second * third);
+    row[93 + channel]  = roundThousandths(anisotropy);
+    row[100 + channel] = roundThousandths((e1 + e2 + e3) / Real(3));
+    row[107 + channel] =
+      roundThousandths(total + first * second + first * third + second * third + first * second * third);
   }
 
   Real gammaProduct = Real(1);
@@ -316,17 +312,13 @@ __device__ __forceinline__ void writeWhimChannel(const ConformerAtoms&        at
     const Real gamma = computeWhimGamma(atoms, laneInGroup, groupMask, state, axis, threshold, scores);
     gammaProduct *= gamma;
     if (writeRow) {
-      row[channelStart + 5 + axis] = roundWhim(gamma);
+      row[channelStart + 5 + axis] = roundThousandths(gamma);
     }
   }
   if (writeRow && channel < 2) {
-    row[91 + channel] = roundWhim(pow(gammaProduct, Real(1) / Real(3)));
+    row[91 + channel] = roundThousandths(pow(gammaProduct, Real(1) / Real(3)));
   }
 }
-
-//! Number of WHIM atom-property channels after the unweighted one (mass, van der Waals volume,
-//! electronegativity, polarizability, ionization potential, I-state).
-constexpr int kNumWhimWeightChannels = 6;
 
 /**
  * @brief Arithmetic type of WHIM's PCA and projections, in every precision mode.
@@ -343,8 +335,8 @@ using WhimReal = double;
  * @brief PBF and WHIM for conformers [@p conformerBegin, @p conformerEnd); one group of lanes per conformer.
  *
  * PBF uses an unweighted PCA in @p OutputReal. WHIM runs its own PCA in WhimReal for the unweighted channel
- * and each atom-property channel, whose weights are stored channel-major in `inputs.whimWeights`
- * (`kNumWhimWeightChannels` blocks of one value per molecule atom), and uses @p whimScores as
+ * and each atom-property channel, whose weights are stored channel-major in `inputs.atomPropertyWeights`
+ * (`kNumAtomPropertyChannels` blocks of one value per molecule atom), and uses @p whimScores as
  * symmetry-search scratch: @p whimScoreStride slots per conformer of the range. Rows longer than
  * @p whimScoreStride are treated as invalid. Outputs are @p OutputReal.
  */
@@ -403,8 +395,9 @@ __global__ void projection3DKernel(const DeviceCoordView        coordinates,
     const int moleculeIdx       = atoms.valid ? coordinates.molIndices[conformerIdx] : 0;
     const int moleculeAtomStart = atoms.valid ? inputs.moleculeAtomStarts[moleculeIdx] : 0;
     const int totalAtoms        = inputs.moleculeAtomStarts[coordinates.nMols];
-    for (int channel = 1; channel <= kNumWhimWeightChannels; ++channel) {
-      const double* weights = inputs.whimWeights + static_cast<size_t>(channel - 1) * totalAtoms + moleculeAtomStart;
+    for (int channel = 1; channel <= kNumAtomPropertyChannels; ++channel) {
+      const double* weights =
+        inputs.atomPropertyWeights + static_cast<size_t>(channel - 1) * totalAtoms + moleculeAtomStart;
       computeProjectionPca(atoms, weights, laneInGroup, state);
       writeWhimChannel(atoms, laneInGroup, groupMask, channel, threshold, state, writeRow && atoms.valid, row, scores);
     }
