@@ -253,18 +253,30 @@ AapHostDescriptors buildDescriptors(const std::vector<const RDKit::ROMol*>& mole
   const std::size_t               numThreads =
     std::clamp<std::size_t>(numMolecules / kMoleculesPerThread, 1, std::max(1U, std::thread::hardware_concurrency()));
   std::vector<std::exception_ptr> failures(numThreads);
-  std::vector<std::thread>        workers;
-  for (std::size_t worker = 0; worker < numThreads; ++worker) {
-    workers.emplace_back([&, worker]() {
-      try {
-        for (std::size_t index = worker; index < numMolecules; index += numThreads) {
-          perMolecule[index] = describeMolecule(*molecules[index], options);
-        }
-      } catch (...) {
-        failures[worker] = std::current_exception();
+  const auto                      describeShare = [&](const std::size_t worker) {
+    try {
+      for (std::size_t index = worker; index < numMolecules; index += numThreads) {
+        perMolecule[index] = describeMolecule(*molecules[index], options);
       }
-    });
+    } catch (...) {
+      failures[worker] = std::current_exception();
+    }
+  };
+  // The calling thread takes the first share, so small inputs start no threads.
+  std::vector<std::thread> workers;
+  workers.reserve(numThreads - 1);
+  try {
+    for (std::size_t worker = 1; worker < numThreads; ++worker) {
+      workers.emplace_back(describeShare, worker);
+    }
+  } catch (...) {
+    // A joinable thread must not be destroyed, so join the workers that started before rethrowing.
+    for (auto& thread : workers) {
+      thread.join();
+    }
+    throw;
   }
+  describeShare(0);
   for (auto& thread : workers) {
     thread.join();
   }
