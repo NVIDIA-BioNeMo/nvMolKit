@@ -17,6 +17,7 @@
 namespace {
 
 using nvMolKit::AsyncDeviceVector;
+using nvMolKit::FingerprintSimilarityMetric;
 
 template <typename T> AsyncDeviceVector<T> upload(const std::vector<T>& host, cudaStream_t stream) {
   AsyncDeviceVector<T> device(host.size(), stream);
@@ -143,6 +144,17 @@ TEST(DiversityPickerLeader, HonorsInclusiveCutoffDirectedRowsAndFirstPicks) {
   EXPECT_THAT(downloadPicks(result, stream), ::testing::ElementsAre(0, 1, 2));
 }
 
+TEST(DiversityPickerFused, CosineZeroFingerprintIsSelectedOnlyOnce) {
+  nvMolKit::ScopedStream const     streamOwner;
+  const auto                       stream       = streamOwner.stream();
+  const std::vector<std::uint32_t> fingerprints = {0U, 0b0011U, 0b0010U, 0b1100U};
+  auto                             device       = upload(fingerprints, stream);
+
+  const auto result =
+    nvMolKit::fusedLeaderGpu(toSpan(device), 4, 1, 0.5, FingerprintSimilarityMetric::Cosine, 0, {}, stream);
+  EXPECT_THAT(downloadPicks(result, stream), ::testing::ElementsAre(0, 1, 3));
+}
+
 TEST(DiversityPickerEdges, HandlesEmptyAndSingletonInputs) {
   const nvMolKit::ScopedStream        streamOwner;
   const auto                          stream = streamOwner.stream();
@@ -158,8 +170,9 @@ TEST(DiversityPickerEdges, HandlesEmptyAndSingletonInputs) {
 
 TEST(DiversityPickerValidation, RejectsMalformedArguments) {
   nvMolKit::ScopedStream const streamOwner;
-  const auto                   stream = streamOwner.stream();
-  auto                         matrix = upload(std::vector<double>{0.0, 1.0, 1.0, 0.0}, stream);
+  const auto                   stream       = streamOwner.stream();
+  auto                         matrix       = upload(std::vector<double>{0.0, 1.0, 1.0, 0.0}, stream);
+  auto                         fingerprints = upload(std::vector<std::uint32_t>{1U, 2U}, stream);
 
   EXPECT_THROW(nvMolKit::leaderFromDistanceMatrix(toSpan(matrix), 3, 0.2, 0, {}, stream), std::invalid_argument);
   EXPECT_THROW(
@@ -167,6 +180,9 @@ TEST(DiversityPickerValidation, RejectsMalformedArguments) {
     std::invalid_argument);
   EXPECT_THROW(nvMolKit::leaderFromDistanceMatrix(toSpan(matrix), 2, 0.2, 0, {0, 0}, stream), std::invalid_argument);
   EXPECT_THROW(nvMolKit::leaderFromDistanceMatrix(toSpan(matrix), 2, 0.2, 0, {2}, stream), std::invalid_argument);
+  EXPECT_THROW(
+    nvMolKit::fusedLeaderGpu(toSpan(fingerprints), 2, 0, 0.2, FingerprintSimilarityMetric::Tanimoto, 0, {}, stream),
+    std::invalid_argument);
 }
 
 }  // namespace

@@ -5,9 +5,10 @@
 
 RDKit selects from Morgan bit vectors with ``LeaderPicker``.
 
-nvMolKit starts from nvMolKit Morgan fingerprints on the GPU, builds the
-Tanimoto distance matrix, and selects from it; ``nvmolkit_matrix_select``
-times the selection alone on a prebuilt matrix.
+nvMolKit is timed in two forms, both starting from nvMolKit Morgan
+fingerprints on the GPU. The fused form selects directly from fingerprints.
+The matrix form builds the Tanimoto distance matrix and selects from it;
+``nvmolkit_matrix_select`` times the selection alone on a prebuilt matrix.
 Fingerprint generation is outside every timed region.
 
 nvMolKit compares distances in single precision, so a cutoff that is not a
@@ -42,8 +43,10 @@ from rdkit.SimDivFilters import rdSimDivPickers
 
 from nvmolkit.clustering import OutputMode
 from nvmolkit.fingerprints import MorganFingerprintGenerator
-from nvmolkit.pickers import leader
+from nvmolkit.pickers import fused_leader, leader
 from nvmolkit.similarity import crossTanimotoSimilarity
+
+FORMS = ("fused", "matrix")
 
 
 @dataclass
@@ -69,12 +72,14 @@ class Operation:
     """RDKit and nvMolKit implementations of one selection algorithm."""
 
     rdkit: Callable
+    fused: Callable
     matrix: Callable
 
 
 OPERATIONS = {
     "leader": Operation(
         rdkit=_rdkit_leader,
+        fused=lambda fps, cutoff: fused_leader(fps, cutoff, output=OutputMode.RDKIT),
         matrix=lambda matrix, cutoff: leader(matrix, cutoff, output=OutputMode.RDKIT),
     ),
 }
@@ -109,6 +114,7 @@ def _benchmark_point(
     operation: Operation,
     cutoff: float,
     inputs: Inputs,
+    forms: list[str],
     runs: int,
     warmups: int,
     validate: bool,
@@ -137,6 +143,18 @@ def _benchmark_point(
             if validate:
                 row[f"{form}_matches_rdkit"] = result == rdkit_result
 
+    if not no_nvmolkit and "fused" in forms:
+        compare(
+            "fused",
+            *_time(
+                f"nvmolkit_fused_{name}",
+                lambda: operation.fused(inputs.fingerprints, cutoff),
+                runs,
+                warmups,
+                gpu=True,
+            ),
+        )
+
     if inputs.matrix is not None:
         compare(
             "matrix",
@@ -157,7 +175,7 @@ def _benchmark_point(
         )
         row.update(_timing_fields("nvmolkit_matrix_select", select_timing))
 
-    if row.get("matrix_matches_rdkit") is False:
+    if row.get("fused_matches_rdkit") is False or row.get("matrix_matches_rdkit") is False:
         print(f"WARNING: nvMolKit {name} differs from RDKit", file=sys.stderr, flush=True)
     return row
 
@@ -166,6 +184,7 @@ def run(
     smiles_path: str,
     sizes: list[int],
     operations: list[str],
+    forms: list[str],
     cutoffs: list[float],
     matrix_max_size: int,
     radius: int,
@@ -209,7 +228,7 @@ def run(
     try:
         for size in sorted(set(sizes)):
             inputs = None  # Release the previous size's matrix before building the next.
-            use_matrix = not no_nvmolkit and size <= matrix_max_size
+            use_matrix = "matrix" in forms and not no_nvmolkit and size <= matrix_max_size
             fingerprints = None if all_fingerprints is None else all_fingerprints[:size].contiguous()
             matrix = _distance_matrix(fingerprints) if use_matrix else None
             inputs = Inputs(
@@ -223,7 +242,16 @@ def run(
                     print(f"\n=== {name}, {size} molecules, cutoff={cutoff} ===", flush=True)
                     rows.append(
                         _benchmark_point(
-                            name, OPERATIONS[name], cutoff, inputs, runs, warmups, validate, no_rdkit, no_nvmolkit
+                            name,
+                            OPERATIONS[name],
+                            cutoff,
+                            inputs,
+                            forms,
+                            runs,
+                            warmups,
+                            validate,
+                            no_rdkit,
+                            no_nvmolkit,
                         )
                     )
     finally:
@@ -242,8 +270,11 @@ def main() -> None:
     parser.add_argument("--smiles", required=True, help="Path to a SMILES file")
     parser.add_argument("--sizes", type=int, nargs="+", default=[1000, 10000])
     parser.add_argument("--operations", choices=tuple(OPERATIONS), nargs="+", default=list(OPERATIONS))
+    parser.add_argument("--forms", choices=FORMS, nargs="+", default=list(FORMS))
     parser.add_argument("--cutoffs", type=float, nargs="+", default=[0.25, 0.5], help="Leader distance cutoffs")
-    parser.add_argument("--matrix_max_size", type=int, default=10000, help="Largest size benchmarked by nvMolKit")
+    parser.add_argument(
+        "--matrix_max_size", type=int, default=10000, help="Largest size benchmarked in the matrix form"
+    )
     parser.add_argument("--radius", type=int, default=2)
     parser.add_argument("--fp_size", type=int, default=1024)
     parser.add_argument("--runs", type=int, default=3)
@@ -258,6 +289,7 @@ def main() -> None:
         smiles_path=args.smiles,
         sizes=args.sizes,
         operations=args.operations,
+        forms=args.forms,
         cutoffs=args.cutoffs,
         matrix_max_size=args.matrix_max_size,
         radius=args.radius,

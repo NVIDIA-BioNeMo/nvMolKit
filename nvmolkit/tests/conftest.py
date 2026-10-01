@@ -69,7 +69,7 @@ def _float32_distances(packed, metric):
     if metric == "tanimoto":
         unions = counts[:, None] + counts[None, :] - intersections
         with np.errstate(invalid="ignore", divide="ignore"):
-            similarity = np.where(unions > 0, intersections / unions, np.float32(1.0))
+            return np.where(unions > 0, (unions - intersections) / unions, np.float32(0.0)).astype(np.float32)
     else:
         norms = np.sqrt(counts[:, None] * counts[None, :])
         with np.errstate(invalid="ignore", divide="ignore"):

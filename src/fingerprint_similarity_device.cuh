@@ -76,6 +76,20 @@ __device__ __forceinline__ bool fingerprintSimilarityCanReach(const int   lhsBit
   }
 }
 
+//! Distance 1 - similarity in single precision. Tanimoto distances are computed directly as the correctly rounded
+//! (union - intersection) / union, so they equal a double-precision distance rounded to float32.
+template <FingerprintSimilarityMetric Metric>
+__device__ __forceinline__ float fingerprintDistance(const int intersection,
+                                                     const int lhsBitCount,
+                                                     const int rhsBitCount) {
+  if constexpr (Metric == FingerprintSimilarityMetric::Tanimoto) {
+    const int unionCount = lhsBitCount + rhsBitCount - intersection;
+    return unionCount > 0 ? __fdiv_rn(__int2float_rn(unionCount - intersection), __int2float_rn(unionCount)) : 0.0F;
+  } else {
+    return 1.0F - fingerprintSimilarity<Metric, float>(intersection, lhsBitCount, rhsBitCount);
+  }
+}
+
 template <FingerprintSimilarityMetric Metric>
 __device__ __forceinline__ bool fingerprintSimilarityAtLeast(const int   intersection,
                                                              const int   lhsBitCount,
