@@ -401,7 +401,12 @@ target_link_libraries(
 add_executable(test_descriptors3d test_descriptors3d.cpp)
 target_link_libraries(
   test_descriptors3d PRIVATE ${RDKit_LIBS} descriptors3d_mol
-                             conformer_coord_upload)
+                             conformer_coord_upload device)
+
+add_executable(test_descriptors3d_whim_arithmetic
+               test_descriptors3d_whim_arithmetic.cu)
+target_link_libraries(test_descriptors3d_whim_arithmetic
+                      PRIVATE descriptors3d cuda_error_check)
 
 add_executable(test_tfd_cpu test_tfd_cpu.cpp)
 target_link_libraries(test_tfd_cpu PRIVATE ${RDKit_LIBS} tfd_cpu test_utils
@@ -422,6 +427,7 @@ target_link_libraries(test_tfd PRIVATE ${RDKit_LIBS} tfd_gpu tfd_cpu
 
 set(TEST_LIST
     test_descriptors3d
+    test_descriptors3d_whim_arithmetic
     test_boolean_tree
     test_butina
     test_diversity_pickers

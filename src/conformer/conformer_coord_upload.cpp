@@ -20,6 +20,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -64,10 +65,12 @@ DeviceCoordResult uploadConformerCoordinates(const std::vector<const RDKit::ROMo
   result.molIndices  = AsyncDeviceVector<int32_t>(numConformers, stream);
   result.confIndices = AsyncDeviceVector<int32_t>(numConformers, stream);
 
-  std::vector<double>  hostPositions(totalAtoms * 3);
-  std::vector<int32_t> hostAtomStarts(numConformers + 1);
-  std::vector<int32_t> hostMolIndices(numConformers);
-  std::vector<int32_t> hostConfIndices(numConformers);
+  // Left uninitialized: zero-filling gigabytes serially cost more than the parallel fill below, which
+  // now also takes the first-touch page faults across its threads.
+  const std::unique_ptr<double[]> hostPositions(new double[totalAtoms * 3]);
+  std::vector<int32_t>            hostAtomStarts(numConformers + 1);
+  std::vector<int32_t>            hostMolIndices(numConformers);
+  std::vector<int32_t>            hostConfIndices(numConformers);
   hostAtomStarts[numConformers] = static_cast<int32_t>(totalAtoms);
 
   detail::OpenMPExceptionRegistry exceptionRegistry;
@@ -108,7 +111,7 @@ DeviceCoordResult uploadConformerCoordinates(const std::vector<const RDKit::ROMo
 
   // Pageable cudaMemcpyAsync returns once the source is staged, so the vectors may go out of scope.
   if (totalAtoms > 0) {
-    result.positions.copyFromHost(hostPositions);
+    result.positions.copyFromHost(hostPositions.get(), totalAtoms * 3);
   }
   result.atomStarts.copyFromHost(hostAtomStarts);
   if (numConformers > 0) {
