@@ -10,6 +10,7 @@ Each picker has a matrix form that takes a precomputed distance matrix and a
 import operator
 from typing import Sequence
 
+import numpy as np
 import torch
 
 from nvmolkit import _clustering
@@ -19,6 +20,14 @@ from nvmolkit.similarity import Metric
 from nvmolkit.types import ArrayInput, AsyncGpuResult
 
 
+def _validate_maxmin_threshold(threshold: float | None) -> float:
+    if threshold is None:
+        return -1.0
+    if not np.isfinite(threshold) or threshold < 0 or threshold > float(np.finfo(np.float32).max):
+        raise ValueError(f"threshold must be between 0 and the largest finite float32 value, got {threshold}")
+    return float(threshold)
+
+
 def _index_tuple(name: str, values: Sequence[int]) -> tuple[int, ...]:
     try:
         return tuple(operator.index(value) for value in values)
@@ -26,11 +35,12 @@ def _index_tuple(name: str, values: Sequence[int]) -> tuple[int, ...]:
         raise TypeError(f"{name} must be a sequence of integers") from None
 
 
-def _resolve_selection_output(result, output: OutputMode):
-    indices = AsyncGpuResult(result)
-    if output is OutputMode.DEVICE:
-        return indices
-    return tuple(int(index) for index in indices.numpy())
+def _resolve_selection_output(result, output: OutputMode, *, maxmin: bool):
+    indices_obj, last_distance = result
+    indices = AsyncGpuResult(indices_obj)
+    if output is OutputMode.RDKIT:
+        indices = tuple(int(index) for index in indices.numpy())
+    return (indices, float(last_distance)) if maxmin else indices
 
 
 def leader(
@@ -82,7 +92,7 @@ def leader(
             _index_tuple("first_picks", first_picks),
             active_stream.cuda_stream,
         )
-        return _resolve_selection_output(result, output)
+        return _resolve_selection_output(result, output, maxmin=False)
 
 
 def fused_leader(
@@ -130,4 +140,122 @@ def fused_leader(
             first_picks,
             active_stream.cuda_stream,
         )
-        return _resolve_selection_output(result, output)
+        return _resolve_selection_output(result, output, maxmin=False)
+
+
+def maxmin(
+    distance_matrix: ArrayInput,
+    pick_size: int,
+    *,
+    first_picks: Sequence[int] = (),
+    seed: int = -1,
+    threshold: float | None = None,
+    stream: torch.cuda.Stream | None = None,
+    output: OutputMode = OutputMode.DEVICE,
+) -> tuple[AsyncGpuResult | tuple[int, ...], float]:
+    """Select a diverse subset from a distance matrix by greedy MaxMin.
+
+    Each step adds the candidate whose distance to its nearest pick is largest,
+    breaking ties by lowest index, as in RDKit's ``MaxMinPicker``. A given
+    ``seed`` selects the same random first pick as RDKit.
+
+    Distances are compared in float32, so distances within float32 rounding of
+    each other tie, and a distance within float32 rounding of ``threshold`` can
+    be classified differently than by RDKit's ``MaxMinPicker``, which compares
+    in double precision.
+
+    Args:
+        distance_matrix: Square float32 or float64 matrix of shape ``(N, N)``.
+            Element ``[i, j]`` is the distance from item ``i`` to item ``j``.
+            Values are converted to float32 for comparisons. Values that
+            overflow float32 during conversion become infinity.
+        pick_size: Number of items to select, from 1 through ``N``. All
+            ``first_picks`` are retained even if they exceed this limit.
+        first_picks: Unique indices that start the selection, in order. If
+            empty, the first pick is drawn at random.
+        seed: Seed for the random first pick. Negative values use system
+            entropy.
+        threshold: Stop before adding a candidate whose nearest-pick distance
+            is at most this value, rounded to float32. Must be between zero
+            and the largest finite float32 value, or None for no threshold.
+        stream: CUDA stream to use. If None, uses the current stream.
+        output: Result representation.
+
+    Returns:
+        ``(indices, last_distance)``. ``indices`` is an
+        :class:`~nvmolkit.types.AsyncGpuResult` of int32 indices for
+        ``OutputMode.DEVICE``, or a tuple of indices for ``OutputMode.RDKIT``.
+        ``last_distance`` is the nearest-pick distance of the last item added,
+        or ``-1`` if none was added after ``first_picks``.
+    """
+    _validate_output(output)
+    matrix, active_stream = _prepare_distance_matrix(distance_matrix, stream)
+    with torch.cuda.stream(active_stream):
+        result = _clustering.maxmin(
+            matrix.__cuda_array_interface__,
+            operator.index(pick_size),
+            _index_tuple("first_picks", first_picks),
+            operator.index(seed),
+            _validate_maxmin_threshold(threshold),
+            active_stream.cuda_stream,
+        )
+        return _resolve_selection_output(result, output, maxmin=True)
+
+
+def fused_maxmin(
+    x,
+    pick_size: int,
+    *,
+    metric: Metric = "tanimoto",
+    first_picks: Sequence[int] = (),
+    seed: int = -1,
+    threshold: float | None = None,
+    stream: torch.cuda.Stream | None = None,
+    output: OutputMode = OutputMode.DEVICE,
+) -> tuple[AsyncGpuResult | tuple[int, ...], float]:
+    """Select a diverse subset by greedy MaxMin, computing distances as needed.
+
+    Equivalent to :func:`maxmin` on the matrix of ``1 - similarity`` values,
+    with memory that scales as ``O(N)``. Distances are computed in float32, so
+    results can differ slightly from RDKit's double-precision results.
+
+    Args:
+        x: Packed int32 or uint32 fingerprints of shape ``(N, num_words)``.
+        pick_size: Number of items to select, from 1 through ``N``. All
+            ``first_picks`` are retained even if they exceed this limit.
+        metric: Similarity metric. :class:`~nvmolkit.similarity.AAPMetric` is not
+            yet supported.
+        first_picks: Unique indices that start the selection, in order. If
+            empty, the first pick is drawn at random.
+        seed: Seed for the random first pick. Negative values use system
+            entropy.
+        threshold: Stop before adding a candidate whose nearest-pick distance
+            is at most this value. Distances and the threshold are compared
+            in float32. Must be in ``[0, 1]``, or None for no threshold.
+        stream: CUDA stream to use. If None, uses the current stream.
+        output: Result representation.
+
+    Returns:
+        ``(indices, last_distance)``. ``indices`` is an
+        :class:`~nvmolkit.types.AsyncGpuResult` of int32 indices for
+        ``OutputMode.DEVICE``, or a tuple of indices for ``OutputMode.RDKIT``.
+        ``last_distance`` is the nearest-pick distance of the last item added,
+        or ``-1`` if none was added after ``first_picks``.
+    """
+    _validate_output(output)
+    resolved, inputs, active_stream = _prepare_fused_input(x, metric, stream, "fused_maxmin")
+    pick_size = operator.index(pick_size)
+    first_picks = _index_tuple("first_picks", first_picks)
+    seed = operator.index(seed)
+    threshold = _validate_maxmin_threshold(threshold)
+    with torch.cuda.stream(active_stream):
+        result = _clustering.fused_maxmin(
+            inputs.__cuda_array_interface__,
+            pick_size,
+            _packed_metric_name(resolved),
+            first_picks,
+            seed,
+            threshold,
+            active_stream.cuda_stream,
+        )
+        return _resolve_selection_output(result, output, maxmin=True)

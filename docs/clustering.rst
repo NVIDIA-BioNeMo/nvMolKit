@@ -4,7 +4,7 @@ Clustering and diversity selection
 ==================================
 
 :mod:`nvmolkit.clustering` provides Butina and directed sphere exclusion (DISE) clustering, and
-:mod:`nvmolkit.pickers` provides Leader selection.
+:mod:`nvmolkit.pickers` provides Leader and MaxMin selection.
 
 Matrix and fused forms
 ----------------------
@@ -23,6 +23,9 @@ Each algorithm has two forms:
    * - Leader
      - :func:`~nvmolkit.pickers.leader`
      - :func:`~nvmolkit.pickers.fused_leader`
+   * - MaxMin
+     - :func:`~nvmolkit.pickers.maxmin`
+     - :func:`~nvmolkit.pickers.fused_maxmin`
    * - DISE
      - :func:`~nvmolkit.clustering.dise`
      - :func:`~nvmolkit.clustering.fused_dise`
@@ -63,13 +66,14 @@ metric object:
 
     from nvmolkit.clustering import OutputMode
     from nvmolkit.fingerprints import MorganFingerprintGenerator
-    from nvmolkit.pickers import fused_leader
+    from nvmolkit.pickers import fused_leader, fused_maxmin
 
     smiles = ["CCO", "CCN", "CCCC", "c1ccccc1", "c1ccncc1", "CC(=O)O"]
     molecules = [Chem.MolFromSmiles(value) for value in smiles]
     fingerprints = MorganFingerprintGenerator(radius=2, fpSize=2048).GetFingerprints(molecules)
 
     leaders = fused_leader(fingerprints, 0.6, metric="tanimoto", output=OutputMode.RDKIT)
+    picks, last_distance = fused_maxmin(fingerprints, 3, metric="tanimoto", seed=23, output=OutputMode.RDKIT)
 
 Output modes
 ------------
@@ -83,10 +87,12 @@ format.
 Differences from RDKit
 ----------------------
 
-Leader follows RDKit's ``LeaderPicker``. RDKit has no DISE.
+Leader and MaxMin follow RDKit's ``LeaderPicker`` and ``MaxMinPicker``, and a
+given MaxMin ``seed`` selects the same first pick as RDKit. DISE uses the
+leaders ``LeaderPicker`` selects as centroids and adds cluster assignment.
 
-Leader and DISE compare distances in ``float32``, while RDKit uses double
-precision, so a distance within ``float32`` rounding of a cutoff can be
+Leader, MaxMin, and DISE compare distances in ``float32``, while RDKit uses double
+precision, so a distance within ``float32`` rounding of a cutoff or threshold can be
 classified differently. For Tanimoto distances this happens only at values that
 ``float32`` cannot represent exactly, such as 0.3; values such as 0.25 and 0.5
 give RDKit's results. A distance matrix built from nvMolKit similarities can

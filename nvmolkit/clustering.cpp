@@ -73,8 +73,9 @@ boost::python::tuple wrapClusteringResult(const nvMolKit::ClusteringResult& resu
     toOwnedPyArray(nvMolKit::makePyArray(clusterSizes, "i8", boost::python::make_tuple(clusterSizes.size()))));
 }
 
-boost::python::object wrapPickerResult(nvMolKit::PickerResult& result) {
-  return toOwnedPyArray(nvMolKit::makePyArray(result.indices));
+boost::python::tuple wrapPickerResult(nvMolKit::PickerResult& result) {
+  auto indices = nvMolKit::makePyArray(result.indices);
+  return boost::python::make_tuple(toOwnedPyArray(indices), result.lastDistance);
 }
 
 cudaStream_t requireStream(const std::uintptr_t streamPtr) {
@@ -279,6 +280,64 @@ BOOST_PYTHON_MODULE(_clustering) {
      boost::python::arg("metric"),
      boost::python::arg("pick_size"),
      boost::python::arg("first_picks"),
+     boost::python::arg("stream")));
+
+  boost::python::def(
+    "maxmin",
+    +[](const boost::python::dict&   distanceMatrix,
+        const int                    pickSize,
+        const boost::python::object& firstPicks,
+        const int                    seed,
+        const double                 threshold,
+        const std::uintptr_t         streamPtr) {
+      const auto input  = parseDistanceMatrix(distanceMatrix);
+      auto       result = std::visit(
+        [&](const auto distances) {
+          return nvMolKit::maxMinFromDistanceMatrix(distances,
+                                                    input.numItems,
+                                                    pickSize,
+                                                    extractIndices(firstPicks),
+                                                    seed,
+                                                    threshold,
+                                                    requireStream(streamPtr));
+        },
+        input.distances);
+      return wrapPickerResult(result);
+    },
+    (boost::python::arg("distance_matrix"),
+     boost::python::arg("pick_size"),
+     boost::python::arg("first_picks"),
+     boost::python::arg("seed"),
+     boost::python::arg("threshold"),
+     boost::python::arg("stream")));
+
+  boost::python::def(
+    "fused_maxmin",
+    +[](const boost::python::dict&   fingerprints,
+        const int                    pickSize,
+        const std::string&           metric,
+        const boost::python::object& firstPicks,
+        const int                    seed,
+        const double                 threshold,
+        const std::uintptr_t         streamPtr) {
+      const auto input  = parseFingerprints(fingerprints);
+      auto       result = nvMolKit::fusedMaxMinGpu(input.fingerprints,
+                                             input.numItems,
+                                             input.numWords,
+                                             pickSize,
+                                             parseFingerprintMetric(metric),
+                                             extractIndices(firstPicks),
+                                             seed,
+                                             threshold,
+                                             requireStream(streamPtr));
+      return wrapPickerResult(result);
+    },
+    (boost::python::arg("fingerprints"),
+     boost::python::arg("pick_size"),
+     boost::python::arg("metric"),
+     boost::python::arg("first_picks"),
+     boost::python::arg("seed"),
+     boost::python::arg("threshold"),
      boost::python::arg("stream")));
 
   boost::python::def(
