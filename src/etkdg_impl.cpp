@@ -20,6 +20,7 @@
 #include <GraphMol/MolOps.h>
 #include <omp.h>
 
+#include <algorithm>
 #include <atomic>
 #include <iomanip>
 #include <iostream>
@@ -269,19 +270,21 @@ void initETKDGContext(const std::vector<RDKit::ROMol*>& mols, ETKDGContext& cont
                                           context.systemDevice.atomStarts);
 }
 
-Scheduler::Scheduler(const int numUniqueMols, const int numConfsPerMol, const int maxIterations)
+Scheduler::Scheduler(const int numConfsPerMol, const std::vector<int>& maxIterationsPerMol)
     : numConfsPerMol_(numConfsPerMol),
-      maxIterations_(maxIterations),
-      numUniqueMolecules_(numUniqueMols) {
-  // Throw if any parameter is <= 0
-  if (numUniqueMols <= 0 || numConfsPerMol <= 0 || maxIterations <= 0) {
+      numUniqueMolecules_(maxIterationsPerMol.size()) {
+  if (maxIterationsPerMol.empty() || numConfsPerMol <= 0 ||
+      std::any_of(maxIterationsPerMol.begin(), maxIterationsPerMol.end(), [](const int it) { return it <= 0; })) {
     throw std::invalid_argument("All parameters must be greater than 0.");
   }
 
-  maxTriesPerMolecule_ = maxIterations_ * numConfsPerMol_;
-  completedConformers_.resize(numUniqueMols, 0);
-  totalAttempts_.resize(numUniqueMols, 0);
-  attemptsInFlightByMolecule_.resize(numUniqueMols, 0);
+  maxTriesPerMolecule_.reserve(numUniqueMolecules_);
+  for (const int maxIterations : maxIterationsPerMol) {
+    maxTriesPerMolecule_.push_back(maxIterations * numConfsPerMol_);
+  }
+  completedConformers_.resize(numUniqueMolecules_, 0);
+  totalAttempts_.resize(numUniqueMolecules_, 0);
+  attemptsInFlightByMolecule_.resize(numUniqueMolecules_, 0);
 }
 
 std::vector<int> Scheduler::dispatch(const int batchSize, std::vector<int>* attemptIds) {
@@ -323,24 +326,47 @@ std::vector<int> Scheduler::dispatchAvailableLocked(const int batchSize, std::ve
     attemptIds->clear();
     attemptIds->reserve(batchSize);
   }
+  std::vector<size_t> eligible;
   for (size_t i = 0; i < numUniqueMolecules_; i++) {
     // Keep one attempt in flight for each conformer still needed. Recording a
     // failure immediately reopens its slot without waiting on other molecules.
     while (completedConformers_[i] + attemptsInFlightByMolecule_[i] < numConfsPerMol_ &&
-           totalAttempts_[i] < maxTriesPerMolecule_) {
+           totalAttempts_[i] < maxTriesPerMolecule_[i]) {
       if (static_cast<int>(molIds.size()) >= batchSize) {
         return molIds;
       }
-      molIds.push_back(static_cast<int>(i));
-      if (attemptIds != nullptr) {
-        attemptIds->push_back(totalAttempts_[i]);
-      }
-      totalAttempts_[i]++;
-      attemptsInFlightByMolecule_[i]++;
-      attemptsInFlight_++;
+      pushAttemptLocked(i, molIds, attemptIds);
+    }
+    if (completedConformers_[i] < numConfsPerMol_ && totalAttempts_[i] < maxTriesPerMolecule_[i]) {
+      eligible.push_back(i);
     }
   }
+
+  // Fill spare capacity round-robin with extra attempts for unfinished molecules, ignoring the in-flight cap.
+  // Surplus successes are discarded at writeback.
+  while (!eligible.empty() && static_cast<int>(molIds.size()) < batchSize) {
+    size_t numStillEligible = 0;
+    for (const size_t i : eligible) {
+      if (static_cast<int>(molIds.size()) < batchSize) {
+        pushAttemptLocked(i, molIds, attemptIds);
+      }
+      if (totalAttempts_[i] < maxTriesPerMolecule_[i]) {
+        eligible[numStillEligible++] = i;
+      }
+    }
+    eligible.resize(numStillEligible);
+  }
   return molIds;
+}
+
+void Scheduler::pushAttemptLocked(const size_t molIdx, std::vector<int>& molIds, std::vector<int>* attemptIds) {
+  molIds.push_back(static_cast<int>(molIdx));
+  if (attemptIds != nullptr) {
+    attemptIds->push_back(totalAttempts_[molIdx]);
+  }
+  totalAttempts_[molIdx]++;
+  attemptsInFlightByMolecule_[molIdx]++;
+  attemptsInFlight_++;
 }
 
 void Scheduler::record(const std::vector<int>& molIds, const std::vector<int16_t>& finishedOnIteration) {

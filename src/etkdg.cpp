@@ -71,21 +71,16 @@ class ETKDGCollectDeviceCoordsStage final : public detail::ETKDGStage {
   detail::DeviceCoordCollector&    collector_;
 };
 
-// Helper function to calculate max iterations
-unsigned int calculateMaxIterations(const std::vector<RDKit::ROMol*>& mols, unsigned int maxIterations) {
-  // TODO: Support per-molecule maxIterations to match RDKit's implementation.
-  // Current implementation uses a single maxIterations value for all molecules.
-  // Consider adding a vector of maxIterations to the context for per-molecule control.
-  if (maxIterations == 0) {
-    // Find maximum number of atoms
-    unsigned int maxAtoms = 0;
-    for (const auto& mol : mols) {
-      maxAtoms = std::max(maxAtoms, mol->getNumAtoms());
-    }
-    constexpr unsigned int kIterationsPerAtom = 10;
-    maxIterations                             = kIterationsPerAtom * maxAtoms;
+// Per-molecule iteration limit. Matches RDKit: an unset (0) EmbedParameters::maxIterations means 10 * numAtoms of
+// each molecule, and an explicit value applies to every molecule.
+std::vector<int> calculateMaxIterations(const std::vector<RDKit::ROMol*>& mols, unsigned int maxIterations) {
+  constexpr unsigned int kIterationsPerAtom = 10;
+  std::vector<int>       result;
+  result.reserve(mols.size());
+  for (const auto& mol : mols) {
+    result.push_back(static_cast<int>(maxIterations == 0 ? kIterationsPerAtom * mol->getNumAtoms() : maxIterations));
   }
-  return maxIterations;
+  return result;
 }
 }  // anonymous namespace
 
@@ -195,9 +190,9 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
   prepareExceptionRegistry.rethrow();
 
   // Set max iterations if not specified
-  if (maxIterations == -1) {
-    maxIterations = static_cast<int>(calculateMaxIterations(sortedMols, paramsCopy.maxIterations));
-  }
+  const std::vector<int> maxIterationsPerMol = maxIterations == -1 ?
+                                                 calculateMaxIterations(sortedMols, paramsCopy.maxIterations) :
+                                                 std::vector<int>(sortedMols.size(), maxIterations);
   coordsRange.pop();
 
   // Initialize failures structure if needed (outer vector is per stage, inner is per conformer)
@@ -261,7 +256,7 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
   const int    effectiveBatchSize = (batchSize <= 0) ? static_cast<int>(numUniqueMols) : batchSize;
 
   // Create result tracker for work dispatch
-  detail::Scheduler Scheduler(static_cast<int>(numUniqueMols), confsPerMolecule, maxIterations);
+  detail::Scheduler Scheduler(confsPerMolecule, maxIterationsPerMol);
 
   // Shared completion flag
   std::atomic<bool> workComplete{false};
