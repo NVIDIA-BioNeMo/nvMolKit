@@ -2196,6 +2196,17 @@ TEST_P(ResidentSubstructureSearchTest, RejectsMismatchedAndOversizedTargetBatche
   // caller packing targets by other means could.
   targetsHost.batchAtomStarts.erase(targetsHost.batchAtomStarts.begin() + 1);
   EXPECT_THROW(nvMolKit::makeResidentTargetBatch({targets[0]}, targetsHost, targetsDevice), std::invalid_argument);
+
+  // A target that needs the RDKit fallback, here an atom above the packed bond limit, is rejected up front.
+  RDKit::SmilesParserParams params;
+  params.sanitize  = false;
+  auto hypervalent = std::unique_ptr<RDKit::ROMol>(RDKit::SmilesToMol("[Fe](C)(C)(C)(C)(C)(C)(C)(C)C", params));
+  ASSERT_NE(hypervalent, nullptr);
+  RDKit::MolOps::symmetrizeSSSR(*hypervalent);
+  nvMolKit::MoleculesHost singleHost;
+  nvMolKit::buildTargetBatchParallelInto(singleHost, 1, {targets[0]}, {});
+  EXPECT_THROW(nvMolKit::makeResidentTargetBatch({hypervalent.get()}, singleHost, targetsDevice),
+               std::invalid_argument);
 }
 
 TEST_P(ResidentSubstructureSearchTest, RejectsSearchesConfiguredForAnotherGpu) {

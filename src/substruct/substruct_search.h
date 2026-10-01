@@ -96,9 +96,8 @@ struct ResidentTargetBatch;
  * @brief Describe packed targets resident on the current GPU for hasSubstructMatchResident().
  *
  * targets, targetsHost, and targetsDevice must describe the same molecules in the same order, stay alive and
- * unmodified while the batch is used, and targetsDevice must be fully uploaded. Every target must fit the GPU
- * representation: none may need the RDKit fallback (see requiresRDKitFallback()), and targets above
- * kMaxTargetAtoms atoms are rejected with std::invalid_argument.
+ * unmodified while the batch is used, and targetsDevice must be fully uploaded. Targets above kMaxTargetAtoms atoms
+ * or needing the RDKit fallback (see requiresRDKitFallback()) are rejected with std::invalid_argument.
  */
 std::shared_ptr<const ResidentTargetBatch> makeResidentTargetBatch(const std::vector<const RDKit::ROMol*>& targets,
                                                                    const MoleculesHost&                    targetsHost,

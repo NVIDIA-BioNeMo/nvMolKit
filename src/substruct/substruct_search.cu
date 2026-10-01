@@ -1343,6 +1343,12 @@ std::shared_ptr<const ResidentTargetBatch> makeResidentTargetBatch(const std::ve
   if (targetsHost.numMolecules() != targets.size()) {
     throw std::invalid_argument("Resident target batch does not match its target molecules");
   }
+  // Resident searches skip the per-call RDKit fallback screen, so every target must fit the GPU path.
+  for (const RDKit::ROMol* target : targets) {
+    if (target == nullptr || target->getNumAtoms() > kMaxTargetAtoms || requiresRDKitFallback(target)) {
+      throw std::invalid_argument("Resident targets must not need the RDKit fallback");
+    }
+  }
   auto batch      = std::make_shared<ResidentTargetBatch>();
   batch->targets  = targets;
   batch->host     = &targetsHost;
