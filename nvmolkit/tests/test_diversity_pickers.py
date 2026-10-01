@@ -266,6 +266,14 @@ def test_matrix_values_that_overflow_float32_convert_to_infinity():
 
     assert leader(distances, largest_float32, output=RDKIT) == (0, 1)
     assert dise(distances, largest_float32, output=RDKIT) == ((0,), (1,))
+    assert maxmin(distances, 2, first_picks=(0,), threshold=largest_float32, output=RDKIT) == ((0, 1), float("inf"))
+
+
+def test_maxmin_signed_zero_distances_tie_to_the_lower_index():
+    distances = np.zeros((3, 3))
+    distances[0, 1] = -0.0
+
+    assert maxmin(distances, 2, first_picks=(0,), output=RDKIT)[0] == (0, 1)
 
 
 def test_matrix_cutoff_and_threshold_accept_largest_finite_float32():

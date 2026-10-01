@@ -271,8 +271,10 @@ def run(
         raise ValueError("cannot disable both RDKit and nvMolKit")
     if any(size < 1 for size in sizes):
         raise ValueError("every --sizes value must be positive")
-    if "maxmin" in operations and any(pick_size < 1 or pick_size >= min(sizes) for pick_size in pick_sizes):
-        raise ValueError("every --pick_sizes value must be positive and smaller than every size")
+    # RDKit's MaxMinPicker requires pickSize < poolSize; nvMolKit alone also accepts pickSize == poolSize.
+    largest_pick = min(sizes) - (0 if no_rdkit else 1)
+    if "maxmin" in operations and any(not 1 <= pick_size <= largest_pick for pick_size in pick_sizes):
+        raise ValueError(f"every --pick_sizes value must be between 1 and {largest_pick}")
 
     max_size = max(sizes)
     mols = load_smiles(smiles_path, max_count=max_size + 100, sanitize=True, seed=seed)[:max_size]

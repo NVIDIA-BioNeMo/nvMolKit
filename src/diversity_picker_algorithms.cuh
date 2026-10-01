@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -66,7 +67,8 @@ struct LeaderHitsOp {
 
 //! Orders a MaxMin candidate by larger distance, then by lower index; 0 means no candidate.
 __device__ __forceinline__ std::uint64_t maxMinKey(const float distance, const int candidate) {
-  const auto bits    = __float_as_uint(distance);
+  // -0.0 and +0.0 must tie so the lower index wins.
+  const auto bits    = __float_as_uint(distance == 0.0F ? 0.0F : distance);
   const auto ordered = (bits & 0x80000000U) != 0U ? ~bits : bits | 0x80000000U;
   return (static_cast<std::uint64_t>(ordered) << 32) | (0xFFFFFFFFU - static_cast<std::uint32_t>(candidate));
 }
@@ -286,7 +288,7 @@ PickerResult maxMinPick(Provider&               provider,
   AsyncDevicePtr<int>             count(numInitial, stream);
   AsyncDevicePtr<int>             currentPick(-1, stream);
   AsyncDevicePtr<float>           lastDistance(-1.0F, stream);
-  launchFillFloats(minimumDistances.data(), numItems, FLT_MAX, stream);
+  launchFillFloats(minimumDistances.data(), numItems, std::numeric_limits<float>::infinity(), stream);
   cudaCheckError(cudaMemsetAsync(selected.data(), 0, numItems, stream));
   const MinDistanceOp op{minimumDistances.data(), selected.data(), best.data()};
   provider.accumulateDistances(picks.data(), numInitial, op, stream);
