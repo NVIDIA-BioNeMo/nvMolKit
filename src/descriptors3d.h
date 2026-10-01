@@ -155,32 +155,31 @@ struct Property3DOptions {
  */
 struct Property3DDeviceInputs {
   //! All families: CSR offsets of each molecule's atoms, length `nMols + 1`. Required for a non-empty batch.
-  const int32_t* moleculeAtomStarts        = nullptr;
+  const int32_t* moleculeAtomStarts    = nullptr;
   //! Moments: one weight per atom; null gives every atom unit weight.
-  const double*  momentWeights             = nullptr;
+  const double*  momentWeights         = nullptr;
   //! WHIM, RDF, MORSE, AUTOCORR3D: six atom-property channels (RDKit's relative mass, van der Waals volume,
   //! electronegativity, polarizability and ionization potential, then I-state), channel-major with one
   //! value per atom. Required when any of them is requested.
-  const double*  atomPropertyWeights       = nullptr;
+  const double*  atomPropertyWeights   = nullptr;
   //! RDF: RDKit's I-state (GetIStateDrag), one value per atom, used in place of the I-state channel.
   //! Required when RDF is requested.
-  const double*  iStateDragWeights         = nullptr;
+  const double*  iStateDragWeights     = nullptr;
   //! AUTOCORR3D: RDKit's relative covalent radius (GetRelativeRcov), one value per atom.
-  const double*  covalentRadiusWeights     = nullptr;
-  //! AUTOCORR3D: per molecule, the bond-count distance of every atom pair j < k in row-major order
-  //! ((0, 1), (0, 2), ..., (1, 2), ...), starting at @ref topologicalDistanceStarts. Entries hold distances
-  //! 1-10; 0 marks longer paths and disconnected pairs, which do not contribute.
-  const uint8_t* topologicalDistances      = nullptr;
-  //! AUTOCORR3D: offsets of each molecule's matrix in @ref topologicalDistances, length `nMols + 1`.
-  const int64_t* topologicalDistanceStarts = nullptr;
+  const double*  covalentRadiusWeights = nullptr;
+  //! AUTOCORR3D: bond adjacency in CSR form. Atom g (indexed like @ref moleculeAtomStarts, `totalAtoms + 1`
+  //! starts) has neighbors `bondNeighbors[bondNeighborStarts[g] .. bondNeighborStarts[g + 1])`, stored as atom
+  //! indices within its molecule.
+  const int32_t* bondNeighborStarts    = nullptr;
+  const int32_t* bondNeighbors         = nullptr;
   //! USRCAT: per atom, bit c set when the atom is in RDKit's USRCAT class c (hydrophobic, aromatic,
   //! acceptor, donor).
-  const uint8_t* usrcatAtomClasses         = nullptr;
+  const uint8_t* usrcatAtomClasses     = nullptr;
   //! PBF: per-conformer RDKit is3D flags (one per coordinate row); null treats every row as 3D.
-  const int8_t*  conformerIs3D             = nullptr;
+  const int8_t*  conformerIs3D         = nullptr;
   //! WHIM: largest molecule atom count in the batch (host value); sizes the per-conformer symmetry-search
   //! scratch. Rows with more atoms produce NaN.
-  int32_t        maxMoleculeAtoms          = 0;
+  int32_t        maxMoleculeAtoms      = 0;
 };
 
 //! One row-major device vector of length numConformers * property3DWidth(property) per property.

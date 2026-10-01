@@ -28,6 +28,43 @@ constexpr int kNumAutocorrChannels = kNumPairwiseChannels + 1;
 constexpr int kNumAutocorrLags     = kNumAutocorr3DProperties / kNumAutocorrChannels;
 constexpr int kAutocorrLagsPerLane = (kNumAutocorrLags + kGroupSize - 1) / kGroupSize;
 
+//! Bond depth of an atom not reached within kNumAutocorrLags bonds of the search source.
+constexpr uint8_t kUnreachedDepth = 0xFF;
+
+/**
+ * @brief Collective over the @p groupMask lanes. Breadth-first search over the molecule's bonds from atom
+ *        @p source, writing each atom's bond-count distance to @p depth, or kUnreachedDepth beyond
+ *        kNumAutocorrLags bonds. Matches RDKit's MolOps::getDistanceMat(mol, false) up to that cap.
+ *
+ * Each level scans the atoms set at the previous level, O(kNumAutocorrLags * atoms) per source; lanes that
+ * reach the same atom write the same value.
+ */
+__device__ __forceinline__ void searchBondDepths(const int32_t* neighborStarts,
+                                                 const int32_t* neighbors,
+                                                 const int      numAtoms,
+                                                 const int      source,
+                                                 const int      laneInGroup,
+                                                 const unsigned groupMask,
+                                                 uint8_t*       depth) {
+  for (int atomIdx = laneInGroup; atomIdx < numAtoms; atomIdx += kGroupSize) {
+    depth[atomIdx] = atomIdx == source ? 0 : kUnreachedDepth;
+  }
+  __syncwarp(groupMask);
+  for (int level = 1; level <= kNumAutocorrLags; ++level) {
+    for (int atomIdx = laneInGroup; atomIdx < numAtoms; atomIdx += kGroupSize) {
+      if (depth[atomIdx] == level - 1) {
+        for (int edge = neighborStarts[atomIdx]; edge < neighborStarts[atomIdx + 1]; ++edge) {
+          const int neighbor = neighbors[edge];
+          if (depth[neighbor] == kUnreachedDepth) {
+            depth[neighbor] = static_cast<uint8_t>(level);
+          }
+        }
+      }
+    }
+    __syncwarp(groupMask);
+  }
+}
+
 //! Pairwise properties served by one kernel instantiation; unrequested ones compile out.
 enum PairwiseSet : unsigned {
   kPairwiseRdf        = 1u,
@@ -136,8 +173,10 @@ __device__ __forceinline__ void computeMorseZeroBin(const ConformerAtoms& atoms,
  * the I-state block of `inputs.atomPropertyWeights`, matching RDKit.
  *
  * AUTOCORR3D lag l (1-10) adds r * w_j * w_k over pairs whose bond-count distance is l, for the MORSE
- * channels plus covalent radius; the lane owning the lag accumulates it. RDKit evaluates each sum as
- * w^T (B_l .* D) w, so a NaN weight anywhere in a channel makes every lag of that channel NaN, which RDKit
+ * channels plus covalent radius; the lane owning the lag accumulates it. Each group finds row j's bond
+ * distances with searchBondDepths() into its own @p bondDepths array (kPairStreams per conformer, laid out
+ * by atom like the coordinate rows). RDKit evaluates each sum
+ * as w^T (B_l .* D) w, so a NaN weight anywhere in a channel makes every lag of that channel NaN, which RDKit
  * then reports as 0; the kernel reproduces that per channel. Sums count both orders of each pair and are
  * divided by n (n - 1).
  *
@@ -152,6 +191,7 @@ template <typename Real, unsigned kSet>
 __global__ void pairwise3DKernel(const DeviceCoordView        coordinates,
                                  const Property3DDeviceInputs inputs,
                                  Real* __restrict__ scratch,
+                                 uint8_t* __restrict__ bondDepths,
                                  Real* __restrict__ rdfOutput,
                                  Real* __restrict__ morseOutput,
                                  Real* __restrict__ autocorrOutput) {
@@ -213,9 +253,12 @@ __global__ void pairwise3DKernel(const DeviceCoordView        coordinates,
     // Makes the scratch rows visible to every lane.
     __syncwarp();
 
-    const uint8_t* topology = nullptr;
+    const int32_t* neighborStarts = nullptr;
+    uint8_t*       depth          = nullptr;
     if constexpr (kAutocorr) {
-      topology = inputs.topologicalDistances + inputs.topologicalDistanceStarts[coordinates.molIndices[conformerIdx]];
+      neighborStarts = inputs.bondNeighborStarts + moleculeStart;
+      depth          = bondDepths + ((atoms.positions - coordinates.positions) / 3) * kPairStreams +
+              static_cast<size_t>(stream) * atoms.numAtoms;
       for (int channel = 1; channel < kNumAutocorrChannels; ++channel) {
         const double* weights =
           channel < kNumPairwiseChannels ? propertyWeights + static_cast<size_t>(channel - 1) * totalAtoms : radius;
@@ -232,8 +275,15 @@ __global__ void pairwise3DKernel(const DeviceCoordView        coordinates,
       const PairwiseAtom<Real> first   = loadPairwiseAtom(rowJ);
       const Real               dragJ   = rowJ[kScratchIStateDrag];
       const Real               radiusJ = rowJ[kScratchCovalentRadius];
-      // Packed upper-triangle index of pair (j, j + 1) in the topology rows.
-      const int64_t rowPairStart = static_cast<int64_t>(j) * atoms.numAtoms - static_cast<int64_t>(j) * (j + 1) / 2;
+      if constexpr (kAutocorr) {
+        searchBondDepths(neighborStarts,
+                         inputs.bondNeighbors,
+                         atoms.numAtoms,
+                         j,
+                         laneInGroup,
+                         0xffu << (stream * kGroupSize),
+                         depth);
+      }
       for (int k = j + 1; k < atoms.numAtoms; ++k) {
         const Real* const        rowK   = rows + k * kPairwiseScratchStride;
         const PairwiseAtom<Real> second = loadPairwiseAtom(rowK);
@@ -261,8 +311,8 @@ __global__ void pairwise3DKernel(const DeviceCoordView        coordinates,
           }
         }
         if constexpr (kAutocorr) {
-          const int lag = topology[rowPairStart + (k - j - 1)];
-          if (lag != 0 && (lag - 1) % kGroupSize == laneInGroup) {
+          const int lag = depth[k];
+          if (lag != kUnreachedDepth && (lag - 1) % kGroupSize == laneInGroup) {
             // A select on the slot, not an index, keeps autocorrAcc in registers.
             const int  lagSlot       = (lag - 1) / kGroupSize;
             const Real radiusProduct = radiusJ * rowK[kScratchCovalentRadius];
@@ -363,15 +413,18 @@ template <typename Real, unsigned kSet>
 void launchPairwiseSet(const DeviceCoordView&        coordinates,
                        const Property3DDeviceInputs& inputs,
                        Real*                         scratch,
+                       uint8_t*                      bondDepths,
                        const PairwiseOutputs<Real>&  outputs,
-                       const int                     numBlocks,
                        const cudaStream_t            stream) {
+  const int numBlocks = (coordinates.numConformers + kWarpsPerBlock - 1) / kWarpsPerBlock;
   pairwise3DKernel<Real, kSet><<<numBlocks, kBlockSize, 0, stream>>>(coordinates,
                                                                      inputs,
                                                                      scratch,
+                                                                     bondDepths,
                                                                      outputs.rdf,
                                                                      outputs.morse,
                                                                      outputs.autocorr3D);
+  cudaCheckError(cudaGetLastError());
 }
 
 //! Launches the pairwise kernel when RDF, MORSE or AUTOCORR3D is requested; one pass over atom pairs serves
@@ -383,52 +436,44 @@ void launchPairwiseProperties(const DeviceCoordView&        coordinates,
                               const cudaStream_t            stream) {
   const unsigned set = (outputs.rdf != nullptr ? kPairwiseRdf : 0u) | (outputs.morse != nullptr ? kPairwiseMorse : 0u) |
                        (outputs.autocorr3D != nullptr ? kPairwiseAutocorr3D : 0u);
-  const int numConformers = coordinates.numConformers;
-  if (numConformers == 0 || set == 0) {
+  if (coordinates.numConformers == 0 || set == 0) {
     return;
   }
-  const int               numBlocks = (numConformers + kWarpsPerBlock - 1) / kWarpsPerBlock;
-  AsyncDeviceVector<Real> scratch(static_cast<size_t>(coordinates.numAtoms) * kPairwiseScratchStride, stream);
-  Real* const             rows = scratch.data();
+  AsyncDeviceVector<Real>    scratch(static_cast<size_t>(coordinates.numAtoms) * kPairwiseScratchStride, stream);
+  // One bond-depth array per pair stream per conformer, only when AUTOCORR3D is requested.
+  AsyncDeviceVector<uint8_t> bondDepthScratch(
+    (set & kPairwiseAutocorr3D) != 0 ? static_cast<size_t>(coordinates.numAtoms) * kPairStreams : 0,
+    stream);
+  Real* const    rows   = scratch.data();
+  uint8_t* const depths = bondDepthScratch.data();
   switch (set) {
     case kPairwiseRdf:
-      launchPairwiseSet<Real, kPairwiseRdf>(coordinates, inputs, rows, outputs, numBlocks, stream);
+      launchPairwiseSet<Real, kPairwiseRdf>(coordinates, inputs, rows, depths, outputs, stream);
       break;
     case kPairwiseMorse:
-      launchPairwiseSet<Real, kPairwiseMorse>(coordinates, inputs, rows, outputs, numBlocks, stream);
+      launchPairwiseSet<Real, kPairwiseMorse>(coordinates, inputs, rows, depths, outputs, stream);
       break;
     case kPairwiseRdf | kPairwiseMorse:
-      launchPairwiseSet<Real, kPairwiseRdf | kPairwiseMorse>(coordinates, inputs, rows, outputs, numBlocks, stream);
+      launchPairwiseSet<Real, kPairwiseRdf | kPairwiseMorse>(coordinates, inputs, rows, depths, outputs, stream);
       break;
     case kPairwiseAutocorr3D:
-      launchPairwiseSet<Real, kPairwiseAutocorr3D>(coordinates, inputs, rows, outputs, numBlocks, stream);
+      launchPairwiseSet<Real, kPairwiseAutocorr3D>(coordinates, inputs, rows, depths, outputs, stream);
       break;
     case kPairwiseRdf | kPairwiseAutocorr3D:
-      launchPairwiseSet<Real, kPairwiseRdf | kPairwiseAutocorr3D>(coordinates,
-                                                                  inputs,
-                                                                  rows,
-                                                                  outputs,
-                                                                  numBlocks,
-                                                                  stream);
+      launchPairwiseSet<Real, kPairwiseRdf | kPairwiseAutocorr3D>(coordinates, inputs, rows, depths, outputs, stream);
       break;
     case kPairwiseMorse | kPairwiseAutocorr3D:
-      launchPairwiseSet<Real, kPairwiseMorse | kPairwiseAutocorr3D>(coordinates,
-                                                                    inputs,
-                                                                    rows,
-                                                                    outputs,
-                                                                    numBlocks,
-                                                                    stream);
+      launchPairwiseSet<Real, kPairwiseMorse | kPairwiseAutocorr3D>(coordinates, inputs, rows, depths, outputs, stream);
       break;
     default:
       launchPairwiseSet<Real, kPairwiseRdf | kPairwiseMorse | kPairwiseAutocorr3D>(coordinates,
                                                                                    inputs,
                                                                                    rows,
+                                                                                   depths,
                                                                                    outputs,
-                                                                                   numBlocks,
                                                                                    stream);
       break;
   }
-  cudaCheckError(cudaGetLastError());
 }
 
 }  // namespace nvMolKit::descriptors3d_detail

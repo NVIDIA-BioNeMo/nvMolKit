@@ -343,10 +343,9 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
       "Atom-property weights must not be null when WHIM, RDF, MORSE or AUTOCORR3D is requested");
   }
   if (pairwiseOutputs.autocorr3D != nullptr &&
-      (inputs.covalentRadiusWeights == nullptr || inputs.topologicalDistances == nullptr ||
-       inputs.topologicalDistanceStarts == nullptr)) {
-    throw std::invalid_argument(
-      "Covalent radii and topological distances must not be null when AUTOCORR3D is requested");
+      (inputs.covalentRadiusWeights == nullptr || inputs.bondNeighborStarts == nullptr ||
+       inputs.bondNeighbors == nullptr)) {
+    throw std::invalid_argument("Covalent radii and bond adjacency must not be null when AUTOCORR3D is requested");
   }
   if (usrcatOutput != nullptr && inputs.usrcatAtomClasses == nullptr) {
     throw std::invalid_argument("USRCAT atom classes must not be null when USRCAT is requested");
