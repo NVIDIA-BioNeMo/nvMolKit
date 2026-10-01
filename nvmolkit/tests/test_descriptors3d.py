@@ -535,6 +535,19 @@ def test_usr_nan_coordinates_give_nan(precision):
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)
+def test_autocorr3d_non_finite_coordinates_match_rdkit(precision):
+    mols = [
+        _mol_with_conformers("CCCO", [[(0.0, 0.0, 0.0), (1.5, float("nan"), 0.0), (2.0, 1.4, 0.0), (3.4, 1.5, 0.2)]]),
+        _mol_with_conformers("CCCO", [[(0.0, 0.0, 0.0), (1.5, 0.2, 0.0), (2.0, 1.4, float("inf")), (3.4, 1.5, 0.2)]]),
+        _embed("CCCO", 1, 47),
+    ]
+    result = Calc3DProperties(mols, Property3D.AUTOCORR3D, precision=precision)
+    _assert_rounded_matches_rdkit(
+        result[Property3D.AUTOCORR3D].numpy(), _rdkit_pairwise_rows(mols, Property3D.AUTOCORR3D), precision
+    )
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
 def test_autocorr3d_accepts_batches_without_bonds(precision):
     mols = [
         _mol_with_conformers("[He]", [[(4.0, -3.0, 2.0)]]),

@@ -46,6 +46,8 @@ __device__ __forceinline__ void searchBondDepths(const int32_t* neighborStarts,
                                                  const int      laneInGroup,
                                                  const unsigned groupMask,
                                                  uint8_t*       depth) {
+  // Every lane has finished reading the previous source's depths before they are overwritten.
+  __syncwarp(groupMask);
   for (int atomIdx = laneInGroup; atomIdx < numAtoms; atomIdx += kGroupSize) {
     depth[atomIdx] = atomIdx == source ? 0 : kUnreachedDepth;
   }
@@ -176,8 +178,9 @@ __device__ __forceinline__ void computeMorseZeroBin(const ConformerAtoms& atoms,
  * channels plus covalent radius; the lane owning the lag accumulates it. Each group finds row j's bond
  * distances with searchBondDepths() into its own @p bondDepths array (kPairStreams per conformer, laid out
  * by atom like the coordinate rows). RDKit evaluates each sum
- * as w^T (B_l .* D) w, so a NaN weight anywhere in a channel makes every lag of that channel NaN, which RDKit
- * then reports as 0; the kernel reproduces that per channel. Sums count both orders of each pair and are
+ * as w^T (B_l .* D) w, so a NaN weight anywhere in a channel, or a non-finite coordinate anywhere in the
+ * conformer (a NaN distance, multiplied by the mask's zeros), makes every affected lag NaN, which RDKit then
+ * reports as 0; the kernel reproduces that per channel. Sums count both orders of each pair and are
  * divided by n (n - 1).
  *
  * The warp first writes one @p scratch row per atom (kPairwiseScratchStride values: coordinates centered in
@@ -259,6 +262,14 @@ __global__ void pairwise3DKernel(const DeviceCoordView        coordinates,
       neighborStarts = inputs.bondNeighborStarts + moleculeStart;
       depth          = bondDepths + ((atoms.positions - coordinates.positions) / 3) * kPairStreams +
               static_cast<size_t>(stream) * atoms.numAtoms;
+      int nonFiniteCount = 0;
+      for (int atomIdx = lane; atomIdx < atoms.numAtoms; atomIdx += kWarpSize) {
+        for (int axis = 0; axis < 3; ++axis) {
+          nonFiniteCount += isfinite(atoms.positions[atomIdx * 3 + axis]) ? 0 : 1;
+        }
+      }
+      const bool nonFiniteCoordinates = groupAllReduceSum<kWarpSize>(nonFiniteCount) != 0;
+      autocorrChannelNaN[0]           = nonFiniteCoordinates;
       for (int channel = 1; channel < kNumAutocorrChannels; ++channel) {
         const double* weights =
           channel < kNumPairwiseChannels ? propertyWeights + static_cast<size_t>(channel - 1) * totalAtoms : radius;
@@ -266,7 +277,7 @@ __global__ void pairwise3DKernel(const DeviceCoordView        coordinates,
         for (int atomIdx = lane; atomIdx < atoms.numAtoms; atomIdx += kWarpSize) {
           nanCount += isnan(weights[atomIdx]) ? 1 : 0;
         }
-        autocorrChannelNaN[channel] = groupAllReduceSum<kWarpSize>(nanCount) != 0;
+        autocorrChannelNaN[channel] = nonFiniteCoordinates || groupAllReduceSum<kWarpSize>(nanCount) != 0;
       }
     }
 
