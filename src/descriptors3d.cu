@@ -11,7 +11,7 @@
 #include "src/descriptors3d_moments.cuh"
 #include "src/descriptors3d_pairwise.cuh"
 #include "src/descriptors3d_projection.cuh"
-#include "src/descriptors3d_reference.cuh"
+#include "src/descriptors3d_usr.cuh"
 #include "src/utils/cuda_error_check.h"
 
 namespace nvMolKit {
@@ -79,7 +79,7 @@ using descriptors3d_detail::kWarpSize;
 using descriptors3d_detail::kWarpsPerBlock;
 using descriptors3d_detail::launchPairwiseProperties;
 using descriptors3d_detail::launchProjectionProperties;
-using descriptors3d_detail::launchReferencePointProperties;
+using descriptors3d_detail::launchUsrProperties;
 using descriptors3d_detail::loadConformer;
 using descriptors3d_detail::MomentState;
 using descriptors3d_detail::PairwiseOutputs;
@@ -318,7 +318,7 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
          property == Property3D::MORSE ? pairwiseOutputs.morse :
                                          pairwiseOutputs.autocorr3D) = it->second.data();
         break;
-      case Property3DFamily::ReferencePoints:
+      case Property3DFamily::Usr:
         (property == Property3D::USR ? usrOutput : usrcatOutput) = it->second.data();
         break;
     }
@@ -361,7 +361,7 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
   launchMomentProperties(coordinates, momentWeights, inputs.moleculeAtomStarts, work, separateSpherocityState, stream);
   launchProjectionProperties(coordinates, inputs, options.whim, pbfOutput, whimOutput, stream);
   launchPairwiseProperties(coordinates, inputs, pairwiseOutputs, stream);
-  launchReferencePointProperties(coordinates, inputs, usrOutput, usrcatOutput, stream);
+  launchUsrProperties(coordinates, inputs, usrOutput, usrcatOutput, stream);
   return results;
 }
 

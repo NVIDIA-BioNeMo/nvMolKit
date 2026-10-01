@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-#ifndef NVMOLKIT_DESCRIPTORS3D_REFERENCE_CUH
-#define NVMOLKIT_DESCRIPTORS3D_REFERENCE_CUH
+#ifndef NVMOLKIT_DESCRIPTORS3D_USR_CUH
+#define NVMOLKIT_DESCRIPTORS3D_USR_CUH
 
 #include <cmath>
 
@@ -148,11 +148,11 @@ __device__ __forceinline__ void usrMoments(const Real*    centered,
  * Conformers with fewer than three atoms, which RDKit rejects, produce NaN.
  */
 template <typename Real, bool kUsrcat>
-__global__ void referencePoints3DKernel(const DeviceCoordView        coordinates,
-                                        const Property3DDeviceInputs inputs,
-                                        Real* __restrict__ centered,
-                                        Real* __restrict__ usrOutput,
-                                        Real* __restrict__ usrcatOutput) {
+__global__ void usr3DKernel(const DeviceCoordView        coordinates,
+                            const Property3DDeviceInputs inputs,
+                            Real* __restrict__ centered,
+                            Real* __restrict__ usrOutput,
+                            Real* __restrict__ usrcatOutput) {
   constexpr int kNumSubsets = kUsrcat ? kNumUsrcatClasses + 1 : 1;
   const int     lane        = static_cast<int>(threadIdx.x) % kWarpSize;
   const int     laneInGroup = lane % kGroupSize;
@@ -219,11 +219,11 @@ __global__ void referencePoints3DKernel(const DeviceCoordView        coordinates
 //! Launches the reference-point kernel when USR or USRCAT is requested; USRCAT's first block is USR, so
 //! requesting both costs one pass.
 template <typename Real>
-void launchReferencePointProperties(const DeviceCoordView&        coordinates,
-                                    const Property3DDeviceInputs& inputs,
-                                    Real*                         usrOutput,
-                                    Real*                         usrcatOutput,
-                                    const cudaStream_t            stream) {
+void launchUsrProperties(const DeviceCoordView&        coordinates,
+                         const Property3DDeviceInputs& inputs,
+                         Real*                         usrOutput,
+                         Real*                         usrcatOutput,
+                         const cudaStream_t            stream) {
   const int numConformers = coordinates.numConformers;
   if (numConformers == 0 || (usrOutput == nullptr && usrcatOutput == nullptr)) {
     return;
@@ -231,10 +231,10 @@ void launchReferencePointProperties(const DeviceCoordView&        coordinates,
   const int               numBlocks = (numConformers + kConformersPerBlock - 1) / kConformersPerBlock;
   AsyncDeviceVector<Real> centered(static_cast<size_t>(coordinates.numAtoms) * 3, stream);
   if (usrcatOutput != nullptr) {
-    referencePoints3DKernel<Real, true>
+    usr3DKernel<Real, true>
       <<<numBlocks, kBlockSize, 0, stream>>>(coordinates, inputs, centered.data(), usrOutput, usrcatOutput);
   } else {
-    referencePoints3DKernel<Real, false>
+    usr3DKernel<Real, false>
       <<<numBlocks, kBlockSize, 0, stream>>>(coordinates, inputs, centered.data(), usrOutput, nullptr);
   }
   cudaCheckError(cudaGetLastError());
@@ -242,4 +242,4 @@ void launchReferencePointProperties(const DeviceCoordView&        coordinates,
 
 }  // namespace nvMolKit::descriptors3d_detail
 
-#endif  // NVMOLKIT_DESCRIPTORS3D_REFERENCE_CUH
+#endif  // NVMOLKIT_DESCRIPTORS3D_USR_CUH

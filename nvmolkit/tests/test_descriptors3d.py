@@ -38,8 +38,8 @@ RDKIT_PAIRWISE = {
     Property3D.MORSE: rdMolDescriptors.CalcMORSE,
     Property3D.AUTOCORR3D: rdMolDescriptors.CalcAUTOCORR3D,
 }
-REFERENCE_PROPERTIES = (Property3D.USR, Property3D.USRCAT)
-RDKIT_REFERENCE = {Property3D.USR: rdMolDescriptors.GetUSR, Property3D.USRCAT: rdMolDescriptors.GetUSRCAT}
+USR_PROPERTIES = (Property3D.USR, Property3D.USRCAT)
+RDKIT_USR = {Property3D.USR: rdMolDescriptors.GetUSR, Property3D.USRCAT: rdMolDescriptors.GetUSRCAT}
 
 
 def _assert_matches_rdkit(actual, expected, precision=PrecisionMode.SINGLE):
@@ -315,12 +315,12 @@ def test_scalar_properties_are_translation_invariant_far_from_origin(precision):
     far_pairwise = Calc3DProperties(translated, PAIRWISE_PROPERTIES, precision=precision)
     for prop in PAIRWISE_PROPERTIES:
         _assert_rounded_matches_rdkit(far_pairwise[prop].numpy(), near_pairwise[prop].numpy(), precision)
-    near_reference = Calc3DProperties(mols, REFERENCE_PROPERTIES, precision=precision)
-    far_reference = Calc3DProperties(translated, REFERENCE_PROPERTIES, precision=precision)
-    for prop in REFERENCE_PROPERTIES:
+    near_usr = Calc3DProperties(mols, USR_PROPERTIES, precision=precision)
+    far_usr = Calc3DProperties(translated, USR_PROPERTIES, precision=precision)
+    for prop in USR_PROPERTIES:
         _assert_usr_matches(
-            far_reference[prop].numpy(),
-            near_reference[prop].numpy(),
+            far_usr[prop].numpy(),
+            near_usr[prop].numpy(),
             precision,
             class_blocks=prop == Property3D.USRCAT,
         )
@@ -474,7 +474,7 @@ def _assert_usr_matches(actual, expected, precision, *, class_blocks):
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)
-def test_reference_point_family_matches_rdkit(precision):
+def test_usr_family_matches_rdkit(precision):
     mols = [
         _embed("CC(=O)Nc1ccc(O)cc1", 3, 79),
         _embed("c1ccncc1", 2, 83),
@@ -484,13 +484,13 @@ def test_reference_point_family_matches_rdkit(precision):
             "C.C.C.C", [[(0.6656854354786497, 0.0, 0.0), (-0.5, 0.0, 0.1), (0.4, 3.0, 0.0), (-0.2, -3.2, 0.5)]]
         ),
     ]
-    result = Calc3DProperties(mols, REFERENCE_PROPERTIES, precision=precision)
+    result = Calc3DProperties(mols, USR_PROPERTIES, precision=precision)
     assert result[Property3D.USR].torch().shape == (6, 12)
     assert result[Property3D.USRCAT].torch().shape == (6, 60)
 
-    for prop in REFERENCE_PROPERTIES:
+    for prop in USR_PROPERTIES:
         expected = np.asarray(
-            [RDKIT_REFERENCE[prop](mol, confId=conf.GetId()) for mol in mols for conf in mol.GetConformers()]
+            [RDKIT_USR[prop](mol, confId=conf.GetId()) for mol in mols for conf in mol.GetConformers()]
         )
         _assert_usr_matches(result[prop].numpy(), expected, precision, class_blocks=prop == Property3D.USRCAT)
         alone = Calc3DProperties(mols, prop, precision=precision)
@@ -500,21 +500,21 @@ def test_reference_point_family_matches_rdkit(precision):
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)
-def test_reference_points_need_three_atoms(precision):
+def test_usr_needs_three_atoms(precision):
     mols = [
         _mol_with_conformers("CO", [[(0.0, 0.0, 0.0), (1.4, 0.0, 0.0)]]),
         _mol_with_conformers("CCO", [[(0.0, 0.0, 0.0), (1.5, 0.0, 0.0), (2.0, 1.4, 0.0)]]),
     ]
-    result = Calc3DProperties(mols, REFERENCE_PROPERTIES, precision=precision)
+    result = Calc3DProperties(mols, USR_PROPERTIES, precision=precision)
     # RDKit raises for fewer than three atoms; nvMolKit reports NaN for that row.
     with pytest.raises(ValueError):
         rdMolDescriptors.GetUSR(mols[0])
-    for prop in REFERENCE_PROPERTIES:
+    for prop in USR_PROPERTIES:
         values = result[prop].numpy()
         assert np.isnan(values[0]).all()
         _assert_usr_matches(
             values[1:],
-            np.asarray([RDKIT_REFERENCE[prop](mols[1])]),
+            np.asarray([RDKIT_USR[prop](mols[1])]),
             precision,
             class_blocks=prop == Property3D.USRCAT,
         )

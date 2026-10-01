@@ -311,7 +311,7 @@ TEST(Descriptors3DPairwise, MatchesRdkitAutocorr3D) {
   }
 }
 
-TEST(Descriptors3DReferencePoints, MatchesRdkitUsrAndUsrcat) {
+TEST(Descriptors3DUsr, MatchesRdkitUsrAndUsrcat) {
   auto                                   mol  = molWithConformers("CCCO",
                                                                   {
                                  {{-1.3, 0.2, 0.7}, {-0.2, -0.8, 0.1}, {0.9, 0.4, -0.6},  {1.7, 1.1, 0.9}},

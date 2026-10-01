@@ -94,10 +94,10 @@ constexpr int property3DWidth(const Property3D property) {
 //! Properties computed together because they share per-conformer work; each family has its own kernel,
 //! device inputs and options.
 enum class Property3DFamily : int {
-  Moments,          //!< Inertia/gyration tensor eigenvalues: PMI, NPR, RadiusOfGyration and derived shape indices.
-  Projection,       //!< Coordinate PCA and projections onto its axes: PBF and WHIM.
-  Pairwise,         //!< Sums over atom pairs weighted by atom-property pairs: RDF, MORSE and AUTOCORR3D.
-  ReferencePoints,  //!< Distance moments from four reference points: USR and USRCAT.
+  Moments,     //!< Inertia/gyration tensor eigenvalues: PMI, NPR, RadiusOfGyration and derived shape indices.
+  Projection,  //!< Coordinate PCA and projections onto its axes: PBF and WHIM.
+  Pairwise,    //!< Sums over atom pairs weighted by atom-property pairs: RDF, MORSE and AUTOCORR3D.
+  Usr,         //!< Distance moments from four reference points: USR and USRCAT.
 };
 
 constexpr Property3DFamily property3DFamily(const Property3D property) {
@@ -122,7 +122,7 @@ constexpr Property3DFamily property3DFamily(const Property3D property) {
       return Property3DFamily::Pairwise;
     case Property3D::USR:
     case Property3D::USRCAT:
-      return Property3DFamily::ReferencePoints;
+      return Property3DFamily::Usr;
   }
   return Property3DFamily::Moments;
 }
