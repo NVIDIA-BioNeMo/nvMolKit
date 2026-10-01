@@ -49,12 +49,12 @@ namespace {
 
 constexpr unsigned int kMaxTargetIsotope = 255;
 
+// ONEANDAHALF (7) is excluded: packed bonds treat it as aromatic, but RDKit does not.
 bool isSupportedTargetBondType(const int bondType) {
   switch (bondType) {
     case 1:
     case 2:
     case 3:
-    case 7:
     case 12:
       return true;
     default:

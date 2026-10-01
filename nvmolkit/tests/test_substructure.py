@@ -1358,3 +1358,24 @@ def test_plain_molecule_query_atoms_match_like_rdkit(query_smiles):
     results = hasSubstructMatch(targets, [query])
 
     assert results[:, 0].astype(bool).tolist() == [target.HasSubstructMatch(query) for target in targets]
+
+
+def _one_and_a_half_bond_target() -> Chem.Mol:
+    mol = Chem.RWMol(Chem.MolFromSmiles("CCO"))
+    mol.GetBondWithIdx(0).SetBondType(Chem.BondType.ONEANDAHALF)
+    mol.UpdatePropertyCache(strict=False)
+    Chem.GetSymmSSSR(mol)
+    return mol.GetMol()
+
+
+@pytest.mark.parametrize("algorithm", ["gsi", "dfs"])
+def test_targets_outside_packed_limits_match_like_rdkit(algorithm):
+    """Isotopes above 255 and dative or ONEANDAHALF bonds are matched by the RDKit fallback."""
+    targets = [Chem.MolFromSmiles(smiles) for smiles in ["[300C]CN", "[NH3]->[Cu]", "CCN"]]
+    targets.append(_one_and_a_half_bond_target())
+    queries = [Chem.MolFromSmarts(smarts) for smarts in ["[#7]", "[Cu]", "[#6]~[#7]", "C:C", "C~C", "[#6]-[#6]", "CC"]]
+
+    results = hasSubstructMatch(targets, queries, config=SubstructSearchConfig(algorithm=algorithm))
+
+    expected = [[target.HasSubstructMatch(query) for query in queries] for target in targets]
+    assert results.astype(bool).tolist() == expected
