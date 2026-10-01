@@ -10,6 +10,7 @@
 #include <cuda/std/span>
 #include <vector>
 
+#include "src/clustering_result.h"
 #include "src/fingerprint_similarity.h"
 #include "src/utils/device_vector.h"
 
@@ -52,6 +53,26 @@ PickerResult fusedLeaderGpu(cuda::std::span<const std::uint32_t> fingerprints,
                             int                                  pickSize,
                             const std::vector<int>&              firstPicks = {},
                             cudaStream_t                         stream     = nullptr);
+
+ClusteringResult diseFromDistanceMatrix(cuda::std::span<const float> distanceMatrix,
+                                        int                          numItems,
+                                        double                       cutoff,
+                                        bool                         nearestAssignment,
+                                        cudaStream_t                 stream = nullptr);
+
+ClusteringResult diseFromDistanceMatrix(cuda::std::span<const double> distanceMatrix,
+                                        int                           numItems,
+                                        double                        cutoff,
+                                        bool                          nearestAssignment,
+                                        cudaStream_t                  stream = nullptr);
+
+ClusteringResult fusedDiseGpu(cuda::std::span<const std::uint32_t> fingerprints,
+                              int                                  numFingerprints,
+                              int                                  numWords,
+                              double                               cutoff,
+                              FingerprintSimilarityMetric          metric,
+                              bool                                 nearestAssignment,
+                              cudaStream_t                         stream = nullptr);
 
 }  // namespace nvMolKit
 

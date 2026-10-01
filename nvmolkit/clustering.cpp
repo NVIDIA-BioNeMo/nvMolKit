@@ -282,6 +282,55 @@ BOOST_PYTHON_MODULE(_clustering) {
      boost::python::arg("stream")));
 
   boost::python::def(
+    "dise",
+    +[](const boost::python::dict& distanceMatrix,
+        const double               cutoff,
+        const bool                 nearestAssignment,
+        const bool                 deviceOutput,
+        const std::uintptr_t       streamPtr) {
+      const auto stream = requireStream(streamPtr);
+      const auto input  = parseDistanceMatrix(distanceMatrix);
+      auto       result = std::visit(
+        [&](const auto distances) {
+          return nvMolKit::diseFromDistanceMatrix(distances, input.numItems, cutoff, nearestAssignment, stream);
+        },
+        input.distances);
+      return wrapClusteringResult(result, deviceOutput, stream);
+    },
+    (boost::python::arg("distance_matrix"),
+     boost::python::arg("cutoff"),
+     boost::python::arg("nearest_assignment"),
+     boost::python::arg("device_output"),
+     boost::python::arg("stream")));
+
+  boost::python::def(
+    "fused_dise",
+    +[](const boost::python::dict& fingerprints,
+        const double               cutoff,
+        const std::string&         metric,
+        const bool                 nearestAssignment,
+        const bool                 deviceOutput,
+        const std::uintptr_t       streamPtr) {
+      const auto stream = requireStream(streamPtr);
+      const auto input  = parseFingerprints(fingerprints);
+      return wrapClusteringResult(nvMolKit::fusedDiseGpu(input.fingerprints,
+                                                         input.numItems,
+                                                         input.numWords,
+                                                         cutoff,
+                                                         parseFingerprintMetric(metric),
+                                                         nearestAssignment,
+                                                         stream),
+                                  deviceOutput,
+                                  stream);
+    },
+    (boost::python::arg("fingerprints"),
+     boost::python::arg("cutoff"),
+     boost::python::arg("metric"),
+     boost::python::arg("nearest_assignment"),
+     boost::python::arg("device_output"),
+     boost::python::arg("stream")));
+
+  boost::python::def(
     "butina",
     +[](const boost::python::dict& distanceMatrix,
         const double               cutoff,

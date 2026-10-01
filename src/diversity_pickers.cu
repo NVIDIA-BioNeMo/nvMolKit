@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cub/block/block_scan.cuh>
 #include <limits>
+#include <numeric>
 #include <stdexcept>
 #include <vector>
 
@@ -85,9 +86,13 @@ __global__ void resolveLeaderWindowKernel(const LeaderState                state
   }
 
   if ((accepted >> lane & 1U) != 0U) {
-    const int ordinal    = start + __popc(accepted & ((1U << lane) - 1U));
-    state.picks[ordinal] = member;
-    state.active[member] = 0;
+    const int ordinal          = start + __popc(accepted & ((1U << lane) - 1U));
+    state.windowOrdinals[lane] = ordinal;
+    state.picks[ordinal]       = member;
+    state.active[member]       = 0;
+    if (state.labels != nullptr) {
+      state.labels[member] = ordinal;
+    }
   }
   if (lane == 0) {
     *state.count    = count;
@@ -103,8 +108,20 @@ __global__ void applyLeaderWindowKernel(const LeaderState state, const int numIt
   if (candidate >= numItems || state.active[candidate] == 0) {
     return;
   }
-  if ((state.hits[candidate] & *state.accepted) != 0U) {
-    state.active[candidate] = 0;
+  const std::uint32_t excludedBy = state.hits[candidate] & *state.accepted;
+  if (excludedBy == 0U) {
+    return;
+  }
+  state.active[candidate] = 0;
+  if (state.labels != nullptr) {
+    state.labels[candidate] = state.windowOrdinals[__ffs(static_cast<int>(excludedBy)) - 1];
+  }
+}
+
+__global__ void markIndicesKernel(const int* indices, const int count, std::uint8_t* flags) {
+  const int index = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (index < count) {
+    flags[indices[index]] = 1;
   }
 }
 
@@ -431,7 +448,19 @@ PickerResult leaderFromMatrix(const cuda::std::span<const Scalar> distanceMatrix
   validateDistanceMatrix(distanceMatrix, numItems);
   validateMatrixCutoff(cutoff);
   MatrixDistanceProvider<Scalar> provider(distanceMatrix, numItems);
-  return leaderPick(provider, static_cast<float>(cutoff), pickSize, firstPicks, stream);
+  return leaderPick(provider, static_cast<float>(cutoff), pickSize, firstPicks, nullptr, stream);
+}
+
+template <typename Scalar>
+ClusteringResult diseFromMatrix(const cuda::std::span<const Scalar> distanceMatrix,
+                                const int                           numItems,
+                                const double                        cutoff,
+                                const bool                          nearestAssignment,
+                                cudaStream_t                        stream) {
+  validateDistanceMatrix(distanceMatrix, numItems);
+  validateMatrixCutoff(cutoff);
+  MatrixDistanceProvider<Scalar> provider(distanceMatrix, numItems);
+  return diseCluster(provider, static_cast<float>(cutoff), nearestAssignment, stream);
 }
 
 }  // namespace
@@ -456,6 +485,14 @@ void launchApplyLeaderWindow(const LeaderState& state, const int numItems, cudaS
   cudaCheckError(cudaGetLastError());
 }
 
+void launchMarkIndices(const int* indices, const int count, std::uint8_t* flags, cudaStream_t stream) {
+  if (count == 0) {
+    return;
+  }
+  markIndicesKernel<<<pickerGridSize(count), kPickerBlockSize, 0, stream>>>(indices, count, flags);
+  cudaCheckError(cudaGetLastError());
+}
+
 void validateFirstPicks(const std::vector<int>& firstPicks, const int numItems) {
   std::vector<std::uint8_t> seen(numItems, 0);
   for (const int pick : firstPicks) {
@@ -473,6 +510,38 @@ void validateUnitCutoff(const double cutoff) {
   if (!(cutoff >= 0.0 && cutoff <= 1.0)) {
     throw std::invalid_argument("cutoff must be in [0, 1]");
   }
+}
+
+ClusteringResult buildClusteringResult(const std::vector<int>& labels, const std::vector<int>& centroids) {
+  const int                 numClusters = static_cast<int>(centroids.size());
+  std::vector<std::int64_t> sizes(numClusters, 0);
+  for (const int label : labels) {
+    ++sizes[label];
+  }
+
+  std::vector<int> order(numClusters);
+  std::iota(order.begin(), order.end(), 0);
+  std::stable_sort(order.begin(), order.end(), [&sizes](const int left, const int right) {
+    return sizes[left] > sizes[right];
+  });
+  std::vector<int> remap(numClusters);
+  for (int newId = 0; newId < numClusters; ++newId) {
+    remap[order[newId]] = newId;
+  }
+
+  ClusteringResult result;
+  result.clusterIds.resize(labels.size());
+  result.centroids.resize(numClusters);
+  result.clusterSizes.resize(numClusters);
+  std::transform(labels.begin(), labels.end(), result.clusterIds.begin(), [&remap](const int label) {
+    return remap[label];
+  });
+  for (int newId = 0; newId < numClusters; ++newId) {
+    const int oldId            = order[newId];
+    result.centroids[newId]    = centroids[oldId];
+    result.clusterSizes[newId] = sizes[oldId];
+  }
+  return result;
 }
 
 }  // namespace detail
@@ -495,6 +564,22 @@ PickerResult leaderFromDistanceMatrix(const cuda::std::span<const double> distan
   return detail::leaderFromMatrix(distanceMatrix, numItems, cutoff, pickSize, firstPicks, stream);
 }
 
+ClusteringResult diseFromDistanceMatrix(const cuda::std::span<const float> distanceMatrix,
+                                        const int                          numItems,
+                                        const double                       cutoff,
+                                        const bool                         nearestAssignment,
+                                        cudaStream_t                       stream) {
+  return detail::diseFromMatrix(distanceMatrix, numItems, cutoff, nearestAssignment, stream);
+}
+
+ClusteringResult diseFromDistanceMatrix(const cuda::std::span<const double> distanceMatrix,
+                                        const int                           numItems,
+                                        const double                        cutoff,
+                                        const bool                          nearestAssignment,
+                                        cudaStream_t                        stream) {
+  return detail::diseFromMatrix(distanceMatrix, numItems, cutoff, nearestAssignment, stream);
+}
+
 PickerResult fusedLeaderGpu(const cuda::std::span<const std::uint32_t> fingerprints,
                             const int                                  numFingerprints,
                             const int                                  numWords,
@@ -505,7 +590,20 @@ PickerResult fusedLeaderGpu(const cuda::std::span<const std::uint32_t> fingerpri
                             cudaStream_t                               stream) {
   detail::validateUnitCutoff(cutoff);
   return detail::withFingerprintProvider(fingerprints, numFingerprints, numWords, metric, stream, [&](auto& provider) {
-    return detail::leaderPick(provider, static_cast<float>(cutoff), pickSize, firstPicks, stream);
+    return detail::leaderPick(provider, static_cast<float>(cutoff), pickSize, firstPicks, nullptr, stream);
+  });
+}
+
+ClusteringResult fusedDiseGpu(const cuda::std::span<const std::uint32_t> fingerprints,
+                              const int                                  numFingerprints,
+                              const int                                  numWords,
+                              const double                               cutoff,
+                              const FingerprintSimilarityMetric          metric,
+                              const bool                                 nearestAssignment,
+                              cudaStream_t                               stream) {
+  detail::validateUnitCutoff(cutoff);
+  return detail::withFingerprintProvider(fingerprints, numFingerprints, numWords, metric, stream, [&](auto& provider) {
+    return detail::diseCluster(provider, static_cast<float>(cutoff), nearestAssignment, stream);
   });
 }
 

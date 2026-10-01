@@ -27,7 +27,7 @@ import numpy as np
 import torch
 
 from nvmolkit import _clustering
-from nvmolkit._distance_inputs import _packed_metric_name
+from nvmolkit._distance_inputs import _packed_metric_name, _prepare_distance_matrix, _prepare_fused_input
 from nvmolkit._fingerprint_inputs import _prepare_packed_fingerprints
 from nvmolkit.similarity import (
     _DEFAULT_AAP_METRIC,
@@ -138,6 +138,103 @@ def _check_distance_matrix(name: str, x: torch.Tensor) -> torch.Tensor:
     if x.dtype != torch.float64:
         raise ValueError(f"{name} must have dtype float64")
     return x.contiguous()
+
+
+def dise(
+    distance_matrix: ArrayInput,
+    cutoff: float,
+    *,
+    assignment: Literal["first", "nearest"] = "nearest",
+    stream: torch.cuda.Stream | None = None,
+    output: OutputMode = OutputMode.DEVICE,
+) -> ClusterDeviceResult | _RDKitClusters:
+    """Cluster a distance matrix by directed sphere exclusion (DISE).
+
+    Centroids are the leaders selected by :func:`~nvmolkit.pickers.leader`. With
+    ``assignment="first"``, each item joins the first centroid that excluded
+    it; with ``"nearest"``, each non-centroid joins its nearest centroid, with
+    ties going to the earlier centroid. Clusters are ordered by descending
+    size, then by centroid selection order.
+
+    Distances are compared in float32, so a distance within float32 rounding
+    of the cutoff can be classified differently than in double precision, and
+    distances within float32 rounding of each other tie in ``"nearest"``
+    assignment.
+
+    Args:
+        distance_matrix: Square float32 or float64 matrix of shape ``(N, N)``.
+            Element ``[i, j]`` is the distance from item ``i`` to item ``j``.
+            Values are converted to float32 for comparisons. Values that
+            overflow float32 during conversion become infinity.
+        cutoff: Inclusive exclusion distance, rounded to float32. Must be
+            between zero and the largest finite float32 value.
+        assignment: ``"first"`` or ``"nearest"``.
+        stream: CUDA stream to use. If None, uses the current stream.
+        output: Result representation.
+
+    Returns:
+        A :class:`ClusterDeviceResult` for ``OutputMode.DEVICE``, or
+        centroid-first tuples of input indices for ``OutputMode.RDKIT``.
+    """
+    _validate_output(output)
+    _validate_assignment(assignment)
+    matrix, active_stream = _prepare_distance_matrix(distance_matrix, stream)
+    with torch.cuda.stream(active_stream):
+        result = _clustering.dise(
+            matrix.__cuda_array_interface__,
+            cutoff,
+            assignment == "nearest",
+            output is OutputMode.DEVICE,
+            active_stream.cuda_stream,
+        )
+        return _resolve_cluster_output(result, output)
+
+
+def fused_dise(
+    x,
+    cutoff: float,
+    *,
+    metric: Metric = "tanimoto",
+    assignment: Literal["first", "nearest"] = "nearest",
+    stream: torch.cuda.Stream | None = None,
+    output: OutputMode = OutputMode.DEVICE,
+) -> ClusterDeviceResult | _RDKitClusters:
+    """Cluster by directed sphere exclusion (DISE), computing distances as needed.
+
+    Equivalent to :func:`dise` on the matrix of ``1 - similarity`` values,
+    with memory that scales as ``O(N)``. Distances are computed in float32, so
+    results can differ slightly from RDKit's double-precision results.
+
+    Args:
+        x: Packed int32 or uint32 fingerprints of shape ``(N, num_words)``.
+        cutoff: Inclusive exclusion distance in ``[0, 1]``, rounded to float32.
+        metric: Similarity metric. :class:`~nvmolkit.similarity.AAPMetric` is not
+            yet supported.
+        assignment: ``"first"`` or ``"nearest"``.
+        stream: CUDA stream to use. If None, uses the current stream.
+        output: Result representation.
+
+    Returns:
+        A :class:`ClusterDeviceResult` for ``OutputMode.DEVICE``, or
+        centroid-first tuples of input indices for ``OutputMode.RDKIT``.
+
+    Note:
+        For the method, see `Gobbi et al. (2015)
+        <https://doi.org/10.1186/s13321-015-0056-8>`_.
+    """
+    _validate_output(output)
+    _validate_assignment(assignment)
+    resolved, inputs, active_stream = _prepare_fused_input(x, metric, stream, "fused_dise")
+    with torch.cuda.stream(active_stream):
+        result = _clustering.fused_dise(
+            inputs.__cuda_array_interface__,
+            cutoff,
+            _packed_metric_name(resolved),
+            assignment == "nearest",
+            output is OutputMode.DEVICE,
+            active_stream.cuda_stream,
+        )
+        return _resolve_cluster_output(result, output)
 
 
 def aap_dise(

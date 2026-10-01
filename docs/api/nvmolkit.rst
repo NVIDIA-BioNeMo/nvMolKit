@@ -90,6 +90,8 @@ Clustering
 
    clustering.butina
    clustering.fused_butina
+   clustering.dise
+   clustering.fused_dise
    clustering.aap_dise
 
 .. autosummary::

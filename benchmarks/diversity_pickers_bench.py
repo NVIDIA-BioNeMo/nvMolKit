@@ -1,9 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Benchmark Leader selection against RDKit.
+"""Benchmark Leader and DISE selection against RDKit.
 
-RDKit selects from Morgan bit vectors with ``LeaderPicker``.
+RDKit selects from Morgan bit vectors with ``LeaderPicker``. RDKit has no
+DISE, so the DISE reference is RDKit Leader followed by nearest-centroid
+assignment with ``BulkTanimotoSimilarity``.
 
 nvMolKit is timed in two forms, both starting from nvMolKit Morgan
 fingerprints on the GPU. The fused form selects directly from fingerprints.
@@ -41,7 +43,7 @@ from rdkit import DataStructs
 from rdkit.Chem import rdFingerprintGenerator
 from rdkit.SimDivFilters import rdSimDivPickers
 
-from nvmolkit.clustering import OutputMode
+from nvmolkit.clustering import OutputMode, dise, fused_dise
 from nvmolkit.fingerprints import MorganFingerprintGenerator
 from nvmolkit.pickers import fused_leader, leader
 from nvmolkit.similarity import crossTanimotoSimilarity
@@ -63,8 +65,28 @@ def _distance_matrix(fingerprints: torch.Tensor) -> torch.Tensor:
     return 1.0 - crossTanimotoSimilarity(fingerprints).torch()
 
 
+def _clusters(centroids, assignments) -> tuple[tuple[int, ...], ...]:
+    groups = [[] for _ in centroids]
+    for item, cluster_id in enumerate(assignments):
+        groups[int(cluster_id)].append(item)
+    return tuple(tuple(sorted(group)) for group in groups)
+
+
+def _canonical_clusters(clusters) -> tuple[tuple[int, ...], ...]:
+    return tuple(sorted(tuple(sorted(cluster)) for cluster in clusters))
+
+
 def _rdkit_leader(fps: list, cutoff: float):
     return tuple(rdSimDivPickers.LeaderPicker().LazyBitVectorPick(fps, len(fps), cutoff))
+
+
+def _rdkit_dise(fps: list, cutoff: float):
+    centroids = _rdkit_leader(fps, cutoff)
+    centroid_fps = [fps[index] for index in centroids]
+    assignments = [
+        int(np.argmin(DataStructs.BulkTanimotoSimilarity(fp, centroid_fps, returnDistance=True))) for fp in fps
+    ]
+    return _clusters(centroids, assignments)
 
 
 @dataclass(frozen=True)
@@ -74,6 +96,7 @@ class Operation:
     rdkit: Callable
     fused: Callable
     matrix: Callable
+    canonical: Callable = tuple
 
 
 OPERATIONS = {
@@ -81,6 +104,12 @@ OPERATIONS = {
         rdkit=_rdkit_leader,
         fused=lambda fps, cutoff: fused_leader(fps, cutoff, output=OutputMode.RDKIT),
         matrix=lambda matrix, cutoff: leader(matrix, cutoff, output=OutputMode.RDKIT),
+    ),
+    "dise": Operation(
+        rdkit=_rdkit_dise,
+        fused=lambda fps, cutoff: fused_dise(fps, cutoff, output=OutputMode.RDKIT),
+        matrix=lambda matrix, cutoff: dise(matrix, cutoff, output=OutputMode.RDKIT),
+        canonical=_canonical_clusters,
     ),
 }
 
@@ -141,7 +170,7 @@ def _benchmark_point(
         if rdkit_timing is not None:
             row[f"{form}_speedup"] = rdkit_timing.median_ms / timing.median_ms
             if validate:
-                row[f"{form}_matches_rdkit"] = result == rdkit_result
+                row[f"{form}_matches_rdkit"] = operation.canonical(result) == operation.canonical(rdkit_result)
 
     if not no_nvmolkit and "fused" in forms:
         compare(
@@ -266,12 +295,14 @@ def run(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Leader selection benchmark")
+    parser = argparse.ArgumentParser(description="Leader and DISE selection benchmark")
     parser.add_argument("--smiles", required=True, help="Path to a SMILES file")
     parser.add_argument("--sizes", type=int, nargs="+", default=[1000, 10000])
     parser.add_argument("--operations", choices=tuple(OPERATIONS), nargs="+", default=list(OPERATIONS))
     parser.add_argument("--forms", choices=FORMS, nargs="+", default=list(FORMS))
-    parser.add_argument("--cutoffs", type=float, nargs="+", default=[0.25, 0.5], help="Leader distance cutoffs")
+    parser.add_argument(
+        "--cutoffs", type=float, nargs="+", default=[0.25, 0.5], help="Leader and DISE distance cutoffs"
+    )
     parser.add_argument(
         "--matrix_max_size", type=int, default=10000, help="Largest size benchmarked in the matrix form"
     )
