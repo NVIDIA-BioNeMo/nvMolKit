@@ -125,7 +125,6 @@ void incrementBondTypeCount(BondTypeCounts& counts, int bondType) {
     case 3:
       ++counts.triple;
       break;
-    case 7:
     case 12:
       ++counts.aromatic;
       break;
@@ -1293,11 +1292,6 @@ namespace {
 
 void populateQueryAtomDataPacked(const RDKit::Atom* atom, AtomDataPacked& packed) {
   if (!atom->hasQuery()) {
-    packed.setAtomicNum(atom->getAtomicNum());
-    packed.setIsotope(atom->getIsotope());
-    packed.setFormalCharge(atom->getFormalCharge());
-    packed.setNumExplicitHs(atom->getTotalNumHs(true));
-    packed.setNumRadicalElectrons(atom->getNumRadicalElectrons());
     return;
   }
 

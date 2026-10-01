@@ -48,10 +48,23 @@ PLAIN_QUERY_TARGETS = [
     "*C",
     "[1*]C",
     "[2*]C",
+    "[300*]C",
+    "C[C@@H](O)N",
 ]
 # Plain (SMILES) query atoms follow RDKit's Atom::Match: hydrogen counts are ignored, set charges, isotopes, and
 # radicals must match, and dummy isotopes only conflict when both atoms carry one.
-PLAIN_QUERIES = ["c1ccc2[nH]ccc2c1", "[NH2]C", "C[O-]", "[13CH3]O", "C[CH2]", "*C", "[1*]C", "[300CH4]"]
+PLAIN_QUERIES = [
+    "c1ccc2[nH]ccc2c1",
+    "[NH2]C",
+    "C[O-]",
+    "[13CH3]O",
+    "C[CH2]",
+    "*C",
+    "[1*]C",
+    "[300*]C",
+    "[300CH4]",
+    "C[C@H](O)N",
+]
 
 
 def get_rdkit_matches(target: Chem.Mol, query: Chem.Mol, uniquify: bool = False) -> list[tuple[int, ...]]:
@@ -1350,12 +1363,13 @@ class TestIntegrationConfig:
         assert len(validation.count_mismatches) == 0
 
 
+@pytest.mark.parametrize("algorithm", ["gsi", "dfs"])
 @pytest.mark.parametrize("query_smiles", PLAIN_QUERIES)
-def test_plain_molecule_query_atoms_match_like_rdkit(query_smiles):
+def test_plain_molecule_query_atoms_match_like_rdkit(query_smiles, algorithm):
     targets = [Chem.MolFromSmiles(smiles) for smiles in PLAIN_QUERY_TARGETS]
     query = Chem.MolFromSmiles(query_smiles)
 
-    results = hasSubstructMatch(targets, [query])
+    results = hasSubstructMatch(targets, [query], config=SubstructSearchConfig(algorithm=algorithm))
 
     assert results[:, 0].astype(bool).tolist() == [target.HasSubstructMatch(query) for target in targets]
 

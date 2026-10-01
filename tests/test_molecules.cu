@@ -23,6 +23,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "src/substruct/molecules.h"
 #include "src/substruct/molecules_device.cuh"
 #include "src/substruct/packed_bonds_device.cuh"
 #include "src/utils/cuda_error_check.h"
@@ -1112,4 +1113,17 @@ TEST(MoleculesSizeLimitTest, QueryMoleculeAt128AtomsSucceeds) {
   EXPECT_NO_THROW(nvMolKit::addQueryToBatch(mol.get(), batch));
   EXPECT_EQ(batch.numMolecules(), 1);
   EXPECT_EQ(batch.totalAtoms(), 128);
+}
+
+TEST(MoleculesHostTest, ParallelTargetPackingPropagatesPackingErrors) {
+  std::vector<std::unique_ptr<RDKit::ROMol>> mols;
+  std::vector<const RDKit::ROMol*>           targets;
+  for (const char* smiles : {"CCO", "c1ccccc1", "CCN", "[300C]CO", "CCCl", "OCCO", "CC(=O)O", "CN"}) {
+    mols.emplace_back(RDKit::SmilesToMol(smiles));
+    ASSERT_NE(mols.back(), nullptr) << smiles;
+    targets.push_back(mols.back().get());
+  }
+  // The isotope-300 target cannot be packed; the error must surface from the OpenMP team, not terminate.
+  MoleculesHost batch;
+  EXPECT_THROW(nvMolKit::buildTargetBatchParallelInto(batch, 4, targets, {}), std::runtime_error);
 }
