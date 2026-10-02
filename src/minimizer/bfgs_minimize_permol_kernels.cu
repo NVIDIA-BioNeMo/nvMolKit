@@ -813,8 +813,12 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
       __syncthreads();
 
       // Check convergence and update lambda
-      lineSearchConverged =
+      // Only thread 0 computes the verdict; the others return false and must not overwrite it.
+      const bool lsDone =
         lineSearchPostEnergy(lineSearchIter == 0, prevE, currE, slope, lambda, lambdaMin, lambda2, eScratch, lambda);
+      if (tid == 0) {
+        lineSearchConverged = lsDone;
+      }
       __syncthreads();
 
       if (tid == 0) {
