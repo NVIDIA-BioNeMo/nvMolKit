@@ -36,7 +36,8 @@ class ETKDGUpdateConformersStage final : public ETKDGStage {
     PinnedHostVector<uint8_t>&                                                               activeScratch,
     cudaStream_t                                                                             stream          = nullptr,
     std::mutex*                                                                              conformer_mutex = nullptr,
-    int                                                                                      maxConformersPerMol = -1);
+    int                                                                                      maxConformersPerMol = -1,
+    std::vector<int>                                                                         attemptIds          = {});
 
   void        execute(ETKDGContext& ctx) override;
   std::string name() const override { return "Update Conformers"; }
@@ -50,6 +51,12 @@ class ETKDGUpdateConformersStage final : public ETKDGStage {
   cudaStream_t                                                                             stream_;
   std::mutex*                                                                              conformer_mutex_;
   int                                                                                      maxConformersPerMol_;
+  std::vector<int>                                                                         attemptIds_;
+
+  //! Keeps @p newConf if there is room, or if its attempt ID beats the highest one kept. Requires the caller to
+  //! serialize access to @p confVec.
+  void addOrReplace(std::vector<std::unique_ptr<RDKit::Conformer>>& confVec,
+                    std::unique_ptr<RDKit::Conformer>               newConf) const;
 };
 
 }  // namespace detail

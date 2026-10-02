@@ -19,7 +19,9 @@
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
+#include <mutex>
 #include <unordered_map>
 
 #include "rdkit_extensions/conformer_pruning.h"
@@ -429,6 +431,59 @@ TEST_F(ETKDGPipelineUpdateConformersTestFixture, UpdateConformersStage) {
       EXPECT_DOUBLE_EQ(pos.z, refPositions[posIdx + 2]) << "Molecule " << i << " atom " << j << " z coordinate";
     }
   }
+}
+
+TEST_F(ETKDGPipelineUpdateConformersTestFixture, UpdateConformersStageKeepsLowestAttemptIds) {
+  // Three attempts for the same molecule succeed in one batch, in an order unrelated to their attempt IDs. With room
+  // for two conformers, the two lowest IDs must survive regardless of arrival order.
+  RDKit::ROMol*                            mol        = mols_[0];
+  const std::vector<RDKit::ROMol*>         batchMols  = {mol, mol, mol};
+  const std::vector<int>                   attemptIds = {7, 2, 5};
+  std::vector<nvMolKit::detail::EmbedArgs> eargs(batchMols.size());
+  for (auto& earg : eargs) {
+    earg.dim = 3;
+  }
+
+  const int    nAtoms = static_cast<int>(mol->getNumAtoms());
+  ETKDGContext context;
+  context.nTotalSystems = batchMols.size();
+  context.activeThisStage.resize(context.nTotalSystems);
+  context.activeThisStage.copyFromHost(std::vector<uint8_t>(batchMols.size(), 1));
+  context.systemHost.atomStarts = {0};
+  for (size_t i = 0; i < batchMols.size(); ++i) {
+    context.systemHost.atomStarts.push_back(static_cast<int>(i + 1) * nAtoms);
+  }
+  // Tag each batch slot's coordinates with its attempt ID.
+  std::vector<double> positions(batchMols.size() * nAtoms * 3);
+  for (size_t i = 0; i < batchMols.size(); ++i) {
+    std::fill_n(positions.begin() + i * nAtoms * 3, nAtoms * 3, static_cast<double>(attemptIds[i]));
+  }
+  context.systemDevice.positions.resize(positions.size());
+  context.systemDevice.positions.copyFromHost(positions);
+
+  std::unordered_map<const RDKit::ROMol*, std::vector<std::unique_ptr<Conformer>>> conformers;
+  nvMolKit::PinnedHostVector<double>                                               positionsScratch(positions.size());
+  nvMolKit::PinnedHostVector<uint8_t>                                              activeScratch(batchMols.size());
+  std::mutex                                                                       mutex;
+  nvMolKit::detail::ETKDGUpdateConformersStage                                     stage(batchMols,
+                                                     eargs,
+                                                     conformers,
+                                                     positionsScratch,
+                                                     activeScratch,
+                                                     nullptr,
+                                                     &mutex,
+                                                     /*maxConformersPerMol=*/2,
+                                                     attemptIds);
+  stage.execute(context);
+
+  const auto& kept = conformers.at(mol);
+  ASSERT_EQ(kept.size(), 2u);
+  std::vector<double> keptTags;
+  for (const auto& conf : kept) {
+    keptTags.push_back(conf->getAtomPos(0).x);
+  }
+  std::sort(keptTags.begin(), keptTags.end());
+  EXPECT_THAT(keptTags, testing::ElementsAre(2.0, 5.0));
 }
 
 TEST_F(ETKDGPipelineUpdateConformersTestFixture, UpdateConformersStageWithInactiveMolecule) {

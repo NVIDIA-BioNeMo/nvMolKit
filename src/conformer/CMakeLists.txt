@@ -15,7 +15,8 @@
 
 add_library(conformer_types INTERFACE)
 
-add_library(device_coord_collector device_coord_collector.cpp)
+add_library(device_coord_collector device_coord_collector.cpp
+                                   device_coord_gather.cu)
 target_link_libraries(
   device_coord_collector
   PUBLIC conformer_types device_vector

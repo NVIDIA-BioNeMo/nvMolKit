@@ -68,6 +68,7 @@ void appendActive(const AsyncDeviceVector<double>&  srcPositions,
                   const AsyncDeviceVector<uint8_t>& active,
                   const int                         dim,
                   const std::vector<int>&           batchGlobalMolIds,
+                  const std::vector<int>&           batchAttemptIds,
                   DeviceCoordCollectorCap&          cap,
                   DeviceCoordCollector&             collector) {
   const int batchSize = static_cast<int>(srcAtomStarts.size()) - 1;
@@ -76,6 +77,9 @@ void appendActive(const AsyncDeviceVector<double>&  srcPositions,
   }
   if (static_cast<int>(batchGlobalMolIds.size()) != batchSize) {
     throw std::invalid_argument("batchGlobalMolIds size does not match batch size");
+  }
+  if (static_cast<int>(batchAttemptIds.size()) != batchSize) {
+    throw std::invalid_argument("batchAttemptIds size does not match batch size");
   }
 
   std::vector<uint8_t> activeHost(static_cast<size_t>(batchSize));
@@ -99,9 +103,19 @@ void appendActive(const AsyncDeviceVector<double>&  srcPositions,
       if (activeHost[static_cast<size_t>(batchSlot)] != 1) {
         continue;
       }
-      const int molId = batchGlobalMolIds[batchSlot];
-      if (cap.maxConformersPerMol > 0 && cap.keptPerMol[molId] >= cap.maxConformersPerMol) {
-        continue;
+      const int molId     = batchGlobalMolIds[batchSlot];
+      const int attemptId = batchAttemptIds[batchSlot];
+      if (cap.maxConformersPerMol > 0) {
+        auto& kept = cap.keptAttemptIds[molId];
+        if (static_cast<int>(kept.size()) < cap.maxConformersPerMol) {
+          kept.push(attemptId);
+        } else if (attemptId < kept.top()) {
+          // Displaces the highest kept ID; its conformer is dropped at finalize.
+          kept.pop();
+          kept.push(attemptId);
+        } else {
+          continue;
+        }
       }
       const int srcAtomStart = srcAtomStarts[batchSlot];
       const int srcAtomEnd   = srcAtomStarts[batchSlot + 1];
@@ -111,9 +125,9 @@ void appendActive(const AsyncDeviceVector<double>&  srcPositions,
       atomCountsHost.push_back(natoms);
       collector.atomCounts.push_back(natoms);
       collector.molIds.push_back(molId);
+      collector.attemptIds.push_back(attemptId);
       runningAtoms += natoms;
       maxAtoms = std::max(maxAtoms, natoms);
-      cap.keptPerMol[molId]++;
     }
   }
 
