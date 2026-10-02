@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <numeric>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -65,14 +66,26 @@ DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors
         refs.push_back({collector.molIds[j], collector.attemptIds[j], static_cast<int>(c), static_cast<int>(j)});
       }
     }
-    std::sort(refs.begin(), refs.end(), [](const AttemptRef& a, const AttemptRef& b) {
-      return a.molId != b.molId ? a.molId < b.molId : a.attemptId < b.attemptId;
-    });
-    int rank = 0;
-    for (size_t r = 0; r < refs.size(); ++r) {
-      rank = (r > 0 && refs[r].molId == refs[r - 1].molId) ? rank + 1 : 0;
-      if (maxConformersPerMol <= 0 || rank < maxConformersPerMol) {
-        ranks[refs[r].collectorIdx][refs[r].confIdx] = rank;
+    // Bucket by molecule in O(n), then order each (small) bucket by attempt ID.
+    std::vector<size_t> bucketStart(static_cast<size_t>(nMols) + 1, 0);
+    for (const auto& ref : refs) {
+      ++bucketStart[static_cast<size_t>(ref.molId) + 1];
+    }
+    std::partial_sum(bucketStart.begin(), bucketStart.end(), bucketStart.begin());
+    std::vector<AttemptRef> bucketed(refs.size());
+    std::vector<size_t>     fill(bucketStart.begin(), bucketStart.end() - 1);
+    for (const auto& ref : refs) {
+      bucketed[fill[static_cast<size_t>(ref.molId)]++] = ref;
+    }
+    for (size_t m = 0; m < static_cast<size_t>(nMols); ++m) {
+      std::sort(bucketed.begin() + bucketStart[m],
+                bucketed.begin() + bucketStart[m + 1],
+                [](const AttemptRef& a, const AttemptRef& b) { return a.attemptId < b.attemptId; });
+      for (size_t r = bucketStart[m]; r < bucketStart[m + 1]; ++r) {
+        const int rank = static_cast<int>(r - bucketStart[m]);
+        if (maxConformersPerMol <= 0 || rank < maxConformersPerMol) {
+          ranks[bucketed[r].collectorIdx][bucketed[r].confIdx] = rank;
+        }
       }
     }
   }

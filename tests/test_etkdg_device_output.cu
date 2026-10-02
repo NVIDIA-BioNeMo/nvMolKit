@@ -325,6 +325,46 @@ TEST(DeviceConformerPruning, PreservesGreedyOrderAcrossInterleavedMolecules) {
   EXPECT_EQ(downloadDeviceVector(result.confIndices), (std::vector<int32_t>{0, 0, 1}));
 }
 
+TEST(DeviceConformerPruning, PrunesInConformerIndexOrderNotBufferOrder) {
+  auto mol = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol("CC"));
+  ASSERT_NE(mol, nullptr);
+
+  // Bond lengths 2, 1, 3 sit in the buffer in that order, but their conformer indices (attempt-ID ranks) are 1, 0, 2.
+  // Greedy pruning must follow the conformer index: keep length 1, drop length 2 (conflicts with 1), keep length 3.
+  // In buffer order it would keep length 2 and drop both others.
+  const std::vector<double> positions = {
+    0.0,
+    0.0,
+    0.0,
+    2.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    3.0,
+    0.0,
+    0.0,
+  };
+  auto input = makeDeviceResult(positions, {0, 0, 0}, 1);
+  input.confIndices.copyFromHost(std::vector<int32_t>{1, 0, 2});
+  cudaCheckError(cudaStreamSynchronize(nullptr));
+  auto                       params = pruningParams(0.75);
+  std::vector<RDKit::ROMol*> mols   = {mol.get()};
+
+  const auto result = detail::pruneDeviceConformers(std::move(input), mols, params);
+  EXPECT_EQ(downloadDeviceVector(result.positions),
+            (std::vector<double>{0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0}));
+  EXPECT_EQ(downloadDeviceVector(result.molIndices), (std::vector<int32_t>{0, 0}));
+  EXPECT_EQ(downloadDeviceVector(result.confIndices), (std::vector<int32_t>{0, 1}));
+}
+
 TEST(DeviceConformerPruning, UsesSymmetryAtomMappings) {
   auto mol = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol("CC(C)C"));
   ASSERT_NE(mol, nullptr);
