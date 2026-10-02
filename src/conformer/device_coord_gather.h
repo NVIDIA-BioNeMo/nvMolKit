@@ -26,9 +26,9 @@ namespace detail {
 /**
  * @brief Gather scattered conformers into one contiguous destination with a single kernel launch.
  *
- * Conformer i has @p atomCounts[i] atoms, read from @p srcPositions[i] (packed 3D, device pointer, possibly on a peer
- * GPU with peer access enabled from the current device) and written at atom offset @p dstAtomStarts[i] of @p dst.
- * Must be called with the destination GPU current. Returns after the kernel has completed on @p stream.
+ * Conformer i has @p atomCounts[i] atoms, read from @p srcPositions[i] (packed 3D device pointer on the current device)
+ * and written at atom offset @p dstAtomStarts[i] of @p dst. Must be called with the destination GPU current. Returns
+ * after the kernel has completed on @p stream.
  */
 void gatherConformerPositions(const std::vector<const double*>& srcPositions,
                               const std::vector<int>&           dstAtomStarts,

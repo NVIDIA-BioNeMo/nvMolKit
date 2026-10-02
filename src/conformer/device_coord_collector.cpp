@@ -146,6 +146,32 @@ DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors
   std::vector<int>           gatherDstAtomStarts;
   std::vector<int>           gatherAtomCounts;
 
+  // The gather kernel only reads memory on the target GPU: stream-ordered allocations on other GPUs are not covered by
+  // cudaDeviceEnablePeerAccess, so stage those collectors' buffers over with one peer copy each first.
+  std::vector<AsyncDeviceVector<double>> stagedPositions(collectors.size());
+  std::vector<const double*>             gatherBase(collectors.size(), nullptr);
+  if (gatherPositions) {
+    for (size_t c = 0; c < collectors.size(); ++c) {
+      auto& collector = collectors[c];
+      if (collector.atomCounts.empty()) {
+        continue;
+      }
+      if (collector.gpuId == targetGpu) {
+        gatherBase[c] = collector.positions.data();
+        continue;
+      }
+      stagedPositions[c] = AsyncDeviceVector<double>(collector.positions.size(), targetStream.stream());
+      copyDeviceToDeviceAsync(stagedPositions[c].data(),
+                              collector.positions.data(),
+                              collector.positions.size() * sizeof(double),
+                              collector.gpuId,
+                              collector.stream,
+                              targetGpu,
+                              targetStream.stream());
+      gatherBase[c] = stagedPositions[c].data();
+    }
+  }
+
   std::unordered_map<int, int> perMolCounter;
   int                          confCursor = 0;
   int                          atomCursor = 0;
@@ -211,7 +237,7 @@ DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors
       }
       atomStartsHost[static_cast<size_t>(confCursor)] = atomCursor;
       if (gatherPositions) {
-        gatherSrc.push_back(collector.positions.data() + static_cast<size_t>(srcAtomCursor) * 3);
+        gatherSrc.push_back(gatherBase[c] + static_cast<size_t>(srcAtomCursor) * 3);
         gatherDstAtomStarts.push_back(atomCursor);
         gatherAtomCounts.push_back(natoms);
       }
@@ -235,8 +261,11 @@ DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors
   atomStartsHost[static_cast<size_t>(totalConformers)] = atomCursor;
 
   if (gatherPositions) {
-    // Collector streams are idle once appendActive returns, but make sure before reading their buffers directly.
+    // Collector streams are idle once appendActive returns, but make sure before reading same-GPU buffers directly.
     for (const auto& collector : collectors) {
+      if (collector.gpuId != targetGpu) {
+        continue;
+      }
       const WithDevice withCollector(collector.gpuId);
       cudaCheckError(cudaStreamSynchronize(collector.stream));
     }
