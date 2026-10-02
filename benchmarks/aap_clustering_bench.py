@@ -26,7 +26,7 @@ from bench_utils import (
 from rdkit import Chem
 from rdkit.SimDivFilters import rdSimDivPickers
 
-from nvmolkit.clustering import aap_dise
+from nvmolkit.clustering import fused_dise
 from nvmolkit.similarity import AAPMetric, aap_similarity
 
 SUPPORTED_BOND_TYPES = {
@@ -400,11 +400,11 @@ def _benchmark_clustering(args, molecules, ligand_clustering_cpu_reference):
 
     if not args.no_nvmolkit:
         timing, result = _time_callable(
-            lambda: aap_dise(
+            lambda: fused_dise(
                 molecules,
-                similarity_threshold=args.threshold,
-                assignment="first",
+                cutoff=1.0 - args.threshold,
                 metric=metric,
+                assignment="first",
             ),
             args.runs,
             args.warmup,
@@ -493,11 +493,11 @@ def _benchmark_dise(args, molecules, rdkit_reference):
         def run_gpu_workflow():
             nonlocal gpu_labels
             indexed = _priority_order(molecules, args.sort_tag, args.sort_descending)
-            result = aap_dise(
+            result = fused_dise(
                 [molecule for _, molecule in indexed],
-                similarity_threshold=args.threshold,
-                assignment="nearest",
+                cutoff=1.0 - args.threshold,
                 metric=_aap_metric(args),
+                assignment="nearest",
             )
             ordered_labels = result.cluster_ids.numpy().tolist()
             gpu_labels = [-1] * len(molecules)

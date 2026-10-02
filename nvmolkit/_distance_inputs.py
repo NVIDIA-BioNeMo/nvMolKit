@@ -14,6 +14,10 @@ def _packed_metric_name(metric: TanimotoMetric | CosineMetric) -> str:
     return "tanimoto" if isinstance(metric, TanimotoMetric) else "cosine"
 
 
+def _aap_args(metric: AAPMetric) -> tuple:
+    return (metric.max_path_length, metric.histogram_bins, metric.sinkhorn_iterations, metric.sinkhorn_temperature)
+
+
 def _prepare_distance_matrix(distance_matrix: ArrayInput, stream: torch.cuda.Stream | None):
     active_stream = _resolve_cuda_stream(stream, distance_matrix)
     with torch.cuda.stream(active_stream):
@@ -26,9 +30,9 @@ def _prepare_distance_matrix(distance_matrix: ArrayInput, stream: torch.cuda.Str
     return tensor, active_stream
 
 
-def _prepare_fused_input(x, metric: Metric, stream: torch.cuda.Stream | None, name: str):
+def _prepare_fused_input(x, metric: Metric, stream: torch.cuda.Stream | None):
     resolved = _resolve_metric(metric)
     if isinstance(resolved, AAPMetric):
-        raise NotImplementedError(f"{name} does not yet support AAPMetric")
+        return resolved, list(x), _resolve_cuda_stream(stream)
     (fingerprints,), active_stream = _prepare_packed_fingerprints(("x", x), stream=stream)
     return resolved, fingerprints, active_stream

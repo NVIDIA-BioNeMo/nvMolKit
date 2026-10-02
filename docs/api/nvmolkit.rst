@@ -92,7 +92,6 @@ Clustering
    clustering.fused_butina
    clustering.dise
    clustering.fused_dise
-   clustering.aap_dise
 
 .. autosummary::
    :toctree: generated/

@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import weakref
+from functools import cache
 
 import numpy as np
 import pytest
 import torch
+from rdkit import Chem
 from rdkit.SimDivFilters import rdSimDivPickers
 
 from nvmolkit import _clustering, _distance_inputs, clustering, pickers
@@ -17,7 +19,7 @@ from nvmolkit.clustering import (
     fused_dise,
 )
 from nvmolkit.pickers import fused_leader, fused_maxmin, leader, maxmin
-from nvmolkit.similarity import CosineMetric, TanimotoMetric, crossTanimotoSimilarity
+from nvmolkit.similarity import AAPMetric, CosineMetric, TanimotoMetric, aap_similarity, crossTanimotoSimilarity
 from nvmolkit.types import AsyncGpuResult
 
 RDKIT = OutputMode.RDKIT
@@ -35,6 +37,17 @@ def _reference_leader(distances, cutoff, pick_size=0, first_picks=()):
         if all(distances[picked, candidate] > cutoff for picked in selected):
             selected.append(candidate)
     return tuple(selected)
+
+
+@pytest.fixture(scope="module")
+def aap_molecules(chembl_molecules):
+    """110 AAP-compatible molecules plus atom-renumbered copies of two of them."""
+    molecules = [molecule for molecule in chembl_molecules if molecule.GetNumAtoms() <= 64][:110]
+    duplicates = [
+        Chem.RenumberAtoms(molecules[index], list(reversed(range(molecules[index].GetNumAtoms()))))
+        for index in (5, 17)
+    ]
+    return molecules + duplicates
 
 
 def _reference_dise(distances, cutoff, assignment):
@@ -295,6 +308,9 @@ _STREAM_CASES = [
     (fused_maxmin, "cosine"),
     (fused_dise, "tanimoto"),
     (fused_dise, "cosine"),
+    (fused_leader, "aap"),
+    (fused_maxmin, "aap"),
+    (fused_dise, "aap"),
 ]
 
 
@@ -303,6 +319,9 @@ def _stream_case_input(metric, device):
     if metric == "matrix":
         inputs = torch.from_numpy(_fingerprint_distance_matrix(fingerprints, "tanimoto")).to(device)
         options = {}
+    elif metric == "aap":
+        inputs = [Chem.MolFromSmiles(smiles) for smiles in ("CC", "CCC", "CO", "CCO")]
+        options = {"metric": metric}
     else:
         inputs = torch.from_numpy(fingerprints).to(device)
         options = {"metric": metric}
@@ -319,7 +338,7 @@ def test_native_call_and_output_wrapping_use_selected_stream(monkeypatch, functi
         options["first_picks"] = (0,)
     expected = function(inputs, argument, output=RDKIT, **options)
     torch.cuda.current_stream().synchronize()
-    native_name = function.__name__
+    native_name = function.__name__.replace("fused_", "aap_") if metric == "aap" else function.__name__
     native = getattr(_clustering, native_name)
     module = clustering if function in (dise, fused_dise) else pickers
     resolve_name = "_resolve_cluster_output" if module is clustering else "_resolve_selection_output"
@@ -373,7 +392,7 @@ def test_selected_device_can_differ_from_current_device(function, metric, stream
         torch.cuda.synchronize()
 
     with torch.cuda.device(0):
-        stream_argument = stream if stream_kind == "explicit" else None
+        stream_argument = stream if stream_kind == "explicit" or metric == "aap" else None
         result = function(inputs, argument, stream=stream_argument, **options)
         assert torch.cuda.current_device() == 0
         stream.synchronize()
@@ -488,7 +507,7 @@ def test_fused_prepared_input_owns_storage_through_native_call(monkeypatch, func
         assert actual == expected
 
 
-@pytest.mark.parametrize("metric", ["matrix", "tanimoto", "cosine"])
+@pytest.mark.parametrize("metric", ["matrix", "tanimoto", "cosine", "aap"])
 @pytest.mark.parametrize("assignment", ["first", "nearest"])
 @pytest.mark.parametrize("output", [RDKIT, OutputMode.DEVICE])
 def test_dise_singleton_has_initialized_cluster_arrays(metric, assignment, output):
@@ -519,14 +538,71 @@ def test_explicit_stream_matches_default_stream_on_chembl(chembl_fingerprints):
 
 
 # ---------------------------------------------------------------------------
-# AAP metric support
+# Integration: AAP as a fused metric, against RDKit's lazy pickers
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("function", [fused_butina, fused_leader, fused_maxmin, fused_dise])
-def test_aap_is_not_yet_supported_by_fused_forms(function):
+def _aap_distance(molecules):
+    @cache
+    def distance(selected, candidate):
+        return 1.0 - aap_similarity(molecules[selected], molecules[candidate])
+
+    return distance
+
+
+def test_aap_leader_and_first_assignment_match_rdkit_lazy_picker(aap_molecules):
+    # AAP similarities across diverse ChEMBL compounds are low; this cutoff still yields ~30 multi-member clusters.
+    cutoff = 0.95
+    distance = _aap_distance(aap_molecules)
+    # RDKit's LeaderPicker evaluates func(leader, candidate).
+    expected_leaders = tuple(rdSimDivPickers.LeaderPicker().LazyPick(distance, len(aap_molecules), cutoff))
+
+    assert fused_leader(aap_molecules, cutoff, metric="aap", output=RDKIT) == expected_leaders
+
+    labels = [
+        next(k for k, leader_index in enumerate(expected_leaders) if distance(leader_index, item) <= cutoff)
+        if item not in expected_leaders
+        else expected_leaders.index(item)
+        for item in range(len(aap_molecules))
+    ]
+    result = fused_dise(aap_molecules, cutoff, metric="aap", assignment="first")
+    centroids = result.centroids.numpy()
+    assert [int(centroids[label]) for label in result.cluster_ids.numpy()] == [expected_leaders[k] for k in labels]
+
+
+def test_aap_maxmin_matches_rdkit_lazy_picker(aap_molecules):
+    distance = _aap_distance(aap_molecules)
+    # RDKit's MaxMinPicker evaluates func(candidate, pick); nvMolKit measures from the pick.
+    expected = tuple(
+        rdSimDivPickers.MaxMinPicker().LazyPick(
+            lambda candidate, pick: distance(pick, candidate), len(aap_molecules), 8, firstPicks=[3]
+        )
+    )
+
+    actual, last_distance = fused_maxmin(aap_molecules, 8, metric=AAPMetric(), first_picks=(3,), output=RDKIT)
+
+    assert actual == expected
+    assert last_distance == pytest.approx(min(distance(pick, actual[-1]) for pick in actual[:-1]))
+
+
+def test_aap_nearest_assignment_picks_the_nearest_centroid(aap_molecules):
+    molecules = aap_molecules[:40]
+    cutoff = 0.7
+    distance = _aap_distance(molecules)
+
+    result = fused_dise(molecules, cutoff, metric="aap", assignment="nearest")
+    centroids = result.centroids.numpy().tolist()
+    for item, label in enumerate(result.cluster_ids.numpy().tolist()):
+        if item in centroids:
+            assert centroids[label] == item
+            continue
+        nearest = min(distance(centroid, item) for centroid in centroids)
+        assert distance(centroids[label], item) == nearest
+
+
+def test_aap_is_not_yet_supported_by_fused_butina():
     with pytest.raises(NotImplementedError, match="AAPMetric"):
-        function(np.zeros((1, 1), dtype=np.uint32), 1, metric="aap")
+        fused_butina(np.zeros((1, 1), dtype=np.uint32), 0.5, metric="aap")
 
 
 # ---------------------------------------------------------------------------
@@ -621,6 +697,8 @@ def test_empty_and_singleton_inputs():
     assert dise(empty_matrix, 0.0, output=RDKIT) == ()
     assert fused_leader(empty_fingerprints, 0.5, output=RDKIT) == ()
     assert fused_dise(empty_fingerprints, 0.5, output=RDKIT) == ()
+    assert fused_leader([], 0.5, metric="aap", output=RDKIT) == ()
+    assert fused_dise([], 0.5, metric="aap", output=RDKIT) == ()
     assert leader(singleton, 0.0, output=RDKIT) == (0,)
     assert maxmin(singleton, 1, seed=7, output=RDKIT) == ((0,), -1.0)
     assert dise(singleton, 0.0, output=RDKIT) == ((0,),)
@@ -694,10 +772,12 @@ def test_matrix_sphere_exclusion_rejects_invalid_cutoffs(function, cutoff):
 
 
 @pytest.mark.parametrize("function", [fused_leader, fused_dise])
+@pytest.mark.parametrize("metric", ["tanimoto", "aap"])
 @pytest.mark.parametrize("cutoff", [-0.1, 1.1, np.nan])
-def test_fused_sphere_exclusion_rejects_invalid_cutoffs(function, cutoff):
+def test_fused_sphere_exclusion_rejects_invalid_cutoffs(function, metric, cutoff):
+    x = [Chem.MolFromSmiles("CC")] if metric == "aap" else np.asarray([[1]], dtype=np.uint32)
     with pytest.raises(ValueError, match="cutoff"):
-        function(np.asarray([[1]], dtype=np.uint32), cutoff)
+        function(x, cutoff, metric=metric)
 
 
 @pytest.mark.parametrize(
