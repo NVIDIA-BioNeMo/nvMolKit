@@ -23,6 +23,7 @@
 #include <stdexcept>
 #include <unordered_map>
 
+#include "src/conformer/device_coord_gather.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device.h"
 #include "src/utils/p2p.h"
@@ -93,6 +94,11 @@ DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors
     return !filterByAttempt || ranks[collectorIdx][confIdx] >= 0;
   };
 
+  size_t totalEntries = 0;
+  for (const auto& collector : collectors) {
+    totalEntries += collector.atomCounts.size();
+  }
+
   int  totalConformers = 0;
   int  totalAtoms      = 0;
   bool hasEnergies     = false;
@@ -133,6 +139,13 @@ DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors
   std::vector<int32_t> molIndicesHost(static_cast<size_t>(totalConformers), 0);
   std::vector<int32_t> confIndicesHost(static_cast<size_t>(totalConformers), 0);
 
+  // When surplus entries are dropped, copying each run of kept conformers separately costs a copy call per run.
+  // Gather the positions with one kernel instead.
+  const bool                 gatherPositions = static_cast<size_t>(totalConformers) < totalEntries;
+  std::vector<const double*> gatherSrc;
+  std::vector<int>           gatherDstAtomStarts;
+  std::vector<int>           gatherAtomCounts;
+
   std::unordered_map<int, int> perMolCounter;
   int                          confCursor = 0;
   int                          atomCursor = 0;
@@ -153,13 +166,15 @@ DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors
       if (runConfs == 0) {
         return;
       }
-      copyDeviceToDeviceAsync(result.positions.data() + static_cast<size_t>(atomCursor - runAtoms) * 3,
-                              collector.positions.data() + static_cast<size_t>(runSrcAtom) * 3,
-                              static_cast<size_t>(runAtoms) * 3 * sizeof(double),
-                              collector.gpuId,
-                              collector.stream,
-                              targetGpu,
-                              targetStream.stream());
+      if (!gatherPositions) {
+        copyDeviceToDeviceAsync(result.positions.data() + static_cast<size_t>(atomCursor - runAtoms) * 3,
+                                collector.positions.data() + static_cast<size_t>(runSrcAtom) * 3,
+                                static_cast<size_t>(runAtoms) * 3 * sizeof(double),
+                                collector.gpuId,
+                                collector.stream,
+                                targetGpu,
+                                targetStream.stream());
+      }
       if (hasEnergies && collector.energies.size() > 0) {
         copyDeviceToDeviceAsync(result.energies.data() + (confCursor - runConfs),
                                 collector.energies.data() + runSrcConf,
@@ -195,6 +210,11 @@ DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors
         runSrcConf = conformerIdx;
       }
       atomStartsHost[static_cast<size_t>(confCursor)] = atomCursor;
+      if (gatherPositions) {
+        gatherSrc.push_back(collector.positions.data() + static_cast<size_t>(srcAtomCursor) * 3);
+        gatherDstAtomStarts.push_back(atomCursor);
+        gatherAtomCounts.push_back(natoms);
+      }
       const int molId                                 = collector.molIds[conformerIdx];
       molIndicesHost[static_cast<size_t>(confCursor)] = molId;
       if (useExplicitConfIds) {
@@ -213,6 +233,19 @@ DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors
     flushRun();
   }
   atomStartsHost[static_cast<size_t>(totalConformers)] = atomCursor;
+
+  if (gatherPositions) {
+    // Collector streams are idle once appendActive returns, but make sure before reading their buffers directly.
+    for (const auto& collector : collectors) {
+      const WithDevice withCollector(collector.gpuId);
+      cudaCheckError(cudaStreamSynchronize(collector.stream));
+    }
+    gatherConformerPositions(gatherSrc,
+                             gatherDstAtomStarts,
+                             gatherAtomCounts,
+                             result.positions.data(),
+                             targetStream.stream());
+  }
 
   result.atomStarts.copyFromHost(atomStartsHost);
   if (totalConformers > 0) {
