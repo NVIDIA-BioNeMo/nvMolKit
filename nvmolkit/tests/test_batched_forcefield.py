@@ -624,6 +624,7 @@ def _assert_minimize_runs_match(got, want, start, got_converged, want_converged,
         for conf_idx in range(len(want[mol_idx])):
             got_energy = got[mol_idx][conf_idx]
             want_energy = want[mol_idx][conf_idx]
+            assert math.isfinite(want_energy), f"Mol {mol_idx} conformer {conf_idx}: reference energy is {want_energy}"
             if tol.require_progress:
                 assert math.isfinite(got_energy) and got_energy < start[mol_idx][conf_idx], (
                     f"Mol {mol_idx} conformer {conf_idx}: energy went from "
