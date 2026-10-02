@@ -70,9 +70,8 @@ TEST(DeviceTimings, RecordsSleepDurations) {
   EXPECT_EQ(host_data.counts[0], 1);
   EXPECT_EQ(host_data.counts[1], 1);
 
+  // Only lower bounds: time-slicing with other work on a shared GPU can add arbitrary cycles
+  // between the spin loop and the timing end, but can never remove them.
   EXPECT_GE(host_data.totals[0], short_cycles * 9 / 10);
-  EXPECT_LE(host_data.totals[0], short_cycles * 11 / 10);
-
   EXPECT_GE(host_data.totals[1], long_cycles * 9 / 10);
-  EXPECT_LE(host_data.totals[1], long_cycles * 11 / 10);
 }
