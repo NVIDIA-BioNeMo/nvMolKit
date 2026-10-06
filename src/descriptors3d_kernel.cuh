@@ -137,6 +137,47 @@ writeCenteredConformer(const ConformerAtoms& atoms, const int laneInGroup, const
   return make_double3(centroidX, centroidY, centroidZ);
 }
 
+//! Bond depth of an atom not reached within the search's depth cap.
+constexpr uint8_t kUnreachedDepth = 0xFF;
+
+/**
+ * @brief Collective over the @p groupMask lanes. Breadth-first search over the molecule's bonds from atom
+ *        @p source, writing each atom's bond-count distance to @p depth, or kUnreachedDepth beyond
+ *        @p kMaxDepth bonds. Matches RDKit's MolOps::getDistanceMat(mol, false) up to that cap.
+ *
+ * Each level scans the atoms set at the previous level, O(kMaxDepth * atoms) per source; lanes that reach the
+ * same atom write the same value.
+ */
+template <int kMaxDepth>
+__device__ __forceinline__ void searchBondDepths(const int32_t* neighborStarts,
+                                                 const int32_t* neighbors,
+                                                 const int      numAtoms,
+                                                 const int      source,
+                                                 const int      laneInGroup,
+                                                 const unsigned groupMask,
+                                                 uint8_t*       depth) {
+  static_assert(kMaxDepth < kUnreachedDepth);
+  // Every lane has finished reading the previous source's depths before they are overwritten.
+  __syncwarp(groupMask);
+  for (int atomIdx = laneInGroup; atomIdx < numAtoms; atomIdx += kGroupSize) {
+    depth[atomIdx] = atomIdx == source ? 0 : kUnreachedDepth;
+  }
+  __syncwarp(groupMask);
+  for (int level = 1; level <= kMaxDepth; ++level) {
+    for (int atomIdx = laneInGroup; atomIdx < numAtoms; atomIdx += kGroupSize) {
+      if (depth[atomIdx] == level - 1) {
+        for (int edge = neighborStarts[atomIdx]; edge < neighborStarts[atomIdx + 1]; ++edge) {
+          const int neighbor = neighbors[edge];
+          if (depth[neighbor] == kUnreachedDepth) {
+            depth[neighbor] = static_cast<uint8_t>(level);
+          }
+        }
+      }
+    }
+    __syncwarp(groupMask);
+  }
+}
+
 //! Round to three decimals as RDKit's WHIM, RDF and MORSE do: std::round(1000 * x) / 1000.
 template <typename Real> __device__ __forceinline__ Real roundThousandths(const Real value) {
   return round(value * Real(1000)) / Real(1000);

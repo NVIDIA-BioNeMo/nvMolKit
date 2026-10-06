@@ -33,6 +33,8 @@ struct DeviceDescriptorInputs {
   AsyncDeviceVector<int32_t> bondNeighborStarts;
   AsyncDeviceVector<int32_t> bondNeighbors;
   AsyncDeviceVector<uint8_t> usrcatAtomClasses;
+  AsyncDeviceVector<uint8_t> heavyAtomFlags;
+  AsyncDeviceVector<int32_t> defaultConformerRows;
   AsyncDeviceVector<int8_t>  conformerIs3D;
   AsyncDeviceVector<int32_t> moleculeAtomStarts;
 };
@@ -45,6 +47,8 @@ struct DescriptorInputNeeds {
   bool covalentRadiusWeights = false;
   bool bondAdjacency         = false;
   bool usrcatAtomClasses     = false;
+  bool heavyAtomFlags        = false;
+  bool defaultConformerRows  = false;
   bool conformerFlags        = false;
 };
 
@@ -136,7 +140,20 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
     bondNeighborStarts[totalAtoms] = neighborOffsets.back();
   }
   std::vector<uint8_t> usrcatAtomClasses(needs.usrcatAtomClasses ? static_cast<size_t>(totalAtoms) : 0);
-  std::vector<int8_t>  conformerIs3D;
+  std::vector<uint8_t> heavyAtomFlags(needs.heavyAtomFlags ? static_cast<size_t>(totalAtoms) : 0);
+  // Coordinate rows follow each molecule's conformers in order, so a molecule's first row is its default
+  // conformer (RDKit's getConformer(-1)).
+  std::vector<int32_t> defaultConformerRows;
+  if (needs.defaultConformerRows) {
+    defaultConformerRows.resize(numMols);
+    int32_t row = 0;
+    for (int molIdx = 0; molIdx < numMols; ++molIdx) {
+      const int32_t numConformers  = static_cast<int32_t>(mols[molIdx]->getNumConformers());
+      defaultConformerRows[molIdx] = numConformers > 0 ? row : -1;
+      row += numConformers;
+    }
+  }
+  std::vector<int8_t> conformerIs3D;
   if (needs.conformerFlags) {
     for (const RDKit::ROMol* mol : mols) {
       for (auto conformer = mol->beginConformers(); conformer != mol->endConformers(); ++conformer) {
@@ -161,7 +178,7 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
     exceptionRegistry.rethrow();
   }
   if (needs.atomPropertyWeights || needs.iStateDragWeights || needs.covalentRadiusWeights || needs.bondAdjacency ||
-      needs.usrcatAtomClasses) {
+      needs.usrcatAtomClasses || needs.heavyAtomFlags) {
 #pragma omp parallel for num_threads(numThreads) schedule(dynamic) default(none) shared(numMols,                 \
                                                                                           mols,                  \
                                                                                           atomStarts,            \
@@ -174,6 +191,7 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
                                                                                           bondNeighborStarts,    \
                                                                                           bondNeighbors,         \
                                                                                           usrcatAtomClasses,     \
+                                                                                          heavyAtomFlags,        \
                                                                                           exceptionRegistry)
     for (int molIdx = 0; molIdx < numMols; ++molIdx) {
       try {
@@ -202,6 +220,11 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
         if (needs.covalentRadiusWeights) {
           const std::vector<double> radii = descriptorData.GetRelativeRcov(mol);
           std::copy(radii.begin(), radii.end(), covalentRadiusWeights.begin() + atomStart);
+        }
+        if (needs.heavyAtomFlags) {
+          for (const auto* atom : mol.atoms()) {
+            heavyAtomFlags[atomStart + atom->getIdx()] = atom->getAtomicNum() > 1 ? 1 : 0;
+          }
         }
         if (needs.bondAdjacency) {
           writeBondAdjacency(mol, neighborOffsets[molIdx], bondNeighborStarts.data() + atomStart, bondNeighbors.data());
@@ -233,6 +256,8 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
                                 AsyncDeviceVector<int32_t>(bondNeighborStarts.size(), stream),
                                 AsyncDeviceVector<int32_t>(bondNeighbors.size(), stream),
                                 AsyncDeviceVector<uint8_t>(usrcatAtomClasses.size(), stream),
+                                AsyncDeviceVector<uint8_t>(heavyAtomFlags.size(), stream),
+                                AsyncDeviceVector<int32_t>(defaultConformerRows.size(), stream),
                                 AsyncDeviceVector<int8_t>(conformerIs3D.size(), stream),
                                 AsyncDeviceVector<int32_t>(atomStarts.size(), stream)};
   if (!weights.empty()) {
@@ -255,6 +280,12 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
   }
   if (!usrcatAtomClasses.empty()) {
     result.usrcatAtomClasses.copyFromHost(usrcatAtomClasses);
+  }
+  if (!heavyAtomFlags.empty()) {
+    result.heavyAtomFlags.copyFromHost(heavyAtomFlags);
+  }
+  if (!defaultConformerRows.empty()) {
+    result.defaultConformerRows.copyFromHost(defaultConformerRows);
   }
   if (!conformerIs3D.empty()) {
     result.conformerIs3D.copyFromHost(conformerIs3D);
@@ -297,13 +328,17 @@ Property3DBatchResult<Real> calc3DProperties(const std::vector<const RDKit::ROMo
     const Property3DFamily family = property3DFamily(property);
     needs.momentWeights |=
       family == Property3DFamily::Moments && options.moments.useAtomicMasses && property != Property3D::SpherocityIndex;
-    needs.atomPropertyWeights |= property == Property3D::WHIM || family == Property3DFamily::Pairwise;
+    needs.atomPropertyWeights |=
+      property == Property3D::WHIM || family == Property3DFamily::Pairwise || property == Property3D::GETAWAY;
     needs.iStateDragWeights |= property == Property3D::RDF;
     needs.covalentRadiusWeights |= property == Property3D::AUTOCORR3D;
-    needs.bondAdjacency |= property == Property3D::AUTOCORR3D;
+    needs.bondAdjacency |= property == Property3D::AUTOCORR3D || property == Property3D::GETAWAY;
+    needs.heavyAtomFlags |= property == Property3D::GETAWAY;
+    // Device coordinate rows are not tied to molecule conformers, so GETAWAY then uses each row's own.
+    needs.defaultConformerRows |= property == Property3D::GETAWAY && coordinates == nullptr;
     needs.usrcatAtomClasses |= property == Property3D::USRCAT;
     // Device coordinate rows carry no is3D flag and are treated as three-dimensional.
-    needs.conformerFlags |= property == Property3D::PBF && coordinates == nullptr;
+    needs.conformerFlags |= (property == Property3D::PBF || property == Property3D::GETAWAY) && coordinates == nullptr;
   }
   const DeviceDescriptorInputs uploadedInputs = uploadDescriptorInputs(mols, needs, numThreads, stream);
 
@@ -316,6 +351,8 @@ Property3DBatchResult<Real> calc3DProperties(const std::vector<const RDKit::ROMo
   inputs.bondNeighborStarts    = uploadedInputs.bondNeighborStarts.data();
   inputs.bondNeighbors         = uploadedInputs.bondNeighbors.data();
   inputs.usrcatAtomClasses     = uploadedInputs.usrcatAtomClasses.data();
+  inputs.heavyAtomFlags        = uploadedInputs.heavyAtomFlags.data();
+  inputs.defaultConformerRows  = uploadedInputs.defaultConformerRows.data();
   inputs.conformerIs3D         = uploadedInputs.conformerIs3D.data();
   for (const RDKit::ROMol* mol : mols) {
     inputs.maxMoleculeAtoms = std::max(inputs.maxMoleculeAtoms, static_cast<int32_t>(mol->getNumAtoms()));

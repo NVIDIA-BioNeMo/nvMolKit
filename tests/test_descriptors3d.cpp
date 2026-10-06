@@ -3,6 +3,7 @@
 
 #include <GraphMol/Conformer.h>
 #include <GraphMol/Descriptors/AUTOCORR3D.h>
+#include <GraphMol/Descriptors/GETAWAY.h>
 #include <GraphMol/Descriptors/MORSE.h>
 #include <GraphMol/Descriptors/PBF.h>
 #include <GraphMol/Descriptors/RDF.h>
@@ -361,6 +362,27 @@ TEST(Descriptors3DPairwise, MatchesRdkitAutocorr3D) {
     ASSERT_EQ(expected.size(), static_cast<size_t>(nvMolKit::kNumAutocorr3DProperties));
     for (int valueIdx = 0; valueIdx < nvMolKit::kNumAutocorr3DProperties; ++valueIdx) {
       EXPECT_NEAR(values[confIdx * nvMolKit::kNumAutocorr3DProperties + valueIdx], expected[valueIdx], 1.1e-3)
+        << "conformer " << confIdx << ", value " << valueIdx;
+    }
+  }
+}
+
+TEST(Descriptors3DGetaway, MatchesRdkitGetaway) {
+  auto                                   mol  = molWithConformers("CCCO",
+                                                                  {
+                                 {{-1.3, 0.2, 0.7}, {-0.2, -0.8, 0.1}, {0.9, 0.4, -0.6},  {1.7, 1.1, 0.9}},
+                                 {{2.0, -1.0, 0.5},  {2.7, 0.3, -0.4}, {3.9, -0.2, 0.8}, {4.6, 1.0, -0.7}},
+  });
+  const std::vector<const RDKit::ROMol*> mols = {mol.get()};
+  auto       results = nvMolKit::calc3DProperties<double>(mols, {Property3D::GETAWAY}, {}, nullptr);
+  const auto values  = toHost(results.properties.at(Property3D::GETAWAY));
+  ASSERT_EQ(values.size(), 2u * nvMolKit::kNumGetawayProperties);
+  for (int confIdx = 0; confIdx < 2; ++confIdx) {
+    std::vector<double> expected;
+    RDKit::Descriptors::GETAWAY(*mol, expected, confIdx);
+    ASSERT_EQ(expected.size(), static_cast<size_t>(nvMolKit::kNumGetawayProperties));
+    for (int valueIdx = 0; valueIdx < nvMolKit::kNumGetawayProperties; ++valueIdx) {
+      EXPECT_NEAR(values[confIdx * nvMolKit::kNumGetawayProperties + valueIdx], expected[valueIdx], 1.1e-3)
         << "conformer " << confIdx << ", value " << valueIdx;
     }
   }

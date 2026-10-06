@@ -28,45 +28,6 @@ constexpr int kNumAutocorrChannels = kNumPairwiseChannels + 1;
 constexpr int kNumAutocorrLags     = kNumAutocorr3DProperties / kNumAutocorrChannels;
 constexpr int kAutocorrLagsPerLane = (kNumAutocorrLags + kGroupSize - 1) / kGroupSize;
 
-//! Bond depth of an atom not reached within kNumAutocorrLags bonds of the search source.
-constexpr uint8_t kUnreachedDepth = 0xFF;
-
-/**
- * @brief Collective over the @p groupMask lanes. Breadth-first search over the molecule's bonds from atom
- *        @p source, writing each atom's bond-count distance to @p depth, or kUnreachedDepth beyond
- *        kNumAutocorrLags bonds. Matches RDKit's MolOps::getDistanceMat(mol, false) up to that cap.
- *
- * Each level scans the atoms set at the previous level, O(kNumAutocorrLags * atoms) per source; lanes that
- * reach the same atom write the same value.
- */
-__device__ __forceinline__ void searchBondDepths(const int32_t* neighborStarts,
-                                                 const int32_t* neighbors,
-                                                 const int      numAtoms,
-                                                 const int      source,
-                                                 const int      laneInGroup,
-                                                 const unsigned groupMask,
-                                                 uint8_t*       depth) {
-  // Every lane has finished reading the previous source's depths before they are overwritten.
-  __syncwarp(groupMask);
-  for (int atomIdx = laneInGroup; atomIdx < numAtoms; atomIdx += kGroupSize) {
-    depth[atomIdx] = atomIdx == source ? 0 : kUnreachedDepth;
-  }
-  __syncwarp(groupMask);
-  for (int level = 1; level <= kNumAutocorrLags; ++level) {
-    for (int atomIdx = laneInGroup; atomIdx < numAtoms; atomIdx += kGroupSize) {
-      if (depth[atomIdx] == level - 1) {
-        for (int edge = neighborStarts[atomIdx]; edge < neighborStarts[atomIdx + 1]; ++edge) {
-          const int neighbor = neighbors[edge];
-          if (depth[neighbor] == kUnreachedDepth) {
-            depth[neighbor] = static_cast<uint8_t>(level);
-          }
-        }
-      }
-    }
-    __syncwarp(groupMask);
-  }
-}
-
 //! Pairwise properties served by one kernel instantiation; unrequested ones compile out.
 enum PairwiseSet : unsigned {
   kPairwiseRdf        = 1u,
@@ -287,13 +248,13 @@ __global__ void pairwise3DKernel(const DeviceCoordView        coordinates,
       const Real               dragJ   = rowJ[kScratchIStateDrag];
       const Real               radiusJ = rowJ[kScratchCovalentRadius];
       if constexpr (kAutocorr) {
-        searchBondDepths(neighborStarts,
-                         inputs.bondNeighbors,
-                         atoms.numAtoms,
-                         j,
-                         laneInGroup,
-                         0xffu << (stream * kGroupSize),
-                         depth);
+        searchBondDepths<kNumAutocorrLags>(neighborStarts,
+                                           inputs.bondNeighbors,
+                                           atoms.numAtoms,
+                                           j,
+                                           laneInGroup,
+                                           0xffu << (stream * kGroupSize),
+                                           depth);
       }
       for (int k = j + 1; k < atoms.numAtoms; ++k) {
         const Real* const        rowK   = rows + k * kPairwiseScratchStride;

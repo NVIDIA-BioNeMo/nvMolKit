@@ -40,6 +40,10 @@ class Property3D(Enum):
       Conformers with fewer than 3 atoms, which RDKit rejects, produce NaN.
     - ``USRCAT``: 60 values, ``USR`` for all atoms and then for RDKit's
       hydrophobic, aromatic, acceptor and donor atoms. Same atom-count rule.
+    - ``GETAWAY``: 273 values in RDKit's ``CalcGETAWAY`` order. RDKit counts
+      atom pairs in different fragments (salts, counterions) only in the
+      totals; nvMolKit returns the same values, which RDKit itself takes
+      impractically long to reach for multi-fragment molecules.
     """
 
     PMI1 = "PMI1"
@@ -59,6 +63,7 @@ class Property3D(Enum):
     AUTOCORR3D = "AUTOCORR3D"
     USR = "USR"
     USRCAT = "USRCAT"
+    GETAWAY = "GETAWAY"
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,18 @@ class WhimOptions:
 
 
 @dataclass(frozen=True)
+class GetawayOptions:
+    """Options for :attr:`Property3D.GETAWAY`.
+
+    Attributes:
+        precision: Significant digits the heavy-atom leverages are rounded to before ``ITH`` and ``ISH``
+            group them, RDKit's default ``2``. Must be between 1 and 6.
+    """
+
+    precision: int = 2
+
+
+@dataclass(frozen=True)
 class Property3DOptions:
     """Per-family options for :func:`Calc3DProperties`; each family reads only its own member.
 
@@ -106,10 +123,12 @@ class Property3DOptions:
     Attributes:
         moments: Options for the moment-based properties.
         whim: Options for ``WHIM``.
+        getaway: Options for ``GETAWAY``.
     """
 
     moments: MomentOptions = MomentOptions()
     whim: WhimOptions = WhimOptions()
+    getaway: GetawayOptions = GetawayOptions()
 
 
 @dataclass(frozen=True)
@@ -314,8 +333,9 @@ def Calc3DProperties(
             Steps where float32 measurably loses accuracy always compute in
             float64: coordinate centering (conformers far from the origin),
             WHIM's PCA (inverse kurtosis of near-planar conformers),
-            MORSE's first scattering value (a large sum of positive terms)
-            and USR's reference-atom choice (near-equidistant atoms).
+            MORSE's first scattering value (a large sum of positive terms),
+            USR's reference-atom choice (near-equidistant atoms) and GETAWAY's
+            leverages (rounded and clustered for ITH and ISH).
         hardwareOptions: Only ``preprocessingThreads`` applies: the CPU
             threads used to extract coordinates and atom weights from the
             molecules (default ``-1``, all threads).
@@ -379,6 +399,11 @@ def Calc3DProperties(
         options = Property3DOptions()
     elif not isinstance(options, Property3DOptions):
         raise TypeError(f"options must be a Property3DOptions or None, got {type(options).__name__}")
+    getaway_precision = options.getaway.precision
+    if isinstance(getaway_precision, bool) or not isinstance(getaway_precision, int):
+        raise TypeError(f"GETAWAY precision must be an int, got {type(getaway_precision).__name__}")
+    if not 1 <= getaway_precision <= 6:
+        raise ValueError(f"GETAWAY precision must be between 1 and 6 significant digits, got {getaway_precision}")
     if hardwareOptions is None:
         hardwareOptions = HardwareOptions()
     elif not isinstance(hardwareOptions, HardwareOptions):
@@ -398,6 +423,7 @@ def Calc3DProperties(
         [prop.value for prop in normalized_properties],
         options.moments.useAtomicMasses,
         options.whim.threshold,
+        options.getaway.precision,
         coordinate_interfaces,
         precision,
         hardwareOptions.preprocessingThreads,

@@ -14,6 +14,7 @@ from rdkit.Geometry import Point3D
 from nvmolkit.descriptors3d import (
     Calc3DProperties,
     Device3DPropertyResult,
+    GetawayOptions,
     MomentOptions,
     Property3D,
     Property3DOptions,
@@ -30,6 +31,7 @@ VECTOR_PROPERTIES = (
     Property3D.AUTOCORR3D,
     Property3D.USR,
     Property3D.USRCAT,
+    Property3D.GETAWAY,
 )
 SCALAR_PROPERTIES = tuple(prop for prop in Property3D if prop not in VECTOR_PROPERTIES)
 PAIRWISE_PROPERTIES = (Property3D.RDF, Property3D.MORSE, Property3D.AUTOCORR3D)
@@ -545,6 +547,100 @@ def test_autocorr3d_non_finite_coordinates_match_rdkit(precision):
     _assert_rounded_matches_rdkit(
         result[Property3D.AUTOCORR3D].numpy(), _rdkit_pairwise_rows(mols, Property3D.AUTOCORR3D), precision
     )
+
+
+def _rdkit_getaway_rows(mols, precision_digits=2):
+    return np.asarray(
+        [
+            rdMolDescriptors.CalcGETAWAY(mol, confId=conf.GetId(), precision=precision_digits)
+            for mol in mols
+            for conf in mol.GetConformers()
+        ]
+    )
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_getaway_matches_rdkit(precision):
+    rng = np.random.default_rng(11)
+    steps = rng.normal(size=(60, 3))
+    chain = np.cumsum(1.5 * steps / np.linalg.norm(steps, axis=1, keepdims=True), axis=0)
+    mols = [
+        _embed("CC(=O)Nc1ccc(O)cc1", 3, 97),
+        # Planar: X^T X has a zero singular value, dropped from the pseudo-inverse, and HIC uses D = 2.
+        _embed("c1ccncc1", 2, 101),
+        _mol_with_conformers("C" * 60, [chain]),
+    ]
+    result = Calc3DProperties(mols, Property3D.GETAWAY, precision=precision)
+    assert result[Property3D.GETAWAY].torch().shape == (6, 273)
+    _assert_rounded_matches_rdkit(result[Property3D.GETAWAY].numpy(), _rdkit_getaway_rows(mols), precision)
+
+
+@pytest.fixture(scope="module")
+def getaway_salt():
+    # RDKit's lag loop runs to its 1e8 distance for disconnected atoms: seconds even for this 4-atom salt.
+    mol = _mol_with_conformers("CCO.N", [[(0.0, 0.0, 0.0), (1.5, 0.1, 0.0), (2.1, 1.4, 0.2), (5.0, 1.0, -1.0)]])
+    return mol, _rdkit_getaway_rows([mol])
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_getaway_counts_disconnected_pairs_in_totals_like_rdkit(getaway_salt, precision):
+    mol, expected = getaway_salt
+    result = Calc3DProperties([mol], Property3D.GETAWAY, precision=precision)
+    _assert_rounded_matches_rdkit(result[Property3D.GETAWAY].numpy(), expected, precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_getaway_hic_uses_default_conformer_dimension(precision):
+    # RDKit's HIC takes its 2D/3D choice from PBF(mol), i.e. the default (first) conformer: planar here.
+    planar = [(0.0, 0.0, 0.0), (1.5, 0.0, 0.0), (2.1, 1.4, 0.0), (3.6, 1.5, 0.0)]
+    bent = [(0.0, 0.0, 0.0), (1.5, 0.1, 0.3), (2.1, 1.4, -0.4), (3.6, 1.5, 0.6)]
+    mol = _mol_with_conformers("CCCO", [planar, bent])
+    result = Calc3DProperties([mol], Property3D.GETAWAY, precision=precision)
+    _assert_rounded_matches_rdkit(result[Property3D.GETAWAY].numpy(), _rdkit_getaway_rows([mol]), precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_getaway_tiny_leverage_matches_rdkit(precision):
+    # The central carbon sits 0.003 A from the centroid: its leverage (~2e-6) prints in scientific notation
+    # in RDKit's ITH/ISH digit-string clustering.
+    corner = 0.89
+    coordinates = [
+        (0.003, 0.0, 0.0),
+        (corner, corner, corner),
+        (corner, -corner, -corner),
+        (-corner, corner, -corner),
+        (-corner, -corner, corner),
+    ]
+    mol = _mol_with_conformers("C(C)(C)(C)C", [coordinates])
+    result = Calc3DProperties([mol], Property3D.GETAWAY, precision=precision)
+    _assert_rounded_matches_rdkit(result[Property3D.GETAWAY].numpy(), _rdkit_getaway_rows([mol]), precision)
+
+
+@pytest.mark.parametrize("precision_digits", [1, 3])
+def test_getaway_precision_option_matches_rdkit(precision_digits):
+    mols = [_embed("CC(=O)Nc1ccc(O)cc1", 2, 103)]
+    result = Calc3DProperties(
+        mols,
+        Property3D.GETAWAY,
+        options=Property3DOptions(getaway=GetawayOptions(precision=precision_digits)),
+        precision=PrecisionMode.FULL,
+    )
+    _assert_rounded_matches_rdkit(
+        result[Property3D.GETAWAY].numpy(), _rdkit_getaway_rows(mols, precision_digits), PrecisionMode.FULL
+    )
+
+
+@pytest.mark.parametrize("precision_digits", [-1, 0, 7])
+def test_getaway_rejects_out_of_range_precision(precision_digits):
+    options = Property3DOptions(getaway=GetawayOptions(precision=precision_digits))
+    with pytest.raises(ValueError, match="GETAWAY precision"):
+        Calc3DProperties([_embed("CCO", 1, 5)], Property3D.GETAWAY, options=options)
+
+
+def test_getaway_rejects_non_integer_precision():
+    options = Property3DOptions(getaway=GetawayOptions(precision=2.5))
+    with pytest.raises(TypeError, match="GETAWAY precision"):
+        Calc3DProperties([_embed("CCO", 1, 5)], Property3D.GETAWAY, options=options)
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)

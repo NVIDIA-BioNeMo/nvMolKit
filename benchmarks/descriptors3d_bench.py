@@ -84,6 +84,11 @@ def _calc_rdkit_property(mol: Chem.Mol, conf_id: int, prop: Property3D) -> float
         return rdMolDescriptors.GetUSR(mol, confId=conf_id)
     if prop == Property3D.USRCAT:
         return rdMolDescriptors.GetUSRCAT(mol, confId=conf_id)
+    if prop == Property3D.GETAWAY:
+        if len(Chem.GetMolFrags(mol)) > 1:
+            # RDKit's GETAWAY loops up to its 1e8 disconnected-pair distance and would not finish.
+            return [math.nan] * 273
+        return rdMolDescriptors.CalcGETAWAY(mol, confId=conf_id)
     return RDKIT_CALCULATORS[prop](mol, confId=conf_id, useAtomicMasses=True)
 
 
@@ -151,6 +156,11 @@ def _validate(
     for result in results:
         for prop in properties:
             actual = result[prop.value].numpy()
+            if prop == Property3D.GETAWAY:
+                # Rows RDKit could not compute (multi-fragment molecules) are NaN and not compared.
+                computed = ~np.isnan(expected[prop]).all(axis=1)
+                np.testing.assert_allclose(actual[computed], expected[prop][computed], rtol=0, atol=max(atol, 1.1e-3))
+                continue
             if prop not in (Property3D.USR, Property3D.USRCAT):
                 np.testing.assert_allclose(actual, expected[prop], rtol=rtol, atol=atol)
                 continue
@@ -256,6 +266,11 @@ def run(
                 }
 
                 rdkit_timing = None
+                if not no_rdkit and Property3D.GETAWAY in properties:
+                    skipped = sum(len(Chem.GetMolFrags(mol)) > 1 for mol in mols)
+                    if skipped:
+                        print(f"RDKit GETAWAY skips {skipped} multi-fragment molecules (it would not finish on them)")
+                    row["rdkit_getaway_skipped_mols"] = skipped
                 if not no_rdkit:
                     rdkit_timing = time_it(
                         lambda mols=mols, properties=properties: _calc_rdkit(mols, properties),

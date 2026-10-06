@@ -7,6 +7,7 @@
 #include <string>
 
 #include "src/descriptors3d.h"
+#include "src/descriptors3d_getaway.cuh"
 #include "src/descriptors3d_kernel.cuh"
 #include "src/descriptors3d_moments.cuh"
 #include "src/descriptors3d_pairwise.cuh"
@@ -52,6 +53,8 @@ std::string_view property3DName(const Property3D property) {
       return "USR";
     case Property3D::USRCAT:
       return "USRCAT";
+    case Property3D::GETAWAY:
+      return "GETAWAY";
   }
   throw std::invalid_argument("Unknown Property3D value " + std::to_string(static_cast<int>(property)));
 }
@@ -77,6 +80,7 @@ using descriptors3d_detail::kGroupSize;
 using descriptors3d_detail::kGroupsPerWarp;
 using descriptors3d_detail::kWarpSize;
 using descriptors3d_detail::kWarpsPerBlock;
+using descriptors3d_detail::launchGetawayProperties;
 using descriptors3d_detail::launchPairwiseProperties;
 using descriptors3d_detail::launchProjectionProperties;
 using descriptors3d_detail::launchUsrProperties;
@@ -129,6 +133,7 @@ constexpr SharedStageSet directStages(const Property3D property) {
     case Property3D::AUTOCORR3D:
     case Property3D::USR:
     case Property3D::USRCAT:
+    case Property3D::GETAWAY:
       return 0;
   }
   return 0;
@@ -293,8 +298,9 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
   Real*                   pbfOutput     = nullptr;
   Real*                   whimOutput    = nullptr;
   PairwiseOutputs<Real>   pairwiseOutputs;
-  Real*                   usrOutput    = nullptr;
-  Real*                   usrcatOutput = nullptr;
+  Real*                   usrOutput     = nullptr;
+  Real*                   usrcatOutput  = nullptr;
+  Real*                   getawayOutput = nullptr;
   for (const Property3D property : properties) {
     // Bounds the work arrays, which hold one slot per known property.
     if (std::find(kAllProperty3D.begin(), kAllProperty3D.end(), property) == kAllProperty3D.end()) {
@@ -321,12 +327,18 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
       case Property3DFamily::Usr:
         (property == Property3D::USR ? usrOutput : usrcatOutput) = it->second.data();
         break;
+      case Property3DFamily::Getaway:
+        getawayOutput = it->second.data();
+        break;
     }
   }
 
   // Options are validated only for requested families; the rest are ignored.
   if (whimOutput != nullptr && (!std::isfinite(options.whim.threshold) || options.whim.threshold < 0)) {
     throw std::invalid_argument("WHIM threshold must be finite and non-negative");
+  }
+  if (getawayOutput != nullptr && (options.getaway.precision < 1 || options.getaway.precision > 6)) {
+    throw std::invalid_argument("GETAWAY precision must be between 1 and 6 significant digits");
   }
 
   if (coordinates.numConformers == 0) {
@@ -338,9 +350,13 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
   }
   const bool anyPairwise =
     pairwiseOutputs.rdf != nullptr || pairwiseOutputs.morse != nullptr || pairwiseOutputs.autocorr3D != nullptr;
-  if ((whimOutput != nullptr || anyPairwise) && inputs.atomPropertyWeights == nullptr) {
+  if ((whimOutput != nullptr || anyPairwise || getawayOutput != nullptr) && inputs.atomPropertyWeights == nullptr) {
     throw std::invalid_argument(
-      "Atom-property weights must not be null when WHIM, RDF, MORSE or AUTOCORR3D is requested");
+      "Atom-property weights must not be null when WHIM, RDF, MORSE, AUTOCORR3D or GETAWAY is requested");
+  }
+  if (getawayOutput != nullptr &&
+      (inputs.bondNeighborStarts == nullptr || inputs.bondNeighbors == nullptr || inputs.heavyAtomFlags == nullptr)) {
+    throw std::invalid_argument("Bond adjacency and heavy-atom flags must not be null when GETAWAY is requested");
   }
   if (pairwiseOutputs.autocorr3D != nullptr &&
       (inputs.covalentRadiusWeights == nullptr || inputs.bondNeighborStarts == nullptr ||
@@ -362,6 +378,7 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
   launchProjectionProperties(coordinates, inputs, options.whim, pbfOutput, whimOutput, stream);
   launchPairwiseProperties(coordinates, inputs, pairwiseOutputs, stream);
   launchUsrProperties(coordinates, inputs, usrOutput, usrcatOutput, stream);
+  launchGetawayProperties(coordinates, inputs, options.getaway, getawayOutput, stream);
   return results;
 }
 
