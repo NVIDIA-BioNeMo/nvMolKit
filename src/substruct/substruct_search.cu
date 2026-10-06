@@ -64,10 +64,11 @@ void runPipelinedSubstructSearch(const std::vector<const RDKit::ROMol*>& targets
                                  const SubstructSearchConfig&            config,
                                  int                                     effectivePreprocessingThreads,
                                  RDKitFallbackQueue*                     fallbackQueue,
-                                 HasSubstructMatchResults*               boolResults       = nullptr,
-                                 std::vector<int>*                       countResults      = nullptr,
-                                 const PersistentDeviceTargets*          persistentTargets = nullptr,
-                                 SubstructSearchWorkspace*               workspace         = nullptr);
+                                 HasSubstructMatchResults*               boolResults           = nullptr,
+                                 std::vector<int>*                       countResults          = nullptr,
+                                 const PersistentDeviceTargets*          persistentTargets     = nullptr,
+                                 SubstructSearchWorkspace*               workspace             = nullptr,
+                                 const std::vector<int>*                 selectedTargetIndices = nullptr);
 
 }  // anonymous namespace
 
@@ -661,7 +662,8 @@ void runPipelinedSubstructSearch(const std::vector<const RDKit::ROMol*>& targets
                                  HasSubstructMatchResults*               boolResults,
                                  std::vector<int>*                       countResults,
                                  const PersistentDeviceTargets*          persistentTargets,
-                                 SubstructSearchWorkspace*               workspace) {
+                                 SubstructSearchWorkspace*               workspace,
+                                 const std::vector<int>*                 selectedTargetIndices) {
   (void)stream;
   const bool      countOnly  = (boolResults != nullptr) || (countResults != nullptr);
   const char*     rangeLabel = boolResults ?
@@ -669,10 +671,13 @@ void runPipelinedSubstructSearch(const std::vector<const RDKit::ROMol*>& targets
                                  (countResults ? "runPipelinedCountSubstructMatches" : "runPipelinedSubstructSearch");
   ScopedNvtxRange e2eRange(rangeLabel);
 
-  const int              numTargets      = static_cast<int>(targets.size());
-  const int              numQueries      = queryContext.numQueries;
+  const int numTargets = static_cast<int>(targets.size());
+  const int numQueries = queryContext.numQueries;
+  // Selected targets pair with a single query, so each selected target is one pair of work.
+  const int numWorkTargets =
+    selectedTargetIndices == nullptr ? numTargets : static_cast<int>(selectedTargetIndices->size());
   const LeafSubpatterns& leafSubpatterns = recursivePreprocessor.leafSubpatterns();
-  if (numTargets == 0 || numQueries == 0) {
+  if (numTargets == 0 || numQueries == 0 || numWorkTargets == 0) {
     return;
   }
 
@@ -691,8 +696,8 @@ void runPipelinedSubstructSearch(const std::vector<const RDKit::ROMol*>& targets
   // Determine runner counts (per GPU, possibly limited by target count).
   const int runnersPerGpu = std::max(1, config.workerThreads);
   int       numRunners    = runnersPerGpu * numGpus;
-  if (numRunners > numTargets) {
-    numRunners = numTargets;
+  if (numRunners > numWorkTargets) {
+    numRunners = numWorkTargets;
   }
   if (numRunners == 0) {
     return;
@@ -840,7 +845,7 @@ void runPipelinedSubstructSearch(const std::vector<const RDKit::ROMol*>& targets
           }
           const PersistentTargetMetadata* metadata = &persistentTargets->metadata;
 
-          const int totalPairs = numTargets * numQueries;
+          const int totalPairs = selectedTargetIndices == nullptr ? numTargets * numQueries : numWorkTargets;
           for (int pairOffset = 0; pairOffset < totalPairs; pairOffset += maxPairsPerBatch) {
             if (pipelineAbort.load(std::memory_order_acquire)) {
               break;
@@ -859,7 +864,17 @@ void runPipelinedSubstructSearch(const std::vector<const RDKit::ROMol*>& targets
                                                config,
                                                countOnly);
             batch->persistentTargetsDevice = persistentTargets->device;
-            planner.prepareMiniBatch(batch->plan, *buffer, batch->ctx, leafSubpatterns, pairOffset, maxPairsPerBatch);
+            if (selectedTargetIndices == nullptr) {
+              planner.prepareMiniBatch(batch->plan, *buffer, batch->ctx, leafSubpatterns, pairOffset, maxPairsPerBatch);
+            } else {
+              planner.prepareSelectedTargetsMiniBatch(batch->plan,
+                                                      *buffer,
+                                                      batch->ctx,
+                                                      leafSubpatterns,
+                                                      *selectedTargetIndices,
+                                                      pairOffset,
+                                                      maxPairsPerBatch);
+            }
             releaseGuard.release();
             batchQueue.push(std::move(batch));
           }
@@ -1061,7 +1076,8 @@ void computeEffectiveThreadCounts(const SubstructSearchConfig& config,
 
 namespace {
 
-void getSubstructMatchesImpl(const std::vector<const RDKit::ROMol*>& targets,
+// Returns false when selectedTargetIndices was ignored and every target was searched.
+bool getSubstructMatchesImpl(const std::vector<const RDKit::ROMol*>& targets,
                              const std::vector<const RDKit::ROMol*>& queries,
                              SubstructSearchResults&                 results,
                              SubstructAlgorithm                      algorithm,
@@ -1069,8 +1085,9 @@ void getSubstructMatchesImpl(const std::vector<const RDKit::ROMol*>& targets,
                              const SubstructSearchConfig&            config,
                              HasSubstructMatchResults*               boolResults,
                              std::vector<int>*                       countResults,
-                             const PersistentDeviceTargets*          persistentTargets = nullptr,
-                             SubstructSearchWorkspace*               workspace         = nullptr) {
+                             const PersistentDeviceTargets*          persistentTargets     = nullptr,
+                             SubstructSearchWorkspace*               workspace             = nullptr,
+                             const std::vector<int>*                 selectedTargetIndices = nullptr) {
   // CUDA sources build with --default-stream=per-thread but C++ sources use the legacy default stream, so a null
   // stream means a different stream on each side. Resolve it to an explicit handle before handing it to host-compiled
   // code such as MoleculesDevice, or the synchronization below would not cover the query upload.
@@ -1082,7 +1099,7 @@ void getSubstructMatchesImpl(const std::vector<const RDKit::ROMol*>& targets,
 
   if (numTargets == 0 || numQueries == 0) {
     results.resize(numTargets, numQueries);
-    return;
+    return true;
   }
 
   std::vector<int> gpuIds = config.gpuIds;
@@ -1218,6 +1235,16 @@ void getSubstructMatchesImpl(const std::vector<const RDKit::ROMol*>& targets,
     recursiveScratchRelease.workspace = workspace;
   }
 
+  // Recursive-pattern painting currently operates on contiguous
+  // target ranges. Preserve correctness by bypassing selected-index screening
+  // for those queries until that path supports indirection.
+  const std::vector<int>* screenedTargetIndices = selectedTargetIndices;
+  if (screenedTargetIndices != nullptr && std::any_of(queryContext.queryHasPatterns.begin(),
+                                                      queryContext.queryHasPatterns.end(),
+                                                      [](int8_t value) { return value != 0; })) {
+    screenedTargetIndices = nullptr;
+  }
+
   // Mutex shared between GPU batch accumulation and fallback queue processing
   std::mutex resultsMutex;
 
@@ -1230,8 +1257,14 @@ void getSubstructMatchesImpl(const std::vector<const RDKit::ROMol*>& targets,
     std::vector<RDKitFallbackEntry> depthFallbackEntries;
     for (int q = 0; q < numQueries; ++q) {
       if (queryContext.queryNeedsFallback[q]) {
-        for (int t = 0; t < numTargets; ++t) {
-          depthFallbackEntries.push_back({t, q});
+        if (screenedTargetIndices == nullptr) {
+          for (int t = 0; t < numTargets; ++t) {
+            depthFallbackEntries.push_back({t, q});
+          }
+        } else {
+          for (const int t : *screenedTargetIndices) {
+            depthFallbackEntries.push_back({t, q});
+          }
         }
       }
     }
@@ -1254,7 +1287,8 @@ void getSubstructMatchesImpl(const std::vector<const RDKit::ROMol*>& targets,
                               boolResults,
                               countResults,
                               persistentTargets,
-                              workspace);
+                              workspace,
+                              screenedTargetIndices);
 
   // Process any remaining fallback entries after GPU work completes.
   while (fallbackQueue.tryProcessOne()) {
@@ -1263,6 +1297,7 @@ void getSubstructMatchesImpl(const std::vector<const RDKit::ROMol*>& targets,
   if (!boolResults && config.uniquify) {
     uniquifyResults(results);
   }
+  return screenedTargetIndices == selectedTargetIndices;
 }
 
 }  // anonymous namespace
@@ -1369,7 +1404,8 @@ void hasSubstructMatch(const PersistentDeviceTargets& batch,
                        SubstructAlgorithm             algorithm,
                        cudaStream_t                   stream,
                        const SubstructSearchConfig&   config,
-                       SubstructSearchWorkspace*      workspace) {
+                       SubstructSearchWorkspace*      workspace,
+                       const std::vector<int>*        candidateTargetIndices) {
   if (workspace != nullptr && workspace->deviceId != batch.deviceId) {
     throw std::invalid_argument("A search workspace must be on the GPU holding the targets");
   }
@@ -1390,21 +1426,34 @@ void hasSubstructMatch(const PersistentDeviceTargets& batch,
   hasMatchConfig.maxMatches                       = 1;
   hasMatchConfig.gpuIds                           = {batch.deviceId};
   flagResults.resize(static_cast<int>(batch.targets.size()), 1);
+  bool selectionHonored = true;
   try {
-    getSubstructMatchesImpl(batch.targets,
-                            queries,
-                            unusedResults,
-                            algorithm,
-                            stream,
-                            hasMatchConfig,
-                            &flagResults,
-                            nullptr,
-                            &batch,
-                            workspace);
+    selectionHonored = getSubstructMatchesImpl(batch.targets,
+                                               queries,
+                                               unusedResults,
+                                               algorithm,
+                                               stream,
+                                               hasMatchConfig,
+                                               &flagResults,
+                                               nullptr,
+                                               &batch,
+                                               workspace,
+                                               candidateTargetIndices);
   } catch (...) {
     // A failed search can leave executor work in flight; drain it before the workspace is reused.
     cudaCheckErrorNoThrow(cudaDeviceSynchronize());
     throw;
+  }
+  if (candidateTargetIndices != nullptr && !selectionHonored) {
+    // The search covered every target; report only the selected ones.
+    std::vector<uint8_t> selected(candidateTargetIndices->size());
+    for (std::size_t index = 0; index < selected.size(); ++index) {
+      selected[index] = flagResults.hasMatch[static_cast<std::size_t>((*candidateTargetIndices)[index])];
+    }
+    std::fill(flagResults.hasMatch.begin(), flagResults.hasMatch.end(), 0);
+    for (std::size_t index = 0; index < selected.size(); ++index) {
+      flagResults.hasMatch[static_cast<std::size_t>((*candidateTargetIndices)[index])] = selected[index];
+    }
   }
   results = std::move(flagResults.hasMatch);
 }

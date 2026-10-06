@@ -96,7 +96,8 @@ BOOST_PYTHON_MODULE(_substructLibrary) {
 
   class_<nvMolKit::SubstructLibrary, boost::noncopyable>(
     "SubstructLibrary",
-    init<nvMolKit::SubstructSearchConfig>((arg("config") = nvMolKit::SubstructSearchConfig())))
+    init<nvMolKit::SubstructSearchConfig, bool>(
+      (arg("config") = nvMolKit::SubstructSearchConfig(), arg("usePatternFingerprints") = true)))
     .def("addMol", &addMolecule)
     .def("addMols", &addMolecules)
     .def("finalize", &finalize)

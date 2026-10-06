@@ -30,7 +30,11 @@ namespace nvMolKit {
  */
 class SubstructLibrary {
  public:
-  explicit SubstructLibrary(SubstructSearchConfig config = SubstructSearchConfig{});
+  /**
+   * With usePatternFingerprints, each query is first screened against RDKit pattern fingerprints of the molecules,
+   * as RDKit's PatternHolder does, and only molecules that pass are searched. The screen never changes results.
+   */
+  explicit SubstructLibrary(SubstructSearchConfig config = SubstructSearchConfig{}, bool usePatternFingerprints = true);
   ~SubstructLibrary();
 
   SubstructLibrary(const SubstructLibrary&)            = delete;

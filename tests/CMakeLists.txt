@@ -373,6 +373,11 @@ target_link_libraries(
   test_substructure_search PRIVATE substructure_search molecules device
                                    substruct_validation ${RDKit_LIBS})
 
+add_executable(test_pattern_screen test_pattern_screen.cu)
+target_link_libraries(
+  test_pattern_screen PRIVATE pattern_screen molecules device test_utils
+                              molData ${RDKit_LIBS})
+
 add_executable(test_substruct_library test_substruct_library.cu)
 target_link_libraries(test_substruct_library PRIVATE substruct_library
                                                      ${RDKit_LIBS})
@@ -484,6 +489,7 @@ set(TEST_LIST
     test_substruct_algos
     test_warp_dfs
     test_substructure_search
+    test_pattern_screen
     test_substruct_library
     test_substructure_integration
     test_substruct_label_integration

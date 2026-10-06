@@ -85,13 +85,15 @@ class SubstructLibrary:
             several GPUs. ``batchSize``, ``workerThreads``, and
             ``preprocessingThreads`` tune throughput; ``maxMatches`` and
             ``uniquify`` do not apply because queries return molecule indices.
+        usePatternFingerprints: Prescreen queries using RDKit pattern fingerprints before
+            doing a full match.
     """
 
-    def __init__(self, config: SubstructSearchConfig | None = None) -> None:
+    def __init__(self, config: SubstructSearchConfig | None = None, usePatternFingerprints: bool = True) -> None:
         """Create an empty library."""
         if config is None:
             config = SubstructSearchConfig()
-        self._native = _NativeSubstructLibrary(config._as_native())
+        self._native = _NativeSubstructLibrary(config._as_native(), bool(usePatternFingerprints))
         self._executorLock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="nvmolkit-substruct")
 

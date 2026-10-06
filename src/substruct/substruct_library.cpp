@@ -3,6 +3,9 @@
 
 #include "src/substruct/substruct_library.h"
 
+#include <DataStructs/BitOps.h>
+#include <DataStructs/ExplicitBitVect.h>
+#include <GraphMol/Fingerprints/Fingerprints.h>
 #include <GraphMol/MolOps.h>
 #include <GraphMol/ROMol.h>
 #include <GraphMol/Substruct/SubstructMatch.h>
@@ -13,6 +16,7 @@
 #include <cstdint>
 #include <limits>
 #include <mutex>
+#include <optional>
 #include <semaphore>
 #include <shared_mutex>
 #include <stdexcept>
@@ -20,6 +24,7 @@
 #include <utility>
 
 #include "src/substruct/molecules.h"
+#include "src/substruct/pattern_screen.h"
 #include "src/substruct/substruct_constants.h"
 #include "src/substruct/substruct_search.h"
 #include "src/utils/cuda_error_check.h"
@@ -66,19 +71,26 @@ struct GpuTargets {
   std::vector<const RDKit::ROMol*>               molecules;
   std::vector<unsigned int>                      ids;
   std::shared_ptr<const PersistentDeviceTargets> searchTargets;
+  //! Pattern fingerprints of the molecules, in the same order; empty when fingerprints are disabled.
+  std::vector<const ExplicitBitVect*>            fingerprints;
+  //! The fingerprints transposed to one bitmap over molecules per bit (see buildPatternBitSlices).
+  AsyncDeviceVector<std::uint32_t>               patternSlices;
+  //! How many molecules carry each fingerprint bit.
+  std::vector<std::uint32_t>                     bitFrequencies;
 
   //! Approximate device memory held by the uploaded batch.
   [[nodiscard]] std::size_t deviceBytes() const {
     return host->batchAtomStarts.size() * sizeof(int) + host->atomDataPacked.size() * sizeof(AtomDataPacked) +
            host->bondTypeCounts.size() * sizeof(BondTypeCounts) +
-           host->targetAtomBonds.size() * sizeof(TargetAtomBonds);
+           host->targetAtomBonds.size() * sizeof(TargetAtomBonds) + patternSlices.size() * sizeof(std::uint32_t);
   }
 };
 
-//! A search workspace and the per-target match flags its queries fill.
+//! A search workspace, the per-target match flags its queries fill, and a fingerprint screen workspace.
 struct QuerySlot {
   std::shared_ptr<SubstructSearchWorkspace> workspace;
   std::vector<std::uint8_t>                 matchFlags;
+  std::unique_ptr<PatternScreenWorkspace>   screen;
 };
 
 //! One GPU's query slots; a query waits for a free slot.
@@ -131,7 +143,9 @@ class TakenSlot {
 
 class SubstructLibrary::Impl {
  public:
-  explicit Impl(SubstructSearchConfig config) : config_(std::move(config)) {
+  Impl(SubstructSearchConfig config, bool usePatternFingerprints)
+      : config_(std::move(config)),
+        usePatternFingerprints_(usePatternFingerprints) {
     if (config_.algorithm == SubstructAlgorithm::VF2) {
       throw std::invalid_argument("Substructure libraries support the GSI and DFS production backends");
     }
@@ -210,16 +224,30 @@ class SubstructLibrary::Impl {
 
     // Molecules added since the last finalize(): those the GPU format cannot represent are matched with RDKit,
     // and the rest go to the GPU searching the fewest molecules.
-    const std::size_t               firstNew = numFinalized_;
-    const std::size_t               numNew   = molecules_.size() - firstNew;
-    std::vector<std::uint8_t>       onGpu(numNew);
-    detail::OpenMPExceptionRegistry screenExceptions;
+    const std::size_t                             firstNew = numFinalized_;
+    const std::size_t                             numNew   = molecules_.size() - firstNew;
+    std::vector<std::uint8_t>                     onGpu(numNew);
+    std::vector<std::unique_ptr<ExplicitBitVect>> newFingerprints(usePatternFingerprints_ ? numNew : 0);
+    detail::OpenMPExceptionRegistry               screenExceptions;
 #pragma omp parallel for num_threads(threads()) schedule(static)
     for (std::int64_t index = 0; index < static_cast<std::int64_t>(numNew); ++index) {
+      const auto          position = static_cast<std::size_t>(index);
+      const RDKit::ROMol& molecule = *molecules_[firstNew + position];
       try {
-        onGpu[static_cast<std::size_t>(index)] = fitsGpu(*molecules_[firstNew + static_cast<std::size_t>(index)]);
+        onGpu[position] = fitsGpu(molecule);
       } catch (...) {
         screenExceptions.store(std::current_exception());
+        continue;
+      }
+      if (usePatternFingerprints_) {
+        try {
+          newFingerprints[position].reset(RDKit::PatternFingerprintMol(molecule));
+        } catch (...) {
+          // The GPU screen needs every GPU molecule's fingerprint; RDKit-matched molecules can do without.
+          if (onGpu[position] != 0) {
+            screenExceptions.store(std::current_exception());
+          }
+        }
       }
     }
     screenExceptions.rethrow();
@@ -258,8 +286,12 @@ class SubstructLibrary::Impl {
         const auto index = static_cast<std::size_t>(gpu);
         if (!newGpuIds[index].empty()) {
           const WithDevice device(deviceIds_[index]);
-          replacements[index] =
-            extendGpuTargets(gpus_[index].get(), newGpuIds[index], packed[index], validateStream(stream));
+          replacements[index] = extendGpuTargets(gpus_[index].get(),
+                                                 newGpuIds[index],
+                                                 packed[index],
+                                                 newFingerprints,
+                                                 firstNew,
+                                                 validateStream(stream));
         }
       } catch (...) {
         // Clear a recoverable CUDA error such as out of memory, so this thread's next CUDA check does not report it.
@@ -271,16 +303,20 @@ class SubstructLibrary::Impl {
     try {
       exceptions.rethrow();
       rdkitIds_.reserve(rdkitIds_.size() + newRdkitIds.size());
+      fingerprints_.reserve(molecules_.size());
       // Query slots are sized against memory that already holds the new batches. The batches they replace are
       // freed below, so their memory counts as available.
       std::vector<std::size_t> freedBytes(deviceIds_.size(), 0);
+      std::vector<std::size_t> gpuMolecules(deviceIds_.size(), 0);
       for (std::size_t gpu = 0; gpu < deviceIds_.size(); ++gpu) {
         if (replacements[gpu] != nullptr && gpus_[gpu] != nullptr) {
           freedBytes[gpu] = gpus_[gpu]->deviceBytes();
         }
+        const GpuTargets* targets = replacements[gpu] != nullptr ? replacements[gpu].get() : gpus_[gpu].get();
+        gpuMolecules[gpu]         = targets != nullptr ? targets->ids.size() : 0;
       }
       slotsRebuilt = true;
-      createSlotPools(freedBytes);
+      createSlotPools(freedBytes, gpuMolecules);
     } catch (...) {
       static_cast<void>(cudaGetLastError());
       releaseOnDevices(
@@ -298,6 +334,10 @@ class SubstructLibrary::Impl {
       [&](std::size_t index) { return replacements[index] != nullptr; },
       [&](std::size_t index) { gpus_[index] = std::move(replacements[index]); });
     rdkitIds_.insert(rdkitIds_.end(), newRdkitIds.begin(), newRdkitIds.end());
+    fingerprints_.resize(molecules_.size());
+    for (std::size_t index = 0; index < newFingerprints.size(); ++index) {
+      fingerprints_[firstNew + index] = std::move(newFingerprints[index]);
+    }
     numFinalized_ = molecules_.size();
     finalized_    = true;
   }
@@ -399,11 +439,15 @@ class SubstructLibrary::Impl {
   }
 
   // The current device's targets plus newIds, whose packed form is packed, uploaded on stream and ready to search.
+  // newFingerprints holds the fingerprints of molecules from firstNew on, or nothing when fingerprints are disabled.
   // The whole batch is copied and uploaded again, so the current targets stay intact if this throws.
-  [[nodiscard]] std::unique_ptr<GpuTargets> extendGpuTargets(const GpuTargets*                current,
-                                                             const std::vector<unsigned int>& newIds,
-                                                             const MoleculesHost&             packed,
-                                                             cudaStream_t                     stream) const {
+  [[nodiscard]] std::unique_ptr<GpuTargets> extendGpuTargets(
+    const GpuTargets*                                    current,
+    const std::vector<unsigned int>&                     newIds,
+    const MoleculesHost&                                 packed,
+    const std::vector<std::unique_ptr<ExplicitBitVect>>& newFingerprints,
+    std::size_t                                          firstNew,
+    cudaStream_t                                         stream) const {
     const std::vector<const RDKit::ROMol*> newMolecules = moleculesWithIds(newIds);
 
     auto next = std::make_unique<GpuTargets>();
@@ -416,19 +460,37 @@ class SubstructLibrary::Impl {
     }
     next->molecules.insert(next->molecules.end(), newMolecules.begin(), newMolecules.end());
     next->ids.insert(next->ids.end(), newIds.begin(), newIds.end());
+    if (usePatternFingerprints_) {
+      if (current != nullptr) {
+        next->fingerprints = current->fingerprints;
+      }
+      for (const unsigned int id : newIds) {
+        next->fingerprints.push_back(newFingerprints[id - firstNew].get());
+      }
+    }
 
     next->device = std::make_unique<MoleculesDevice>(stream);
     next->device->copyFromHost(*next->host, stream);
+    std::vector<std::uint32_t> slices;
+    if (usePatternFingerprints_) {
+      const std::size_t count = next->fingerprints.size();
+      slices                  = buildPatternBitSlices(packPatternFingerprintsWordMajor(next->fingerprints), count);
+      next->bitFrequencies    = patternBitFrequencies(slices, count);
+      next->patternSlices     = AsyncDeviceVector<std::uint32_t>(slices.size(), stream);
+      next->patternSlices.copyFromHost(slices);
+    }
     cudaCheckError(cudaStreamSynchronize(stream));
-    // The device copy outlives the caller's stream, so release it on the default stream.
+    // The device copies outlive the caller's stream, so release them on the default stream.
     next->device->setStream(nullptr);
+    next->patternSlices.setStream(nullptr);
     next->searchTargets = makePersistentDeviceTargets(next->molecules, *next->host, *next->device);
     return next;
   }
 
-  // Give each GPU as many query slots as fit below 85% of its memory, counting freedBytes[gpu] as free. Queries
-  // with recursive SMARTS also need scratch memory, so fewer of them may run at once.
-  void createSlotPools(const std::vector<std::size_t>& freedBytes) {
+  // Give each GPU as many query slots as fit below 85% of its memory, counting freedBytes[gpu] as free;
+  // gpuMolecules[gpu] sizes the fingerprint screen. Queries with recursive SMARTS also need scratch memory, so
+  // fewer of them may run at once.
+  void createSlotPools(const std::vector<std::size_t>& freedBytes, const std::vector<std::size_t>& gpuMolecules) {
     destroySlotPools();
     constexpr std::size_t    memoryPercent = 85;
     std::size_t              slots         = std::numeric_limits<std::size_t>::max();
@@ -443,8 +505,9 @@ class SubstructLibrary::Impl {
       const std::size_t usedBytes   = totalBytes - std::min(totalBytes, freeBytes + freedBytes[gpu]);
       const std::size_t budgetBytes = totalBytes * memoryPercent / 100;
       availableBytes[gpu]           = budgetBytes > usedBytes ? budgetBytes - usedBytes : 0;
-      slotBytes[gpu]                = estimateSubstructSearchWorkspaceBytes(gpuConfig(gpu));
-      recursiveBytes[gpu]           = estimateRecursiveScratchBytes(gpuConfig(gpu));
+      slotBytes[gpu]                = estimateSubstructSearchWorkspaceBytes(gpuConfig(gpu)) +
+                       (usePatternFingerprints_ ? PatternScreenWorkspace::estimateDeviceBytes(gpuMolecules[gpu]) : 0);
+      recursiveBytes[gpu] = estimateRecursiveScratchBytes(gpuConfig(gpu));
       if (availableBytes[gpu] < slotBytes[gpu] + recursiveBytes[gpu]) {
         throw std::runtime_error("Substructure library cannot fit one query below 85% of GPU memory");
       }
@@ -463,6 +526,9 @@ class SubstructLibrary::Impl {
         for (auto& slot : gpuSlots) {
           slot            = std::make_unique<QuerySlot>();
           slot->workspace = makeSubstructSearchWorkspace(deviceIds_[gpu]);
+          if (usePatternFingerprints_) {
+            slot->screen = std::make_unique<PatternScreenWorkspace>(deviceIds_[gpu]);
+          }
         }
         pools[gpu] = std::make_unique<SlotPool>(std::move(gpuSlots));
       }
@@ -483,7 +549,11 @@ class SubstructLibrary::Impl {
   // queries are refused until finalize() succeeds.
   void restoreSlotPools() noexcept {
     try {
-      createSlotPools(std::vector<std::size_t>(deviceIds_.size(), 0));
+      std::vector<std::size_t> gpuMolecules(deviceIds_.size(), 0);
+      for (std::size_t gpu = 0; gpu < deviceIds_.size(); ++gpu) {
+        gpuMolecules[gpu] = gpus_[gpu] != nullptr ? gpus_[gpu]->ids.size() : 0;
+      }
+      createSlotPools(std::vector<std::size_t>(deviceIds_.size(), 0), gpuMolecules);
     } catch (...) {
       destroySlotPools();
     }
@@ -532,6 +602,12 @@ class SubstructLibrary::Impl {
       recursiveQuerySlots_->acquire();
       recursiveSlot.slots = recursiveQuerySlots_.get();
     }
+    std::unique_ptr<ExplicitBitVect>  queryFingerprint;
+    std::optional<PatternScreenQuery> screenQuery;
+    if (usePatternFingerprints_) {
+      queryFingerprint.reset(RDKit::PatternFingerprintMol(query));
+      screenQuery = makePatternScreenQuery(queryFingerprint.get(), static_cast<int>(query.getNumAtoms()));
+    }
     std::vector<std::vector<unsigned int>> perGpu(deviceIds_.size());
     detail::OpenMPExceptionRegistry        exceptions;
 #pragma omp parallel for num_threads(static_cast<int>(deviceIds_.size())) schedule(static)
@@ -540,7 +616,7 @@ class SubstructLibrary::Impl {
         const auto index = static_cast<std::size_t>(gpu);
         if (gpus_[index] != nullptr) {
           const WithDevice device(deviceIds_[index]);
-          perGpu[index] = gpuMatches(index, query, validateStream(stream));
+          perGpu[index] = gpuMatches(index, query, screenQuery, validateStream(stream));
         }
       } catch (...) {
         exceptions.store(std::current_exception());
@@ -565,6 +641,11 @@ class SubstructLibrary::Impl {
       if (id >= rdkitIdLimit) {
         break;
       }
+      const ExplicitBitVect* fingerprint = fingerprints_.empty() ? nullptr : fingerprints_[id].get();
+      if (queryFingerprint != nullptr && fingerprint != nullptr &&
+          !AllProbeBitsMatch(*queryFingerprint, *fingerprint)) {
+        continue;
+      }
       if (rdkitHasMatch(*molecules_[id], query)) {
         result.push_back(id);
       }
@@ -576,20 +657,53 @@ class SubstructLibrary::Impl {
     return result;
   }
 
-  // IDs of the molecules on one GPU that match query, ascending.
-  [[nodiscard]] std::vector<unsigned int> gpuMatches(std::size_t         gpu,
-                                                     const RDKit::ROMol& query,
-                                                     cudaStream_t        stream) const {
+  // IDs of the molecules on one GPU that match query, ascending. With a screen query, only molecules that pass the
+  // fingerprint screen are searched.
+  [[nodiscard]] std::vector<unsigned int> gpuMatches(std::size_t                              gpu,
+                                                     const RDKit::ROMol&                      query,
+                                                     const std::optional<PatternScreenQuery>& screenQuery,
+                                                     cudaStream_t                             stream) const {
+    const GpuTargets& targets = *gpus_[gpu];
+    const TakenSlot   slot(*slotPools_[gpu]);
+    std::vector<int>  candidates;
+    if (screenQuery.has_value()) {
+      ScopedNvtxRange    screenRange("SubstructLibrary fingerprint screen");
+      PatternScreenQuery orderedQuery = *screenQuery;
+      orderPatternScreenBits(orderedQuery, targets.bitFrequencies);
+      PatternScreenWorkspace& screen = *(*slot).screen;
+      screen.screen(targets.patternSlices.data(),
+                    targets.device->view<MoleculeType::Target>().batchAtomStarts,
+                    static_cast<int>(targets.ids.size()),
+                    orderedQuery);
+      candidates.assign(screen.indices(), screen.indices() + screen.count());
+      if (candidates.empty()) {
+        return {};
+      }
+    }
+
     ScopedNvtxRange             searchRange("SubstructLibrary GPU search");
-    const GpuTargets&           targets = *gpus_[gpu];
-    const TakenSlot             slot(*slotPools_[gpu]);
     std::vector<std::uint8_t>&  flags  = (*slot).matchFlags;
     const SubstructSearchConfig config = gpuConfig(gpu);
-    hasSubstructMatch(*targets.searchTargets, query, flags, config.algorithm, stream, config, (*slot).workspace.get());
+    hasSubstructMatch(*targets.searchTargets,
+                      query,
+                      flags,
+                      config.algorithm,
+                      stream,
+                      config,
+                      (*slot).workspace.get(),
+                      screenQuery.has_value() ? &candidates : nullptr);
     std::vector<unsigned int> result;
-    for (std::size_t target = 0; target < flags.size(); ++target) {
-      if (flags[target] != 0) {
-        result.push_back(targets.ids[target]);
+    if (screenQuery.has_value()) {
+      for (const int target : candidates) {
+        if (flags[static_cast<std::size_t>(target)] != 0) {
+          result.push_back(targets.ids[static_cast<std::size_t>(target)]);
+        }
+      }
+    } else {
+      for (std::size_t target = 0; target < flags.size(); ++target) {
+        if (flags[target] != 0) {
+          result.push_back(targets.ids[target]);
+        }
       }
     }
     return result;
@@ -618,15 +732,18 @@ class SubstructLibrary::Impl {
   }
 
   SubstructSearchConfig     config_;
+  bool                      usePatternFingerprints_;
   std::vector<int>          deviceIds_;
   // Queries share mutex_; additions and finalize() hold it exclusively.
   mutable std::shared_mutex mutex_;
   mutable std::mutex        writerGate_;
 
   //! Every added molecule, indexed by ID; the first numFinalized_ are searchable.
-  std::vector<std::unique_ptr<RDKit::ROMol>> molecules_;
-  std::size_t                                numFinalized_ = 0;
-  bool                                       finalized_    = false;
+  std::vector<std::unique_ptr<RDKit::ROMol>>    molecules_;
+  //! Pattern fingerprints by ID, when enabled; null for RDKit-matched molecules whose fingerprint failed.
+  std::vector<std::unique_ptr<ExplicitBitVect>> fingerprints_;
+  std::size_t                                   numFinalized_ = 0;
+  bool                                          finalized_    = false;
 
   std::vector<std::unique_ptr<GpuTargets>>       gpus_;
   //! Finalized molecules the GPU format cannot represent, ascending; matched with RDKit.
@@ -637,7 +754,8 @@ class SubstructLibrary::Impl {
   std::size_t                                    maxConcurrentQueries_ = 0;
 };
 
-SubstructLibrary::SubstructLibrary(SubstructSearchConfig config) : impl_(std::make_unique<Impl>(std::move(config))) {}
+SubstructLibrary::SubstructLibrary(SubstructSearchConfig config, bool usePatternFingerprints)
+    : impl_(std::make_unique<Impl>(std::move(config), usePatternFingerprints)) {}
 
 SubstructLibrary::~SubstructLibrary() = default;
 

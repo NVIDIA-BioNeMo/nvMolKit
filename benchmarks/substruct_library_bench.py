@@ -183,6 +183,7 @@ def benchmark_nvmolkit(
     operations: Sequence[str],
     query_modes: Sequence[str],
     config: Any,
+    use_pattern_fingerprints: bool,
     max_results: int,
     runs: int,
     warmups: int,
@@ -190,7 +191,7 @@ def benchmark_nvmolkit(
     """Build one nvMolKit library and time every operation and query mode against it."""
     from nvmolkit.substruct_library import SubstructLibrary
 
-    library = SubstructLibrary(config=config)
+    library = SubstructLibrary(config=config, usePatternFingerprints=use_pattern_fingerprints)
     staging = time_it(lambda: library.addMols(mols), runs=1, warmups=0)
     finalization = time_it(library.finalize, runs=1, warmups=0, gpu_sync=True)
 
@@ -279,6 +280,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workers", type=int, default=-1)
     parser.add_argument("--prep_threads", type=int, default=-1, help="Preprocessing threads (-1 = auto)")
     parser.add_argument("--gpu_ids", nargs="+", type=int, default=[0], help="GPUs one library is sharded across")
+    parser.add_argument("--no_pattern_fingerprints", dest="pattern_fingerprints", action="store_false")
     parser.add_argument("--rdkit_holders", nargs="+", choices=["mol", "cached-pattern"], default=["cached-pattern"])
     parser.add_argument("--rdkit_threads", type=int, default=-1)
     add_rdkit_max_seconds_arg(parser, extra_help="The deadline is checked between queries.")
@@ -363,6 +365,7 @@ def main() -> None:
                 operations=args.operations,
                 query_modes=args.query_modes,
                 config=config,
+                use_pattern_fingerprints=args.pattern_fingerprints,
                 max_results=args.max_results,
                 runs=args.runs,
                 warmups=args.warmups,
@@ -390,6 +393,7 @@ def main() -> None:
                         workers=args.workers,
                         prep_threads=args.prep_threads,
                         max_results=args.max_results,
+                        pattern_fingerprints=args.pattern_fingerprints,
                     )
                 )
 
