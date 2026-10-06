@@ -325,32 +325,6 @@ __device__ __forceinline__ void computeInformationIndices(const double*  leverag
   ish = total / total0;
 }
 
-//! Shuffle-combines a value across the warp's pair streams (lanes with equal laneInGroup).
-template <typename Real> __device__ __forceinline__ Real sumOverPairStreams(Real value) {
-  for (int offset = kGroupSize; offset < kWarpSize; offset <<= 1) {
-    value += __shfl_xor_sync(0xffffffffu, value, offset);
-  }
-  return value;
-}
-
-template <typename Real> __device__ __forceinline__ Real maxOverPairStreams(Real value) {
-  for (int offset = kGroupSize; offset < kWarpSize; offset <<= 1) {
-    const Real other = __shfl_xor_sync(0xffffffffu, value, offset);
-    value            = other > value ? other : value;
-  }
-  return value;
-}
-
-//! Maximum over a kGroupSize-lane group; callable with only that group active.
-template <typename Real> __device__ __forceinline__ Real groupMax(Real value) {
-  const unsigned activeMask = __activemask();
-  for (int offset = kGroupSize / 2; offset > 0; offset >>= 1) {
-    const Real other = __shfl_xor_sync(activeMask, value, offset);
-    value            = other > value ? other : value;
-  }
-  return value;
-}
-
 /**
  * @brief Warp-collective. Leverages of the conformer's atoms: the diagonal of H = X (X^T X)^+ X^T for the
  *        centered coordinates X, with RDKit's pseudo-inverse (singular values at or below
@@ -625,13 +599,13 @@ __global__ void getaway3DKernel(const DeviceCoordView        coordinates,
     }
   }
   for (int channel = 0; channel < kNumGetawayChannels; ++channel) {
-    lagH[channel]    = sumOverPairStreams(lagH[channel]);
-    lagHats[channel] = sumOverPairStreams(lagHats[channel]);
-    lagR[channel]    = sumOverPairStreams(lagR[channel]);
-    lagRMax[channel] = maxOverPairStreams(lagRMax[channel]);
-    farH[channel]    = sumOverPairStreams(farH[channel]);
-    farHats[channel] = sumOverPairStreams(farHats[channel]);
-    farR[channel]    = sumOverPairStreams(farR[channel]);
+    lagH[channel]    = sumAcrossGroups(lagH[channel]);
+    lagHats[channel] = sumAcrossGroups(lagHats[channel]);
+    lagR[channel]    = sumAcrossGroups(lagR[channel]);
+    lagRMax[channel] = maxAcrossGroups(lagRMax[channel]);
+    farH[channel]    = sumAcrossGroups(farH[channel]);
+    farHats[channel] = sumAcrossGroups(farHats[channel]);
+    farR[channel]    = sumAcrossGroups(farR[channel]);
   }
 
   // REIG by power iteration on R; the first product with ones gives R's row sums for RARS and RCON.
@@ -703,16 +677,17 @@ __global__ void getaway3DKernel(const DeviceCoordView        coordinates,
   }
   if (stream == 0) {
     for (int channel = 0; channel < kNumGetawayChannels; ++channel) {
-      Real* const hBlock                   = row + kGetawayHStart + channel * kGetawayHBlock;
-      Real* const rBlock                   = row + kGetawayRStart + channel * kGetawayRBlock;
-      const Real  lagHSum                  = groupAllReduceSum(lagH[channel]);
-      const Real  lagHatsSum               = groupAllReduceSum(lagHats[channel]);
-      const Real  lagRSum                  = groupAllReduceSum(lagR[channel]);
-      const Real  farHSum                  = groupAllReduceSum(farH[channel]);
-      const Real  farHatsSum               = groupAllReduceSum(farHats[channel]);
-      const Real  farRSum                  = groupAllReduceSum(farR[channel]);
-      const Real  rMax                     = groupMax(lagRMax[channel]);
-      const int   lagIdx                   = laneInGroup + 1;
+      Real* const hBlock     = row + kGetawayHStart + channel * kGetawayHBlock;
+      Real* const rBlock     = row + kGetawayRStart + channel * kGetawayRBlock;
+      const Real  lagHSum    = groupAllReduceSum(lagH[channel]);
+      const Real  lagHatsSum = groupAllReduceSum(lagHats[channel]);
+      const Real  lagRSum    = groupAllReduceSum(lagR[channel]);
+      const Real  farHSum    = groupAllReduceSum(farH[channel]);
+      const Real  farHatsSum = groupAllReduceSum(farHats[channel]);
+      const Real  farRSum    = groupAllReduceSum(farR[channel]);
+      const Real  rMax =
+        cooperative_groups::reduce(laneTile<kGroupSize>(), lagRMax[channel], cooperative_groups::greater<Real>());
+      const int lagIdx                     = laneInGroup + 1;
       hBlock[lagIdx]                       = roundThousandths(lagH[channel]);
       hBlock[kNumGetawayLags + 2 + lagIdx] = roundThousandths(lagHats[channel]);
       rBlock[lagIdx - 1]                   = roundThousandths(lagR[channel]);

@@ -80,6 +80,15 @@ template <typename Real> __device__ __forceinline__ Real sumAcrossGroups(Real va
   return value;
 }
 
+//! Maximum over the warp's lanes with equal `lane % kGroupSize`; see sumAcrossGroups().
+template <typename Real> __device__ __forceinline__ Real maxAcrossGroups(Real value) {
+  for (int offset = kGroupSize; offset < kWarpSize; offset <<= 1) {
+    const Real other = __shfl_xor_sync(0xffffffffu, value, offset);
+    value            = other > value ? other : value;
+  }
+  return value;
+}
+
 /**
  * @brief Coordinate position minus a centroid, converted to @p Real after the subtraction.
  *
