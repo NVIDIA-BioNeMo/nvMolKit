@@ -10,6 +10,7 @@
 #include "src/descriptors3d.h"
 #include "src/descriptors3d_kernel.cuh"
 #include "src/descriptors3d_projection.cuh"
+#include "src/descriptors3d_topology.cuh"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
 #include "src/utils/symmetric_eigenvalues_3x3.cuh"
@@ -53,6 +54,11 @@ constexpr int kGetawayRowWeights  = 5;
 constexpr int kGetawayRowCentered = kGetawayRowWeights + kNumAtomPropertyChannels;
 constexpr int kGetawayRowStride   = kGetawayRowCentered + 3;
 
+// ITH and ISH group the heavy-atom leverages by their decimal digits, not their numeric values: RDKit rounds
+// each leverage to `precision` significant digits (round_to_n_digits_), prints it with C++ stream output, and
+// its IsClose2 compares substrings of that printed text. Reproducing RDKit's groups exactly therefore means
+// reproducing that rounding and that text, which the helpers below do for the values leverages can take.
+
 //! Exact powers of ten representable in float64.
 __device__ __forceinline__ double exactPowerOfTen(const int exponent) {
   constexpr double kPowers[] = {1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
@@ -77,7 +83,7 @@ __device__ __forceinline__ double scaleByPowerOfTen(double value, int exponent) 
  * @brief RDKit's round_to_n_digits_: `atof(sprintf("%.*g", digits, value))` for a non-negative @p value.
  *
  * Also returns the rounded value's significand (@p mantissa, exactly @p digits digits unless the value is 0)
- * and decimal exponent, from which formatLikeOstream() rebuilds its text. Exact ties round to even, as glibc
+ * and decimal exponent, from which rdkitDecimalText() rebuilds its printed text. Exact ties round to even, as glibc
  * does for exactly representable halves; values within float64 rounding of a tie may differ from printf.
  */
 __device__ __forceinline__ double roundToSignificantDigits(const double value,
@@ -108,7 +114,7 @@ __device__ __forceinline__ double roundToSignificantDigits(const double value,
   return scaleByPowerOfTen(static_cast<double>(mantissa), exponent - (digits - 1));
 }
 
-//! Short text buffer for RDKit's string comparisons.
+//! Decimal text of a printed value, as RDKit's IsClose2 compares it.
 struct DecimalText {
   char chars[24];
   int  length;
@@ -119,14 +125,17 @@ __device__ __forceinline__ void appendChar(DecimalText& text, const char charact
 }
 
 /**
- * @brief The text `std::ostream << v` (default precision 6, %g style, trailing zeros removed) prints for
- *        v = @p mantissa * 10^(@p exponent - @p digits + 1), a value from roundToSignificantDigits() with
- *        @p digits <= 6 significant digits.
+ * @brief The decimal text RDKit's IsClose2 compares for the rounded leverage
+ *        v = @p mantissa * 10^(@p exponent - @p digits + 1) from roundToSignificantDigits().
+ *
+ * IsClose2 prints with default C++ stream formatting: up to 6 significant digits with trailing zeros removed,
+ * fixed notation for decimal exponents -4 to 5 (e.g. "0.034", "1") and scientific notation otherwise
+ * (e.g. "1.8e-06"). With @p digits <= 6 every significant digit of v is printed.
  */
-__device__ __forceinline__ void formatLikeOstream(const int64_t mantissa,
-                                                  const int     exponent,
-                                                  const int     digits,
-                                                  DecimalText&  text) {
+__device__ __forceinline__ void rdkitDecimalText(const int64_t mantissa,
+                                                 const int     exponent,
+                                                 const int     digits,
+                                                 DecimalText&  text) {
   text.length = 0;
   if (mantissa == 0) {
     appendChar(text, '0');
@@ -250,7 +259,7 @@ __device__ __forceinline__ ClusterKey clusterKey(const double leverage, const in
   int     exponent;
   rounded = roundToSignificantDigits(leverage, digits, mantissa, exponent);
   DecimalText printed;
-  formatLikeOstream(mantissa, exponent, digits, printed);
+  rdkitDecimalText(mantissa, exponent, digits, printed);
   const DecimalText fraction = textAfterPoint(printed);
   ClusterKey        key{countLeadingZeros(fraction), fraction.length, leadingInteger(fraction), true};
   for (int position = 0; position < fraction.length; ++position) {
@@ -527,6 +536,7 @@ __global__ void getaway3DKernel(const DeviceCoordView        coordinates,
                                 int64_t* __restrict__ keyScratch,
                                 Real* __restrict__ iterateScratch,
                                 uint8_t* __restrict__ bondDepths,
+                                const BondDistanceTable bondTable,
                                 Real* __restrict__ output) {
   const int lane         = static_cast<int>(threadIdx.x) % kWarpSize;
   const int laneInGroup  = lane % kGroupSize;
@@ -602,18 +612,27 @@ __global__ void getaway3DKernel(const DeviceCoordView        coordinates,
     const int32_t* neighborStarts = inputs.bondNeighborStarts + moleculeStart;
     uint8_t*       depth     = bondDepths + atomOffset * kGetawayPairStreams + static_cast<size_t>(stream) * numAtoms;
     const unsigned groupMask = 0xffu << (stream * kGroupSize);
+    const uint8_t* moleculeTable = moleculeBondDistances(bondTable, moleculeIdx);
     for (int j = stream; j < numAtoms - 1; j += kGetawayPairStreams) {
-      searchBondDepths<kNumGetawayLags>(neighborStarts,
-                                        inputs.bondNeighbors,
-                                        numAtoms,
-                                        j,
-                                        laneInGroup,
-                                        groupMask,
-                                        depth);
+      // Row j's bond distances, indexed by k - lagBase: the molecule's table row, or a search into depth.
+      const uint8_t* lags    = depth;
+      int            lagBase = 0;
+      if (moleculeTable != nullptr) {
+        lags    = moleculeTable + bondTableRowStart(j, numAtoms);
+        lagBase = j + 1;
+      } else {
+        searchBondDepths<kNumGetawayLags>(neighborStarts,
+                                          inputs.bondNeighbors,
+                                          numAtoms,
+                                          j,
+                                          laneInGroup,
+                                          groupMask,
+                                          depth);
+      }
       const Real* rowJ = atomRows + j * kGetawayRowStride;
       for (int k = j + 1; k < numAtoms; ++k) {
-        const int  lag   = depth[k];
-        const bool near  = lag != kUnreachedDepth;
+        const int  lag   = lags[k - lagBase];
+        const bool near  = lag <= kNumGetawayLags;
         const bool owner = near ? lag - 1 == laneInGroup : k % kGroupSize == laneInGroup;
         if (!owner) {
           continue;
@@ -766,6 +785,7 @@ template <typename Real>
 void launchGetawayProperties(const DeviceCoordView&        coordinates,
                              const Property3DDeviceInputs& inputs,
                              const GetawayOptions&         options,
+                             const BondDistanceTable&      bondTable,
                              Real*                         output,
                              const cudaStream_t            stream) {
   const int numConformers = coordinates.numConformers;
@@ -789,6 +809,7 @@ void launchGetawayProperties(const DeviceCoordView&        coordinates,
                                                               keys.data(),
                                                               iterates.data(),
                                                               depths.data(),
+                                                              bondTable,
                                                               output);
   cudaCheckError(cudaGetLastError());
 }

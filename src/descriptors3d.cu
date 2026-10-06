@@ -12,6 +12,7 @@
 #include "src/descriptors3d_moments.cuh"
 #include "src/descriptors3d_pairwise.cuh"
 #include "src/descriptors3d_projection.cuh"
+#include "src/descriptors3d_topology.cuh"
 #include "src/descriptors3d_usr.cuh"
 #include "src/utils/cuda_error_check.h"
 
@@ -376,9 +377,14 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
   const double* momentWeights           = onlySpherocity ? nullptr : inputs.momentWeights;
   launchMomentProperties(coordinates, momentWeights, inputs.moleculeAtomStarts, work, separateSpherocityState, stream);
   launchProjectionProperties(coordinates, inputs, options.whim, pbfOutput, whimOutput, stream);
-  launchPairwiseProperties(coordinates, inputs, pairwiseOutputs, stream);
+  // Bond distances depend only on the molecule, so AUTOCORR3D and GETAWAY share one table for all conformers.
+  descriptors3d_detail::BondDistanceTableStorage bondTable;
+  if (pairwiseOutputs.autocorr3D != nullptr || getawayOutput != nullptr) {
+    descriptors3d_detail::buildBondDistanceTable(coordinates, inputs, bondTable, stream);
+  }
+  launchPairwiseProperties(coordinates, inputs, pairwiseOutputs, bondTable.table, stream);
   launchUsrProperties(coordinates, inputs, usrOutput, usrcatOutput, stream);
-  launchGetawayProperties(coordinates, inputs, options.getaway, getawayOutput, stream);
+  launchGetawayProperties(coordinates, inputs, options.getaway, bondTable.table, getawayOutput, stream);
   return results;
 }
 

@@ -20,6 +20,7 @@
 #include <memory>
 #include <random>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 #include "src/conformer/conformer_coord_upload.h"
@@ -385,6 +386,28 @@ TEST(Descriptors3DGetaway, MatchesRdkitGetaway) {
       EXPECT_NEAR(values[confIdx * nvMolKit::kNumGetawayProperties + valueIdx], expected[valueIdx], 1.1e-3)
         << "conformer " << confIdx << ", value " << valueIdx;
     }
+  }
+}
+
+TEST(Descriptors3DPairwise, BondSearchFallbackMatchesBondDistanceTable) {
+  // A 12-atom chain has bond distances up to 11, past the deepest lag either descriptor uses.
+  constexpr int                   kChainAtoms = 12;
+  std::vector<std::vector<Point>> conformers(2);
+  for (int atomIdx = 0; atomIdx < kChainAtoms; ++atomIdx) {
+    conformers[0].push_back({1.25 * atomIdx, 0.8 * (atomIdx % 2), 0.3 * ((atomIdx / 2) % 2)});
+    conformers[1].push_back({1.1 * atomIdx, 0.9 * ((atomIdx / 3) % 2), 0.5 * (atomIdx % 2)});
+  }
+  auto small = molWithConformers("CCCCCCCCCCCO", conformers);
+  // More atoms than the bond-distance table supports (kBondTableMaxAtoms, 3072), so every molecule batched with
+  // this chain searches its bond distances per row instead. Without conformers it adds no results.
+  auto large = molWithConformers(std::string(3100, 'C').c_str(), {});
+
+  const std::vector<Property3D> properties = {Property3D::AUTOCORR3D, Property3D::GETAWAY};
+  auto                          withTable  = nvMolKit::calc3DProperties<double>({small.get()}, properties, {}, nullptr);
+  auto searched = nvMolKit::calc3DProperties<double>({small.get(), large.get()}, properties, {}, nullptr);
+  for (const Property3D property : properties) {
+    EXPECT_EQ(toHost(searched.properties.at(property)), toHost(withTable.properties.at(property)))
+      << nvMolKit::property3DName(property);
   }
 }
 

@@ -9,6 +9,7 @@
 
 #include "src/descriptors3d.h"
 #include "src/descriptors3d_kernel.cuh"
+#include "src/descriptors3d_topology.cuh"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
 
@@ -156,6 +157,7 @@ __global__ void pairwise3DKernel(const DeviceCoordView        coordinates,
                                  const Property3DDeviceInputs inputs,
                                  Real* __restrict__ scratch,
                                  uint8_t* __restrict__ bondDepths,
+                                 const BondDistanceTable bondTable,
                                  Real* __restrict__ rdfOutput,
                                  Real* __restrict__ morseOutput,
                                  Real* __restrict__ autocorrOutput) {
@@ -219,6 +221,8 @@ __global__ void pairwise3DKernel(const DeviceCoordView        coordinates,
 
     const int32_t* neighborStarts = nullptr;
     uint8_t*       depth          = nullptr;
+    const uint8_t* moleculeTable =
+      kAutocorr ? moleculeBondDistances(bondTable, coordinates.molIndices[conformerIdx]) : nullptr;
     if constexpr (kAutocorr) {
       neighborStarts = inputs.bondNeighborStarts + moleculeStart;
       depth          = bondDepths + ((atoms.positions - coordinates.positions) / 3) * kPairStreams +
@@ -247,14 +251,22 @@ __global__ void pairwise3DKernel(const DeviceCoordView        coordinates,
       const PairwiseAtom<Real> first   = loadPairwiseAtom(rowJ);
       const Real               dragJ   = rowJ[kScratchIStateDrag];
       const Real               radiusJ = rowJ[kScratchCovalentRadius];
+      // Row j's bond distances, indexed by k - lagBase: the molecule's table row, or a search into depth.
+      const uint8_t*           lags    = depth;
+      int                      lagBase = 0;
       if constexpr (kAutocorr) {
-        searchBondDepths<kNumAutocorrLags>(neighborStarts,
-                                           inputs.bondNeighbors,
-                                           atoms.numAtoms,
-                                           j,
-                                           laneInGroup,
-                                           0xffu << (stream * kGroupSize),
-                                           depth);
+        if (moleculeTable != nullptr) {
+          lags    = moleculeTable + bondTableRowStart(j, atoms.numAtoms);
+          lagBase = j + 1;
+        } else {
+          searchBondDepths<kNumAutocorrLags>(neighborStarts,
+                                             inputs.bondNeighbors,
+                                             atoms.numAtoms,
+                                             j,
+                                             laneInGroup,
+                                             0xffu << (stream * kGroupSize),
+                                             depth);
+        }
       }
       for (int k = j + 1; k < atoms.numAtoms; ++k) {
         const Real* const        rowK   = rows + k * kPairwiseScratchStride;
@@ -283,7 +295,7 @@ __global__ void pairwise3DKernel(const DeviceCoordView        coordinates,
           }
         }
         if constexpr (kAutocorr) {
-          const int lag = depth[k];
+          const int lag = lags[k - lagBase];
           if (lag != kUnreachedDepth && (lag - 1) % kGroupSize == laneInGroup) {
             // A select on the slot, not an index, keeps autocorrAcc in registers.
             const int  lagSlot       = (lag - 1) / kGroupSize;
@@ -382,6 +394,7 @@ void launchPairwiseSet(const DeviceCoordView&        coordinates,
                        const Property3DDeviceInputs& inputs,
                        Real*                         scratch,
                        uint8_t*                      bondDepths,
+                       const BondDistanceTable&      bondTable,
                        const PairwiseOutputs<Real>&  outputs,
                        const cudaStream_t            stream) {
   const int numBlocks = (coordinates.numConformers + kWarpsPerBlock - 1) / kWarpsPerBlock;
@@ -389,6 +402,7 @@ void launchPairwiseSet(const DeviceCoordView&        coordinates,
                                                                      inputs,
                                                                      scratch,
                                                                      bondDepths,
+                                                                     bondTable,
                                                                      outputs.rdf,
                                                                      outputs.morse,
                                                                      outputs.autocorr3D);
@@ -401,6 +415,7 @@ template <typename Real>
 void launchPairwiseProperties(const DeviceCoordView&        coordinates,
                               const Property3DDeviceInputs& inputs,
                               const PairwiseOutputs<Real>&  outputs,
+                              const BondDistanceTable&      bondTable,
                               const cudaStream_t            stream) {
   const unsigned set = (outputs.rdf != nullptr ? kPairwiseRdf : 0u) | (outputs.morse != nullptr ? kPairwiseMorse : 0u) |
                        (outputs.autocorr3D != nullptr ? kPairwiseAutocorr3D : 0u);
@@ -416,28 +431,47 @@ void launchPairwiseProperties(const DeviceCoordView&        coordinates,
   uint8_t* const depths = bondDepthScratch.data();
   switch (set) {
     case kPairwiseRdf:
-      launchPairwiseSet<Real, kPairwiseRdf>(coordinates, inputs, rows, depths, outputs, stream);
+      launchPairwiseSet<Real, kPairwiseRdf>(coordinates, inputs, rows, depths, bondTable, outputs, stream);
       break;
     case kPairwiseMorse:
-      launchPairwiseSet<Real, kPairwiseMorse>(coordinates, inputs, rows, depths, outputs, stream);
+      launchPairwiseSet<Real, kPairwiseMorse>(coordinates, inputs, rows, depths, bondTable, outputs, stream);
       break;
     case kPairwiseRdf | kPairwiseMorse:
-      launchPairwiseSet<Real, kPairwiseRdf | kPairwiseMorse>(coordinates, inputs, rows, depths, outputs, stream);
+      launchPairwiseSet<Real, kPairwiseRdf | kPairwiseMorse>(coordinates,
+                                                             inputs,
+                                                             rows,
+                                                             depths,
+                                                             bondTable,
+                                                             outputs,
+                                                             stream);
       break;
     case kPairwiseAutocorr3D:
-      launchPairwiseSet<Real, kPairwiseAutocorr3D>(coordinates, inputs, rows, depths, outputs, stream);
+      launchPairwiseSet<Real, kPairwiseAutocorr3D>(coordinates, inputs, rows, depths, bondTable, outputs, stream);
       break;
     case kPairwiseRdf | kPairwiseAutocorr3D:
-      launchPairwiseSet<Real, kPairwiseRdf | kPairwiseAutocorr3D>(coordinates, inputs, rows, depths, outputs, stream);
+      launchPairwiseSet<Real, kPairwiseRdf | kPairwiseAutocorr3D>(coordinates,
+                                                                  inputs,
+                                                                  rows,
+                                                                  depths,
+                                                                  bondTable,
+                                                                  outputs,
+                                                                  stream);
       break;
     case kPairwiseMorse | kPairwiseAutocorr3D:
-      launchPairwiseSet<Real, kPairwiseMorse | kPairwiseAutocorr3D>(coordinates, inputs, rows, depths, outputs, stream);
+      launchPairwiseSet<Real, kPairwiseMorse | kPairwiseAutocorr3D>(coordinates,
+                                                                    inputs,
+                                                                    rows,
+                                                                    depths,
+                                                                    bondTable,
+                                                                    outputs,
+                                                                    stream);
       break;
     default:
       launchPairwiseSet<Real, kPairwiseRdf | kPairwiseMorse | kPairwiseAutocorr3D>(coordinates,
                                                                                    inputs,
                                                                                    rows,
                                                                                    depths,
+                                                                                   bondTable,
                                                                                    outputs,
                                                                                    stream);
       break;
