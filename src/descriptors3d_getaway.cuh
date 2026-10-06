@@ -577,29 +577,6 @@ __global__ void getaway3DKernel(const DeviceCoordView        coordinates,
   const bool   is3D      = inputs.conformerIs3D == nullptr || inputs.conformerIs3D[defaultRow] != 0;
   const double dimension = (defaultAtoms.numAtoms < 4 || !is3D ? 0.0 : pbf) < kGetawayPlanarPbf ? 2.0 : 3.0;
 
-  // Lag 0: H0 = sum w^2 h and HATS0 = sum w^2 h^2 over atoms with h > 0; HIC from every leverage.
-  Real   lagZeroH[kNumGetawayChannels]    = {};
-  Real   lagZeroHats[kNumGetawayChannels] = {};
-  double hic                              = 0;
-  for (int atomIdx = lane; atomIdx < numAtoms; atomIdx += kWarpSize) {
-    const Real*  atomRow  = atomRows + atomIdx * kGetawayRowStride;
-    const Real   leverage = atomRow[kGetawayRowLeverage];
-    const double exact    = leverages[atomIdx];
-    hic -= exact / dimension * log(exact / dimension) / log(2.0);
-    if (exact > 0.0) {
-      for (int channel = 0; channel < kNumGetawayChannels; ++channel) {
-        const Real weight = getawayWeight(atomRow, channel);
-        lagZeroH[channel] += weight * weight * leverage;
-        lagZeroHats[channel] += weight * weight * leverage * leverage;
-      }
-    }
-  }
-  hic = groupAllReduceSum<kWarpSize>(hic);
-  for (int channel = 0; channel < kNumGetawayChannels; ++channel) {
-    lagZeroH[channel]    = groupAllReduceSum<kWarpSize>(lagZeroH[channel]);
-    lagZeroHats[channel] = groupAllReduceSum<kWarpSize>(lagZeroHats[channel]);
-  }
-
   // Pair loop: lane l owns lag l + 1; pairs beyond kNumGetawayLags (or disconnected) go to lane k % kGroupSize.
   Real lagH[kNumGetawayChannels]    = {};
   Real lagHats[kNumGetawayChannels] = {};
@@ -676,6 +653,59 @@ __global__ void getaway3DKernel(const DeviceCoordView        coordinates,
     farR[channel]    = sumAcrossGroups(farR[channel]);
   }
 
+  // Lag 0: H0 = sum w^2 h and HATS0 = sum w^2 h^2 over atoms with h > 0; HIC from every leverage. Computed
+  // after the pair loop, and the H and R blocks written before REIG, so neither set of sums holds registers
+  // through the other's loop (168 -> 128 registers in float32).
+  Real   lagZeroH[kNumGetawayChannels]    = {};
+  Real   lagZeroHats[kNumGetawayChannels] = {};
+  double hic                              = 0;
+  for (int atomIdx = lane; atomIdx < numAtoms; atomIdx += kWarpSize) {
+    const Real*  atomRow  = atomRows + atomIdx * kGetawayRowStride;
+    const Real   leverage = atomRow[kGetawayRowLeverage];
+    const double exact    = leverages[atomIdx];
+    hic -= exact / dimension * log(exact / dimension) / log(2.0);
+    if (exact > 0.0) {
+      for (int channel = 0; channel < kNumGetawayChannels; ++channel) {
+        const Real weight = getawayWeight(atomRow, channel);
+        lagZeroH[channel] += weight * weight * leverage;
+        lagZeroHats[channel] += weight * weight * leverage * leverage;
+      }
+    }
+  }
+  hic = groupAllReduceSum<kWarpSize>(hic);
+  for (int channel = 0; channel < kNumGetawayChannels; ++channel) {
+    lagZeroH[channel]    = groupAllReduceSum<kWarpSize>(lagZeroH[channel]);
+    lagZeroHats[channel] = groupAllReduceSum<kWarpSize>(lagZeroHats[channel]);
+  }
+
+  if (stream == 0) {
+    for (int channel = 0; channel < kNumGetawayChannels; ++channel) {
+      Real* const hBlock     = row + kGetawayHStart + channel * kGetawayHBlock;
+      Real* const rBlock     = row + kGetawayRStart + channel * kGetawayRBlock;
+      const Real  lagHSum    = groupAllReduceSum(lagH[channel]);
+      const Real  lagHatsSum = groupAllReduceSum(lagHats[channel]);
+      const Real  lagRSum    = groupAllReduceSum(lagR[channel]);
+      const Real  farHSum    = groupAllReduceSum(farH[channel]);
+      const Real  farHatsSum = groupAllReduceSum(farHats[channel]);
+      const Real  farRSum    = groupAllReduceSum(farR[channel]);
+      const Real  rMax =
+        cooperative_groups::reduce(laneTile<kGroupSize>(), lagRMax[channel], cooperative_groups::greater<Real>());
+      const int lagIdx                     = laneInGroup + 1;
+      hBlock[lagIdx]                       = roundThousandths(lagH[channel]);
+      hBlock[kNumGetawayLags + 2 + lagIdx] = roundThousandths(lagHats[channel]);
+      rBlock[lagIdx - 1]                   = roundThousandths(lagR[channel]);
+      rBlock[kNumGetawayLags + lagIdx]     = roundThousandths(lagRMax[channel]);
+      if (laneInGroup == 0) {
+        hBlock[0]                   = roundThousandths(lagZeroH[channel]);
+        hBlock[kNumGetawayLags + 1] = roundThousandths(lagZeroH[channel] + Real(2) * (lagHSum + farHSum));
+        hBlock[kNumGetawayLags + 2] = roundThousandths(lagZeroHats[channel]);
+        hBlock[kGetawayHBlock - 1]  = roundThousandths(lagZeroHats[channel] + Real(2) * (lagHatsSum + farHatsSum));
+        rBlock[kNumGetawayLags]     = roundThousandths(Real(2) * (lagRSum + farRSum));
+        rBlock[kGetawayRBlock - 1]  = roundThousandths(rMax);
+      }
+    }
+  }
+
   // REIG by power iteration on R; the first product with ones gives R's row sums for RARS and RCON.
   Real* const current = iterateScratch + atomOffset * 2;
   Real* const next    = current + numAtoms;
@@ -746,33 +776,6 @@ __global__ void getaway3DKernel(const DeviceCoordView        coordinates,
     row[kGetawayRconIndex + 0] = roundThousandths(rcon);
     row[kGetawayRconIndex + 1] = roundThousandths(rars);
     row[kGetawayRconIndex + 2] = roundThousandths(eigenvalue);
-  }
-  if (stream == 0) {
-    for (int channel = 0; channel < kNumGetawayChannels; ++channel) {
-      Real* const hBlock     = row + kGetawayHStart + channel * kGetawayHBlock;
-      Real* const rBlock     = row + kGetawayRStart + channel * kGetawayRBlock;
-      const Real  lagHSum    = groupAllReduceSum(lagH[channel]);
-      const Real  lagHatsSum = groupAllReduceSum(lagHats[channel]);
-      const Real  lagRSum    = groupAllReduceSum(lagR[channel]);
-      const Real  farHSum    = groupAllReduceSum(farH[channel]);
-      const Real  farHatsSum = groupAllReduceSum(farHats[channel]);
-      const Real  farRSum    = groupAllReduceSum(farR[channel]);
-      const Real  rMax =
-        cooperative_groups::reduce(laneTile<kGroupSize>(), lagRMax[channel], cooperative_groups::greater<Real>());
-      const int lagIdx                     = laneInGroup + 1;
-      hBlock[lagIdx]                       = roundThousandths(lagH[channel]);
-      hBlock[kNumGetawayLags + 2 + lagIdx] = roundThousandths(lagHats[channel]);
-      rBlock[lagIdx - 1]                   = roundThousandths(lagR[channel]);
-      rBlock[kNumGetawayLags + lagIdx]     = roundThousandths(lagRMax[channel]);
-      if (laneInGroup == 0) {
-        hBlock[0]                   = roundThousandths(lagZeroH[channel]);
-        hBlock[kNumGetawayLags + 1] = roundThousandths(lagZeroH[channel] + Real(2) * (lagHSum + farHSum));
-        hBlock[kNumGetawayLags + 2] = roundThousandths(lagZeroHats[channel]);
-        hBlock[kGetawayHBlock - 1]  = roundThousandths(lagZeroHats[channel] + Real(2) * (lagHatsSum + farHatsSum));
-        rBlock[kNumGetawayLags]     = roundThousandths(Real(2) * (lagRSum + farRSum));
-        rBlock[kGetawayRBlock - 1]  = roundThousandths(rMax);
-      }
-    }
   }
 }
 
