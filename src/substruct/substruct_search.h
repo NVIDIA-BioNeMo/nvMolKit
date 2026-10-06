@@ -18,6 +18,7 @@
 
 #include <cuda_runtime.h>
 
+#include <cstddef>
 #include <memory>
 #include <vector>
 
@@ -121,6 +122,15 @@ void hasSubstructMatch(const PersistentDeviceTargets& batch,
 
 /** Create reusable search state bound to one GPU for hasSubstructMatch(). */
 std::shared_ptr<SubstructSearchWorkspace> makeSubstructSearchWorkspace(int deviceId);
+
+/** Conservative device bytes one search workspace holds outside recursive queries. */
+std::size_t estimateSubstructSearchWorkspaceBytes(const SubstructSearchConfig& config);
+
+/**
+ * Additional device bytes a search workspace holds while a query with
+ * recursive SMARTS runs. It is released when the search returns.
+ */
+std::size_t estimateRecursiveScratchBytes(const SubstructSearchConfig& config);
 
 }  // namespace nvMolKit
 

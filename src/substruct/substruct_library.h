@@ -25,7 +25,8 @@ namespace nvMolKit {
  * configured, molecules are split across those GPUs and results are merged in
  * ID order. Molecules the GPU format cannot represent are matched with RDKit.
  *
- * Calls are serialized: queries, additions, and finalize() run one at a time.
+ * Queries may run concurrently, as many as fit in GPU memory; additions and
+ * finalize() wait for running queries and hold off new ones.
  */
 class SubstructLibrary {
  public:
@@ -58,6 +59,9 @@ class SubstructLibrary {
 
   /** Number of molecules added since the last finalize(). */
   [[nodiscard]] std::size_t pendingSize() const;
+
+  /** How many queries can run at once, set by finalize() from the GPU memory left after the molecules. */
+  [[nodiscard]] std::size_t maxConcurrentQueries() const;
 
   /** IDs of matching molecules, ascending. maxResults limits the count; -1 returns all, 0 returns none. */
   [[nodiscard]] std::vector<unsigned int> getMatches(const RDKit::ROMol& query,
