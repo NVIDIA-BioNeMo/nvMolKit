@@ -40,10 +40,7 @@ class Property3D(Enum):
       Conformers with fewer than 3 atoms, which RDKit rejects, produce NaN.
     - ``USRCAT``: 60 values, ``USR`` for all atoms and then for RDKit's
       hydrophobic, aromatic, acceptor and donor atoms. Same atom-count rule.
-    - ``GETAWAY``: 273 values in RDKit's ``CalcGETAWAY`` order. RDKit counts
-      atom pairs in different fragments (salts, counterions) only in the
-      totals; nvMolKit returns the same values, which RDKit itself takes
-      impractically long to reach for multi-fragment molecules.
+    - ``GETAWAY``: 273 values in RDKit's ``CalcGETAWAY`` order.
     """
 
     PMI1 = "PMI1"

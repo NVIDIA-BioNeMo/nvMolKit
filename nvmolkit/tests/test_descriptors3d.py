@@ -577,7 +577,7 @@ def test_getaway_matches_rdkit(precision):
 
 @pytest.fixture(scope="module")
 def getaway_salt():
-    # RDKit's lag loop runs to its 1e8 distance for disconnected atoms: seconds even for this 4-atom salt.
+    # RDKit's GETAWAY takes seconds on this 4-atom salt, so its reference is computed once.
     mol = _mol_with_conformers("CCO.N", [[(0.0, 0.0, 0.0), (1.5, 0.1, 0.0), (2.1, 1.4, 0.2), (5.0, 1.0, -1.0)]])
     return mol, _rdkit_getaway_rows([mol])
 

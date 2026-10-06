@@ -491,10 +491,9 @@ __device__ __forceinline__ void multiplyByInfluenceMatrix(const Real* rows,
  * underflow matches RDKit) and ITH/ISH (computeInformationIndices()); then the pair loop: each kGroupSize-lane
  * group walks interleaved rows j of the pair triangle, finds row j's bond distances (capped at
  * kNumGetawayLags) with searchBondDepths() into its @p bondDepths array, and the lane owning a pair's lag
- * accumulates its H, HATS and R terms; pairs farther apart or disconnected enter the totals only, as RDKit's
- * lag loop reaches its 1e8 disconnected sentinel. REIG, the largest singular value of the nonnegative
- * symmetric R, is its Perron eigenvalue, found by power iteration whose first product (with ones) gives the
- * row sums for RARS and RCON.
+ * accumulates its H, HATS and R terms; pairs farther apart or disconnected enter the totals only. REIG, the largest
+ * singular value of the nonnegative symmetric R, is its Perron eigenvalue, found by power iteration whose first product
+ * (with ones) gives the row sums for RARS and RCON.
  */
 template <typename Real>
 __global__ void getaway3DKernel(const DeviceCoordView        coordinates,

@@ -86,7 +86,7 @@ def _calc_rdkit_property(mol: Chem.Mol, conf_id: int, prop: Property3D) -> float
         return rdMolDescriptors.GetUSRCAT(mol, confId=conf_id)
     if prop == Property3D.GETAWAY:
         if len(Chem.GetMolFrags(mol)) > 1:
-            # RDKit's GETAWAY loops up to its 1e8 disconnected-pair distance and would not finish.
+            # RDKit's GETAWAY does not finish in reasonable time on multi-fragment molecules.
             return [math.nan] * 273
         return rdMolDescriptors.CalcGETAWAY(mol, confId=conf_id)
     return RDKIT_CALCULATORS[prop](mol, confId=conf_id, useAtomicMasses=True)
