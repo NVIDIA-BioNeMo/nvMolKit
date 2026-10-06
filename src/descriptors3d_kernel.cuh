@@ -4,6 +4,9 @@
 #ifndef NVMOLKIT_DESCRIPTORS3D_KERNEL_CUH
 #define NVMOLKIT_DESCRIPTORS3D_KERNEL_CUH
 
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
+
 #include <cstddef>
 #include <cstdint>
 
@@ -56,11 +59,23 @@ __device__ __forceinline__ ConformerAtoms loadConformer(const DeviceCoordView& c
   return atoms;
 }
 
-//! Sum over aligned groups of @p kWidth lanes (a conformer group by default, or the whole warp).
+//! Aligned tile of @p kWidth lanes containing the calling thread.
+template <int kWidth> __device__ __forceinline__ cooperative_groups::thread_block_tile<kWidth> laneTile() {
+  return cooperative_groups::tiled_partition<kWidth>(cooperative_groups::this_thread_block());
+}
+
+//! Sum over aligned groups of @p kWidth lanes (a conformer group by default, or the whole warp), returned to
+//! every lane. Every lane of the group must call it.
 template <int kWidth = kGroupSize, typename Real> __device__ __forceinline__ Real groupAllReduceSum(Real value) {
-  const unsigned activeMask = __activemask();
-  for (int offset = kWidth / 2; offset > 0; offset >>= 1) {
-    value += __shfl_xor_sync(activeMask, value, offset);
+  return cooperative_groups::reduce(laneTile<kWidth>(), value, cooperative_groups::plus<Real>());
+}
+
+//! Sum over the warp's lanes with equal `lane % kGroupSize`, i.e. across its kGroupsPerWarp groups, returned
+//! to each of those lanes. Every lane of the warp must call it. No tile covers these strided lanes, so this
+//! combines with shuffles across group offsets.
+template <typename Real> __device__ __forceinline__ Real sumAcrossGroups(Real value) {
+  for (int offset = kGroupSize; offset < kWarpSize; offset <<= 1) {
+    value += __shfl_xor_sync(0xffffffffu, value, offset);
   }
   return value;
 }

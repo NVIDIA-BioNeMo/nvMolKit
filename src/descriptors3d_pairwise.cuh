@@ -357,22 +357,18 @@ __global__ void pairwise3DKernel(const DeviceCoordView        coordinates,
   // Combine the pair streams' partial sums; lanes with equal laneInGroup own the same bins.
   for (int slot = 0; slot < kPairwiseBinsPerLane; ++slot) {
     for (int channel = 0; channel < kNumPairwiseChannels; ++channel) {
-      for (int offset = kGroupSize; offset < kWarpSize; offset <<= 1) {
-        if constexpr (kRdf) {
-          rdfAcc[slot][channel] += __shfl_xor_sync(0xffffffffu, rdfAcc[slot][channel], offset);
-        }
-        if constexpr (kMorse) {
-          morseAcc[slot][channel] += __shfl_xor_sync(0xffffffffu, morseAcc[slot][channel], offset);
-        }
+      if constexpr (kRdf) {
+        rdfAcc[slot][channel] = sumAcrossGroups(rdfAcc[slot][channel]);
+      }
+      if constexpr (kMorse) {
+        morseAcc[slot][channel] = sumAcrossGroups(morseAcc[slot][channel]);
       }
     }
   }
   if constexpr (kAutocorr) {
     for (int slot = 0; slot < kAutocorrLagsPerLane; ++slot) {
       for (int channel = 0; channel < kNumAutocorrChannels; ++channel) {
-        for (int offset = kGroupSize; offset < kWarpSize; offset <<= 1) {
-          autocorrAcc[slot][channel] += __shfl_xor_sync(0xffffffffu, autocorrAcc[slot][channel], offset);
-        }
+        autocorrAcc[slot][channel] = sumAcrossGroups(autocorrAcc[slot][channel]);
       }
     }
   }
