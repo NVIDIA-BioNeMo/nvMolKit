@@ -219,85 +219,134 @@ __device__ __forceinline__ int64_t leadingInteger(const DecimalText& text) {
   return value;
 }
 
-//! Rounded leverage with the decimal text RDKit's string comparisons see.
-struct RoundedLeverage {
-  double      value;
-  DecimalText fraction;  //!< Text after the decimal point (textAfterPoint of the printed value).
+//! What RDKit's IsClose2 reads from a rounded leverage's printed fraction text (textAfterPoint()): its
+//! leading '0' count, its length, its leading integer (C atoi) and whether it is all digits, in which case
+//! appending '0' multiplies that integer by 10.
+struct ClusterKey {
+  int     zeros;
+  int     length;
+  int64_t leading;
+  bool    allDigits;
 };
 
-__device__ __forceinline__ RoundedLeverage roundLeverage(const double leverage, const int digits) {
-  int64_t         mantissa;
-  int             exponent;
-  RoundedLeverage rounded;
-  rounded.value = roundToSignificantDigits(leverage, digits, mantissa, exponent);
+//! Packs a ClusterKey into 64 bits: leading integer (below 2^40) in the low bits, then length, zeros and the
+//! all-digits flag.
+__device__ __forceinline__ int64_t packClusterKey(const ClusterKey& key) {
+  return key.leading | (int64_t{key.length} << 40) | (int64_t{key.zeros} << 48) |
+         (int64_t{key.allDigits ? 1 : 0} << 56);
+}
+
+__device__ __forceinline__ ClusterKey unpackClusterKey(const int64_t packed) {
+  return {static_cast<int>((packed >> 48) & 0xff),
+          static_cast<int>((packed >> 40) & 0xff),
+          packed & ((int64_t{1} << 40) - 1),
+          ((packed >> 56) & 1) != 0};
+}
+
+//! Rounds @p leverage to @p digits significant digits (into @p rounded) and returns the ClusterKey of its
+//! printed text.
+__device__ __forceinline__ ClusterKey clusterKey(const double leverage, const int digits, double& rounded) {
+  int64_t mantissa;
+  int     exponent;
+  rounded = roundToSignificantDigits(leverage, digits, mantissa, exponent);
   DecimalText printed;
   formatLikeOstream(mantissa, exponent, digits, printed);
-  rounded.fraction = textAfterPoint(printed);
-  return rounded;
+  const DecimalText fraction = textAfterPoint(printed);
+  ClusterKey        key{countLeadingZeros(fraction), fraction.length, leadingInteger(fraction), true};
+  for (int position = 0; position < fraction.length; ++position) {
+    key.allDigits = key.allDigits && fraction.chars[position] >= '0' && fraction.chars[position] <= '9';
+  }
+  return key;
+}
+
+//! The effect of appending '0' to the text a ClusterKey describes.
+__device__ __forceinline__ void appendZero(ClusterKey& key) {
+  ++key.length;
+  if (key.allDigits) {
+    key.leading *= 10;
+  }
 }
 
 /**
- * @brief RDKit's IsClose2: equal leading-zero counts pad the shorter fraction text once with '0'; texts of
- *        equal length are close when their leading integers differ by less than 2.
+ * @brief RDKit's IsClose2 on the keys of two printed values: equal leading-zero counts pad the shorter text
+ *        once with '0'; texts of equal length are close when their leading integers differ by less than 2.
  */
-__device__ __forceinline__ bool rdkitIsClose(const DecimalText& first, const DecimalText& second) {
-  DecimalText a = first;
-  DecimalText b = second;
-  if (countLeadingZeros(a) == countLeadingZeros(b)) {
+__device__ __forceinline__ bool rdkitIsClose(ClusterKey a, ClusterKey b) {
+  if (a.zeros == b.zeros) {
     if (a.length > b.length) {
-      appendChar(b, '0');
+      appendZero(b);
     }
     if (a.length < b.length) {
-      appendChar(a, '0');
+      appendZero(a);
     }
   }
   if (a.length != b.length) {
     return false;
   }
-  const int64_t difference = leadingInteger(a) - leadingInteger(b);
+  const int64_t difference = a.leading - b.leading;
   return difference > -2 && difference < 2;
 }
 
 /**
- * @brief ITH and ISH from the heavy-atom leverages, porting RDKit's getGETAWAYDesc: each leverage rounded to
- *        @p digits significant digits, sorted in descending order and grouped by RDKit's clusterArray2 (a
- *        greedy scan with IsClose2 comparisons of the printed values), then
+ * @brief Warp-collective. ITH and ISH from the heavy-atom leverages, porting RDKit's getGETAWAYDesc: each
+ *        leverage rounded to @p digits significant digits, sorted in descending order and grouped by RDKit's
+ *        clusterArray2 (a greedy scan with IsClose2 comparisons of the printed values), then
  *        ITH = n log2 n - sum(c log2 c) over the group sizes c and ISH = ITH / (n log2 n).
  *
- * Runs on one lane. @p sorted holds the conformer's rounded heavy-atom leverages on return.
+ * The lanes round, key and rank the heavy atoms (equal values print identically, so their relative order
+ * does not matter); lane 0 then runs the greedy scan on the sorted keys and alone receives @p ith and @p ish.
+ * @p heavyValues and @p unsortedKeys hold one entry and @p sortedKeys one entry per heavy atom.
  */
 __device__ __forceinline__ void computeInformationIndices(const double*  leverages,
                                                           const uint8_t* heavyAtomFlags,
                                                           const int      numAtoms,
                                                           const int      digits,
-                                                          double*        sorted,
+                                                          const int      lane,
+                                                          double*        heavyValues,
+                                                          int64_t*       unsortedKeys,
+                                                          int64_t*       sortedKeys,
                                                           double&        ith,
                                                           double&        ish) {
-  int numHeavy = 0;
-  for (int atomIdx = 0; atomIdx < numAtoms; ++atomIdx) {
-    if (heavyAtomFlags[atomIdx] != 0) {
-      int64_t      mantissa;
-      int          exponent;
-      const double rounded = roundToSignificantDigits(leverages[atomIdx], digits, mantissa, exponent);
-      int          slot    = numHeavy++;
-      while (slot > 0 && sorted[slot - 1] < rounded) {
-        sorted[slot] = sorted[slot - 1];
-        --slot;
-      }
-      sorted[slot] = rounded;
+  const auto warp     = laneTile<kWarpSize>();
+  int        numHeavy = 0;
+  for (int base = 0; base < numAtoms; base += kWarpSize) {
+    const int      atomIdx = base + lane;
+    const bool     isHeavy = atomIdx < numAtoms && heavyAtomFlags[atomIdx] != 0;
+    const unsigned heavy   = warp.ballot(isHeavy);
+    if (isHeavy) {
+      const int  slot = numHeavy + __popc(heavy & ((1u << lane) - 1u));
+      double     rounded;
+      const auto key     = clusterKey(leverages[atomIdx], digits, rounded);
+      heavyValues[slot]  = rounded;
+      unsortedKeys[slot] = packClusterKey(key);
     }
+    numHeavy += __popc(heavy);
   }
-  const double heavy  = numHeavy;
-  const double total0 = heavy * log(heavy) / log(2.0);
-  double       total  = total0;
-  auto         store  = [&](const int count) {
+  warp.sync();
+  for (int slot = lane; slot < numHeavy; slot += kWarpSize) {
+    const double value = heavyValues[slot];
+    int          rank  = 0;
+    for (int other = 0; other < numHeavy; ++other) {
+      const double otherValue = heavyValues[other];
+      rank += otherValue > value || (otherValue == value && other < slot) ? 1 : 0;
+    }
+    sortedKeys[rank] = unsortedKeys[slot];
+  }
+  warp.sync();
+  if (lane != 0) {
+    return;
+  }
+  const double heavyCount = numHeavy;
+  const double total0     = heavyCount * log(heavyCount) / log(2.0);
+  double       total      = total0;
+  auto         store      = [&](const int count) {
     const double size = count;
     total -= size * log(size) / log(2.0);
   };
   int head  = 0;
   int count = 0;
   while (head < numHeavy) {
-    const RoundedLeverage front = roundLeverage(sorted[head], digits);
+    const ClusterKey front = unpackClusterKey(sortedKeys[head]);
     ++head;
     ++count;
     const int remaining = numHeavy - head;
@@ -305,8 +354,7 @@ __device__ __forceinline__ void computeInformationIndices(const double*  leverag
       store(count);
     }
     for (int offset = 0; offset < remaining; ++offset) {
-      const RoundedLeverage other = roundLeverage(sorted[head + offset], digits);
-      if (rdkitIsClose(front.fraction, other.fraction)) {
+      if (rdkitIsClose(front, unpackClusterKey(sortedKeys[head + offset]))) {
         ++count;
       } else {
         store(count);
@@ -476,6 +524,7 @@ __global__ void getaway3DKernel(const DeviceCoordView        coordinates,
                                 Real* __restrict__ rows,
                                 double* __restrict__ leverageScratch,
                                 double* __restrict__ sortScratch,
+                                int64_t* __restrict__ keyScratch,
                                 Real* __restrict__ iterateScratch,
                                 uint8_t* __restrict__ bondDepths,
                                 Real* __restrict__ output) {
@@ -652,16 +701,20 @@ __global__ void getaway3DKernel(const DeviceCoordView        coordinates,
     eigenvalue = Real(0);
   }
 
+  double         ith  = 0;
+  double         ish  = 0;
+  int64_t* const keys = keyScratch + atomOffset * 2;
+  computeInformationIndices(leverages,
+                            inputs.heavyAtomFlags + moleculeStart,
+                            numAtoms,
+                            precisionDigits,
+                            lane,
+                            sortScratch + atomOffset,
+                            keys,
+                            keys + numAtoms,
+                            ith,
+                            ish);
   if (lane == 0) {
-    double ith;
-    double ish;
-    computeInformationIndices(leverages,
-                              inputs.heavyAtomFlags + moleculeStart,
-                              numAtoms,
-                              precisionDigits,
-                              sortScratch + atomOffset,
-                              ith,
-                              ish);
     double leverageProduct = 1.0;
     for (int atomIdx = 0; atomIdx < numAtoms; ++atomIdx) {
       leverageProduct *= leverages[atomIdx];
@@ -706,7 +759,8 @@ __global__ void getaway3DKernel(const DeviceCoordView        coordinates,
 
 /**
  * @brief Launches the GETAWAY kernel. Scratch per atom: one kGetawayRowStride row of @p Real, a float64
- *        leverage and sort slot, two power-iteration values and one bond-depth byte per pair stream.
+ *        leverage and rounded-leverage slot, two ITH/ISH sort keys, two power-iteration values and one
+ *        bond-depth byte per pair stream.
  */
 template <typename Real>
 void launchGetawayProperties(const DeviceCoordView&        coordinates,
@@ -722,6 +776,7 @@ void launchGetawayProperties(const DeviceCoordView&        coordinates,
   AsyncDeviceVector<Real>    rows(numAtoms * kGetawayRowStride, stream);
   AsyncDeviceVector<double>  leverages(numAtoms, stream);
   AsyncDeviceVector<double>  sorted(numAtoms, stream);
+  AsyncDeviceVector<int64_t> keys(numAtoms * 2, stream);
   AsyncDeviceVector<Real>    iterates(numAtoms * 2, stream);
   AsyncDeviceVector<uint8_t> depths(numAtoms * kGetawayPairStreams, stream);
   const int                  numBlocks = (numConformers + kWarpsPerBlock - 1) / kWarpsPerBlock;
@@ -731,6 +786,7 @@ void launchGetawayProperties(const DeviceCoordView&        coordinates,
                                                               rows.data(),
                                                               leverages.data(),
                                                               sorted.data(),
+                                                              keys.data(),
                                                               iterates.data(),
                                                               depths.data(),
                                                               output);
