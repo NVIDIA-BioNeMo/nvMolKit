@@ -2123,16 +2123,16 @@ TEST_P(RecursiveSubstructureSearchTest, DeepRecursionMixedWithNormalQueries) {
   }
 }
 
-class ResidentSubstructureSearchTest : public SubstructureSearchTest {};
+class PersistentTargetSubstructureSearchTest : public SubstructureSearchTest {};
 
-INSTANTIATE_TEST_SUITE_P(ResidentAlgorithms,
-                         ResidentSubstructureSearchTest,
+INSTANTIATE_TEST_SUITE_P(PersistentTargetAlgorithms,
+                         PersistentTargetSubstructureSearchTest,
                          ::testing::Values(SubstructAlgorithm::GSI, SubstructAlgorithm::DFS),
                          [](const ::testing::TestParamInfo<SubstructAlgorithm>& info) {
                            return algorithmName(info.param);
                          });
 
-TEST_P(ResidentSubstructureSearchTest, MatchesBatchSearchAcrossCallsSharingAWorkspace) {
+TEST_P(PersistentTargetSubstructureSearchTest, MatchesBatchSearchAcrossCallsSharingAWorkspace) {
   std::vector<std::unique_ptr<RDKit::ROMol>> targetMols;
   std::vector<std::unique_ptr<RDKit::ROMol>> queryMols;
   parseMolecules({"CCO", "c1ccccc1O", "CC(=O)O", "CC(=O)NC", "c1ccncc1", "CCCCCC", "OC(=O)c1ccccc1N", "C1CCNCC1"},
@@ -2149,11 +2149,11 @@ TEST_P(ResidentSubstructureSearchTest, MatchesBatchSearchAcrossCallsSharingAWork
   nvMolKit::MoleculesDevice targetsDevice(stream_.stream());
   targetsDevice.copyFromHost(targetsHost);
   cudaCheckError(cudaStreamSynchronize(stream_.stream()));
-  const auto batch = nvMolKit::makeResidentTargetBatch(targets, targetsHost, targetsDevice);
+  const auto batch = nvMolKit::makePersistentDeviceTargets(targets, targetsHost, targetsDevice);
 
   int deviceId = 0;
   cudaCheckError(cudaGetDevice(&deviceId));
-  const auto workspace = nvMolKit::makeResidentSubstructSearchWorkspace(deviceId);
+  const auto workspace = nvMolKit::makeSubstructSearchWorkspace(deviceId);
 
   // Both result buffers are reused across queries without clearing, so stale flags would show up as mismatches.
   std::vector<uint8_t> withWorkspace;
@@ -2162,14 +2162,14 @@ TEST_P(ResidentSubstructureSearchTest, MatchesBatchSearchAcrossCallsSharingAWork
     HasSubstructMatchResults expected;
     hasSubstructMatch(targets, {query.get()}, expected, algorithm(), stream_.stream());
 
-    nvMolKit::hasSubstructMatchResident(*batch,
-                                        *query,
-                                        withWorkspace,
-                                        algorithm(),
-                                        stream_.stream(),
-                                        SubstructSearchConfig{},
-                                        workspace.get());
-    nvMolKit::hasSubstructMatchResident(*batch, *query, withoutWorkspace, algorithm(), stream_.stream());
+    nvMolKit::hasSubstructMatch(*batch,
+                                *query,
+                                withWorkspace,
+                                algorithm(),
+                                stream_.stream(),
+                                SubstructSearchConfig{},
+                                workspace.get());
+    nvMolKit::hasSubstructMatch(*batch, *query, withoutWorkspace, algorithm(), stream_.stream());
 
     ASSERT_EQ(withWorkspace.size(), targets.size());
     ASSERT_EQ(withoutWorkspace.size(), targets.size());
@@ -2181,7 +2181,7 @@ TEST_P(ResidentSubstructureSearchTest, MatchesBatchSearchAcrossCallsSharingAWork
   }
 }
 
-TEST_P(ResidentSubstructureSearchTest, RejectsMismatchedAndOversizedTargetBatches) {
+TEST_P(PersistentTargetSubstructureSearchTest, RejectsMismatchedAndOversizedTargetBatches) {
   std::vector<std::unique_ptr<RDKit::ROMol>> targetMols;
   std::vector<std::unique_ptr<RDKit::ROMol>> queryMols;
   parseMolecules({std::string(65, 'C'), std::string(65, 'C')}, {"CC"}, targetMols, queryMols);
@@ -2190,12 +2190,12 @@ TEST_P(ResidentSubstructureSearchTest, RejectsMismatchedAndOversizedTargetBatche
   nvMolKit::buildTargetBatchParallelInto(targetsHost, 1, targets, {});
   nvMolKit::MoleculesDevice targetsDevice(stream_.stream());
 
-  EXPECT_THROW(nvMolKit::makeResidentTargetBatch({targets[0]}, targetsHost, targetsDevice), std::invalid_argument);
+  EXPECT_THROW(nvMolKit::makePersistentDeviceTargets({targets[0]}, targetsHost, targetsDevice), std::invalid_argument);
 
   // The packer refuses targets above the atom limit, so join two packed targets into one 130-atom entry, as a
   // caller packing targets by other means could.
   targetsHost.batchAtomStarts.erase(targetsHost.batchAtomStarts.begin() + 1);
-  EXPECT_THROW(nvMolKit::makeResidentTargetBatch({targets[0]}, targetsHost, targetsDevice), std::invalid_argument);
+  EXPECT_THROW(nvMolKit::makePersistentDeviceTargets({targets[0]}, targetsHost, targetsDevice), std::invalid_argument);
 
   // A target that needs the RDKit fallback, here an atom above the packed bond limit, is rejected up front.
   RDKit::SmilesParserParams params;
@@ -2205,11 +2205,11 @@ TEST_P(ResidentSubstructureSearchTest, RejectsMismatchedAndOversizedTargetBatche
   RDKit::MolOps::symmetrizeSSSR(*hypervalent);
   nvMolKit::MoleculesHost singleHost;
   nvMolKit::buildTargetBatchParallelInto(singleHost, 1, {targets[0]}, {});
-  EXPECT_THROW(nvMolKit::makeResidentTargetBatch({hypervalent.get()}, singleHost, targetsDevice),
+  EXPECT_THROW(nvMolKit::makePersistentDeviceTargets({hypervalent.get()}, singleHost, targetsDevice),
                std::invalid_argument);
 }
 
-TEST_P(ResidentSubstructureSearchTest, RejectsSearchesConfiguredForAnotherGpu) {
+TEST_P(PersistentTargetSubstructureSearchTest, RejectsSearchesConfiguredForAnotherGpu) {
   std::vector<std::unique_ptr<RDKit::ROMol>> targetMols;
   std::vector<std::unique_ptr<RDKit::ROMol>> queryMols;
   parseMolecules({"CCO"}, {"CO"}, targetMols, queryMols);
@@ -2219,14 +2219,13 @@ TEST_P(ResidentSubstructureSearchTest, RejectsSearchesConfiguredForAnotherGpu) {
   nvMolKit::MoleculesDevice targetsDevice(stream_.stream());
   targetsDevice.copyFromHost(targetsHost);
   cudaCheckError(cudaStreamSynchronize(stream_.stream()));
-  const auto batch = nvMolKit::makeResidentTargetBatch(targets, targetsHost, targetsDevice);
+  const auto batch = nvMolKit::makePersistentDeviceTargets(targets, targetsHost, targetsDevice);
 
   int deviceId = 0;
   cudaCheckError(cudaGetDevice(&deviceId));
   SubstructSearchConfig otherGpu;
   otherGpu.gpuIds = {deviceId + 1};
   std::vector<uint8_t> results;
-  EXPECT_THROW(
-    nvMolKit::hasSubstructMatchResident(*batch, *queryMols[0], results, algorithm(), stream_.stream(), otherGpu),
-    std::invalid_argument);
+  EXPECT_THROW(nvMolKit::hasSubstructMatch(*batch, *queryMols[0], results, algorithm(), stream_.stream(), otherGpu),
+               std::invalid_argument);
 }

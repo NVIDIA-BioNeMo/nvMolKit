@@ -293,6 +293,13 @@ class MoleculesDevice {
 void addToBatch(const RDKit::ROMol* mol, MoleculesHost& batch);
 
 /**
+ * @brief Append every molecule of src to dest, adjusting all offsets.
+ *
+ * Works for both target and query batches.
+ */
+void mergeBatch(MoleculesHost& dest, const MoleculesHost& src);
+
+/**
  * @brief Add a query molecule (from SMARTS) to an existing batch.
  *
  * Extracts query information from QueryAtom objects and populates atomQueries.
