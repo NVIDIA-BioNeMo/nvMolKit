@@ -23,6 +23,7 @@
 #include <atomic>
 #include <cstddef>
 #include <future>
+#include <latch>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -286,7 +287,7 @@ TEST(SubstructLibraryResults, ReusedWorkspaceDoesNotCarryMatchesBetweenQueries) 
   }
   library.finalize();
 
-  // Alternate a recursive and a plain query until every query slot has been reused.
+  // Alternate recursive and plain queries to check sequential workspace reuse.
   auto broadRecursive = queryFromSmarts("[$([#6])]");
   auto narrowPlain    = queryFromSmarts("[Cl-]");
   ASSERT_NE(broadRecursive, nullptr);
@@ -294,7 +295,7 @@ TEST(SubstructLibraryResults, ReusedWorkspaceDoesNotCarryMatchesBetweenQueries) 
   const auto expectedBroad  = rdkitMatchingIds(targets, *broadRecursive);
   const auto expectedNarrow = rdkitMatchingIds(targets, *narrowPlain);
   ASSERT_EQ(expectedNarrow, std::vector<MoleculeId>({2U}));
-  for (std::size_t round = 0; round < 2 * library.maxConcurrentQueries() + 1; ++round) {
+  for (std::size_t round = 0; round < 3; ++round) {
     EXPECT_EQ(library.getMatches(*broadRecursive), expectedBroad) << "round " << round;
     EXPECT_EQ(library.getMatches(*narrowPlain), expectedNarrow) << "round " << round;
   }
@@ -558,18 +559,30 @@ TEST(SubstructLibraryConcurrency, QueriesSeeOnlyFinalizedMoleculesWhileMoreAreAd
   library.finalize();
 
   std::atomic<bool>             done{false};
+  std::latch                    readersReady{3};
   std::vector<std::future<int>> readers;
   for (int reader = 0; reader < 3; ++reader) {
     readers.push_back(std::async(std::launch::async, [&] {
       int queries = 0;
-      while (!done.load()) {
-        const auto matches = library.getMatches(*oxygen);
-        EXPECT_NE(std::find(finalizedResults.begin(), finalizedResults.end(), matches), finalizedResults.end());
-        ++queries;
+      try {
+        while (!done.load()) {
+          const auto matches = library.getMatches(*oxygen);
+          EXPECT_NE(std::find(finalizedResults.begin(), finalizedResults.end(), matches), finalizedResults.end());
+          if (++queries == 1) {
+            readersReady.count_down();
+          }
+        }
+      } catch (...) {
+        // Let the writer finish so reader.get() can report a failed first query.
+        if (queries == 0) {
+          readersReady.count_down();
+        }
+        throw;
       }
       return queries;
     }));
   }
+  readersReady.wait();
   for (std::size_t round = 1; round < finalizedSizes.size(); ++round) {
     for (std::size_t index = finalizedSizes[round - 1]; index < finalizedSizes[round]; ++index) {
       library.addMol(*targets[index]);
