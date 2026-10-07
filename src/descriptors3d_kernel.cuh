@@ -4,6 +4,9 @@
 #ifndef NVMOLKIT_DESCRIPTORS3D_KERNEL_CUH
 #define NVMOLKIT_DESCRIPTORS3D_KERNEL_CUH
 
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
+
 #include <cstddef>
 #include <cstdint>
 
@@ -56,11 +59,32 @@ __device__ __forceinline__ ConformerAtoms loadConformer(const DeviceCoordView& c
   return atoms;
 }
 
-//! Sum over aligned groups of @p kWidth lanes (a conformer group by default, or the whole warp).
+//! Aligned tile of @p kWidth lanes containing the calling thread.
+template <int kWidth> __device__ __forceinline__ cooperative_groups::thread_block_tile<kWidth> laneTile() {
+  return cooperative_groups::tiled_partition<kWidth>(cooperative_groups::this_thread_block());
+}
+
+//! Sum over aligned groups of @p kWidth lanes (a conformer group by default, or the whole warp), returned to
+//! every lane. Every lane of the group must call it.
 template <int kWidth = kGroupSize, typename Real> __device__ __forceinline__ Real groupAllReduceSum(Real value) {
-  const unsigned activeMask = __activemask();
-  for (int offset = kWidth / 2; offset > 0; offset >>= 1) {
-    value += __shfl_xor_sync(activeMask, value, offset);
+  return cooperative_groups::reduce(laneTile<kWidth>(), value, cooperative_groups::plus<Real>());
+}
+
+//! Sum over the warp's lanes with equal `lane % kGroupSize`, i.e. across its kGroupsPerWarp groups, returned
+//! to each of those lanes. Every lane of the warp must call it. No tile covers these strided lanes, so this
+//! combines with shuffles across group offsets.
+template <typename Real> __device__ __forceinline__ Real sumAcrossGroups(Real value) {
+  for (int offset = kGroupSize; offset < kWarpSize; offset <<= 1) {
+    value += __shfl_xor_sync(0xffffffffu, value, offset);
+  }
+  return value;
+}
+
+//! Maximum over the warp's lanes with equal `lane % kGroupSize`; see sumAcrossGroups().
+template <typename Real> __device__ __forceinline__ Real maxAcrossGroups(Real value) {
+  for (int offset = kGroupSize; offset < kWarpSize; offset <<= 1) {
+    const Real other = __shfl_xor_sync(0xffffffffu, value, offset);
+    value            = other > value ? other : value;
   }
   return value;
 }
@@ -120,6 +144,47 @@ writeCenteredConformer(const ConformerAtoms& atoms, const int laneInGroup, const
   }
   __syncwarp(groupMask);
   return make_double3(centroidX, centroidY, centroidZ);
+}
+
+//! Bond depth of an atom not reached within the search's depth cap.
+constexpr uint8_t kUnreachedDepth = 0xFF;
+
+/**
+ * @brief Collective over the @p groupMask lanes. Breadth-first search over the molecule's bonds from atom
+ *        @p source, writing each atom's bond-count distance to @p depth, or kUnreachedDepth beyond
+ *        @p kMaxDepth bonds. Matches RDKit's MolOps::getDistanceMat(mol, false) up to that cap.
+ *
+ * Each level scans the atoms set at the previous level, O(kMaxDepth * atoms) per source; lanes that reach the
+ * same atom write the same value.
+ */
+template <int kMaxDepth>
+__device__ __forceinline__ void searchBondDepths(const int32_t* neighborStarts,
+                                                 const int32_t* neighbors,
+                                                 const int      numAtoms,
+                                                 const int      source,
+                                                 const int      laneInGroup,
+                                                 const unsigned groupMask,
+                                                 uint8_t*       depth) {
+  static_assert(kMaxDepth < kUnreachedDepth);
+  // Every lane has finished reading the previous source's depths before they are overwritten.
+  __syncwarp(groupMask);
+  for (int atomIdx = laneInGroup; atomIdx < numAtoms; atomIdx += kGroupSize) {
+    depth[atomIdx] = atomIdx == source ? 0 : kUnreachedDepth;
+  }
+  __syncwarp(groupMask);
+  for (int level = 1; level <= kMaxDepth; ++level) {
+    for (int atomIdx = laneInGroup; atomIdx < numAtoms; atomIdx += kGroupSize) {
+      if (depth[atomIdx] == level - 1) {
+        for (int edge = neighborStarts[atomIdx]; edge < neighborStarts[atomIdx + 1]; ++edge) {
+          const int neighbor = neighbors[edge];
+          if (depth[neighbor] == kUnreachedDepth) {
+            depth[neighbor] = static_cast<uint8_t>(level);
+          }
+        }
+      }
+    }
+    __syncwarp(groupMask);
+  }
 }
 
 //! Round to three decimals as RDKit's WHIM, RDF and MORSE do: std::round(1000 * x) / 1000.

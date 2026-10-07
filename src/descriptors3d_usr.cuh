@@ -39,10 +39,7 @@ __device__ __forceinline__ bool isBetter(const double distance, const int atomId
  * reference point's moments by up to 1.3. The selection reads the float64 coordinates, O(atoms) per call.
  */
 template <bool kLargest>
-__device__ __forceinline__ int extremeAtom(const ConformerAtoms& atoms,
-                                           const int             laneInGroup,
-                                           const unsigned        groupMask,
-                                           const double3         point) {
+__device__ __forceinline__ int extremeAtom(const ConformerAtoms& atoms, const int laneInGroup, const double3 point) {
   // Starting from atom 0 keeps the result in range when no distance compares (NaN coordinates), which is
   // also the atom RDKit's scans return then.
   ExtremeAtom best{kLargest ? -INFINITY : INFINITY, 0};
@@ -55,14 +52,14 @@ __device__ __forceinline__ int extremeAtom(const ConformerAtoms& atoms,
       best = {distance, atomIdx};
     }
   }
-  for (int offset = kGroupSize / 2; offset > 0; offset >>= 1) {
-    const double otherDistance = __shfl_xor_sync(groupMask, best.distance, offset);
-    const int    otherIdx      = __shfl_xor_sync(groupMask, best.atomIdx, offset);
-    if (isBetter<kLargest>(otherDistance, otherIdx, best)) {
-      best = {otherDistance, otherIdx};
-    }
-  }
-  return best.atomIdx;
+  // The preferred atom of any two is unique (ties go to the lower index), so the result is independent of
+  // the reduction order.
+  return cooperative_groups::reduce(laneTile<kGroupSize>(),
+                                    best,
+                                    [](const ExtremeAtom& a, const ExtremeAtom& b) {
+                                      return isBetter<kLargest>(b.distance, b.atomIdx, a) ? b : a;
+                                    })
+    .atomIdx;
 }
 
 //! Float64 position of atom @p atomIdx.
@@ -189,9 +186,9 @@ __global__ void usr3DKernel(const DeviceCoordView        coordinates,
   const uint8_t* classes =
     kUsrcat ? inputs.usrcatAtomClasses + inputs.moleculeAtomStarts[coordinates.molIndices[conformerIdx]] : nullptr;
 
-  const int closest              = extremeAtom<false>(atoms, laneInGroup, groupMask, centroid);
-  const int farthest             = extremeAtom<true>(atoms, laneInGroup, groupMask, centroid);
-  const int farthestFromFarthest = extremeAtom<true>(atoms, laneInGroup, groupMask, atomPosition(atoms, farthest));
+  const int closest              = extremeAtom<false>(atoms, laneInGroup, centroid);
+  const int farthest             = extremeAtom<true>(atoms, laneInGroup, centroid);
+  const int farthestFromFarthest = extremeAtom<true>(atoms, laneInGroup, atomPosition(atoms, farthest));
   // -1 is the centroid, the origin of the centered coordinates.
   const int referenceAtoms[kNumUsrReferencePoints] = {-1, closest, farthest, farthestFromFarthest};
 
