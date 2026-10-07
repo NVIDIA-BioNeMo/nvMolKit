@@ -110,8 +110,9 @@ struct BondDistanceTableStorage {
 
 /**
  * @brief Builds the bond-distance table for the batch's molecules on @p stream, without host
- *        synchronization. Capacity is the smaller of kBondTableBudgetBytes and the worst case for
- *        `inputs.maxMoleculeAtoms`; batches whose largest molecule exceeds kBondTableMaxAtoms (or whose
+ *        synchronization. Capacity is the smaller of kBondTableBudgetBytes and `inputs.moleculeAtomPairs`
+ *        (or, when unset, the worst case for `inputs.maxMoleculeAtoms`); batches whose largest molecule
+ *        exceeds kBondTableMaxAtoms (or whose
  *        maxMoleculeAtoms is unset) get an empty table, so every conformer searches per row.
  */
 inline void buildBondDistanceTable(const DeviceCoordView&        coordinates,
@@ -124,7 +125,8 @@ inline void buildBondDistanceTable(const DeviceCoordView&        coordinates,
     return;
   }
   const int64_t maxPairs = static_cast<int64_t>(maxAtoms) * (maxAtoms - 1) / 2;
-  const int64_t capacity = std::min<int64_t>(kBondTableBudgetBytes, maxPairs * nMols);
+  const int64_t pairs    = inputs.moleculeAtomPairs > 0 ? inputs.moleculeAtomPairs : maxPairs * nMols;
+  const int64_t capacity = std::min<int64_t>(kBondTableBudgetBytes, pairs);
 
   storage.starts = AsyncDeviceVector<int64_t>(static_cast<size_t>(nMols) + 1, stream);
   moleculePairCountsKernel<<<(nMols + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(inputs.moleculeAtomStarts,

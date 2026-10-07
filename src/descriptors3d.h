@@ -199,9 +199,13 @@ struct Property3DDeviceInputs {
   const int32_t* defaultConformerRows  = nullptr;
   //! PBF, GETAWAY: per-conformer RDKit is3D flags (one per coordinate row); null treats every row as 3D.
   const int8_t*  conformerIs3D         = nullptr;
-  //! WHIM: largest molecule atom count in the batch (host value); sizes the per-conformer symmetry-search
-  //! scratch. Rows with more atoms produce NaN.
+  //! WHIM, AUTOCORR3D, GETAWAY: largest molecule atom count in the batch (host value). Sizes WHIM's
+  //! per-conformer symmetry-search scratch (rows with more atoms produce NaN) and, with 0 or above 3072 atoms,
+  //! leaves AUTOCORR3D and GETAWAY without the shared bond-distance table.
   int32_t        maxMoleculeAtoms      = 0;
+  //! AUTOCORR3D, GETAWAY: atom pairs n (n - 1) / 2 summed over the batch's molecules (host value); sizes the
+  //! shared bond-distance table. 0 sizes it as if every molecule had @ref maxMoleculeAtoms atoms.
+  int64_t        moleculeAtomPairs     = 0;
 };
 
 //! One row-major device vector of length numConformers * property3DWidth(property) per property.

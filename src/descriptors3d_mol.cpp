@@ -355,7 +355,9 @@ Property3DBatchResult<Real> calc3DProperties(const std::vector<const RDKit::ROMo
   inputs.defaultConformerRows  = uploadedInputs.defaultConformerRows.data();
   inputs.conformerIs3D         = uploadedInputs.conformerIs3D.data();
   for (const RDKit::ROMol* mol : mols) {
-    inputs.maxMoleculeAtoms = std::max(inputs.maxMoleculeAtoms, static_cast<int32_t>(mol->getNumAtoms()));
+    const int64_t numAtoms  = mol->getNumAtoms();
+    inputs.maxMoleculeAtoms = std::max(inputs.maxMoleculeAtoms, static_cast<int32_t>(numAtoms));
+    inputs.moleculeAtomPairs += numAtoms * (numAtoms - 1) / 2;
   }
 
   Property3DBatchResult<Real> result;

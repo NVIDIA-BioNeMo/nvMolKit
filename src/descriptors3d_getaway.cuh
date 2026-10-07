@@ -92,8 +92,8 @@ __device__ __forceinline__ double roundToSignificantDigits(const double value,
                                                            int&         exponent) {
   mantissa = 0;
   exponent = 0;
-  if (!(value > 0.0)) {
-    return value;  // 0 stays 0; NaN stays NaN.
+  if (!(value > 0.0) || !isfinite(value)) {
+    return value;  // 0 stays 0; NaN and infinity stay as they are.
   }
   exponent             = static_cast<int>(floor(log10(value)));
   const double lowest  = exactPowerOfTen(digits - 1);
@@ -304,7 +304,8 @@ __device__ __forceinline__ bool rdkitIsClose(ClusterKey a, ClusterKey b) {
  *
  * The lanes round, key and rank the heavy atoms (equal values print identically, so their relative order
  * does not matter); lane 0 then runs the greedy scan on the sorted keys and alone receives @p ith and @p ish.
- * @p heavyValues and @p unsortedKeys hold one entry and @p sortedKeys one entry per heavy atom.
+ * Both are NaN when any heavy-atom leverage is not finite. @p heavyValues and @p unsortedKeys hold one entry and @p
+ * sortedKeys one entry per heavy atom.
  */
 __device__ __forceinline__ void computeInformationIndices(const double*  leverages,
                                                           const uint8_t* heavyAtomFlags,
@@ -316,12 +317,14 @@ __device__ __forceinline__ void computeInformationIndices(const double*  leverag
                                                           int64_t*       sortedKeys,
                                                           double&        ith,
                                                           double&        ish) {
-  const auto warp     = laneTile<kWarpSize>();
-  int        numHeavy = 0;
+  const auto warp      = laneTile<kWarpSize>();
+  int        numHeavy  = 0;
+  bool       nonFinite = false;
   for (int base = 0; base < numAtoms; base += kWarpSize) {
     const int      atomIdx = base + lane;
     const bool     isHeavy = atomIdx < numAtoms && heavyAtomFlags[atomIdx] != 0;
     const unsigned heavy   = warp.ballot(isHeavy);
+    nonFinite              = nonFinite || (isHeavy && !isfinite(leverages[atomIdx]));
     if (isHeavy) {
       const int  slot = numHeavy + __popc(heavy & ((1u << lane) - 1u));
       double     rounded;
@@ -330,6 +333,12 @@ __device__ __forceinline__ void computeInformationIndices(const double*  leverag
       unsortedKeys[slot] = packClusterKey(key);
     }
     numHeavy += __popc(heavy);
+  }
+  // Non-finite leverages (from non-finite coordinates) have no rank or printed digits to cluster.
+  if (warp.any(nonFinite)) {
+    ith = nan("");
+    ish = nan("");
+    return;
   }
   warp.sync();
   for (int slot = lane; slot < numHeavy; slot += kWarpSize) {

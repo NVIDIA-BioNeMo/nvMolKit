@@ -322,7 +322,10 @@ def Calc3DProperties(
             ``values``, or whose atom count differs from their molecule's
             produce NaN rather than an error, so no host synchronization is
             needed. Device coordinate rows are treated as three-dimensional;
-            molecule conformers preserve their RDKit ``is3D`` flag for PBF.
+            molecule conformers keep their RDKit ``is3D`` flag, which PBF and
+            GETAWAY's HIC read. HIC takes its flatness (PBF and ``is3D``) from
+            each molecule's first conformer for all of its conformers; with
+            ``coordinates``, each row uses its own geometry.
         options: Per-family options; defaults to :class:`Property3DOptions`
             (RDKit's defaults).
         precision: ``PrecisionMode.SINGLE`` (default) computes and returns
@@ -396,11 +399,13 @@ def Calc3DProperties(
         options = Property3DOptions()
     elif not isinstance(options, Property3DOptions):
         raise TypeError(f"options must be a Property3DOptions or None, got {type(options).__name__}")
-    getaway_precision = options.getaway.precision
-    if isinstance(getaway_precision, bool) or not isinstance(getaway_precision, int):
-        raise TypeError(f"GETAWAY precision must be an int, got {type(getaway_precision).__name__}")
-    if not 1 <= getaway_precision <= 6:
-        raise ValueError(f"GETAWAY precision must be between 1 and 6 significant digits, got {getaway_precision}")
+    getaway_precision = GetawayOptions().precision
+    if Property3D.GETAWAY in normalized_properties:
+        getaway_precision = options.getaway.precision
+        if isinstance(getaway_precision, bool) or not isinstance(getaway_precision, int):
+            raise TypeError(f"GETAWAY precision must be an int, got {type(getaway_precision).__name__}")
+        if not 1 <= getaway_precision <= 6:
+            raise ValueError(f"GETAWAY precision must be between 1 and 6 significant digits, got {getaway_precision}")
     if hardwareOptions is None:
         hardwareOptions = HardwareOptions()
     elif not isinstance(hardwareOptions, HardwareOptions):
@@ -420,7 +425,7 @@ def Calc3DProperties(
         [prop.value for prop in normalized_properties],
         options.moments.useAtomicMasses,
         options.whim.threshold,
-        options.getaway.precision,
+        getaway_precision,
         coordinate_interfaces,
         precision,
         hardwareOptions.preprocessingThreads,

@@ -644,6 +644,25 @@ def test_getaway_rejects_non_integer_precision():
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)
+def test_getaway_non_finite_coordinates_give_nan_information_indices(precision):
+    mols = [
+        _mol_with_conformers("CCCO", [[(0.0, 0.0, 0.0), (1.5, float("nan"), 0.0), (2.0, 1.4, 0.0), (3.4, 1.5, 0.2)]]),
+        _mol_with_conformers("CCCO", [[(0.0, 0.0, 0.0), (1.5, 0.2, 0.0), (2.0, 1.4, float("inf")), (3.4, 1.5, 0.2)]]),
+        _embed("CCCO", 1, 47),
+    ]
+    values = Calc3DProperties(mols, Property3D.GETAWAY, precision=precision)[Property3D.GETAWAY].numpy()
+    assert np.isnan(values[:2, :2]).all()  # ITH and ISH
+    _assert_rounded_matches_rdkit(values[2:], _rdkit_getaway_rows(mols[2:]), precision)
+
+
+@pytest.mark.parametrize("precision_digits", [0, 2.5])
+def test_getaway_precision_ignored_when_not_requested(precision_digits):
+    options = Property3DOptions(getaway=GetawayOptions(precision=precision_digits))
+    result = Calc3DProperties([_embed("CCO", 1, 5)], Property3D.PMI1, options=options)
+    assert result[Property3D.PMI1].torch().shape == (1,)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
 def test_autocorr3d_accepts_batches_without_bonds(precision):
     mols = [
         _mol_with_conformers("[He]", [[(4.0, -3.0, 2.0)]]),

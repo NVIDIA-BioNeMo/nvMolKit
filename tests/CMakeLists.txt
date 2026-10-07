@@ -408,6 +408,10 @@ add_executable(test_descriptors3d_whim_arithmetic
 target_link_libraries(test_descriptors3d_whim_arithmetic
                       PRIVATE descriptors3d cuda_error_check)
 
+add_executable(test_descriptors3d_topology test_descriptors3d_topology.cu)
+target_link_libraries(test_descriptors3d_topology PRIVATE descriptors3d
+                                                          cuda_error_check)
+
 add_executable(test_tfd_cpu test_tfd_cpu.cpp)
 target_link_libraries(test_tfd_cpu PRIVATE ${RDKit_LIBS} tfd_cpu test_utils
                                            nvmolkit_versions)
@@ -428,6 +432,7 @@ target_link_libraries(test_tfd PRIVATE ${RDKit_LIBS} tfd_gpu tfd_cpu
 set(TEST_LIST
     test_descriptors3d
     test_descriptors3d_whim_arithmetic
+    test_descriptors3d_topology
     test_boolean_tree
     test_butina
     test_diversity_pickers
