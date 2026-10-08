@@ -4,7 +4,7 @@
 
 ### Summary
 
-nvMolKit 0.7.0 adds a single-precision mode for force field minimization (MMFF, UFF, BFGS, FIRE) and ETKDG conformer generation, which is roughly an order of magnitude faster on consumer GPUs. It also adds a fused 3D descriptor API, diversity selection (Leader and MaxMin), DISE clustering, an Atom-Atom Path (AAP) similarity metric, and a persistent GPU `SubstructLibrary`. ETKDG supports eigenvalue-based initial coordinates and device-side conformer pruning, and conformer RMSD gains selectable alignment modes. Performance improvements include a 10-40% faster per-molecule BFGS kernel, up to 2x faster Morgan fingerprints, and up to 8x faster Tanimoto similarity for queries with few molecules. Butina clustering outputs are now unified across the matrix and fused APIs, which is a breaking change from 0.6.0; see Breaking Changes below.
+nvMolKit 0.7.0 adds a single-precision mode for force field minimization (MMFF, UFF, BFGS, FIRE) and ETKDG conformer generation, which is roughly an order of magnitude faster on consumer GPUs. It also adds a fused 3D descriptor API, diversity selection (Leader and MaxMin), DISE clustering, an Atom-Atom Path (AAP) similarity metric, a persistent GPU `SubstructLibrary`, and various performance improvements to existing fingerprinting, substructure search, and 3D minimization code. Butina clustering outputs are now unified across the matrix and fused APIs, which is a breaking change from 0.6.0; see Breaking Changes below.
 
 ### Contributors
 - Eva Xue (@evasnow1992)
