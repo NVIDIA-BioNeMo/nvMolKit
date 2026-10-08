@@ -18,13 +18,18 @@
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <GraphMol/Substruct/SubstructMatch.h>
 #include <gtest/gtest.h>
+#include <omp.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
+#include <future>
+#include <latch>
 #include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -203,6 +208,7 @@ TEST(SubstructLibraryState, FailedIncrementalFinalizeKeepsPreviousMoleculesAndCa
 
   library.addMol(*benzene);
   library.finalize();
+  const std::size_t querySlots = library.maxConcurrentQueries();
   library.addMol(*phenol);
 
   {
@@ -212,6 +218,7 @@ TEST(SubstructLibraryState, FailedIncrementalFinalizeKeepsPreviousMoleculesAndCa
 
   EXPECT_EQ(library.size(), 1U);
   EXPECT_EQ(library.pendingSize(), 1U);
+  EXPECT_EQ(library.maxConcurrentQueries(), querySlots);
   EXPECT_EQ(library.getMatches(*aromaticCarbon), std::vector<MoleculeId>({0U}));
 
   library.finalize();
@@ -281,7 +288,7 @@ TEST(SubstructLibraryResults, ReusedWorkspaceDoesNotCarryMatchesBetweenQueries) 
   }
   library.finalize();
 
-  // Alternate a recursive and a plain query over the same reused workspace.
+  // Alternate recursive and plain queries to check sequential workspace reuse.
   auto broadRecursive = queryFromSmarts("[$([#6])]");
   auto narrowPlain    = queryFromSmarts("[Cl-]");
   ASSERT_NE(broadRecursive, nullptr);
@@ -495,6 +502,144 @@ TEST(SubstructLibraryMultiGpu, ShardsTargetsAndMergesEveryOperationInInsertionOr
   EXPECT_TRUE(library.getMatches(*phosphorus).empty());
   EXPECT_EQ(library.countMatches(*phosphorus), 0U);
   EXPECT_FALSE(library.hasMatch(*phosphorus));
+}
+
+// A shared GPU may validly fit only one query slot. This test needs a controlled memory budget to require more.
+TEST(SubstructLibraryConcurrency, DISABLED_OpenMPThreadLimitDoesNotLimitQuerySlots) {
+  struct RestoreOpenMPThreads {
+    const int originalThreads = omp_get_max_threads();
+    ~RestoreOpenMPThreads() { omp_set_num_threads(originalThreads); }
+  } restoreThreads;
+
+  std::vector<std::unique_ptr<RDKit::ROMol>> targets;
+  for (const char* smiles : {"CCO", "c1ccccc1", "N", "OCCN"}) {
+    targets.push_back(molFromSmiles(smiles));
+    ASSERT_NE(targets.back(), nullptr);
+  }
+  auto plain     = queryFromSmarts("N");
+  auto recursive = queryFromSmarts("[$([#6]O)]");
+  ASSERT_NE(plain, nullptr);
+  ASSERT_NE(recursive, nullptr);
+  const auto expectedPlain     = rdkitMatchingIds(targets, *plain);
+  const auto expectedRecursive = rdkitMatchingIds(targets, *recursive);
+
+  for (const int threadCount : {1, 2}) {
+    omp_set_num_threads(threadCount);
+    for (const auto algorithm : {nvMolKit::SubstructAlgorithm::GSI, nvMolKit::SubstructAlgorithm::DFS}) {
+      SCOPED_TRACE(threadCount);
+      SCOPED_TRACE(static_cast<int>(algorithm));
+      nvMolKit::SubstructSearchConfig config;
+      config.algorithm            = algorithm;
+      config.preprocessingThreads = 1;
+      config.workerThreads        = 1;
+      config.executorsPerRunner   = 1;
+      nvMolKit::SubstructLibrary library(config);
+      library.finalize();
+      EXPECT_GT(library.maxConcurrentQueries(), 1U);
+      for (const auto& target : targets) {
+        library.addMol(*target);
+      }
+      library.finalize();
+      EXPECT_GT(library.maxConcurrentQueries(), 1U);
+      auto plainResults     = std::async(std::launch::async, [&] { return library.getMatches(*plain); });
+      auto recursiveResults = std::async(std::launch::async, [&] { return library.getMatches(*recursive); });
+      EXPECT_EQ(plainResults.get(), expectedPlain);
+      EXPECT_EQ(recursiveResults.get(), expectedRecursive);
+    }
+  }
+}
+
+TEST(SubstructLibraryConcurrency, MoreQueriesThanSlotsAllComplete) {
+  nvMolKit::SubstructLibrary                 library;
+  std::vector<std::unique_ptr<RDKit::ROMol>> targets;
+  for (const auto& smiles : {"CCO", "c1ccccc1", "CC(=O)O", "N", "OCCN"}) {
+    targets.push_back(molFromSmiles(smiles));
+    ASSERT_NE(targets.back(), nullptr);
+    library.addMol(*targets.back());
+  }
+  library.finalize();
+
+  auto recursive = queryFromSmarts("[$([#6]O)]");
+  auto plain     = queryFromSmarts("N");
+  ASSERT_NE(recursive, nullptr);
+  ASSERT_NE(plain, nullptr);
+  const auto expectedRecursive = rdkitMatchingIds(targets, *recursive);
+  const auto expectedPlain     = rdkitMatchingIds(targets, *plain);
+
+  // More callers than query slots, half of them needing recursive scratch.
+  std::vector<std::future<std::vector<MoleculeId>>> recursiveResults;
+  std::vector<std::future<std::vector<MoleculeId>>> plainResults;
+  for (std::size_t caller = 0; caller < 2 * library.maxConcurrentQueries() + 2; ++caller) {
+    recursiveResults.push_back(std::async(std::launch::async, [&] { return library.getMatches(*recursive); }));
+    plainResults.push_back(std::async(std::launch::async, [&] { return library.getMatches(*plain); }));
+  }
+  for (auto& result : recursiveResults) {
+    EXPECT_EQ(result.get(), expectedRecursive);
+  }
+  for (auto& result : plainResults) {
+    EXPECT_EQ(result.get(), expectedPlain);
+  }
+}
+
+TEST(SubstructLibraryConcurrency, QueriesSeeOnlyFinalizedMoleculesWhileMoreAreAdded) {
+  std::vector<std::unique_ptr<RDKit::ROMol>> targets;
+  for (const char* smiles : {"CCO", "c1ccccc1", "CCN", "OCCO", "c1ccncc1", "CC(=O)O", "CCCl", "Oc1ccccc1"}) {
+    targets.push_back(molFromSmiles(smiles));
+    ASSERT_NE(targets.back(), nullptr);
+  }
+  auto oxygen = queryFromSmarts("[#8]");
+  ASSERT_NE(oxygen, nullptr);
+  // A query sees the molecules of some finalize() call, never a partial set.
+  const std::vector<std::size_t>       finalizedSizes{2, 4, 6, 8};
+  std::vector<std::vector<MoleculeId>> finalizedResults;
+  for (const std::size_t size : finalizedSizes) {
+    std::vector<std::unique_ptr<RDKit::ROMol>> prefix;
+    for (std::size_t index = 0; index < size; ++index) {
+      prefix.push_back(std::make_unique<RDKit::ROMol>(*targets[index]));
+    }
+    finalizedResults.push_back(rdkitMatchingIds(prefix, *oxygen));
+  }
+
+  nvMolKit::SubstructLibrary library;
+  library.addMols({targets[0].get(), targets[1].get()});
+  library.finalize();
+
+  std::atomic<bool>             done{false};
+  std::latch                    readersReady{3};
+  std::vector<std::future<int>> readers;
+  for (int reader = 0; reader < 3; ++reader) {
+    readers.push_back(std::async(std::launch::async, [&] {
+      int queries = 0;
+      try {
+        while (!done.load()) {
+          const auto matches = library.getMatches(*oxygen);
+          EXPECT_NE(std::find(finalizedResults.begin(), finalizedResults.end(), matches), finalizedResults.end());
+          if (++queries == 1) {
+            readersReady.count_down();
+          }
+        }
+      } catch (...) {
+        // Let the writer finish so reader.get() can report a failed first query.
+        if (queries == 0) {
+          readersReady.count_down();
+        }
+        throw;
+      }
+      return queries;
+    }));
+  }
+  readersReady.wait();
+  for (std::size_t round = 1; round < finalizedSizes.size(); ++round) {
+    for (std::size_t index = finalizedSizes[round - 1]; index < finalizedSizes[round]; ++index) {
+      library.addMol(*targets[index]);
+    }
+    library.finalize();
+  }
+  done.store(true);
+  for (auto& reader : readers) {
+    EXPECT_GT(reader.get(), 0);
+  }
+  EXPECT_EQ(library.getMatches(*oxygen), finalizedResults.back());
 }
 
 TEST(SubstructLibraryStreams, SupportsFinalizeAndQueriesOnANondefaultStream) {

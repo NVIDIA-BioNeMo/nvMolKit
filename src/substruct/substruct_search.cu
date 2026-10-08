@@ -635,6 +635,18 @@ void runGpuCoordinator(int                                 deviceId,
 
 namespace {
 
+/// Executors each runner thread drives: 3 for a lone runner, 2 otherwise, unless configured.
+int resolveExecutorsPerRunner(int configured, int numRunners) {
+  if (configured == -1) {
+    return numRunners == 1 ? 3 : 2;
+  }
+  if (configured < 1 || configured > kMaxExecutorsPerRunner) {
+    throw std::invalid_argument("executorsPerRunner must be -1 (auto) or between 1 and " +
+                                std::to_string(kMaxExecutorsPerRunner));
+  }
+  return configured;
+}
+
 void runPipelinedSubstructSearch(const std::vector<const RDKit::ROMol*>& targets,
                                  const MoleculesHost&                    queriesHost,
                                  const MoleculesDevice&                  queriesDevice,
@@ -686,15 +698,7 @@ void runPipelinedSubstructSearch(const std::vector<const RDKit::ROMol*>& targets
     return;
   }
 
-  int executorsPerRunner;
-  if (config.executorsPerRunner == -1) {
-    executorsPerRunner = (numRunners == 1) ? 3 : 2;
-  } else if (config.executorsPerRunner < 1 || config.executorsPerRunner > kMaxExecutorsPerRunner) {
-    throw std::invalid_argument("executorsPerRunner must be -1 (auto) or between 1 and " +
-                                std::to_string(kMaxExecutorsPerRunner));
-  } else {
-    executorsPerRunner = config.executorsPerRunner;
-  }
+  const int executorsPerRunner = resolveExecutorsPerRunner(config.executorsPerRunner, numRunners);
 
   std::vector<int> workersPerGpu(numGpus, numRunners / numGpus);
   for (int i = 0; i < numRunners % numGpus; ++i) {
@@ -1408,6 +1412,39 @@ void hasSubstructMatch(const PersistentDeviceTargets& batch,
 std::shared_ptr<SubstructSearchWorkspace> makeSubstructSearchWorkspace(int deviceId) {
   const WithDevice device(deviceId);
   return std::make_shared<SubstructSearchWorkspace>(deviceId);
+}
+
+namespace {
+
+/// GPU executors a search workspace with this configuration keeps on its device.
+int searchWorkspaceExecutorCount(const SubstructSearchConfig& config) {
+  const int workers = config.workerThreads == -1 ? 4 : std::max(1, config.workerThreads);
+  return workers * resolveExecutorsPerRunner(config.executorsPerRunner, workers);
+}
+
+}  // namespace
+
+std::size_t estimateSubstructSearchWorkspaceBytes(const SubstructSearchConfig& config) {
+  const std::size_t batchSize       = static_cast<std::size_t>(std::max(1, config.batchSize));
+  const std::size_t executors       = static_cast<std::size_t>(searchWorkspaceExecutorCount(config));
+  const std::size_t overflowBuffers = config.algorithm == SubstructAlgorithm::GSI ? 2U : 1U;
+  const std::size_t overflowPerExecutor =
+    batchSize * overflowBuffers * static_cast<std::size_t>(kOverflowEntriesPerBuffer) * sizeof(PartialMatch) * 3U / 2U;
+  const std::size_t auxiliaryPerExecutor = batchSize * 2048U + 8U * 1024U * 1024U;
+  return executors * (overflowPerExecutor + auxiliaryPerExecutor);
+}
+
+std::size_t estimateRecursiveScratchBytes(const SubstructSearchConfig& config) {
+  // Recursive-pattern painting grows per-executor scratch for up to
+  // max(batchSize, 1024) blocks, each with two overflow buffers and a label
+  // matrix, by 1.5x (see RecursivePatternPreprocessor).
+  const std::size_t batchSize   = static_cast<std::size_t>(std::max(1, config.batchSize));
+  const std::size_t paintBlocks = std::max<std::size_t>(batchSize, 1024U);
+  const std::size_t perExecutor = paintBlocks *
+                                  (2U * static_cast<std::size_t>(kOverflowEntriesPerBuffer) * sizeof(PartialMatch) +
+                                   kLabelMatrixWords * sizeof(std::uint32_t)) *
+                                  3U / 2U;
+  return static_cast<std::size_t>(searchWorkspaceExecutorCount(config)) * perExecutor;
 }
 
 }  // namespace nvMolKit
