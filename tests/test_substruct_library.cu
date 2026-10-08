@@ -18,6 +18,7 @@
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <GraphMol/Substruct/SubstructMatch.h>
 #include <gtest/gtest.h>
+#include <omp.h>
 
 #include <algorithm>
 #include <atomic>
@@ -501,6 +502,50 @@ TEST(SubstructLibraryMultiGpu, ShardsTargetsAndMergesEveryOperationInInsertionOr
   EXPECT_TRUE(library.getMatches(*phosphorus).empty());
   EXPECT_EQ(library.countMatches(*phosphorus), 0U);
   EXPECT_FALSE(library.hasMatch(*phosphorus));
+}
+
+TEST(SubstructLibraryConcurrency, OpenMPThreadLimitDoesNotLimitQuerySlots) {
+  struct RestoreOpenMPThreads {
+    const int originalThreads = omp_get_max_threads();
+    ~RestoreOpenMPThreads() { omp_set_num_threads(originalThreads); }
+  } restoreThreads;
+
+  std::vector<std::unique_ptr<RDKit::ROMol>> targets;
+  for (const char* smiles : {"CCO", "c1ccccc1", "N", "OCCN"}) {
+    targets.push_back(molFromSmiles(smiles));
+    ASSERT_NE(targets.back(), nullptr);
+  }
+  auto plain     = queryFromSmarts("N");
+  auto recursive = queryFromSmarts("[$([#6]O)]");
+  ASSERT_NE(plain, nullptr);
+  ASSERT_NE(recursive, nullptr);
+  const auto expectedPlain     = rdkitMatchingIds(targets, *plain);
+  const auto expectedRecursive = rdkitMatchingIds(targets, *recursive);
+
+  for (const int threadCount : {1, 2}) {
+    omp_set_num_threads(threadCount);
+    for (const auto algorithm : {nvMolKit::SubstructAlgorithm::GSI, nvMolKit::SubstructAlgorithm::DFS}) {
+      SCOPED_TRACE(threadCount);
+      SCOPED_TRACE(static_cast<int>(algorithm));
+      nvMolKit::SubstructSearchConfig config;
+      config.algorithm            = algorithm;
+      config.preprocessingThreads = 1;
+      config.workerThreads        = 1;
+      config.executorsPerRunner   = 1;
+      nvMolKit::SubstructLibrary library(config);
+      library.finalize();
+      EXPECT_GT(library.maxConcurrentQueries(), 1U);
+      for (const auto& target : targets) {
+        library.addMol(*target);
+      }
+      library.finalize();
+      EXPECT_GT(library.maxConcurrentQueries(), 1U);
+      auto plainResults     = std::async(std::launch::async, [&] { return library.getMatches(*plain); });
+      auto recursiveResults = std::async(std::launch::async, [&] { return library.getMatches(*recursive); });
+      EXPECT_EQ(plainResults.get(), expectedPlain);
+      EXPECT_EQ(recursiveResults.get(), expectedRecursive);
+    }
+  }
 }
 
 TEST(SubstructLibraryConcurrency, MoreQueriesThanSlotsAllComplete) {
