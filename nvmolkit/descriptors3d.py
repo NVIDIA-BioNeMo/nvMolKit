@@ -27,6 +27,13 @@ class Property3D(Enum):
     ``rdMolDescriptors`` module (``CalcWHIM``, ``GetUSR``, ...). Wherever a
     property is accepted, its string value may be used instead.
 
+    The ``DCLV`` properties are the getters of RDKit's
+    ``DoubleCubicLatticeVolume`` class (``DCLVSurfaceArea`` is
+    ``GetSurfaceArea``, ...), configured by :class:`DclvOptions`. Requesting
+    several costs one pass over the surface dots. Conformers containing an atom
+    with a zero van der Waals radius (dummy atoms, on which RDKit crashes)
+    produce NaN.
+
     Vector properties, in RDKit's order; every other property is a scalar:
 
     - ``WHIM``: 114 values.
@@ -61,6 +68,13 @@ class Property3D(Enum):
     USR = "USR"
     USRCAT = "USRCAT"
     GETAWAY = "GETAWAY"
+    DCLV_SURFACE_AREA = "DCLVSurfaceArea"
+    DCLV_POLAR_SURFACE_AREA = "DCLVPolarSurfaceArea"
+    DCLV_VOLUME = "DCLVVolume"
+    DCLV_VDW_VOLUME = "DCLVVDWVolume"
+    DCLV_POLAR_VOLUME = "DCLVPolarVolume"
+    DCLV_COMPACTNESS = "DCLVCompactness"
+    DCLV_PACKING_DENSITY = "DCLVPackingDensity"
 
 
 @dataclass(frozen=True)
@@ -100,6 +114,27 @@ class GetawayOptions:
 
 
 @dataclass(frozen=True)
+class DclvOptions:
+    """Options for the ``DCLV`` properties (RDKit's ``DoubleCubicLatticeVolume``), with RDKit's defaults.
+
+    Atoms take RDKit's default van der Waals radii. RDKit's ``radii``, ``isProtein`` and
+    ``includeLigand`` arguments are not supported (``isProtein=False``).
+
+    Attributes:
+        probeRadius: Radius of the solvent probe sphere in Angstrom, RDKit's default ``1.4``. Must be
+            finite and non-negative.
+        includeSandP: ``DCLVPolarSurfaceArea`` and ``DCLVPolarVolume`` also count sulfur and phosphorus, as
+            RDKit's ``includeSandP`` argument of ``GetPolarSurfaceArea`` and ``GetPolarVolume``.
+        includeHs: The polar values also count hydrogens bonded to a polar atom, as RDKit's
+            ``includeHs`` argument.
+    """
+
+    probeRadius: float = 1.4
+    includeSandP: bool = False
+    includeHs: bool = False
+
+
+@dataclass(frozen=True)
 class Property3DOptions:
     """Per-family options for :func:`Calc3DProperties`; each family reads only its own member.
 
@@ -121,11 +156,13 @@ class Property3DOptions:
         moments: Options for the moment-based properties.
         whim: Options for ``WHIM``.
         getaway: Options for ``GETAWAY``.
+        dclv: Options for the ``DCLV`` properties.
     """
 
     moments: MomentOptions = MomentOptions()
     whim: WhimOptions = WhimOptions()
     getaway: GetawayOptions = GetawayOptions()
+    dclv: DclvOptions = DclvOptions()
 
 
 @dataclass(frozen=True)
@@ -225,6 +262,9 @@ class Device3DPropertyResult(Mapping[str, AsyncGpuResult]):
             dense_values[mol_indices, conf_indices] = source
             values[name] = dense_values
         return Dense3DPropertyResult(values=values, conf_mask=conf_mask)
+
+
+_DCLV_PROPERTIES = frozenset(prop for prop in Property3D if prop.value.startswith("DCLV"))
 
 
 def _normalize_property(property_name: Property3D | str) -> Property3D:
@@ -336,6 +376,9 @@ def Calc3DProperties(
             MORSE's first scattering value (a large sum of positive terms),
             USR's reference-atom choice (near-equidistant atoms) and GETAWAY's
             leverages (rounded and clustered for ITH and ISH).
+            The ``DCLV`` properties count exposed surface dots, and a dot
+            within rounding of a neighboring sphere can flip between precisions
+            (or against RDKit), which moves the values by one dot's share.
         hardwareOptions: Only ``preprocessingThreads`` applies: the CPU
             threads used to extract coordinates and atom weights from the
             molecules (default ``-1``, all threads).
@@ -406,6 +449,8 @@ def Calc3DProperties(
             raise TypeError(f"GETAWAY precision must be an int, got {type(getaway_precision).__name__}")
         if not 1 <= getaway_precision <= 6:
             raise ValueError(f"GETAWAY precision must be between 1 and 6 significant digits, got {getaway_precision}")
+    # Options of unrequested families are ignored, even when invalid; the native code validates the probe radius.
+    dclv = options.dclv if any(prop in _DCLV_PROPERTIES for prop in normalized_properties) else DclvOptions()
     if hardwareOptions is None:
         hardwareOptions = HardwareOptions()
     elif not isinstance(hardwareOptions, HardwareOptions):
@@ -426,6 +471,9 @@ def Calc3DProperties(
         options.moments.useAtomicMasses,
         options.whim.threshold,
         getaway_precision,
+        float(dclv.probeRadius),
+        bool(dclv.includeSandP),
+        bool(dclv.includeHs),
         coordinate_interfaces,
         precision,
         hardwareOptions.preprocessingThreads,

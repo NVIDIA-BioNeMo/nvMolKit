@@ -13,6 +13,7 @@ from rdkit.Geometry import Point3D
 
 from nvmolkit.descriptors3d import (
     Calc3DProperties,
+    DclvOptions,
     Device3DPropertyResult,
     GetawayOptions,
     MomentOptions,
@@ -33,7 +34,17 @@ VECTOR_PROPERTIES = (
     Property3D.USRCAT,
     Property3D.GETAWAY,
 )
-SCALAR_PROPERTIES = tuple(prop for prop in Property3D if prop not in VECTOR_PROPERTIES)
+DCLV_PROPERTIES = (
+    Property3D.DCLV_SURFACE_AREA,
+    Property3D.DCLV_POLAR_SURFACE_AREA,
+    Property3D.DCLV_VOLUME,
+    Property3D.DCLV_VDW_VOLUME,
+    Property3D.DCLV_POLAR_VOLUME,
+    Property3D.DCLV_COMPACTNESS,
+    Property3D.DCLV_PACKING_DENSITY,
+)
+# Shape and moment scalars, compared against RDKit by _rdkit_property; the DCLV scalars have their own tests.
+SCALAR_PROPERTIES = tuple(prop for prop in Property3D if prop not in VECTOR_PROPERTIES + DCLV_PROPERTIES)
 PAIRWISE_PROPERTIES = (Property3D.RDF, Property3D.MORSE, Property3D.AUTOCORR3D)
 RDKIT_PAIRWISE = {
     Property3D.RDF: rdMolDescriptors.CalcRDF,
@@ -660,6 +671,132 @@ def test_getaway_precision_ignored_when_not_requested(precision_digits):
     options = Property3DOptions(getaway=GetawayOptions(precision=precision_digits))
     result = Calc3DProperties([_embed("CCO", 1, 5)], Property3D.PMI1, options=options)
     assert result[Property3D.PMI1].torch().shape == (1,)
+
+
+def _rdkit_dclv_rows(mols, options=None):
+    """RDKit's DoubleCubicLatticeVolume getters, one column per DCLV_PROPERTIES entry."""
+    options = DclvOptions() if options is None else options
+    rows = []
+    for mol in mols:
+        for conf in mol.GetConformers():
+            dclv = rdMolDescriptors.DoubleCubicLatticeVolume(mol, probeRadius=options.probeRadius, confId=conf.GetId())
+            polar = {"includeSandP": options.includeSandP, "includeHs": options.includeHs}
+            rows.append(
+                [
+                    dclv.GetSurfaceArea(),
+                    dclv.GetPolarSurfaceArea(**polar),
+                    dclv.GetVolume(),
+                    dclv.GetVDWVolume(),
+                    dclv.GetPolarVolume(**polar),
+                    dclv.GetCompactness(),
+                    dclv.GetPackingDensity(),
+                ]
+            )
+    return np.asarray(rows)
+
+
+def _dclv_columns(mols, precision=PrecisionMode.FULL, **kwargs):
+    """Calculate every DCLV property and stack them in DCLV_PROPERTIES order."""
+    result = Calc3DProperties(mols, DCLV_PROPERTIES, precision=precision, **kwargs)
+    return np.column_stack([result[prop].numpy() for prop in DCLV_PROPERTIES])
+
+
+def _assert_dclv_matches(actual, expected, precision):
+    """Compare DCLV rows.
+
+    The values count exposed surface dots, so a dot within rounding of a neighboring sphere could flip and move a
+    value by one dot's share (~1e-3 relative); none does for these geometries, and float32 stays within 1e-5.
+    """
+    rtol = 1e-9 if precision == PrecisionMode.FULL else 1e-5
+    np.testing.assert_allclose(actual, expected, rtol=rtol, atol=1e-9, equal_nan=True)
+
+
+def _cubic_cluster(points_per_side, spacing):
+    grid = np.arange(points_per_side) * spacing
+    return np.asarray([(x, y, z) for x in grid for y in grid for z in grid])
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_dclv_matches_rdkit(precision):
+    mols = [
+        _embed("CC(=O)Nc1ccc(O)cc1", 3, 107),
+        _embed("CS(=O)(=O)Nc1ccc(P(=O)(O)O)cc1", 2, 109),
+        _embed("CC(=O)Nc1ccc(Br)cc1.Cl", 1, 113),
+        # 216 atoms 1.1 A apart: each atom has more neighbors than the per-warp neighbor cache holds.
+        _mol_with_conformers(".".join(["C"] * 216), [_cubic_cluster(6, 1.1)]),
+        _mol_with_conformers("[He]", [[(4.0, -3.0, 2.0)]]),
+        _mol_with_conformers("CC", [[(1.0, 1.0, 1.0), (1.0, 1.0, 1.0)]]),
+    ]
+    result = Calc3DProperties(mols, DCLV_PROPERTIES, precision=precision)
+    assert tuple(result) == tuple(prop.value for prop in DCLV_PROPERTIES)
+    assert all(result[prop].torch().shape == (9,) for prop in DCLV_PROPERTIES)
+    actual = np.column_stack([result[prop].numpy() for prop in DCLV_PROPERTIES])
+    _assert_dclv_matches(actual, _rdkit_dclv_rows(mols), precision)
+    # The probe-expanded and bare-sphere dot passes run only for the properties that need them; a property's value
+    # must not depend on what else is requested.
+    for prop in DCLV_PROPERTIES:
+        alone = Calc3DProperties(mols, prop, precision=precision)
+        np.testing.assert_array_equal(alone[prop].numpy(), result[prop].numpy(), err_msg=prop.value)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        DclvOptions(probeRadius=0.0),
+        DclvOptions(probeRadius=2.0, includeSandP=True),
+        DclvOptions(includeHs=True),
+        DclvOptions(includeSandP=True, includeHs=True),
+    ],
+)
+def test_dclv_options_match_rdkit(options):
+    mols = [_embed("CS(=O)(=O)Nc1ccc(P(=O)(O)O)cc1", 2, 127)]
+    actual = _dclv_columns(mols, options=Property3DOptions(dclv=options))
+    _assert_dclv_matches(actual, _rdkit_dclv_rows(mols, options), PrecisionMode.FULL)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_dclv_zero_radius_atoms_give_nan(precision):
+    # RDKit crashes on dummy atoms (radius 0), so such conformers have no reference value.
+    coordinates = [(0.0, 0.0, 0.0), (1.5, 0.1, 0.0), (2.1, 1.4, 0.2)]
+    mols = [
+        _mol_with_conformers("CCO.*", [[*coordinates, (0.8, 0.9, 0.1)]]),
+        _mol_with_conformers("CCO", [coordinates]),
+    ]
+    values = _dclv_columns(mols, precision)
+    assert np.isnan(values[0]).all()
+    _assert_dclv_matches(values[1:], _rdkit_dclv_rows(mols[1:]), precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_dclv_non_finite_coordinates_give_nan(precision):
+    mols = [
+        _mol_with_conformers("CCO", [[(0.0, 0.0, 0.0), (1.5, float("nan"), 0.0), (2.1, 1.4, 0.2)]]),
+        _mol_with_conformers("CCO", [[(0.0, 0.0, 0.0), (1.5, 0.1, 0.0), (2.1, 1.4, float("inf"))]]),
+        _embed("CCCO", 1, 47),
+    ]
+    values = _dclv_columns(mols, precision)
+    assert np.isnan(values[:2]).all()
+    _assert_dclv_matches(values[2:], _rdkit_dclv_rows(mols[2:]), precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_dclv_device_coordinates_far_from_origin(precision):
+    mols = [_embed("CC(=O)Nc1ccc(O)cc1", 2, 131)]
+    coordinates = _device_result_from_molecules(mols)
+    near = _dclv_columns(mols, precision, coordinates=coordinates)
+    _assert_dclv_matches(near, _rdkit_dclv_rows(mols), precision)
+    coordinates.values.torch().add_(torch.tensor([1e4, -4e3, 6e3], dtype=torch.float64, device="cuda"))
+    far = _dclv_columns(mols, precision, coordinates=coordinates)
+    _assert_dclv_matches(far, near, precision)
+
+
+def test_dclv_rejects_invalid_probe_radius_only_when_requested():
+    mol = _embed("CCO", 1, 5)
+    for probe_radius in (-0.1, float("nan"), float("inf")):
+        options = Property3DOptions(dclv=DclvOptions(probeRadius=probe_radius))
+        with pytest.raises(ValueError, match="probe radius"):
+            Calc3DProperties(mol, Property3D.DCLV_VDW_VOLUME, options=options)
+        assert Calc3DProperties(mol, "PMI1", options=options)["PMI1"].torch().shape == (1,)
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)

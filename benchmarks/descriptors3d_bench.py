@@ -42,6 +42,8 @@ VALIDATION_TOLERANCES = {PrecisionMode.SINGLE: (2e-6, 1e-3), PrecisionMode.FULL:
 # Absolute tolerances for USR skews (whole molecule, USRCAT atom classes): the cube root of a near-zero third
 # moment turns rounding noise into visible values, in RDKit as well (a two-atom class has an exact skew of 0).
 USR_SKEW_TOLERANCES = {PrecisionMode.SINGLE: (5e-3, 0.1), PrecisionMode.FULL: (1e-4, 1e-3)}
+# Relative tolerances for the DCLV properties, which sum float32 dot contributions over every atom.
+DCLV_RELATIVE_TOLERANCES = {PrecisionMode.SINGLE: 1e-5, PrecisionMode.FULL: 1e-9}
 
 PROPERTY_SETS = {
     "single": (Property3D.RADIUS_OF_GYRATION,),
@@ -58,6 +60,16 @@ RDKIT_CALCULATORS = {
     Property3D.INERTIAL_SHAPE_FACTOR: rdMolDescriptors.CalcInertialShapeFactor,
     Property3D.ECCENTRICITY: rdMolDescriptors.CalcEccentricity,
     Property3D.ASPHERICITY: rdMolDescriptors.CalcAsphericity,
+}
+
+DCLV_GETTERS = {
+    Property3D.DCLV_SURFACE_AREA: "GetSurfaceArea",
+    Property3D.DCLV_POLAR_SURFACE_AREA: "GetPolarSurfaceArea",
+    Property3D.DCLV_VOLUME: "GetVolume",
+    Property3D.DCLV_VDW_VOLUME: "GetVDWVolume",
+    Property3D.DCLV_POLAR_VOLUME: "GetPolarVolume",
+    Property3D.DCLV_COMPACTNESS: "GetCompactness",
+    Property3D.DCLV_PACKING_DENSITY: "GetPackingDensity",
 }
 
 
@@ -89,6 +101,9 @@ def _calc_rdkit_property(mol: Chem.Mol, conf_id: int, prop: Property3D) -> float
             # RDKit's GETAWAY does not finish in reasonable time on multi-fragment molecules.
             return [math.nan] * 273
         return rdMolDescriptors.CalcGETAWAY(mol, confId=conf_id)
+    if prop in DCLV_GETTERS:
+        dclv = rdMolDescriptors.DoubleCubicLatticeVolume(mol, confId=conf_id)
+        return getattr(dclv, DCLV_GETTERS[prop])()
     return RDKIT_CALCULATORS[prop](mol, confId=conf_id, useAtomicMasses=True)
 
 
@@ -160,6 +175,9 @@ def _validate(
                 # Rows RDKit could not compute (multi-fragment molecules) are NaN and not compared.
                 computed = ~np.isnan(expected[prop]).all(axis=1)
                 np.testing.assert_allclose(actual[computed], expected[prop][computed], rtol=0, atol=max(atol, 1.1e-3))
+                continue
+            if prop in DCLV_GETTERS:
+                np.testing.assert_allclose(actual, expected[prop], rtol=DCLV_RELATIVE_TOLERANCES[precision], atol=atol)
                 continue
             if prop not in (Property3D.USR, Property3D.USRCAT):
                 np.testing.assert_allclose(actual, expected[prop], rtol=rtol, atol=atol)

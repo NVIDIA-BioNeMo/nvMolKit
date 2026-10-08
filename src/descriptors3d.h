@@ -19,27 +19,35 @@ namespace nvMolKit {
 
 //! Per-conformer 3D properties. Names match the corresponding RDKit descriptor names.
 enum class Property3D : int {
-  PMI1                = 0,
-  PMI2                = 1,
-  PMI3                = 2,
-  RadiusOfGyration    = 3,
-  NPR1                = 4,
-  NPR2                = 5,
-  InertialShapeFactor = 6,
-  Eccentricity        = 7,
-  Asphericity         = 8,
-  SpherocityIndex     = 9,
-  PBF                 = 10,
-  WHIM                = 11,
-  RDF                 = 12,
-  MORSE               = 13,
-  AUTOCORR3D          = 14,
-  USR                 = 15,
-  USRCAT              = 16,
-  GETAWAY             = 17,
+  PMI1                 = 0,
+  PMI2                 = 1,
+  PMI3                 = 2,
+  RadiusOfGyration     = 3,
+  NPR1                 = 4,
+  NPR2                 = 5,
+  InertialShapeFactor  = 6,
+  Eccentricity         = 7,
+  Asphericity          = 8,
+  SpherocityIndex      = 9,
+  PBF                  = 10,
+  WHIM                 = 11,
+  RDF                  = 12,
+  MORSE                = 13,
+  AUTOCORR3D           = 14,
+  USR                  = 15,
+  USRCAT               = 16,
+  GETAWAY              = 17,
+  //! RDKit's DoubleCubicLatticeVolume getters (GetSurfaceArea, ...).
+  DCLVSurfaceArea      = 18,
+  DCLVPolarSurfaceArea = 19,
+  DCLVVolume           = 20,
+  DCLVVDWVolume        = 21,
+  DCLVPolarVolume      = 22,
+  DCLVCompactness      = 23,
+  DCLVPackingDensity   = 24,
 };
 
-inline constexpr std::array<Property3D, 18> kAllProperty3D = {
+inline constexpr std::array<Property3D, 25> kAllProperty3D = {
   Property3D::PMI1,
   Property3D::PMI2,
   Property3D::PMI3,
@@ -58,6 +66,13 @@ inline constexpr std::array<Property3D, 18> kAllProperty3D = {
   Property3D::USR,
   Property3D::USRCAT,
   Property3D::GETAWAY,
+  Property3D::DCLVSurfaceArea,
+  Property3D::DCLVPolarSurfaceArea,
+  Property3D::DCLVVolume,
+  Property3D::DCLVVDWVolume,
+  Property3D::DCLVPolarVolume,
+  Property3D::DCLVCompactness,
+  Property3D::DCLVPackingDensity,
 };
 
 inline constexpr int kNumWhimProperties       = 114;
@@ -104,6 +119,7 @@ enum class Property3DFamily : int {
   Pairwise,    //!< Sums over atom pairs weighted by atom-property pairs: RDF, MORSE and AUTOCORR3D.
   Usr,         //!< Distance moments from four reference points: USR and USRCAT.
   Getaway,     //!< Leverage (molecular influence) matrix descriptors: GETAWAY.
+  Dclv,        //!< Dot-surface areas and volumes of the atom spheres: RDKit's DoubleCubicLatticeVolume (DCLV*).
 };
 
 constexpr Property3DFamily property3DFamily(const Property3D property) {
@@ -131,6 +147,14 @@ constexpr Property3DFamily property3DFamily(const Property3D property) {
       return Property3DFamily::Usr;
     case Property3D::GETAWAY:
       return Property3DFamily::Getaway;
+    case Property3D::DCLVSurfaceArea:
+    case Property3D::DCLVPolarSurfaceArea:
+    case Property3D::DCLVVolume:
+    case Property3D::DCLVVDWVolume:
+    case Property3D::DCLVPolarVolume:
+    case Property3D::DCLVCompactness:
+    case Property3D::DCLVPackingDensity:
+      return Property3DFamily::Dclv;
   }
   return Property3DFamily::Moments;
 }
@@ -155,12 +179,31 @@ struct GetawayOptions {
   unsigned int precision = 2;
 };
 
+//! Property3DDeviceInputs::dclvPolarClasses bits: the atom kinds RDKit's DoubleCubicLatticeVolume counts as polar.
+enum DclvPolarClass : uint8_t {
+  kDclvPolarNitrogenOxygen       = 1u << 0,  //!< Nitrogen or oxygen; always polar.
+  kDclvPolarSulfurPhosphorus     = 1u << 1,  //!< Sulfur or phosphorus; polar with DclvOptions::includeSandP.
+  kDclvPolarHydrogenOnNO         = 1u << 2,  //!< Hydrogen bonded to nitrogen or oxygen; with includeHs.
+  kDclvPolarHydrogenOnSulfurPhos = 1u << 3,  //!< Hydrogen bonded to sulfur or phosphorus; with both options.
+};
+
+//! Options for the DCLV properties (RDKit's DoubleCubicLatticeVolume), with RDKit's defaults.
+struct DclvOptions {
+  //! Radius of the solvent probe sphere in Angstrom. Must be finite and non-negative.
+  double probeRadius  = 1.4;
+  //! DCLVPolarSurfaceArea and DCLVPolarVolume also count sulfur and phosphorus (RDKit's includeSandP).
+  bool   includeSandP = false;
+  //! The polar DCLV properties also count hydrogens bonded to a polar atom (RDKit's includeHs).
+  bool   includeHs    = false;
+};
+
 //! Per-family options; each family reads only its own member. PBF, RDF, MORSE, AUTOCORR3D, USR and
 //! USRCAT have no options.
 struct Property3DOptions {
   MomentOptions  moments;
   WhimOptions    whim;
   GetawayOptions getaway;
+  DclvOptions    dclv;
 };
 
 /**
@@ -197,6 +240,12 @@ struct Property3DDeviceInputs {
   //! GETAWAY: per molecule, the coordinate row of its default (first) conformer, whose PBF decides HIC's
   //! dimension as in RDKit. Null, or a negative entry, uses each row's own conformer.
   const int32_t* defaultConformerRows  = nullptr;
+  //! DCLV: per atom, RDKit's van der Waals radius (PeriodicTable::getRvdw). Conformers with a radius-0 atom (dummy
+  //! atoms, on which RDKit's DoubleCubicLatticeVolume crashes) produce NaN for every DCLV property.
+  const double*  vdwRadii              = nullptr;
+  //! DCLV: per atom, its DclvPolarClass bits. DclvOptions selects the classes DCLVPolarSurfaceArea and
+  //! DCLVPolarVolume count.
+  const uint8_t* dclvPolarClasses      = nullptr;
   //! PBF, GETAWAY: per-conformer RDKit is3D flags (one per coordinate row); null treats every row as 3D.
   const int8_t*  conformerIs3D         = nullptr;
   //! WHIM, AUTOCORR3D, GETAWAY: largest molecule atom count in the batch (host value). Sizes WHIM's
@@ -227,7 +276,9 @@ template <typename Real> using Property3DResults = std::unordered_map<Property3D
  * @throws std::invalid_argument if @p properties is empty, contains duplicates, or contains a value
  *                               outside kAllProperty3D; if WHIM is requested and
  *                               `options.whim.threshold` is negative or not finite; if GETAWAY is
- *                               requested and `options.getaway.precision` is outside [1, 6]; or if a required
+ *                               requested and `options.getaway.precision` is outside [1, 6]; if
+ *                               a DCLV property is requested and `options.dclv.probeRadius` is
+ *                               negative or not finite; or if a required
  *                               input is null.
  */
 template <typename Real>

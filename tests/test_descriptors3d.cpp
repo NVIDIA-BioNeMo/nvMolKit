@@ -3,6 +3,7 @@
 
 #include <GraphMol/Conformer.h>
 #include <GraphMol/Descriptors/AUTOCORR3D.h>
+#include <GraphMol/Descriptors/DCLV.h>
 #include <GraphMol/Descriptors/GETAWAY.h>
 #include <GraphMol/Descriptors/MORSE.h>
 #include <GraphMol/Descriptors/PBF.h>
@@ -13,6 +14,7 @@
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -46,8 +48,23 @@ constexpr std::array<Property3D, 10> kMomentProperties = {
   Property3D::SpherocityIndex,
 };
 
-std::unique_ptr<RDKit::RWMol> molWithConformers(const char* smiles, const std::vector<std::vector<Point>>& confs) {
-  std::unique_ptr<RDKit::RWMol> mol(RDKit::SmilesToMol(smiles));
+//! Every DCLV property, in RDKit's DoubleCubicLatticeVolume getter order.
+constexpr std::array<Property3D, 7> kDclvProperties = {
+  Property3D::DCLVSurfaceArea,
+  Property3D::DCLVPolarSurfaceArea,
+  Property3D::DCLVVolume,
+  Property3D::DCLVVDWVolume,
+  Property3D::DCLVPolarVolume,
+  Property3D::DCLVCompactness,
+  Property3D::DCLVPackingDensity,
+};
+
+std::unique_ptr<RDKit::RWMol> molWithConformers(const char*                            smiles,
+                                                const std::vector<std::vector<Point>>& confs,
+                                                const bool                             keepHs = false) {
+  RDKit::SmilesParserParams params;
+  params.removeHs = !keepHs;
+  std::unique_ptr<RDKit::RWMol> mol(RDKit::SmilesToMol(smiles, params));
   for (const auto& points : confs) {
     auto conf = std::make_unique<RDKit::Conformer>(mol->getNumAtoms());
     for (size_t atomIdx = 0; atomIdx < points.size(); ++atomIdx) {
@@ -387,6 +404,65 @@ TEST(Descriptors3DGetaway, MatchesRdkitGetaway) {
         << "conformer " << confIdx << ", value " << valueIdx;
     }
   }
+}
+
+TEST(Descriptors3DDclv, MatchesRdkitDoubleCubicLatticeVolume) {
+  // Glycine with explicit hydrogens on N and O, so every polar class and option is exercised; two conformers,
+  // the second far from the origin.
+  auto                                   mol  = molWithConformers("[H]OC(=O)CN([H])[H]",
+                                                                  {
+                                 {   {-1.9, 0.9, 0.1},
+                                  {-1.2, 0.2, 0.0},
+                                  {0.1, 0.6, 0.0},
+                                  {0.4, 1.8, 0.1},
+                                  {1.1, -0.5, -0.1},
+                                  {2.5, -0.1, 0.0},
+                                  {2.8, 0.5, 0.8},
+                                  {3.0, -1.0, 0.1}    },
+                                 {{98.1, -50.9, 30.4},
+                                  {98.8, -51.6, 30.2},
+                                  {100.1, -51.1, 30.1},
+                                  {100.5, -50.0, 30.5},
+                                  {101.0, -52.2, 29.6},
+                                  {102.3, -51.6, 29.4},
+                                  {102.9, -52.3, 29.0},
+                                  {102.4, -50.9, 28.6}},
+  },
+                               true);
+  const std::vector<const RDKit::ROMol*> mols = {mol.get()};
+  for (const double probeRadius : {1.4, 0.0}) {
+    for (const bool includeSandP : {false, true}) {
+      for (const bool includeHs : {false, true}) {
+        nvMolKit::Property3DOptions options;
+        options.dclv = {probeRadius, includeSandP, includeHs};
+        auto results =
+          nvMolKit::calc3DProperties<double>(mols, {kDclvProperties.begin(), kDclvProperties.end()}, options, nullptr);
+        for (int confIdx = 0; confIdx < 2; ++confIdx) {
+          RDKit::Descriptors::DoubleCubicLatticeVolume     dclv(*mol, false, true, probeRadius, confIdx);
+          const std::array<double, kDclvProperties.size()> expected = {
+            dclv.getSurfaceArea(),
+            dclv.getPolarSurfaceArea(includeSandP, includeHs),
+            dclv.getVolume(),
+            dclv.getVDWVolume(),
+            dclv.getPolarVolume(includeSandP, includeHs),
+            dclv.getCompactness(),
+            dclv.getPackingDensity(),
+          };
+          for (size_t propertyIdx = 0; propertyIdx < kDclvProperties.size(); ++propertyIdx) {
+            const auto values = toHost(results.properties.at(kDclvProperties[propertyIdx]));
+            ASSERT_EQ(values.size(), 2u);
+            EXPECT_NEAR(values[confIdx], expected[propertyIdx], 1e-9 * std::max(1.0, std::abs(expected[propertyIdx])))
+              << "probe " << probeRadius << ", S/P " << includeSandP << ", Hs " << includeHs << ", conformer "
+              << confIdx << ", " << nvMolKit::property3DName(kDclvProperties[propertyIdx]);
+          }
+        }
+      }
+    }
+  }
+  nvMolKit::Property3DOptions invalid;
+  invalid.dclv.probeRadius = -0.5;
+  EXPECT_THROW(nvMolKit::calc3DProperties<double>(mols, {Property3D::DCLVVolume}, invalid, nullptr),
+               std::invalid_argument);
 }
 
 TEST(Descriptors3DPairwise, BondSearchFallbackMatchesBondDistanceTable) {
