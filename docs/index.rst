@@ -186,6 +186,7 @@ nvMolKit currently supports the following features:
 
 * **Substructure Search**: GPU-accelerated substructure matching against batches of molecules
     * Supports SMILES and recursive SMARTS-based query molecules via RDKit
+    * ``SubstructLibrary`` keeps target molecules on one or more GPUs for repeated queries, as a GPU counterpart to RDKit's ``SubstructLibrary``
     * Does not yet support chirality-aware matching, enhanced stereochemistry, or other advanced RDKit ``SubstructMatchParameters`` options
 
 * **Maximum Common Substructure (MCS)**: GPU-accelerated MCS search across batches of molecule pairs

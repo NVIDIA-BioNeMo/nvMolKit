@@ -108,6 +108,7 @@ for _module_name in (
     "_Fingerprints",
     "_mcs",
     "_mmffOptimization",
+    "_substructLibrary",
     "_substructure",
     "_TFD",
     "_types",
