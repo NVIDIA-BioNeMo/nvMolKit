@@ -37,7 +37,7 @@ from bench_utils import (
 from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
 
-from nvmolkit.descriptors3d import Calc3DProperties, Property3D
+from nvmolkit.descriptors3d import PER_ATOM_PROPERTIES, Calc3DProperties, Property3D
 from nvmolkit.types import AsyncGpuResult, Device3DResult, HardwareOptions, PrecisionMode
 
 PRECISIONS = {"single": PrecisionMode.SINGLE, "full": PrecisionMode.FULL}
@@ -48,6 +48,8 @@ VALIDATION_TOLERANCES = {PrecisionMode.SINGLE: (2e-6, 1e-3), PrecisionMode.FULL:
 USR_SKEW_TOLERANCES = {PrecisionMode.SINGLE: (5e-3, 0.1), PrecisionMode.FULL: (1e-4, 1e-3)}
 # Relative tolerances for the DCLV properties, which sum float32 dot contributions over every atom.
 DCLV_RELATIVE_TOLERANCES = {PrecisionMode.SINGLE: 1e-5, PrecisionMode.FULL: 1e-9}
+# Absolute tolerances for EEM charges.
+EEM_TOLERANCES = {PrecisionMode.SINGLE: 2e-6, PrecisionMode.FULL: 1e-9}
 
 PROPERTY_SETS = {
     "single": (Property3D.RADIUS_OF_GYRATION,),
@@ -100,6 +102,8 @@ def _calc_rdkit_property(mol: Chem.Mol, conf_id: int, prop: Property3D) -> float
         return rdMolDescriptors.GetUSR(mol, confId=conf_id)
     if prop == Property3D.USRCAT:
         return rdMolDescriptors.GetUSRCAT(mol, confId=conf_id)
+    if prop == Property3D.EEM_CHARGES:
+        return rdMolDescriptors.CalcEEMcharges(mol, confId=conf_id)
     if prop == Property3D.GETAWAY:
         if len(Chem.GetMolFrags(mol)) > 1:
             # RDKit's GETAWAY does not finish in reasonable time on multi-fragment molecules.
@@ -166,7 +170,12 @@ def _calc_rdkit(mols: list[Chem.Mol], properties: tuple[Property3D, ...]) -> dic
         for conf in mol.GetConformers():
             for prop, value in _calc_rdkit_conformer(mol, conf.GetId(), properties).items():
                 values[prop].append(value)
-    return {prop: np.asarray(rows, dtype=np.float64) for prop, rows in values.items()}
+    return {
+        prop: np.concatenate([np.asarray(row, dtype=np.float64) for row in rows])
+        if prop in PER_ATOM_PROPERTIES
+        else np.asarray(rows, dtype=np.float64)
+        for prop, rows in values.items()
+    }
 
 
 def _validate(
@@ -198,6 +207,11 @@ def _validate(
                 continue
             if prop in DCLV_GETTERS:
                 np.testing.assert_allclose(actual, expected[prop], rtol=DCLV_RELATIVE_TOLERANCES[precision], atol=atol)
+                continue
+            if prop == Property3D.EEM_CHARGES:
+                # Atoms RDKit has no parameters for are NaN in both.
+                eem_atol = EEM_TOLERANCES[precision] if tolerance is None else tolerance
+                np.testing.assert_allclose(actual, expected[prop], rtol=0, atol=eem_atol, equal_nan=True)
                 continue
             if prop not in (Property3D.USR, Property3D.USRCAT):
                 np.testing.assert_allclose(actual, expected[prop], rtol=rtol, atol=atol)

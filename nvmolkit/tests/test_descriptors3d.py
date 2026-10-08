@@ -12,6 +12,7 @@ from rdkit.Chem.rdDistGeom import EmbedParameters
 from rdkit.Geometry import Point3D
 
 from nvmolkit.descriptors3d import (
+    PER_ATOM_PROPERTIES,
     Calc3DProperties,
     DclvOptions,
     Device3DPropertyResult,
@@ -44,7 +45,9 @@ DCLV_PROPERTIES = (
     Property3D.DCLV_PACKING_DENSITY,
 )
 # Shape and moment scalars, compared against RDKit by _rdkit_property; the DCLV scalars have their own tests.
-SCALAR_PROPERTIES = tuple(prop for prop in Property3D if prop not in VECTOR_PROPERTIES + DCLV_PROPERTIES)
+SCALAR_PROPERTIES = tuple(
+    prop for prop in Property3D if prop not in VECTOR_PROPERTIES + DCLV_PROPERTIES and prop not in PER_ATOM_PROPERTIES
+)
 PAIRWISE_PROPERTIES = (Property3D.RDF, Property3D.MORSE, Property3D.AUTOCORR3D)
 RDKIT_PAIRWISE = {
     Property3D.RDF: rdMolDescriptors.CalcRDF,
@@ -958,3 +961,116 @@ def test_property_and_coordinate_contract_errors_are_clear():
     coordinates = _device_result_from_molecules([mol])
     with pytest.raises(ValueError, match=r"coordinates\.n_mols"):
         Calc3DProperties([mol, mol], ["PMI1"], coordinates=coordinates)
+
+
+# float32 output rounding of charges up to ~20; the float32 solve is refined against a float64 residual.
+EEM_SINGLE_ATOL = 2e-6
+EEM_SMILES = ("CC(=O)[O-]", "C[NH3+]", "c1ccncc1O", "O=c1cc[nH]cc1", "CS(=O)(=O)NCl", "FC(F)(F)c1ccc(Br)cc1")
+
+
+def _rdkit_eem_rows(mols):
+    """RDKit EEM charges of every conformer, concatenated in molecule, then conformer order."""
+    return np.concatenate(
+        [
+            np.asarray(rdMolDescriptors.CalcEEMcharges(mol, confId=conf.GetId()), dtype=np.float64)
+            for mol in mols
+            for conf in mol.GetConformers()
+        ]
+    )
+
+
+def _assert_eem_matches_rdkit(actual, expected, precision):
+    if precision == PrecisionMode.FULL:
+        assert actual.dtype == np.float64
+        np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10, equal_nan=True)
+    else:
+        assert actual.dtype == np.float32
+        np.testing.assert_allclose(actual, expected, rtol=0, atol=EEM_SINGLE_ATOL, equal_nan=True)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_charges_are_per_atom_and_match_rdkit(precision):
+    mols = [_embed(smiles, 2, 7 + idx) for idx, smiles in enumerate(EEM_SMILES)]
+    result = Calc3DProperties(mols, [Property3D.NPR1, Property3D.EEM_CHARGES], precision=precision)
+
+    total_atoms = sum(mol.GetNumAtoms() * mol.GetNumConformers() for mol in mols)
+    expected_starts = np.cumsum([0] + [mol.GetNumAtoms() for mol in mols for _ in mol.GetConformers()])
+    assert result[Property3D.NPR1].torch().shape == (result.n_conformers,)
+    assert result[Property3D.EEM_CHARGES].torch().shape == (total_atoms,)
+    np.testing.assert_array_equal(result.atom_starts.numpy(), expected_starts)
+    _assert_eem_matches_rdkit(result[Property3D.EEM_CHARGES].numpy(), _rdkit_eem_rows(mols), precision)
+
+
+def test_eem_charges_sum_to_negated_formal_charge_like_rdkit():
+    mols = [_embed(smiles, 1, 3) for smiles in ("CC(=O)[O-]", "C[NH3+]", "CCO")]
+    result = Calc3DProperties(mols, Property3D.EEM_CHARGES, precision=PrecisionMode.FULL)
+    starts = result.atom_starts.torch().tolist()
+    charges = result[Property3D.EEM_CHARGES].numpy()
+    sums = [charges[starts[row] : starts[row + 1]].sum() for row in range(len(mols))]
+    np.testing.assert_allclose(sums, [1.0, -1.0, 0.0], atol=1e-9)
+
+
+def test_eem_dense_pads_conformers_and_atoms():
+    mols = [_embed("CCO", 3, 1), Chem.AddHs(Chem.MolFromSmiles("CC")), _embed("c1ccncc1O", 1, 2)]
+    result = Calc3DProperties(mols, [Property3D.PBF, Property3D.EEM_CHARGES], precision=PrecisionMode.FULL)
+    dense = result.dense()
+
+    max_atoms = max(mol.GetNumAtoms() for mol in mols)
+    charges = dense.values[Property3D.EEM_CHARGES.value]
+    assert charges.shape == (3, 3, max_atoms)
+    assert dense.values[Property3D.PBF.value].shape == (3, 3)
+    assert dense.atom_mask.shape == (3, 3, max_atoms)
+    assert int(dense.atom_mask.sum()) == result[Property3D.EEM_CHARGES].torch().numel()
+    torch.testing.assert_close(charges[dense.atom_mask], result[Property3D.EEM_CHARGES].torch())
+    assert torch.isnan(charges[~dense.atom_mask]).all()
+    assert dense.conf_mask.tolist() == [[True, True, True], [False, False, False], [True, False, False]]
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_device_coordinates_share_atom_starts(precision):
+    mols = [Chem.AddHs(Chem.MolFromSmiles(smiles)) for smiles in ("CC(=O)[O-]", "c1ccncc1O")]
+    params = EmbedParameters()
+    params.randomSeed = 0xC0FFEE
+    coordinates = EmbedMolecules(mols, params, confsPerMolecule=2, output=CoordinateOutput.DEVICE)
+
+    result = Calc3DProperties(mols, Property3D.EEM_CHARGES, coordinates=coordinates, precision=precision)
+
+    assert result.atom_starts is coordinates.atom_starts
+    values = coordinates.values.numpy()
+    atom_starts = coordinates.atom_starts.torch().tolist()
+    expected = np.full(len(values), np.nan)
+    for row, mol_idx in enumerate(coordinates.mol_indices.torch().tolist()):
+        mol = Chem.Mol(mols[mol_idx])
+        conf = Chem.Conformer(mol.GetNumAtoms())
+        for atom_idx, (x, y, z) in enumerate(values[atom_starts[row] : atom_starts[row + 1]]):
+            conf.SetAtomPosition(atom_idx, Point3D(float(x), float(y), float(z)))
+        conf_id = mol.AddConformer(conf, assignId=True)
+        expected[atom_starts[row] : atom_starts[row + 1]] = rdMolDescriptors.CalcEEMcharges(mol, confId=conf_id)
+    _assert_eem_matches_rdkit(result[Property3D.EEM_CHARGES].numpy(), expected, precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_atoms_without_parameters_give_nan_for_their_conformers(precision):
+    # RDKit has no EEM parameters past bromine and reads beyond its tables for iodine.
+    iodide = _embed("CCI", 2, 4)
+    ethanol = _embed("CCO", 1, 4)
+    result = Calc3DProperties([iodide, ethanol], Property3D.EEM_CHARGES, precision=precision)
+    charges = result[Property3D.EEM_CHARGES].numpy()
+    iodide_rows = 2 * iodide.GetNumAtoms()
+    assert np.isnan(charges[:iodide_rows]).all()
+    _assert_eem_matches_rdkit(charges[iodide_rows:], _rdkit_eem_rows([ethanol]), precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_atoms_with_zero_parameters_give_nan_unlike_rdkit(precision):
+    # Deliberately differs from RDKit: its parameter tables hold zeros for elements and bond orders they do not
+    # cover (here Si and single-bonded P), which RDKit silently solves with, returning charges of -10 or beyond.
+    # nvMolKit reports NaN for those conformers instead.
+    uncovered = [_embed(smiles, 1, 5) for smiles in ("C[Si](C)(C)C", "CP(C)C")]
+    ethanol = _embed("CCO", 1, 5)
+    result = Calc3DProperties([*uncovered, ethanol], Property3D.EEM_CHARGES, precision=precision)
+    charges = result[Property3D.EEM_CHARGES].numpy()
+    uncovered_rows = sum(mol.GetNumAtoms() for mol in uncovered)
+    assert np.isnan(charges[:uncovered_rows]).all()
+    assert np.abs(_rdkit_eem_rows(uncovered)).max() > 5  # RDKit's zero-parameter charges
+    _assert_eem_matches_rdkit(charges[uncovered_rows:], _rdkit_eem_rows([ethanol]), precision)

@@ -57,7 +57,8 @@ bp::object toOwnedPyArray(nvMolKit::PyArray* array) {
   return bp::object(bp::handle<>(Converter()(array)));
 }
 
-//! Returns (properties dict in request order, molIndices or None, confIndices or None).
+//! Returns (properties dict in request order, molIndices, confIndices and atomStarts, each None when
+//! coordinates came from the caller).
 template <typename Real>
 bp::object calc3DPropertiesAs(const std::vector<const RDKit::ROMol*>&  mols,
                               const std::vector<nvMolKit::Property3D>& properties,
@@ -70,6 +71,7 @@ bp::object calc3DPropertiesAs(const std::vector<const RDKit::ROMol*>&  mols,
   bp::dict output;
   for (const nvMolKit::Property3D property : properties) {
     auto&      values = result.properties.at(property);
+    // Rows are conformers or atoms (property3DExtent); either way the buffer holds rows x width values.
     const int  width  = nvMolKit::property3DWidth(property);
     const auto shape =
       width == 1 ? bp::make_tuple(values.size()) : bp::make_tuple(values.size() / static_cast<size_t>(width), width);
@@ -78,11 +80,12 @@ bp::object calc3DPropertiesAs(const std::vector<const RDKit::ROMol*>&  mols,
   // Row labels exist only when coordinates came from the molecules; otherwise the caller already
   // holds the labels of its own coordinate batch.
   if (view != nullptr) {
-    return bp::make_tuple(output, bp::object(), bp::object());
+    return bp::make_tuple(output, bp::object(), bp::object(), bp::object());
   }
   return bp::make_tuple(output,
                         toOwnedPyArray(nvMolKit::makePyArray(result.molIndices)),
-                        toOwnedPyArray(nvMolKit::makePyArray(result.confIndices)));
+                        toOwnedPyArray(nvMolKit::makePyArray(result.confIndices)),
+                        toOwnedPyArray(nvMolKit::makePyArray(result.atomStarts)));
 }
 
 bp::object calc3DProperties(const bp::list&                mols,

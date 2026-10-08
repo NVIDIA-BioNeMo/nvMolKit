@@ -20,11 +20,12 @@ namespace nvMolKit {
 //! Properties for a molecule batch together with the labels of each output row.
 template <typename Real> struct Property3DBatchResult {
   Property3DResults<Real>    properties;
-  //! Row -> input molecule index and per-molecule conformer position. Populated only when
-  //! coordinates were taken from the molecules; otherwise rows follow the caller's DeviceCoordView
-  //! and these are empty.
+  //! Conformer row -> input molecule index and per-molecule conformer position, and each conformer's range of
+  //! per-atom rows (`numConformers + 1` offsets). Populated only when coordinates were taken from the
+  //! molecules; otherwise rows follow the caller's DeviceCoordView and these are empty.
   AsyncDeviceVector<int32_t> molIndices;
   AsyncDeviceVector<int32_t> confIndices;
+  AsyncDeviceVector<int32_t> atomStarts;
 };
 
 /**
