@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.7.0 - 2026-10-15
+
+### Summary
+
+nvMolKit 0.7.0 adds a single-precision mode for force field minimization (MMFF, UFF, BFGS, FIRE) and ETKDG conformer generation, which is roughly an order of magnitude faster on consumer GPUs. It also adds a fused 3D descriptor API, diversity selection (Leader and MaxMin), DISE clustering, an Atom-Atom Path (AAP) similarity metric, and a persistent GPU `SubstructLibrary`. ETKDG supports eigenvalue-based initial coordinates and device-side conformer pruning, and conformer RMSD gains selectable alignment modes. Performance improvements include a 10-40% faster per-molecule BFGS kernel, up to 2x faster Morgan fingerprints, and up to 8x faster Tanimoto similarity for queries with few molecules. Butina clustering outputs are now unified across the matrix and fused APIs, which is a breaking change from 0.6.0; see Breaking Changes below.
+
+### Contributors
+- Eva Xue (@evasnow1992)
+- Kevin Boyd (@scal444)
+- Matthew Neba (@Matthew-Neba)
+- Ohad Mosafi (@ohadmo)
+
+### Features
+- Single-precision mode (`precision=PrecisionMode.SINGLE`) for MMFF and UFF force fields, BFGS and FIRE minimizers, and ETKDG distance geometry and ETK stages, available through the MMFF, UFF, `BatchedForcefield`, and `EmbedMolecules` APIs. On consumer GPUs, single precision is roughly an order of magnitude faster than double precision. Validation against RDKit is documented in the 3D minimizers guide ([#266](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/266))
+- GPU-accelerated 3D descriptors through the new `nvmolkit.descriptors3d.Calc3DProperties`, which computes a user-selected set of properties in one fused pass over a batch of conformers: PMI, NPR, radius of gyration, shape factors, PBF, WHIM, RDF, MORSE, AUTOCORR3D, USR, USRCAT, and GETAWAY, matching RDKit's `rdMolDescriptors` ([#341](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/341))
+- Atom-Atom Path (AAP) molecule similarity via `aap_similarity`, also usable as `metric="aap"` in `fused_leader`, `fused_maxmin`, and `fused_dise` ([#303](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/303))
+- Diversity selection with `leader` and `maxmin` for distance matrices, and `fused_leader` and `fused_maxmin` for packed fingerprints or molecules, following RDKit's `LeaderPicker` and `MaxMinPicker` ([#339](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/339))
+- Directed sphere exclusion (DISE) clustering with `dise` and `fused_dise` ([#339](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/339))
+- Standardized clustering and diversity selection APIs. Butina, DISE, Leader, and MaxMin each come in a matrix form, which takes a precomputed distance matrix, and a fused form, which computes distances on the fly so memory grows linearly instead of quadratically. Every fused form accepts any similarity metric (`"tanimoto"`, `"cosine"`, or `"aap"`) and either output mode (`OutputMode.DEVICE` or `OutputMode.RDKIT`), so algorithms, forms, metrics, and output modes combine freely, except that `fused_butina` does not yet support AAP ([#339](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/339))
+- Persistent GPU `SubstructLibrary` (`nvmolkit.substruct_library.SubstructLibrary`), the GPU counterpart of RDKit's `SubstructLibrary`. Target molecules are packed and uploaded once, then searched by any number of queries, with multi-GPU storage, asynchronous concurrent queries within a GPU-memory budget, and pattern-fingerprint prescreening ([#350](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/350))
+- ETKDG now supports eigenvalue-based initial coordinate generation (`useRandomCoords=False`), matching RDKit's initialization and retry behavior ([#288](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/288))
+- Device-side conformer pruning for ETKDG, so `pruneRmsThresh` can now be combined with GPU-resident output, by @Matthew-Neba ([#160](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/160))
+- Conformer RMSD supports `alignment_mode="pairwise"` (the default, aligning every pair independently) and `alignment_mode="first-conformer"` (matching RDKit's `GetConformerRMSMatrix`) ([#281](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/281))
+
+### Performance Improvements
+- Per-molecule BFGS minimizer is 10-40% faster, applying to ETKDG, MMFF, and UFF on the per-molecule backend ([#342](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/342), [#355](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/355))
+- Morgan fingerprint generation is up to 2x faster, through reduced CPU preprocessing and Python transfer overhead ([#267](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/267))
+- Tanimoto similarity for queries with few molecules is up to 8x faster ([#284](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/284))
+- Substructure search performance has been improved for queries with repeated recursive SMARTS, since each repeated pattern is now solved only once ([#313](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/313))
+- ETKDG conformer generation is up to 2x faster for batches with a few hard-to-embed molecules, because retries now keep GPU batches full. The default retry budget is also now bounded per molecule instead of scaling with the largest molecule in the input ([#353](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/353))
+
+### Breaking Changes
+- `butina` and `fused_butina` now return a `ClusterDeviceResult` (cluster IDs, centroids, and cluster sizes) by default, or RDKit-format cluster tuples with `output=OutputMode.RDKIT`. The `return_centroids` argument is removed ([#269](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/269))
+
+### Bug Fixes
+- Fix `countSubstructMatches` ignoring `uniquify=True`, which returned raw embedding counts that disagreed with RDKit for symmetric queries ([#275](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/275))
+- Fix SMARTS hydrogen counts excluding explicit hydrogen neighbors, so queries such as `[CH3]` now match deuterated and explicit-H targets as in RDKit ([#276](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/276))
+- Fix plain query atoms (for example from `MolFromSmiles`) being packed as wildcards in substructure search, and route targets with isotopes above 255 or unsupported bond types to the RDKit fallback instead of failing ([#349](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/349))
+- Fix ETKDG exiting early on molecules that fail to embed, which previously could skip scheduled retries and fail more often than RDKit ([#300](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/300))
+- Fix float32 division in the Tanimoto similarity kernels using approximate rounding, which could order equal distances differently than RDKit in downstream clustering ([#338](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/338))
+
+### Miscellaneous
+- Improved shared benchmark tooling, including common CLI, timing, result-reporting, and dataset-loading utilities, and RDKit-side deadlines for long-running baselines
+- Drastically improved CI coverage, and added back linters and static analysis
+- Support for CUDA 13.4 and Rubin GPUs ([#304](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/304))
+
+
 ## 0.6.0 - 2026-08-13
 
 ### Summary
