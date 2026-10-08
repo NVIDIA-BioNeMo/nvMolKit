@@ -109,7 +109,8 @@ std::shared_ptr<const PersistentDeviceTargets> makePersistentDeviceTargets(
  * @brief Check one query against persistent device targets.
  *
  * Runs on the GPU holding the batch; config.gpuIds must be empty or name that GPU, and a workspace must belong to
- * it. A workspace keeps executors and pinned buffers alive across calls and serves one call at a time. results is
+ * it. A workspace keeps executors and pinned buffers alive across calls and serves one call at a time.
+ * candidateTargetIndices may select an ordered subset of targets to search; the others report no match. results is
  * resized to the batch size and holds one flag per target.
  */
 void hasSubstructMatch(const PersistentDeviceTargets& batch,
@@ -117,8 +118,9 @@ void hasSubstructMatch(const PersistentDeviceTargets& batch,
                        std::vector<uint8_t>&          results,
                        SubstructAlgorithm             algorithm,
                        cudaStream_t                   stream,
-                       const SubstructSearchConfig&   config    = SubstructSearchConfig{},
-                       SubstructSearchWorkspace*      workspace = nullptr);
+                       const SubstructSearchConfig&   config                 = SubstructSearchConfig{},
+                       SubstructSearchWorkspace*      workspace              = nullptr,
+                       const std::vector<int>*        candidateTargetIndices = nullptr);
 
 /** Create reusable search state bound to one GPU for hasSubstructMatch(). */
 std::shared_ptr<SubstructSearchWorkspace> makeSubstructSearchWorkspace(int deviceId);

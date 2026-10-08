@@ -111,6 +111,7 @@ def test_nvmolkit_backend_matches_rdkit_in_every_query_mode(mols, queries):
         operations=["has", "count", "get"],
         query_modes=["serial", "concurrent"],
         config=SubstructSearchConfig(),
+        use_pattern_fingerprints=True,
         max_results=-1,
         runs=1,
         warmups=0,

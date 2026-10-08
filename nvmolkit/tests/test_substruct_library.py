@@ -100,9 +100,10 @@ def test_invalid_library_configuration():
         SubstructLibrary(config=config)
 
 
+@pytest.mark.parametrize("use_pattern_fingerprints", [False, True])
 @pytest.mark.parametrize("query_smiles", PLAIN_QUERIES)
-def test_plain_molecule_query_atoms_match_like_rdkit(query_smiles):
-    library = SubstructLibrary()
+def test_plain_molecule_query_atoms_match_like_rdkit(query_smiles, use_pattern_fingerprints):
+    library = SubstructLibrary(usePatternFingerprints=use_pattern_fingerprints)
     targets = [Chem.MolFromSmiles(smiles) for smiles in PLAIN_QUERY_TARGETS]
     library.addMols(targets)
     library.finalize()
@@ -135,9 +136,13 @@ def test_sync_methods_return_the_future_results():
     assert not library.hasMatchSync(Chem.MolFromSmarts("[Si]"))
 
 
-def test_matches_rdkit_on_real_molecules_and_query_sets(one_hundred_mols):
-    library = SubstructLibrary()
-    assert library.addMols(one_hundred_mols) == list(range(len(one_hundred_mols)))
+@pytest.mark.parametrize("use_pattern_fingerprints", [False, True])
+def test_matches_rdkit_on_real_molecules_and_query_sets(one_hundred_mols, use_pattern_fingerprints):
+    library = SubstructLibrary(usePatternFingerprints=use_pattern_fingerprints)
+    # Two finalize() calls, so the second extends each GPU's existing molecules and fingerprints.
+    assert library.addMols(one_hundred_mols[:50]) == list(range(50))
+    library.finalize()
+    assert library.addMols(one_hundred_mols[50:]) == list(range(50, len(one_hundred_mols)))
     library.finalize()
 
     queries, smarts = load_smarts_file(TEST_DATA_DIR / "SMARTS" / "rdkit_fragment_descriptors_supported.txt")
@@ -146,3 +151,31 @@ def test_matches_rdkit_on_real_molecules_and_query_sets(one_hundred_mols):
         expected = [index for index, mol in enumerate(one_hundred_mols) if mol.HasSubstructMatch(query)]
         assert all_matches.result() == expected, pattern
         assert limited.result() == expected[:3], pattern
+
+
+@pytest.mark.parametrize("use_pattern_fingerprints", [False, True])
+def test_pattern_fingerprint_screening_preserves_exact_results(use_pattern_fingerprints):
+    config = SubstructSearchConfig(workerThreads=1, preprocessingThreads=2)
+    library = SubstructLibrary(config=config, usePatternFingerprints=use_pattern_fingerprints)
+    targets = [
+        Chem.MolFromSmiles(smiles)
+        for smiles in [
+            "CCO",
+            "CC(=O)C",
+            "c1ccccc1",
+            "C1CCCCC1",
+            "C[N+](C)(C)C",
+            "CC(=O)[O-]",
+            "[Na+].[Cl-]",
+            "CCOC(=O)c1ccccc1O",
+        ]
+    ]
+    library.addMols(targets)
+    library.finalize()
+
+    for smarts in ["[#6]", "C=O", "c1ccccc1", "[N+]", "[$([CX3]=[OX1])]", "[Si]"]:
+        query = Chem.MolFromSmarts(smarts)
+        expected = [index for index, target in enumerate(targets) if target.HasSubstructMatch(query)]
+        assert library.getMatches(query).result() == expected
+        assert library.countMatches(query).result() == len(expected)
+        assert library.hasMatch(query).result() == bool(expected)
