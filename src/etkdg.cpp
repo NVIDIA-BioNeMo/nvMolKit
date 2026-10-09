@@ -328,7 +328,7 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
         for (const int molId : molIds) {
           // Use the original unique molecules and their prepared eargs
           batchMolsWithConfs.push_back(sortedMols[molId]);
-          batchEargs.push_back(eargs[molId]);
+          batchEargs.push_back(detail::cloneEmbedArgs(eargs[molId]));
           coordinateDimensions.push_back(eargs[molId].chiralCenters.empty() ? 3 : 4);
         }
 

@@ -30,6 +30,7 @@
 
 #include "rdkit_extensions/bounds_matrix.h"
 #include "rdkit_extensions/dist_geom_flattened_builder.h"
+#include "rdkit_extensions/torsion_compat.h"
 #include "src/embedder_utils.h"
 #include "src/forcefields/dist_geom.h"
 #include "src/forcefields/dist_geom_kernels.h"
@@ -120,8 +121,8 @@ void addExperimentalTorsionTerms(ForceFields::ForceField*                       
     } else {
       atomPairs[l * numAtoms + i] = true;
     }
-    torsionContribs
-      ->addContrib(i, j, k, l, etkdgDetails.expTorsionAngles[t].second, etkdgDetails.expTorsionAngles[t].first);
+    const auto& torsionParameters = nvMolKit::detail::getCosineTorsionParameters(etkdgDetails.expTorsionAngles[t]);
+    torsionContribs->addContrib(i, j, k, l, torsionParameters.second, torsionParameters.first);
   }
   if (!torsionContribs->empty()) {
     ff->contribs().push_back(std::move(torsionContribs));

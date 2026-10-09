@@ -9,6 +9,7 @@
 #include <map>
 #include <sstream>
 
+#include "rdkit_extensions/torsion_compat.h"
 #include "versions.h"
 
 // No clang-tidy for 1:1 RDKit ports.
@@ -157,8 +158,9 @@ void addExperimentalTorsionTerms(nvMolKit::DistGeom::Energy3DForceContribsHost& 
     contribs.experimentalTorsionTerms.idx4.push_back(atomIdx4);
 
     // Add force constants and signs (6 values per torsion)
-    const auto& signs          = etkdgDetails.expTorsionAngles[torsionIdx].first;
-    const auto& forceConstants = etkdgDetails.expTorsionAngles[torsionIdx].second;
+    const auto& torsionParameters = detail::getCosineTorsionParameters(etkdgDetails.expTorsionAngles[torsionIdx]);
+    const auto& signs             = torsionParameters.first;
+    const auto& forceConstants    = torsionParameters.second;
 
     // Ensure we have 6 values for each torsion
     for (int term = 0; term < TORSION_TERMS_PER_ANGLE; ++term) {
