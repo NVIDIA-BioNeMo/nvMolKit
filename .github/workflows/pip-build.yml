@@ -118,6 +118,7 @@ jobs:
           set -xeuo pipefail
           # CIBW_BUILD format expects no dot in the python tag.
           export CIBW_BUILD="${CIBW_BUILD/./}"
+          python -m pip install -r admin/distribute/requirements-release.txt
           bash admin/deploy/build_pip_wheels.sh "${{ matrix.rdkit_version }}" wheelhouse
 
       - name: Upload wheel

@@ -26,7 +26,7 @@ BUILD_WORKTREE_ROOT=${BUILD_WORKTREE_ROOT:-"${TMPDIR:-/tmp}/nvmolkit-wheels-v${V
 INDEX_DIR=${INDEX_DIR:-"$ARTIFACT_ROOT/simple-index"}
 PAGES_WORKTREE=${PAGES_WORKTREE:-"${TMPDIR:-/tmp}/nvmolkit-pages-v${VERSION}"}
 GH_REPO=${GH_REPO:-NVIDIA-BioNeMo/nvMolKit}
-CANONICAL_RDKIT=2026.3.5
+CANONICAL_RDKIT=2026.9.1
 ```
 
 Set `CANONICAL_RDKIT` explicitly for each release. It must exist in
