@@ -7,6 +7,7 @@
 nvMolKit 0.7.0 adds a single-precision mode for force field minimization (MMFF, UFF, BFGS, FIRE) and ETKDG conformer generation, which is roughly an order of magnitude faster on consumer GPUs. It also adds a fused 3D descriptor API, diversity selection (Leader and MaxMin), DISE clustering, an Atom-Atom Path (AAP) similarity metric, a persistent GPU `SubstructLibrary`, and various performance improvements to existing fingerprinting, substructure search, and 3D minimization code.
 
 ### Contributors
+- Ben Fauber (@bf-nv)
 - Eva Xue (@evasnow1992)
 - Kevin Boyd (@scal444)
 - Matthew Neba (@Matthew-Neba)
@@ -15,9 +16,9 @@ nvMolKit 0.7.0 adds a single-precision mode for force field minimization (MMFF, 
 ### Features
 - Single-precision mode (`precision=PrecisionMode.SINGLE`) for MMFF and UFF force fields, BFGS and FIRE minimizers, and ETKDG distance geometry and ETK stages, available through the MMFF, UFF, `BatchedForcefield`, and `EmbedMolecules` APIs. On consumer GPUs, single precision is roughly an order of magnitude faster than double precision. Validation against RDKit is documented in the 3D minimizers guide ([#266](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/266))
 - GPU-accelerated 3D descriptors through the new `nvmolkit.descriptors3d.Calc3DProperties`, which computes a user-selected set of properties in one fused pass over a batch of conformers: PMI, NPR, radius of gyration, shape factors, PBF, WHIM, RDF, MORSE, AUTOCORR3D, USR, USRCAT, and GETAWAY, matching RDKit's `rdMolDescriptors` ([#341](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/341))
-- Atom-Atom Path (AAP) molecule similarity via `aap_similarity`, also usable as `metric="aap"` in `fused_leader`, `fused_maxmin`, and `fused_dise` ([#303](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/303))
+- Atom-Atom Path (AAP) molecule similarity via `aap_similarity`, also usable as `metric="aap"` in `fused_leader`, `fused_maxmin`, and `fused_dise`, by @bf-nv ([#303](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/303))
 - Diversity selection with `leader` and `maxmin` for distance matrices, and `fused_leader` and `fused_maxmin` for packed fingerprints or molecules, following RDKit's `LeaderPicker` and `MaxMinPicker` ([#339](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/339))
-- Directed sphere exclusion (DISE) clustering with `dise` and `fused_dise` ([#339](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/339))
+- Directed sphere exclusion (DISE) clustering with `dise` and `fused_dise`, by @bf-nv ([#339](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/339))
 - Standardized clustering and diversity selection APIs. Butina, DISE, Leader, and MaxMin each come in a matrix form, which takes a precomputed distance matrix, and a fused form, which computes distances on the fly so memory grows linearly instead of quadratically. Every fused form accepts any similarity metric (`"tanimoto"`, `"cosine"`, or `"aap"`) and either output mode (`OutputMode.DEVICE` or `OutputMode.RDKIT`), so algorithms, forms, metrics, and output modes combine freely, except that `fused_butina` does not yet support AAP ([#339](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/339))
 - Persistent GPU `SubstructLibrary` (`nvmolkit.substruct_library.SubstructLibrary`), the GPU counterpart of RDKit's `SubstructLibrary`. Target molecules are packed and uploaded once, then searched by any number of queries, with multi-GPU storage, asynchronous concurrent queries within a GPU-memory budget, and pattern-fingerprint prescreening ([#350](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/350))
 - ETKDG now supports eigenvalue-based initial coordinate generation (`useRandomCoords=False`), matching RDKit's initialization and retry behavior ([#288](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/288))
