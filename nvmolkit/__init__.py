@@ -31,5 +31,5 @@ Currently supported functionality:
   (requires the ``optuna`` package, installable via the ``autotune`` extra)
 """
 
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 __version__ = VERSION
