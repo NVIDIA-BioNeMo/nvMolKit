@@ -21,11 +21,66 @@
 #include <gtest/gtest.h>
 
 #include <filesystem>
+#include <tuple>
 
 #include "rdkit_extensions/dist_geom_flattened_builder.h"
 #include "rdkit_extensions/mmff_flattened_builder.h"
+#include "rdkit_extensions/torsion_compat.h"
 #include "src/embedder_utils.h"
 #include "tests/test_utils.h"
+#include "versions.h"
+
+TEST(TorsionCompatibilityTest, LegacyCosineParameters) {
+  const nvMolKit::detail::CosineTorsionParameters parameters{
+    {  1,  -1},
+    {2.5, 3.0}
+  };
+  EXPECT_EQ(&nvMolKit::detail::getCosineTorsionParameters(parameters), &parameters);
+}
+
+TEST(TorsionCompatibilityTest, VariantCosineParameters) {
+  using GaussianParameters = std::tuple<std::vector<double>, std::vector<double>, std::vector<double>, double>;
+  const std::variant<nvMolKit::detail::CosineTorsionParameters, GaussianParameters> parameters =
+    nvMolKit::detail::CosineTorsionParameters{
+      {  1,  -1},
+      {2.5, 3.0}
+  };
+  const auto& cosine = nvMolKit::detail::getCosineTorsionParameters(parameters);
+  EXPECT_EQ(cosine.first, (std::vector<int>{1, -1}));
+  EXPECT_EQ(cosine.second, (std::vector<double>{2.5, 3.0}));
+}
+
+TEST(TorsionCompatibilityTest, RejectsGaussianParameters) {
+  using GaussianParameters = std::tuple<std::vector<double>, std::vector<double>, std::vector<double>, double>;
+  const std::variant<nvMolKit::detail::CosineTorsionParameters, GaussianParameters> parameters = GaussianParameters{};
+  EXPECT_THROW(nvMolKit::detail::getCosineTorsionParameters(parameters), std::invalid_argument);
+}
+
+TEST(FlattenedBuilderTest, ClonesPreparedEmbedArgsForConformerAttempts) {
+  auto mol = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol("CCCC"));
+  ASSERT_NE(mol, nullptr);
+  RDKit::MolOps::addHs(*mol);
+  nvMolKit::detail::EmbedArgs original;
+  ASSERT_TRUE(nvMolKit::DGeomHelpers::prepareEmbedderArgs(*mol, RDKit::DGeomHelpers::ETKDGv3, original));
+
+  auto copied = nvMolKit::detail::cloneEmbedArgs(original);
+  EXPECT_EQ(copied.mmat, original.mmat);
+  EXPECT_EQ(copied.etkdgDetails.expTorsionAtoms, original.etkdgDetails.expTorsionAtoms);
+  EXPECT_EQ(copied.etkdgDetails.expTorsionAngles, original.etkdgDetails.expTorsionAngles);
+  copied.etkdgDetails.expTorsionAtoms.clear();
+  EXPECT_FALSE(original.etkdgDetails.expTorsionAtoms.empty());
+
+#if RDKIT_VERSION_MAJOR > 2026 || (RDKIT_VERSION_MAJOR == 2026 && RDKIT_VERSION_MINOR >= 9)
+  original.etkdgDetails.internalCoords          = std::make_unique<RDKit::DGeomHelpers::InternalCoordinates>(3);
+  original.etkdgDetails.internalCoords->lengths = {1.1, 1.2, 1.3};
+  auto ownedCopy                                = nvMolKit::detail::cloneEmbedArgs(original);
+  ASSERT_NE(ownedCopy.etkdgDetails.internalCoords, nullptr);
+  EXPECT_NE(ownedCopy.etkdgDetails.internalCoords.get(), original.etkdgDetails.internalCoords.get());
+  EXPECT_EQ(ownedCopy.etkdgDetails.internalCoords->lengths, original.etkdgDetails.internalCoords->lengths);
+  ownedCopy.etkdgDetails.internalCoords->lengths[0] = 2.0;
+  EXPECT_DOUBLE_EQ(original.etkdgDetails.internalCoords->lengths[0], 1.1);
+#endif
+}
 
 TEST(FlattenedBuilderTest, NullMolecule) {
   RDKit::ROMol mol;

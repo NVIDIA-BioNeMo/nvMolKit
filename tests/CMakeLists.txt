@@ -130,7 +130,7 @@ add_executable(test_flattened_builder test_flattened_builder.cu)
 target_link_libraries(
   test_flattened_builder
   PRIVATE ${RDKit_LIBS} rdkit_mmff_flattened rdkit_dist_geom_flattened
-          device_vector test_utils embedder_utils)
+          device_vector test_utils embedder_utils nvmolkit_versions)
 
 add_executable(test_mmff test_mmff.cu)
 target_link_libraries(

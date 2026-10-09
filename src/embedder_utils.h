@@ -70,12 +70,15 @@ struct EmbedArgs {
   ::DistGeom::BoundsMatPtr                                          mmat = nullptr;
   ::DistGeom::VECT_CHIRALSET                                        chiralCenters;
   ::DistGeom::VECT_CHIRALSET                                        tetrahedralCarbons;
-  ForceFields::CrystalFF::CrystalFFDetails                          etkdgDetails;
+  ForceFields::CrystalFF::CrystalFFDetails                          etkdgDetails{};
   std::vector<std::tuple<unsigned int, unsigned int, unsigned int>> doubleBondEnds;
   std::vector<std::pair<std::vector<unsigned int>, int>>            stereoDoubleBonds;
   std::vector<double>                                               posVec;
   MinimizeStage                                                     stage = MinimizeStage::FirstMinimize;
 };
+
+//! Copy prepared arguments for one conformer attempt, including owned RDKit state.
+EmbedArgs cloneEmbedArgs(const EmbedArgs& source);
 
 }  // namespace detail
 
