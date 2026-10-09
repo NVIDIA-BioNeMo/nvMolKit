@@ -20,7 +20,9 @@
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
+#include <set>
 #include <tuple>
 
 #include "rdkit_extensions/dist_geom_flattened_builder.h"
@@ -81,6 +83,66 @@ TEST(FlattenedBuilderTest, ClonesPreparedEmbedArgsForConformerAttempts) {
   EXPECT_DOUBLE_EQ(original.etkdgDetails.internalCoords->lengths[0], 1.1);
 #endif
 }
+
+#if RDKIT_ETKDG_2026_09_API
+TEST(FlattenedBuilderTest, PreparedArgsIncludeForcedTransAmideTorsion) {
+  // N-methylacetamide: atoms 1 (carbonyl C) and 3 (N) form the amide bond, which no ET pattern covers.
+  auto mol = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol("CC(=O)NC"));
+  ASSERT_NE(mol, nullptr);
+  RDKit::MolOps::addHs(*mol);
+  nvMolKit::detail::EmbedArgs eargs;
+  ASSERT_TRUE(nvMolKit::DGeomHelpers::prepareEmbedderArgs(*mol, RDKit::DGeomHelpers::ETKDGv3, eargs));
+
+  // RDKit lists a forced torsion for every 1-4 path through the amide bond; the force field keeps the first.
+  const auto&    details           = eargs.etkdgDetails;
+  const auto     isAmide           = [](int j, int k) { return std::minmax(j, k) == std::minmax(1, 3); };
+  std::ptrdiff_t firstAmideTorsion = -1;
+  for (size_t t = 0; t < details.expTorsionAtoms.size() && firstAmideTorsion < 0; ++t) {
+    if (isAmide(details.expTorsionAtoms[t][1], details.expTorsionAtoms[t][2])) {
+      firstAmideTorsion = static_cast<std::ptrdiff_t>(t);
+    }
+  }
+  ASSERT_GE(firstAmideTorsion, 0) << "forced trans amide torsion missing";
+  const auto& parameters = nvMolKit::detail::getCosineTorsionParameters(details.expTorsionAngles[firstAmideTorsion]);
+  EXPECT_DOUBLE_EQ(parameters.second[0], 75.0);
+  EXPECT_EQ(parameters.first[0], 1);
+
+  constexpr int             dim = 4;
+  const std::vector<double> positions(mol->getNumAtoms() * dim, 0.0);
+  const auto  contribs   = nvMolKit::DistGeom::construct3DForceFieldContribs(*eargs.mmat, details, positions, dim);
+  const auto& terms      = contribs.experimentalTorsionTerms;
+  int         amideTerms = 0;
+  for (size_t t = 0; t < terms.idx2.size(); ++t) {
+    if (isAmide(terms.idx2[t], terms.idx3[t])) {
+      ++amideTerms;
+      EXPECT_EQ(terms.idx1[t], details.expTorsionAtoms[firstAmideTorsion][0]);
+      EXPECT_EQ(terms.idx4[t], details.expTorsionAtoms[firstAmideTorsion][3]);
+    }
+  }
+  EXPECT_EQ(amideTerms, 1);
+}
+
+TEST(FlattenedBuilderTest, ExperimentalTorsionTermsUseOneTermPerCentralBond) {
+  for (const std::string smiles : {"CC(=O)NC", "CC(=O)OCC(=O)NCc1ccccc1", "O=C1CCCCCCCCCCNC(=O)CCCCCN1"}) {
+    SCOPED_TRACE(smiles);
+    auto mol = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol(smiles));
+    ASSERT_NE(mol, nullptr);
+    RDKit::MolOps::addHs(*mol);
+    nvMolKit::detail::EmbedArgs eargs;
+    ASSERT_TRUE(nvMolKit::DGeomHelpers::prepareEmbedderArgs(*mol, RDKit::DGeomHelpers::ETKDGv3, eargs));
+
+    const auto&                   details = eargs.etkdgDetails;
+    std::set<std::pair<int, int>> centralBonds;
+    for (const auto& atoms : details.expTorsionAtoms) {
+      centralBonds.insert(std::minmax(atoms[1], atoms[2]));
+    }
+    constexpr int             dim = 4;
+    const std::vector<double> positions(mol->getNumAtoms() * dim, 0.0);
+    const auto contribs = nvMolKit::DistGeom::construct3DForceFieldContribs(*eargs.mmat, details, positions, dim);
+    EXPECT_EQ(contribs.experimentalTorsionTerms.idx1.size(), centralBonds.size());
+  }
+}
+#endif
 
 TEST(FlattenedBuilderTest, NullMolecule) {
   RDKit::ROMol mol;

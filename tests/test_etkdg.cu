@@ -16,6 +16,7 @@
 #include <gmock/gmock.h>
 #include <GraphMol/FileParsers/FileParsers.h>
 #include <GraphMol/FileParsers/MolWriters.h>
+#include <GraphMol/MolOps.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
 
@@ -35,6 +36,7 @@
 #include "src/utils/device.h"
 #include "src/utils/host_vector.h"
 #include "tests/test_utils.h"
+#include "versions.h"
 
 using ::nvMolKit::detail::ETKDGContext;
 using ::nvMolKit::detail::ETKDGDriver;
@@ -982,3 +984,70 @@ INSTANTIATE_TEST_SUITE_P(BfgsBackends,
                          [](const ::testing::TestParamInfo<nvMolKit::BfgsBackend>& info) {
                            return (info.param == nvMolKit::BfgsBackend::BATCHED) ? "Batched" : "PerMolecule";
                          });
+
+TEST(ETKDGParameters, RejectsUnsupportedOptions) {
+  using nvMolKit::DGeomHelpers::validateSupportedEmbedParameters;
+  for (const unsigned int version : {0u, 3u, 4u}) {
+    auto parameters      = RDKit::DGeomHelpers::ETKDGv3;
+    parameters.ETversion = version;
+    EXPECT_THROW(validateSupportedEmbedParameters(parameters), ValueErrorException) << "ETversion " << version;
+  }
+#if RDKIT_AIO_ETKDG_API
+  auto allInOne                    = RDKit::DGeomHelpers::ETKDGv3;
+  allInOne.useLegacyImplementation = false;
+  EXPECT_THROW(validateSupportedEmbedParameters(allInOne), ValueErrorException);
+#endif
+#if RDKIT_ETKDG_2026_09_API
+  auto mmff            = RDKit::DGeomHelpers::ETKDGv3;
+  mmff.embedForceField = RDKit::DGeomHelpers::EmbedFF::MMFF;
+  EXPECT_THROW(validateSupportedEmbedParameters(mmff), ValueErrorException);
+  // Validation runs before any molecule is touched, so an empty input rejects it too.
+  EXPECT_THROW(nvMolKit::embedMolecules({}, mmff), ValueErrorException);
+
+  auto initialOnly                 = RDKit::DGeomHelpers::ETKDGv3;
+  initialOnly.onlyInitialEmbedding = true;
+  EXPECT_THROW(validateSupportedEmbedParameters(initialOnly), ValueErrorException);
+
+  auto internal                 = RDKit::DGeomHelpers::ETKDGv3;
+  internal.initialEmbeddingMode = RDKit::DGeomHelpers::InitialEmbeddingMode::INTERNAL_COORDINATE_EMBEDDING;
+  EXPECT_THROW(validateSupportedEmbedParameters(internal), ValueErrorException);
+  // RDKit replaces the mode with random coordinates when useRandomCoords is set, and so does nvMolKit.
+  internal.useRandomCoords = true;
+  EXPECT_NO_THROW(validateSupportedEmbedParameters(nvMolKit::DGeomHelpers::normalizeEmbedParameters(internal)));
+#endif
+}
+
+#if RDKIT_ETKDG_2026_09_API
+//! RDKit 2026.09 deprecates useRandomCoords in favor of initialEmbeddingMode; setting only the mode embeds with the
+//! same parameters as the flag and produces every conformer, including for molecules too large for eigenvalue
+//! initialization.
+TEST(ETKDGParameters, RandomCoordinateModeEmbedsLikeUseRandomCoords) {
+  auto withMode                 = RDKit::DGeomHelpers::ETKDGv3;
+  withMode.initialEmbeddingMode = RDKit::DGeomHelpers::InitialEmbeddingMode::RANDOM_COORDINATE_EMBEDDING;
+  auto withFlag                 = RDKit::DGeomHelpers::ETKDGv3;
+  withFlag.useRandomCoords      = true;
+  const auto normalizedMode     = nvMolKit::DGeomHelpers::normalizeEmbedParameters(withMode);
+  const auto normalizedFlag     = nvMolKit::DGeomHelpers::normalizeEmbedParameters(withFlag);
+  const auto normalizedDefault  = nvMolKit::DGeomHelpers::normalizeEmbedParameters(RDKit::DGeomHelpers::ETKDGv3);
+  EXPECT_TRUE(normalizedMode.useRandomCoords);
+  EXPECT_EQ(normalizedMode.basinThresh, 1e8);
+  EXPECT_EQ(normalizedFlag.basinThresh, 1e8);
+  EXPECT_FALSE(normalizedDefault.useRandomCoords);
+  EXPECT_EQ(normalizedDefault.basinThresh, RDKit::DGeomHelpers::ETKDGv3.basinThresh);
+  EXPECT_NO_THROW(nvMolKit::DGeomHelpers::validateSupportedEmbedParameters(withMode));
+
+  std::vector<std::unique_ptr<RDKit::RWMol>> owners;
+  std::vector<RDKit::ROMol*>                 mols;
+  for (const auto& smiles : {std::string("CCO"), std::string("C[C@H](O)F"), std::string(100, 'C')}) {
+    auto& mol = owners.emplace_back(RDKit::SmilesToMol(smiles));
+    RDKit::MolOps::addHs(*mol);
+    mols.push_back(mol.get());
+  }
+  ASSERT_GT(mols.back()->getNumAtoms(), 256u);
+  withMode.randomSeed = 42;
+  nvMolKit::embedMolecules(mols, withMode, 2);
+  for (const auto* mol : mols) {
+    EXPECT_EQ(mol->getNumConformers(), 2u);
+  }
+}
+#endif

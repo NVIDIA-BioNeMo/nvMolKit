@@ -30,6 +30,7 @@
 #include "src/etkdg_stage_stereochem_checks.h"
 #include "src/forcefields/dist_geom.h"
 #include "tests/test_utils.h"
+#include "versions.h"
 
 using namespace ::nvMolKit::detail;
 
@@ -637,7 +638,12 @@ TEST_P(ETKDGUnifiedCheckTest, MMFFConformersAllPassByDefault) {
       expectedFailures = 3;
       break;
     case ETKDGCheckType::ChiralDistMat:
+#if RDKIT_ETKDG_2026_09_API
+      // RDKit 2026.09 bounds (angle-based 1-3 tolerances, revised ring 1-4 bounds) accept one more conformer.
+      expectedFailures = 22;
+#else
       expectedFailures = 23;
+#endif
       break;
     default:
       expectedFailures = 0;

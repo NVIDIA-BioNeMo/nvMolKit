@@ -6,6 +6,8 @@
 #include <GraphMol/ROMol.h>
 #include <Numerics/SymmMatrix.h>
 
+#include "rdkit_extensions/topology_bounds_compat.h"
+
 namespace RDKit::DGeomHelpers {
 
 // TODO: Coordmap support.
@@ -14,24 +16,19 @@ bool setupInitialBoundsMatrix(const ROMol*                              mol,
                               const EmbedParameters&                    params,
                               ForceFields::CrystalFF::CrystalFFDetails& etkdgDetails) {
   PRECONDITION(mol, "bad molecule");
-  if (params.useExpTorsionAnglePrefs || params.useBasicKnowledge) {
-    setTopolBounds(*mol,
-                   mmat,
-                   etkdgDetails.bonds,
-                   etkdgDetails.angles,
-                   true,
-                   false,
-                   params.useMacrocycle14config,
-                   params.forceTransAmides);
-  } else {
-    setTopolBounds(*mol, mmat, true, false, params.useMacrocycle14config, params.forceTransAmides);
-  }
+  const bool collectEtkdgTerms = params.useExpTorsionAnglePrefs || params.useBasicKnowledge;
+  nvMolKit::detail::setEmbedderTopolBounds(*mol,
+                                           mmat,
+                                           params,
+                                           collectEtkdgTerms ? &etkdgDetails : nullptr,
+                                           false,
+                                           true);
 
   if (!DistGeom::triangleSmoothBounds(mmat)) {
     // ok this bound matrix failed to triangle smooth - re-compute the
     // bounds matrix without 15 bounds and with VDW scaling
     initBoundsMat(mmat);
-    setTopolBounds(*mol, mmat, false, true, params.useMacrocycle14config, params.forceTransAmides);
+    nvMolKit::detail::setEmbedderTopolBounds(*mol, mmat, params, nullptr, true, false);
 
     // try triangle smoothing again
     if (!DistGeom::triangleSmoothBounds(mmat)) {
@@ -39,7 +36,7 @@ bool setupInitialBoundsMatrix(const ROMol*                              mol,
       if (params.ignoreSmoothingFailures) {
         // proceed anyway with the more relaxed bounds matrix
         initBoundsMat(mmat);
-        setTopolBounds(*mol, mmat, false, true, params.useMacrocycle14config, params.forceTransAmides);
+        nvMolKit::detail::setEmbedderTopolBounds(*mol, mmat, params, nullptr, true, false);
       } else {
         BOOST_LOG(rdWarningLog) << "Could not triangle bounds smooth molecule.\n";
         return false;
@@ -102,7 +99,7 @@ bool initialCoordsNormDistances(const RDNumeric::SymmMatrix<double>& initialDist
     sqD0iData[i] -= sumSqD2;
 
     if ((sqD0iData[i] < EIGVAL_TOL) && (N > 3)) {
-      valid          = false;
+      valid        = false;
       sqD0iData[i] = 10 * EIGVAL_TOL;
     }
   }

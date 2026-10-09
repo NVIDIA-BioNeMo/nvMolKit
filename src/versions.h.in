@@ -21,4 +21,10 @@
    (RDKIT_VERSION_MAJOR == 2026 &&                                                                                \
     (RDKIT_VERSION_MINOR > 3 || (RDKIT_VERSION_MINOR == 3 && RDKIT_VERSION_PATCH >= 4))))
 
+// RDKit 2026.09 sets topology bounds before the ETKDG torsions, records forced amide/ester 1-4 configurations that
+// become torsion terms, keeps at most one experimental torsion per central bond, and adds the initialEmbeddingMode,
+// onlyInitialEmbedding and embedForceField parameters. Preprocessor macro because those members do not exist in older
+// supported RDKit headers.
+#define RDKIT_ETKDG_2026_09_API (RDKIT_VERSION_MAJOR > 2026 || (RDKIT_VERSION_MAJOR == 2026 && RDKIT_VERSION_MINOR >= 9))
+
 #endif  // NVMOLKIT_VERSIONS_H

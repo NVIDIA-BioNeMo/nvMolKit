@@ -451,6 +451,41 @@ def test_embed_molecules_with_hardware_options(embed_test_mols, precision):
         )
 
 
+@pytest.mark.parametrize("setting", ["ETversion", "embedForceField", "onlyInitialEmbedding", "internalCoordinates"])
+def test_embed_molecules_rejects_unsupported_parameters(setting):
+    """Settings nvMolKit does not implement raise ValueError instead of being ignored."""
+    params = rdDistGeom.ETKDGv3()
+    if setting == "ETversion":
+        params.ETversion = 3
+    elif not hasattr(rdDistGeom, "InitialEmbeddingMode"):
+        pytest.skip("this setting requires RDKit 2026.09 or later")
+    elif setting == "embedForceField":
+        params.embedForceField = rdDistGeom.EmbedFF.MMFF
+    elif setting == "onlyInitialEmbedding":
+        params.onlyInitialEmbedding = True
+    else:
+        params.initialEmbeddingMode = rdDistGeom.InitialEmbeddingMode.INTERNAL_COORDINATE_EMBEDDING
+    with pytest.raises(ValueError):
+        embed.EmbedMolecules([Chem.AddHs(Chem.MolFromSmiles("CCO"))], params)
+
+
+def test_embed_molecules_random_coordinate_mode(precision):
+    """initialEmbeddingMode=RANDOM_COORDINATE_EMBEDDING embeds as useRandomCoords=True does."""
+    if not hasattr(rdDistGeom, "InitialEmbeddingMode"):
+        pytest.skip("initialEmbeddingMode requires RDKit 2026.09 or later")
+    # Above 256 atoms only random starting coordinates are supported, so the mode must select them.
+    molecules = [Chem.AddHs(Chem.MolFromSmiles(smiles)) for smiles in ["CCO", "C[C@H](O)F", "C" * 100]]
+    assert molecules[-1].GetNumAtoms() > 256
+    params = rdDistGeom.ETKDGv3()
+    params.initialEmbeddingMode = rdDistGeom.InitialEmbeddingMode.RANDOM_COORDINATE_EMBEDDING
+    params.randomSeed = 42
+    params.maxIterations = 5
+
+    embed.EmbedMolecules(molecules, params, confsPerMolecule=2, precision=precision)
+    for molecule in molecules:
+        assert molecule.GetNumConformers() == 2
+
+
 def test_embed_molecules_allows_large_molecule_interleaved(precision):
     """Ensure a large (>256 atoms) molecule in batch is accepted and embedded."""
     small1 = Chem.AddHs(Chem.MolFromSmiles("CCCCCC"))  # 6 atoms

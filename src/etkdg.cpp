@@ -38,6 +38,7 @@
 #include "src/utils/host_vector.h"
 #include "src/utils/nvtx.h"
 #include "src/utils/openmp_helpers.h"
+#include "versions.h"
 
 namespace nvMolKit {
 namespace {
@@ -103,6 +104,8 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
                                                 PrecisionMode                               precision) {
   const ScopedNvtxRange fullRange("EmbedMolecules");
   const bool            deviceOutput = output == CoordinateOutput::DEVICE;
+  auto                  paramsCopy   = DGeomHelpers::normalizeEmbedParameters(params);
+  DGeomHelpers::validateSupportedEmbedParameters(paramsCopy);
 
   // Validate inputs
   for (size_t i = 0; i < mols.size(); ++i) {
@@ -110,7 +113,7 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
     if (mol == nullptr) {
       throw std::invalid_argument("Invalid molecule pointer at index " + std::to_string(i));
     }
-    if (!params.useRandomCoords && mol->getNumAtoms() > 256) {
+    if (!paramsCopy.useRandomCoords && mol->getNumAtoms() > 256) {
       throw std::invalid_argument("Eigenvalue coordinate generation supports at most 256 atoms per molecule");
     }
   }
@@ -130,13 +133,8 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
   // Calculate actual batches needed and clamp batchesPerGpu if necessary
   const int actualBatchesNeeded =
     batchSize > 0 ? (static_cast<int>(mols.size()) * confsPerMolecule + batchSize - 1) / batchSize : 1;
-  const int        effectivebatchesPerGpu  = std::min(batchesPerGpu, actualBatchesNeeded);
-  auto             paramsCopy              = params;
-  constexpr double randomCoordsBasinThresh = 1e8;
-  constexpr int    dim                     = 4;  // ETKDG always uses 4D coordinates
-  if (paramsCopy.useRandomCoords) {
-    paramsCopy.basinThresh = randomCoordsBasinThresh;
-  }
+  const int     effectivebatchesPerGpu = std::min(batchesPerGpu, actualBatchesNeeded);
+  constexpr int dim                    = 4;  // ETKDG always uses 4D coordinates
 
   ScopedNvtxRange coordsRange("Init ETKDG");
 

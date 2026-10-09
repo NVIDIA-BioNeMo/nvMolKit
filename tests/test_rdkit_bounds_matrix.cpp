@@ -20,12 +20,24 @@
 #include <gtest/gtest.h>
 
 #include "rdkit_extensions/bounds_matrix.h"
+#include "versions.h"
 
 namespace nvMolKit {
 namespace test {
 
 TEST(BoundsMatrixTest, Hexane) {
-  static const std::string                smiles   = "C1CCCCC1";
+  static const std::string smiles = "C1CCCCC1";
+#if RDKIT_ETKDG_2026_09_API
+  // RDKit 2026.09 derives 1-3 tolerances from the angle and resolves competing 1-4 distances in 6-membered rings.
+  static std::vector<std::vector<double>> expected = {
+    {0.000000, 1.524000, 2.519526, 3.875383, 2.519526, 1.524000},
+    {1.504000, 0.000000, 1.524000, 2.519526, 3.875383, 2.519526},
+    {2.425702, 1.504000, 0.000000, 1.524000, 2.519526, 3.875383},
+    {2.408255, 2.425702, 1.504000, 0.000000, 1.524000, 2.519526},
+    {2.425702, 2.408255, 2.425702, 1.504000, 0.000000, 1.524000},
+    {1.504000, 2.425702, 2.408255, 2.425702, 1.504000, 0.000000}
+  };
+#else
   static std::vector<std::vector<double>> expected = {
     {      0,   1.524, 2.51279, 3.81072, 2.51279,   1.524},
     {  1.504,       0,   1.524, 2.51279, 3.81072, 2.51279},
@@ -34,38 +46,24 @@ TEST(BoundsMatrixTest, Hexane) {
     {2.43279, 2.52477, 2.43279,   1.504,       0,   1.524},
     {  1.504, 2.43279, 2.52477, 2.43279,   1.504,       0}
   };
+#endif
 
   // Get ROMol
   std::vector<std::unique_ptr<RDKit::ROMol>> mols;
   mols.emplace_back(RDKit::SmilesToMol(smiles));
   std::vector<const RDKit::ROMol*> molsView{mols[0].get()};
 
-  // Match what EmbedMultipleConfs sets by default.
-  RDKit::DGeomHelpers::EmbedParameters params(30,       // maxIterations
-                                              1,        // numThreads
-                                              -1,       // seed
-                                              true,     // clearConfs
-                                              false,    // useRandomCoords
-                                              2.0,      // boxSizeMult
-                                              true,     // randNegEig
-                                              1,        // numZeroFail
-                                              nullptr,  // coordMap
-                                              1e-3,     // optimizerForceTol
-                                              false,    // ignoreSmoothingFailures
-                                              true,     // enforceChirality
-                                              false,    // useExpTorsionAnglePrefs
-                                              false,    // useBasicKnowledge
-                                              false,    // verbose
-                                              5.0,      // basinThresh
-                                              -1.0,     // pruneRmsThresh
-                                              false,    // onlyHeavyAtomsForRMS
-                                              2,        // ETversion
-                                              nullptr,  // extraParams
-                                              true,     // useSmallRingTorsions
-                                              true,     // useMacrocycleTorsions
-                                              true,     // useMacrocycle14config
-                                              0         // timeout
-  );
+  // Plain distance geometry with macrocycle 1-4 heuristics. Field assignment because RDKit 2026.03.4 removed the
+  // positional EmbedParameters constructor.
+  RDKit::DGeomHelpers::EmbedParameters params;
+  params.maxIterations           = 30;
+  params.randomSeed              = -1;
+  params.useExpTorsionAnglePrefs = false;
+  params.useBasicKnowledge       = false;
+  params.ETversion               = 2;
+  params.useSmallRingTorsions    = true;
+  params.useMacrocycleTorsions   = true;
+  params.useMacrocycle14config   = true;
 
   std::vector<ForceFields::CrystalFF::CrystalFFDetails> details(mols.size());
   RDKit::DGeomHelpers::initETKDG(mols[0].get(), params, details[0]);

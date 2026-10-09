@@ -93,6 +93,23 @@ enum class Dimensionality {
 };
 
 /**
+ * @brief Throws ValueErrorException for embedding parameters that nvMolKit does not implement yet
+ *
+ * Unsupported: ETversion other than 1 or 2, all-in-one refinement (useLegacyImplementation=false), and on
+ * RDKit >= 2026.09, embedForceField other than UFF, onlyInitialEmbedding and internal-coordinate initial embedding.
+ */
+void validateSupportedEmbedParameters(const RDKit::DGeomHelpers::EmbedParameters& params);
+
+/**
+ * @brief Returns the parameters nvMolKit embeds with.
+ *
+ * Random starting coordinates raise the basin threshold to 1e8 as RDKit does. On RDKit >= 2026.09, useRandomCoords
+ * selects initialEmbeddingMode=RANDOM_COORDINATE_EMBEDDING as in RDKit, and that mode also selects useRandomCoords:
+ * RDKit deprecates the flag in favor of the mode but still applies its random-coordinate settings only for the flag.
+ */
+RDKit::DGeomHelpers::EmbedParameters normalizeEmbedParameters(const RDKit::DGeomHelpers::EmbedParameters& params);
+
+/**
  * @brief Prepares embedder arguments for the ETKDG algorithm
  *
  * @param mol The molecule to prepare arguments for
