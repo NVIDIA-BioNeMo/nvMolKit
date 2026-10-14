@@ -17,8 +17,11 @@
 
 Each algorithm has a matrix form that takes a precomputed distance matrix and a
 ``fused_`` form that computes distances from fingerprints or molecules as needed.
+``bitbirch()`` builds one BitBIRCH tree incrementally from packed fingerprints
+and needs no distance matrix.
 """
 
+import math
 from dataclasses import dataclass
 from enum import Enum
 from typing import Literal, overload
@@ -388,3 +391,59 @@ def fused_butina(
             x.__cuda_array_interface__, cutoff, True, _packed_metric_name(resolved), active_stream.cuda_stream
         )
         return _resolve_butina_output(result, output)
+
+
+def bitbirch(
+    x: ArrayInput,
+    threshold: float,
+    *,
+    branching_factor: int = 1024,
+    batch_size: int = 1024,
+    return_centroids: bool = False,
+    stream: torch.cuda.Stream | None = None,
+) -> AsyncGpuResult | tuple[AsyncGpuResult, AsyncGpuResult]:
+    """Cluster packed binary fingerprints with one BitBIRCH tree.
+
+    Each insertion batch routes against a stable snapshot of the tree. One ordered
+    owner then updates each leaf, and summaries and splits are repaired at
+    barriers, so the tree is never mutated concurrently and no independent trees
+    are merged.
+
+    Args:
+        x: Shape ``(N, W)`` packed int32 or uint32 fingerprints, ``W <= 128``
+           (at most 4096 bits). Host arrays are copied to the GPU.
+        threshold: Minimum combined-cluster iSIM Jaccard--Tanimoto similarity.
+        branching_factor: Maximum entries per tree node. Must be at least 3.
+        batch_size: Fingerprints routed per insertion batch. Larger batches
+                    expose more parallelism but route against an older snapshot.
+        return_centroids: Also return packed majority centroids with shape
+                          ``(num_clusters, W)``.
+        stream: CUDA stream to use. If None, uses the current stream.
+
+    Returns:
+        One cluster ID per input fingerprint, numbered by each cluster's earliest
+        member, and the centroids in cluster-ID order if requested.
+
+    Notes:
+        A row represents exactly ``32 * W`` bits. Results are deterministic for
+        fixed input and options; changing ``batch_size`` can change the clustering.
+    """
+    if not math.isfinite(threshold) or not 0 <= threshold <= 1:
+        raise ValueError("threshold must be finite and in [0, 1]")
+    if branching_factor < 3:
+        raise ValueError(f"branching_factor must be at least 3, got {branching_factor}")
+    if batch_size < 1:
+        raise ValueError(f"batch_size must be positive, got {batch_size}")
+    (x,), active_stream = _prepare_packed_fingerprints(("x", x), stream=stream)
+    if x.shape[1] > 128:
+        raise ValueError(f"bitbirch supports at most 128 fingerprint words (4096 bits), got {x.shape[1]}")
+    with torch.cuda.stream(active_stream):
+        labels, centroids = _clustering.bitbirch(
+            x.__cuda_array_interface__,
+            threshold,
+            branching_factor,
+            batch_size,
+            return_centroids,
+            active_stream.cuda_stream,
+        )
+        return (AsyncGpuResult(labels), AsyncGpuResult(centroids)) if return_centroids else AsyncGpuResult(labels)
