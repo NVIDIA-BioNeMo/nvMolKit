@@ -139,6 +139,12 @@ target_link_libraries(
   PUBLIC device_vector
   PRIVATE cuda_error_check cub_helpers nvtx)
 
+add_library(bitbirch bitbirch.cu)
+target_link_libraries(
+  bitbirch
+  PUBLIC device_vector
+  PRIVATE cuda_error_check device nvtx)
+
 add_library(aap aap.cu)
 target_link_libraries(
   aap
