@@ -41,7 +41,6 @@ of conformers each:
     mols = [Chem.AddHs(Chem.MolFromSmiles(smi)) for smi in smiles]
 
     params = ETKDGv3()
-    params.useRandomCoords = True
 
     # Heterogeneous conformer counts require one EmbedMolecules call per
     # count; if every molecule needed the same number of conformers, a

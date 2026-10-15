@@ -1,0 +1,10 @@
+﻿.. SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+MomentOptions
+=============
+
+.. currentmodule:: nvmolkit.descriptors3d
+
+.. autoclass:: MomentOptions
+   :members:
+   :inherited-members:

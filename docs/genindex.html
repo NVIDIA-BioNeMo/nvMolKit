@@ -1,5 +1,4 @@
 
-
 <!DOCTYPE html>
 
 
@@ -27,53 +26,69 @@
   </noscript>
   
   <!-- Loaded before other Sphinx assets -->
-  <link href="_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
-<link href="_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+  <link href="_static/styles/theme.css?digest=18bd87630a240e9c25be" rel="stylesheet" />
+<link href="_static/styles/pydata-sphinx-theme.css?digest=18bd87630a240e9c25be" rel="stylesheet" />
 
     <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=03e43079" />
-    <link rel="stylesheet" type="text/css" href="_static/styles/nvidia-sphinx-theme.css?v=df3ac72c" />
-    <link rel="stylesheet" type="text/css" href="_static/jupyter-sphinx.css?v=572af1d6" />
+    <link rel="stylesheet" type="text/css" href="_static/styles/nvidia-sphinx-theme.css?v=933278ad" />
+    <link rel="stylesheet" type="text/css" href="_static/jupyter-sphinx.css" />
     <link rel="stylesheet" type="text/css" href="_static/thebelab.css" />
     <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
   
   <!-- So that users can add custom icons -->
-  <script src="_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <script defer src="_static/scripts/fontawesome.js?digest=18bd87630a240e9c25be"></script>
   <!-- Pre-loaded scripts that we'll load fully later -->
-  <link rel="preload" as="script" href="_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
-<link rel="preload" as="script" href="_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+  <link rel="preload" as="script" href="_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be" />
+<link rel="preload" as="script" href="_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be" />
 
-    <script src="_static/documentation_options.js?v=8fa8b3e9"></script>
-    <script src="_static/doctools.js?v=9bcbadda"></script>
-    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+
+
+    <script src="_static/documentation_options.js?v=fe7df9b0"></script>
+    <script src="_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/thebelab-helper.js"></script>
     <script src="_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="_static/copybutton.js?v=f281be69"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'genindex';</script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+
     <link rel="icon" href="_static/favicon.png"/>
+
     <link rel="index" title="Index" href="#" />
     <link rel="search" title="Search" href="search.html" />
 
+
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.6.0" />
+  <meta name="docsearch:version" content="0.7.0" />
+  
+    
+    <script src="_static/searchtools.js"></script>
+    <script src="_static/language_data.js"></script>
+    <script src="searchindex.js"></script>
+  
 
 
   </head>
-  
-  
-  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  <body data-default-mode="">
+
 
   
   
   <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
   
   <div id="pst-scroll-pixel-helper"></div>
   
   <button type="button" class="btn rounded-pill" id="pst-back-to-top">
     <i class="fa-solid fa-arrow-up"></i>Back to top</button>
-
+  
+  
+  
   
   <dialog id="pst-search-dialog">
     
@@ -99,9 +114,9 @@
 </div>
 
   
-    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
 <div class="bd-header__inner bd-page-width">
-  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+  <button type="button" class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
     <span class="fa-solid fa-bars"></span>
   </button>
   
@@ -143,7 +158,7 @@
         <div class="navbar-item navbar-persistent--container">
           
 
-<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+<button type="button" class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
  <i class="fa-solid fa-magnifying-glass"></i>
  <span class="search-button__default-text">Search</span>
  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
@@ -153,11 +168,18 @@
       
         <div class="navbar-item">
 
-<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
-  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
-  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
-  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
-</button></div>
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button type="button" class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
       
     </div>
     
@@ -166,7 +188,7 @@
   
     <div class="navbar-persistent--mobile">
 
-<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+<button type="button" class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
  <i class="fa-solid fa-magnifying-glass"></i>
  <span class="search-button__default-text">Search</span>
  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
@@ -225,11 +247,18 @@
         
           <div class="navbar-item">
 
-<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
-  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
-  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
-  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
-</button></div>
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button type="button" class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
         
       </div>
     
@@ -248,8 +277,9 @@
 </ul>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="similarity.html">Molecular similarity on GPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="clustering.html">Clustering and diversity selection</a></li>
 <li class="toctree-l1"><a class="reference internal" href="forcefield.html">Force field optimization on GPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="fire_minimizer.html">FIRE minimizer</a></li>
+<li class="toctree-l1"><a class="reference internal" href="3d_minimizers.html">3D minimizers</a></li>
 <li class="toctree-l1"><a class="reference internal" href="autotune.html">Hardware autotuning</a></li>
 <li class="toctree-l1"><a class="reference internal" href="agent_skill.html">Cursor / agent skill</a></li>
 </ul>
@@ -262,6 +292,10 @@
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.crossTanimotoSimilarityMemoryConstrained.html">crossTanimotoSimilarityMemoryConstrained</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.crossCosineSimilarity.html">crossCosineSimilarity</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.crossCosineSimilarityMemoryConstrained.html">crossCosineSimilarityMemoryConstrained</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.aap_similarity.html">aap_similarity</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.TanimotoMetric.html">TanimotoMetric</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.CosineMetric.html">CosineMetric</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.AAPMetric.html">AAPMetric</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.embedMolecules.EmbedMolecules.html">EmbedMolecules</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mmffOptimization.MMFFOptimizeMoleculesConfs.html">MMFFOptimizeMoleculesConfs</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.batchedForcefield.MMFFBatchedForcefield.html">MMFFBatchedForcefield</a></li>
@@ -271,6 +305,14 @@
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.batchedForcefield.UFFBatchElement.html">UFFBatchElement</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.butina.html">butina</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.fused_butina.html">fused_butina</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.dise.html">dise</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.fused_dise.html">fused_dise</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.OutputMode.html">OutputMode</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.ClusterDeviceResult.html">ClusterDeviceResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.pickers.leader.html">leader</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.pickers.fused_leader.html">fused_leader</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.pickers.maxmin.html">maxmin</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.pickers.fused_maxmin.html">fused_maxmin</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.findMCS.html">findMCS</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.MCSConfig.html">MCSConfig</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.MCSBatchResult.html">MCSBatchResult</a></li>
@@ -280,8 +322,17 @@
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.getSubstructMatches.html">getSubstructMatches</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.SubstructSearchConfig.html">SubstructSearchConfig</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.SubstructMatchResults.html">SubstructMatchResults</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substruct_library.SubstructLibrary.html">SubstructLibrary</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.conformerRmsd.GetConformerRMSMatrix.html">GetConformerRMSMatrix</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.conformerRmsd.GetConformerRMSMatrixBatch.html">GetConformerRMSMatrixBatch</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.Calc3DProperties.html">Calc3DProperties</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.Property3D.html">Property3D</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.Device3DPropertyResult.html">Device3DPropertyResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.Dense3DPropertyResult.html">Dense3DPropertyResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.Property3DOptions.html">Property3DOptions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.MomentOptions.html">MomentOptions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.WhimOptions.html">WhimOptions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.GetawayOptions.html">GetawayOptions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.tfd.GetTFDMatrix.html">GetTFDMatrix</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.tfd.GetTFDMatrices.html">GetTFDMatrices</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.types.AsyncGpuResult.html">AsyncGpuResult</a></li>
@@ -343,14 +394,17 @@
  | <a href="#G"><strong>G</strong></a>
  | <a href="#H"><strong>H</strong></a>
  | <a href="#I"><strong>I</strong></a>
+ | <a href="#K"><strong>K</strong></a>
  | <a href="#L"><strong>L</strong></a>
  | <a href="#M"><strong>M</strong></a>
  | <a href="#N"><strong>N</strong></a>
+ | <a href="#O"><strong>O</strong></a>
  | <a href="#P"><strong>P</strong></a>
  | <a href="#R"><strong>R</strong></a>
  | <a href="#S"><strong>S</strong></a>
  | <a href="#T"><strong>T</strong></a>
  | <a href="#U"><strong>U</strong></a>
+ | <a href="#V"><strong>V</strong></a>
  | <a href="#W"><strong>W</strong></a>
  
 </div>
@@ -362,11 +416,19 @@
       <ul>
         <li><a href="api/generated/nvmolkit.batchedForcefield.UFFBatchedForcefield.html#nvmolkit.batchedForcefield.UFFBatchedForcefield.__init__">(nvmolkit.batchedForcefield.UFFBatchedForcefield method)</a>
 </li>
+        <li><a href="api/generated/nvmolkit.descriptors3d.Device3DPropertyResult.html#nvmolkit.descriptors3d.Device3DPropertyResult.__init__">(nvmolkit.descriptors3d.Device3DPropertyResult method)</a>
+</li>
         <li><a href="api/generated/nvmolkit.fingerprints.MorganFingerprintGenerator.html#nvmolkit.fingerprints.MorganFingerprintGenerator.__init__">(nvmolkit.fingerprints.MorganFingerprintGenerator method)</a>
 </li>
         <li><a href="api/generated/nvmolkit.mcs.MCSConfig.html#nvmolkit.mcs.MCSConfig.__init__">(nvmolkit.mcs.MCSConfig method)</a>
 </li>
+        <li><a href="api/generated/nvmolkit.substruct_library.SubstructLibrary.html#nvmolkit.substruct_library.SubstructLibrary.__init__">(nvmolkit.substruct_library.SubstructLibrary method)</a>
+</li>
+        <li><a href="api/generated/nvmolkit.substructure.SubstructSearchConfig.html#nvmolkit.substructure.SubstructSearchConfig.__init__">(nvmolkit.substructure.SubstructSearchConfig method)</a>
+</li>
         <li><a href="api/generated/nvmolkit.types.AsyncGpuResult.html#nvmolkit.types.AsyncGpuResult.__init__">(nvmolkit.types.AsyncGpuResult method)</a>
+</li>
+        <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.__init__">(nvmolkit.types.FireOptions method)</a>
 </li>
         <li><a href="api/generated/nvmolkit.types.HardwareOptions.html#nvmolkit.types.HardwareOptions.__init__">(nvmolkit.types.HardwareOptions method)</a>
 </li>
@@ -377,6 +439,12 @@
 <h2 id="A">A</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.similarity.aap_similarity.html#nvmolkit.similarity.aap_similarity">aap_similarity() (in module nvmolkit.similarity)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.similarity.AAPMetric.html#nvmolkit.similarity.AAPMetric">AAPMetric (class in nvmolkit.similarity)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.abcCorrection">abcCorrection (nvmolkit.types.FireOptions property)</a>
+</li>
       <li><a href="api/generated/nvmolkit.batchedForcefield.MMFFBatchElement.html#nvmolkit.batchedForcefield.MMFFBatchElement.add_angle_constraint">add_angle_constraint() (nvmolkit.batchedForcefield.MMFFBatchElement method)</a>
 
       <ul>
@@ -403,7 +471,15 @@
         <li><a href="api/generated/nvmolkit.batchedForcefield.UFFBatchElement.html#nvmolkit.batchedForcefield.UFFBatchElement.add_torsion_constraint">(nvmolkit.batchedForcefield.UFFBatchElement method)</a>
 </li>
       </ul></li>
+      <li><a href="api/generated/nvmolkit.substruct_library.SubstructLibrary.html#nvmolkit.substruct_library.SubstructLibrary.addMol">addMol() (nvmolkit.substruct_library.SubstructLibrary method)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.substruct_library.SubstructLibrary.html#nvmolkit.substruct_library.SubstructLibrary.addMols">addMols() (nvmolkit.substruct_library.SubstructLibrary method)</a>
+</li>
       <li><a href="api/generated/nvmolkit.substructure.SubstructSearchConfig.html#nvmolkit.substructure.SubstructSearchConfig.algorithm">algorithm (nvmolkit.substructure.SubstructSearchConfig property)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.alphaDecrement">alphaDecrement (nvmolkit.types.FireOptions property)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.alphaInit">alphaInit (nvmolkit.types.FireOptions property)</a>
 </li>
       <li><a href="api/generated/nvmolkit.types.AsyncGpuResult.html#nvmolkit.types.AsyncGpuResult">AsyncGpuResult (class in nvmolkit.types)</a>
 </li>
@@ -437,7 +513,17 @@
 <h2 id="C">C</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Calc3DProperties.html#nvmolkit.descriptors3d.Calc3DProperties">Calc3DProperties() (in module nvmolkit.descriptors3d)</a>
+</li>
       <li><a href="api/generated/nvmolkit.autotune.TuneResult.html#nvmolkit.autotune.TuneResult.calibration_size">calibration_size (nvmolkit.autotune.TuneResult attribute)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.clustering.ClusterDeviceResult.html#nvmolkit.clustering.ClusterDeviceResult.centroids">centroids (nvmolkit.clustering.ClusterDeviceResult attribute)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.clustering.ClusterDeviceResult.html#nvmolkit.clustering.ClusterDeviceResult.cluster_ids">cluster_ids (nvmolkit.clustering.ClusterDeviceResult attribute)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.clustering.ClusterDeviceResult.html#nvmolkit.clustering.ClusterDeviceResult.cluster_sizes">cluster_sizes (nvmolkit.clustering.ClusterDeviceResult attribute)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.clustering.ClusterDeviceResult.html#nvmolkit.clustering.ClusterDeviceResult">ClusterDeviceResult (class in nvmolkit.clustering)</a>
 </li>
       <li><a href="api/generated/nvmolkit.batchedForcefield.MMFFBatchedForcefield.html#nvmolkit.batchedForcefield.MMFFBatchedForcefield.compute_energy">compute_energy() (nvmolkit.batchedForcefield.MMFFBatchedForcefield method)</a>
 
@@ -453,6 +539,16 @@
       </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Device3DPropertyResult.html#nvmolkit.descriptors3d.Device3DPropertyResult.conf_indices">conf_indices (nvmolkit.descriptors3d.Device3DPropertyResult attribute)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Dense3DPropertyResult.html#nvmolkit.descriptors3d.Dense3DPropertyResult.conf_mask">conf_mask (nvmolkit.descriptors3d.Dense3DPropertyResult attribute)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.similarity.CosineMetric.html#nvmolkit.similarity.CosineMetric">CosineMetric (class in nvmolkit.similarity)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.substruct_library.SubstructLibrary.html#nvmolkit.substruct_library.SubstructLibrary.countMatches">countMatches() (nvmolkit.substruct_library.SubstructLibrary method)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.substruct_library.SubstructLibrary.html#nvmolkit.substruct_library.SubstructLibrary.countMatchesSync">countMatchesSync() (nvmolkit.substruct_library.SubstructLibrary method)</a>
+</li>
       <li><a href="api/generated/nvmolkit.substructure.countSubstructMatches.html#nvmolkit.substructure.countSubstructMatches">countSubstructMatches() (in module nvmolkit.substructure)</a>
 </li>
       <li><a href="api/generated/nvmolkit.similarity.crossCosineSimilarity.html#nvmolkit.similarity.crossCosineSimilarity">crossCosineSimilarity() (in module nvmolkit.similarity)</a>
@@ -469,7 +565,25 @@
 <h2 id="D">D</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Device3DPropertyResult.html#nvmolkit.descriptors3d.Device3DPropertyResult.dense">dense() (nvmolkit.descriptors3d.Device3DPropertyResult method)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Dense3DPropertyResult.html#nvmolkit.descriptors3d.Dense3DPropertyResult">Dense3DPropertyResult (class in nvmolkit.descriptors3d)</a>
+</li>
       <li><a href="api/generated/nvmolkit.types.AsyncGpuResult.html#nvmolkit.types.AsyncGpuResult.device">device (nvmolkit.types.AsyncGpuResult property)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Device3DPropertyResult.html#nvmolkit.descriptors3d.Device3DPropertyResult">Device3DPropertyResult (class in nvmolkit.descriptors3d)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.clustering.dise.html#nvmolkit.clustering.dise">dise() (in module nvmolkit.clustering)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.dMax">dMax (nvmolkit.types.FireOptions property)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.dtInit">dtInit (nvmolkit.types.FireOptions property)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.dtMaxFactor">dtMaxFactor (nvmolkit.types.FireOptions property)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.dtMinFactor">dtMinFactor (nvmolkit.types.FireOptions property)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -485,6 +599,8 @@
 <h2 id="F">F</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.substruct_library.SubstructLibrary.html#nvmolkit.substruct_library.SubstructLibrary.finalize">finalize() (nvmolkit.substruct_library.SubstructLibrary method)</a>
+</li>
       <li><a href="api/generated/nvmolkit.mcs.findMCS.html#nvmolkit.mcs.findMCS">findMCS() (in module nvmolkit.mcs)</a>
 </li>
       <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions">FireOptions (class in nvmolkit.types)</a>
@@ -501,15 +617,27 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api/generated/nvmolkit.clustering.fused_butina.html#nvmolkit.clustering.fused_butina">fused_butina() (in module nvmolkit.clustering)</a>
 </li>
+      <li><a href="api/generated/nvmolkit.clustering.fused_dise.html#nvmolkit.clustering.fused_dise">fused_dise() (in module nvmolkit.clustering)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.pickers.fused_leader.html#nvmolkit.pickers.fused_leader">fused_leader() (in module nvmolkit.pickers)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.pickers.fused_maxmin.html#nvmolkit.pickers.fused_maxmin">fused_maxmin() (in module nvmolkit.pickers)</a>
+</li>
   </ul></td>
 </tr></table>
 
 <h2 id="G">G</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Device3DPropertyResult.html#nvmolkit.descriptors3d.Device3DPropertyResult.get">get() (nvmolkit.descriptors3d.Device3DPropertyResult method)</a>
+</li>
       <li><a href="api/generated/nvmolkit.substructure.SubstructMatchResults.html#nvmolkit.substructure.SubstructMatchResults.get_pair">get_pair() (nvmolkit.substructure.SubstructMatchResults method)</a>
 </li>
       <li><a href="api/generated/nvmolkit.mcs.MCSBatchResult.html#nvmolkit.mcs.MCSBatchResult.get_result">get_result() (nvmolkit.mcs.MCSBatchResult method)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Property3DOptions.html#nvmolkit.descriptors3d.Property3DOptions.getaway">getaway (nvmolkit.descriptors3d.Property3DOptions attribute)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.descriptors3d.GetawayOptions.html#nvmolkit.descriptors3d.GetawayOptions">GetawayOptions (class in nvmolkit.descriptors3d)</a>
 </li>
       <li><a href="api/generated/nvmolkit.conformerRmsd.GetConformerRMSMatrix.html#nvmolkit.conformerRmsd.GetConformerRMSMatrix">GetConformerRMSMatrix() (in module nvmolkit.conformerRmsd)</a>
 </li>
@@ -519,11 +647,17 @@
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.substruct_library.SubstructLibrary.html#nvmolkit.substruct_library.SubstructLibrary.getMatches">getMatches() (nvmolkit.substruct_library.SubstructLibrary method)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.substruct_library.SubstructLibrary.html#nvmolkit.substruct_library.SubstructLibrary.getMatchesSync">getMatchesSync() (nvmolkit.substruct_library.SubstructLibrary method)</a>
+</li>
       <li><a href="api/generated/nvmolkit.substructure.getSubstructMatches.html#nvmolkit.substructure.getSubstructMatches">getSubstructMatches() (in module nvmolkit.substructure)</a>
 </li>
       <li><a href="api/generated/nvmolkit.tfd.GetTFDMatrices.html#nvmolkit.tfd.GetTFDMatrices">GetTFDMatrices() (in module nvmolkit.tfd)</a>
 </li>
       <li><a href="api/generated/nvmolkit.tfd.GetTFDMatrix.html#nvmolkit.tfd.GetTFDMatrix">GetTFDMatrix() (in module nvmolkit.tfd)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Device3DPropertyResult.html#nvmolkit.descriptors3d.Device3DPropertyResult.gpu_id">gpu_id (nvmolkit.descriptors3d.Device3DPropertyResult attribute)</a>
 </li>
       <li><a href="api/generated/nvmolkit.substructure.SubstructSearchConfig.html#nvmolkit.substructure.SubstructSearchConfig.gpuIds">gpuIds (nvmolkit.substructure.SubstructSearchConfig property)</a>
 
@@ -541,9 +675,15 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api/generated/nvmolkit.types.HardwareOptions.html#nvmolkit.types.HardwareOptions">HardwareOptions (class in nvmolkit.types)</a>
 </li>
+      <li><a href="api/generated/nvmolkit.substruct_library.SubstructLibrary.html#nvmolkit.substruct_library.SubstructLibrary.hasMatch">hasMatch() (nvmolkit.substruct_library.SubstructLibrary method)</a>
+</li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.substruct_library.SubstructLibrary.html#nvmolkit.substruct_library.SubstructLibrary.hasMatchSync">hasMatchSync() (nvmolkit.substruct_library.SubstructLibrary method)</a>
+</li>
       <li><a href="api/generated/nvmolkit.substructure.hasSubstructMatch.html#nvmolkit.substructure.hasSubstructMatch">hasSubstructMatch() (in module nvmolkit.substructure)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.similarity.AAPMetric.html#nvmolkit.similarity.AAPMetric.histogram_bins">histogram_bins (nvmolkit.similarity.AAPMetric attribute)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -554,10 +694,26 @@
       <li><a href="api/generated/nvmolkit.autotune.is_available.html#nvmolkit.autotune.is_available">is_available() (in module nvmolkit.autotune)</a>
 </li>
   </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Device3DPropertyResult.html#nvmolkit.descriptors3d.Device3DPropertyResult.items">items() (nvmolkit.descriptors3d.Device3DPropertyResult method)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="K">K</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Device3DPropertyResult.html#nvmolkit.descriptors3d.Device3DPropertyResult.keys">keys() (nvmolkit.descriptors3d.Device3DPropertyResult method)</a>
+</li>
+  </ul></td>
 </tr></table>
 
 <h2 id="L">L</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.pickers.leader.html#nvmolkit.pickers.leader">leader() (in module nvmolkit.pickers)</a>
+</li>
+  </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api/generated/nvmolkit.autotune.load.html#nvmolkit.autotune.load">load() (in module nvmolkit.autotune)</a>
 </li>
@@ -567,7 +723,13 @@
 <h2 id="M">M</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.similarity.AAPMetric.html#nvmolkit.similarity.AAPMetric.max_path_length">max_path_length (nvmolkit.similarity.AAPMetric attribute)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.substruct_library.SubstructLibrary.html#nvmolkit.substruct_library.SubstructLibrary.maxConcurrentQueries">maxConcurrentQueries (nvmolkit.substruct_library.SubstructLibrary property)</a>
+</li>
       <li><a href="api/generated/nvmolkit.substructure.SubstructSearchConfig.html#nvmolkit.substructure.SubstructSearchConfig.maxMatches">maxMatches (nvmolkit.substructure.SubstructSearchConfig property)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.pickers.maxmin.html#nvmolkit.pickers.maxmin">maxmin() (in module nvmolkit.pickers)</a>
 </li>
       <li><a href="api/generated/nvmolkit.mcs.MCSBatchResult.html#nvmolkit.mcs.MCSBatchResult">MCSBatchResult (class in nvmolkit.mcs)</a>
 </li>
@@ -596,6 +758,12 @@
         <li><a href="api/nvmolkit.html#module-nvmolkit">nvmolkit</a>
 </li>
       </ul></li>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Device3DPropertyResult.html#nvmolkit.descriptors3d.Device3DPropertyResult.mol_indices">mol_indices (nvmolkit.descriptors3d.Device3DPropertyResult attribute)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.descriptors3d.MomentOptions.html#nvmolkit.descriptors3d.MomentOptions">MomentOptions (class in nvmolkit.descriptors3d)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Property3DOptions.html#nvmolkit.descriptors3d.Property3DOptions.moments">moments (nvmolkit.descriptors3d.Property3DOptions attribute)</a>
+</li>
       <li><a href="api/generated/nvmolkit.fingerprints.MorganFingerprintGenerator.html#nvmolkit.fingerprints.MorganFingerprintGenerator">MorganFingerprintGenerator (class in nvmolkit.fingerprints)</a>
 </li>
   </ul></td>
@@ -604,16 +772,22 @@
 <h2 id="N">N</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Device3DPropertyResult.html#nvmolkit.descriptors3d.Device3DPropertyResult.n_conformers">n_conformers (nvmolkit.descriptors3d.Device3DPropertyResult property)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Device3DPropertyResult.html#nvmolkit.descriptors3d.Device3DPropertyResult.n_mols">n_mols (nvmolkit.descriptors3d.Device3DPropertyResult attribute)</a>
+</li>
       <li><a href="api/generated/nvmolkit.autotune.TuneResult.html#nvmolkit.autotune.TuneResult.n_trials_run">n_trials_run (nvmolkit.autotune.TuneResult attribute)</a>
 </li>
+      <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.nMinForIncrease">nMinForIncrease (nvmolkit.types.FireOptions property)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api/generated/nvmolkit.batchedForcefield.MMFFBatchElement.html#nvmolkit.batchedForcefield.MMFFBatchElement.num_atoms">num_atoms (nvmolkit.batchedForcefield.MMFFBatchElement property)</a>
 
       <ul>
         <li><a href="api/generated/nvmolkit.batchedForcefield.UFFBatchElement.html#nvmolkit.batchedForcefield.UFFBatchElement.num_atoms">(nvmolkit.batchedForcefield.UFFBatchElement property)</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api/generated/nvmolkit.types.AsyncGpuResult.html#nvmolkit.types.AsyncGpuResult.numpy">numpy() (nvmolkit.types.AsyncGpuResult method)</a>
 </li>
       <li>
@@ -626,10 +800,22 @@
   </ul></td>
 </tr></table>
 
+<h2 id="O">O</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.clustering.OutputMode.html#nvmolkit.clustering.OutputMode">OutputMode (class in nvmolkit.clustering)</a>
+</li>
+  </ul></td>
+</tr></table>
+
 <h2 id="P">P</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api/generated/nvmolkit.fingerprints.pack_fingerprint.html#nvmolkit.fingerprints.pack_fingerprint">pack_fingerprint (class in nvmolkit.fingerprints)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.substruct_library.SubstructLibrary.html#nvmolkit.substruct_library.SubstructLibrary.pendingSize">pendingSize (nvmolkit.substruct_library.SubstructLibrary property)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.descriptors3d.GetawayOptions.html#nvmolkit.descriptors3d.GetawayOptions.precision">precision (nvmolkit.descriptors3d.GetawayOptions attribute)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
@@ -639,6 +825,10 @@
         <li><a href="api/generated/nvmolkit.types.HardwareOptions.html#nvmolkit.types.HardwareOptions.preprocessingThreads">(nvmolkit.types.HardwareOptions property)</a>
 </li>
       </ul></li>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Property3D.html#nvmolkit.descriptors3d.Property3D">Property3D (class in nvmolkit.descriptors3d)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Property3DOptions.html#nvmolkit.descriptors3d.Property3DOptions">Property3DOptions (class in nvmolkit.descriptors3d)</a>
+</li>
   </ul></td>
 </tr></table>
 
@@ -659,10 +849,24 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api/generated/nvmolkit.autotune.save.html#nvmolkit.autotune.save">save() (in module nvmolkit.autotune)</a>
 </li>
-      <li><a href="api/generated/nvmolkit.autotune.TuneResult.html#nvmolkit.autotune.TuneResult.study">study (nvmolkit.autotune.TuneResult attribute)</a>
+      <li><a href="api/generated/nvmolkit.similarity.AAPMetric.html#nvmolkit.similarity.AAPMetric.sinkhorn_iterations">sinkhorn_iterations (nvmolkit.similarity.AAPMetric attribute)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.similarity.AAPMetric.html#nvmolkit.similarity.AAPMetric.sinkhorn_temperature">sinkhorn_temperature (nvmolkit.similarity.AAPMetric attribute)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.stuckDetectionEnabled">stuckDetectionEnabled (nvmolkit.types.FireOptions property)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.stuckEnergyRelTol">stuckEnergyRelTol (nvmolkit.types.FireOptions property)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.stuckEvalEveryNPolls">stuckEvalEveryNPolls (nvmolkit.types.FireOptions property)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.stuckStreakLength">stuckStreakLength (nvmolkit.types.FireOptions property)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.autotune.TuneResult.html#nvmolkit.autotune.TuneResult.study">study (nvmolkit.autotune.TuneResult attribute)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.substruct_library.SubstructLibrary.html#nvmolkit.substruct_library.SubstructLibrary">SubstructLibrary (class in nvmolkit.substruct_library)</a>
+</li>
       <li><a href="api/generated/nvmolkit.substructure.SubstructMatchResults.html#nvmolkit.substructure.SubstructMatchResults">SubstructMatchResults (class in nvmolkit.substructure)</a>
 </li>
       <li><a href="api/generated/nvmolkit.substructure.SubstructSearchConfig.html#nvmolkit.substructure.SubstructSearchConfig">SubstructSearchConfig (class in nvmolkit.substructure)</a>
@@ -673,6 +877,16 @@
 <h2 id="T">T</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.takeHalfStepBack">takeHalfStepBack (nvmolkit.types.FireOptions property)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.similarity.TanimotoMetric.html#nvmolkit.similarity.TanimotoMetric">TanimotoMetric (class in nvmolkit.similarity)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.descriptors3d.WhimOptions.html#nvmolkit.descriptors3d.WhimOptions.threshold">threshold (nvmolkit.descriptors3d.WhimOptions attribute)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.timeStepDecrement">timeStepDecrement (nvmolkit.types.FireOptions property)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.timeStepIncrement">timeStepIncrement (nvmolkit.types.FireOptions property)</a>
+</li>
       <li><a href="api/generated/nvmolkit.mcs.MCSConfig.html#nvmolkit.mcs.MCSConfig.to_dict">to_dict() (nvmolkit.mcs.MCSConfig method)</a>
 
       <ul>
@@ -681,14 +895,14 @@
         <li><a href="api/generated/nvmolkit.types.HardwareOptions.html#nvmolkit.types.HardwareOptions.to_dict">(nvmolkit.types.HardwareOptions method)</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api/generated/nvmolkit.mcs.MCSConfig.html#nvmolkit.mcs.MCSConfig.to_kwargs">to_kwargs() (nvmolkit.mcs.MCSConfig method)</a>
 </li>
       <li><a href="api/generated/nvmolkit.types.AsyncGpuResult.html#nvmolkit.types.AsyncGpuResult.torch">torch() (nvmolkit.types.AsyncGpuResult method)</a>
 </li>
       <li><a href="api/generated/nvmolkit.autotune.tune_batched_forcefield.html#nvmolkit.autotune.tune_batched_forcefield">tune_batched_forcefield() (in module nvmolkit.autotune)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api/generated/nvmolkit.autotune.tune_embed_molecules.html#nvmolkit.autotune.tune_embed_molecules">tune_embed_molecules() (in module nvmolkit.autotune)</a>
 </li>
       <li><a href="api/generated/nvmolkit.autotune.tune_mcs.html#nvmolkit.autotune.tune_mcs">tune_mcs() (in module nvmolkit.autotune)</a>
@@ -711,13 +925,29 @@
 </li>
       <li><a href="api/generated/nvmolkit.batchedForcefield.UFFBatchElement.html#nvmolkit.batchedForcefield.UFFBatchElement">UFFBatchElement (class in nvmolkit.batchedForcefield)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api/generated/nvmolkit.uffOptimization.UFFOptimizeMoleculesConfs.html#nvmolkit.uffOptimization.UFFOptimizeMoleculesConfs">UFFOptimizeMoleculesConfs() (in module nvmolkit.uffOptimization)</a>
 </li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api/generated/nvmolkit.substructure.SubstructSearchConfig.html#nvmolkit.substructure.SubstructSearchConfig.uniquify">uniquify (nvmolkit.substructure.SubstructSearchConfig property)</a>
 </li>
       <li><a href="api/generated/nvmolkit.fingerprints.unpack_fingerprint.html#nvmolkit.fingerprints.unpack_fingerprint">unpack_fingerprint (class in nvmolkit.fingerprints)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.descriptors3d.MomentOptions.html#nvmolkit.descriptors3d.MomentOptions.useAtomicMasses">useAtomicMasses (nvmolkit.descriptors3d.MomentOptions attribute)</a>
+</li>
+      <li><a href="api/generated/nvmolkit.types.FireOptions.html#nvmolkit.types.FireOptions.useMass">useMass (nvmolkit.types.FireOptions property)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="V">V</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Dense3DPropertyResult.html#nvmolkit.descriptors3d.Dense3DPropertyResult.values">values (nvmolkit.descriptors3d.Dense3DPropertyResult attribute)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Device3DPropertyResult.html#nvmolkit.descriptors3d.Device3DPropertyResult.values">values() (nvmolkit.descriptors3d.Device3DPropertyResult method)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -725,6 +955,12 @@
 <h2 id="W">W</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.descriptors3d.Property3DOptions.html#nvmolkit.descriptors3d.Property3DOptions.whim">whim (nvmolkit.descriptors3d.Property3DOptions attribute)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api/generated/nvmolkit.descriptors3d.WhimOptions.html#nvmolkit.descriptors3d.WhimOptions">WhimOptions (class in nvmolkit.descriptors3d)</a>
+</li>
       <li><a href="api/generated/nvmolkit.substructure.SubstructSearchConfig.html#nvmolkit.substructure.SubstructSearchConfig.workerThreads">workerThreads (nvmolkit.substructure.SubstructSearchConfig property)</a>
 </li>
   </ul></td>
@@ -763,9 +999,11 @@
     </div>
   </div>
   
+
   <!-- Scripts loaded after <body> so the DOM is not blocked -->
-  <script defer src="_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
-<script defer src="_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+  <script defer src="_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be"></script>
+<script defer src="_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be"></script>
+
 
   <footer class="bd-footer">
 <div class="bd-footer__inner bd-page-width">
@@ -788,12 +1026,7 @@
   
   
   
-  <a class="external" href="https://www.nvidia.com/en-us/about-nvidia/privacy-center/">Manage My Privacy</a>
-   | 
-  
-  
-  
-  <a class="external" href="https://www.nvidia.com/en-us/preferences/start/">Do Not Sell or Share My Data</a>
+  <a class="external" href="https://www.nvidia.com/en-us/about-nvidia/privacy-center/">Your Privacy Choices</a>
    | 
   
   

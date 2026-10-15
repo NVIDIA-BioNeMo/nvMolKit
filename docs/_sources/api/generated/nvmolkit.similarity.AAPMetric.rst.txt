@@ -1,0 +1,10 @@
+﻿.. SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+AAPMetric
+=========
+
+.. currentmodule:: nvmolkit.similarity
+
+.. autoclass:: AAPMetric
+   :members:
+   :inherited-members:

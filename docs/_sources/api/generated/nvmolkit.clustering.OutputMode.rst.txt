@@ -1,0 +1,10 @@
+﻿.. SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+OutputMode
+==========
+
+.. currentmodule:: nvmolkit.clustering
+
+.. autoclass:: OutputMode
+   :members:
+   :inherited-members:

@@ -1,0 +1,10 @@
+﻿.. SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+Property3DOptions
+=================
+
+.. currentmodule:: nvmolkit.descriptors3d
+
+.. autoclass:: Property3DOptions
+   :members:
+   :inherited-members:

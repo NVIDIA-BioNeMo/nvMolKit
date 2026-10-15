@@ -1,0 +1,10 @@
+﻿.. SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+WhimOptions
+===========
+
+.. currentmodule:: nvmolkit.descriptors3d
+
+.. autoclass:: WhimOptions
+   :members:
+   :inherited-members:

@@ -1,0 +1,10 @@
+﻿.. SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+TanimotoMetric
+==============
+
+.. currentmodule:: nvmolkit.similarity
+
+.. autoclass:: TanimotoMetric
+   :members:
+   :inherited-members:

@@ -1,5 +1,4 @@
 
-
 <!DOCTYPE html>
 
 
@@ -28,55 +27,71 @@
   </noscript>
   
   <!-- Loaded before other Sphinx assets -->
-  <link href="_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
-<link href="_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+  <link href="_static/styles/theme.css?digest=18bd87630a240e9c25be" rel="stylesheet" />
+<link href="_static/styles/pydata-sphinx-theme.css?digest=18bd87630a240e9c25be" rel="stylesheet" />
 
     <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=03e43079" />
-    <link rel="stylesheet" type="text/css" href="_static/styles/nvidia-sphinx-theme.css?v=df3ac72c" />
-    <link rel="stylesheet" type="text/css" href="_static/jupyter-sphinx.css?v=572af1d6" />
+    <link rel="stylesheet" type="text/css" href="_static/styles/nvidia-sphinx-theme.css?v=933278ad" />
+    <link rel="stylesheet" type="text/css" href="_static/jupyter-sphinx.css" />
     <link rel="stylesheet" type="text/css" href="_static/thebelab.css" />
     <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
   
   <!-- So that users can add custom icons -->
-  <script src="_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <script defer src="_static/scripts/fontawesome.js?digest=18bd87630a240e9c25be"></script>
   <!-- Pre-loaded scripts that we'll load fully later -->
-  <link rel="preload" as="script" href="_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
-<link rel="preload" as="script" href="_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+  <link rel="preload" as="script" href="_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be" />
+<link rel="preload" as="script" href="_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be" />
 
-    <script src="_static/documentation_options.js?v=8fa8b3e9"></script>
-    <script src="_static/doctools.js?v=9bcbadda"></script>
-    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+
+
+    <script src="_static/documentation_options.js?v=fe7df9b0"></script>
+    <script src="_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/thebelab-helper.js"></script>
     <script src="_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="_static/copybutton.js?v=f281be69"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'forcefield';</script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+
     <link rel="icon" href="_static/favicon.png"/>
+
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
-    <link rel="next" title="FIRE minimizer" href="fire_minimizer.html" />
-    <link rel="prev" title="Molecular similarity on GPU" href="similarity.html" />
+    <link rel="next" title="3D minimizers" href="3d_minimizers.html" />
+    <link rel="prev" title="Clustering and diversity selection" href="clustering.html" />
+
 
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.6.0" />
+  <meta name="docsearch:version" content="0.7.0" />
+  
+    
+    <script src="_static/searchtools.js"></script>
+    <script src="_static/language_data.js"></script>
+    <script src="searchindex.js"></script>
+  
 
 
   </head>
-  
-  
-  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  <body data-default-mode="">
+
 
   
   
   <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
   
   <div id="pst-scroll-pixel-helper"></div>
   
   <button type="button" class="btn rounded-pill" id="pst-back-to-top">
     <i class="fa-solid fa-arrow-up"></i>Back to top</button>
-
+  
+  
+  
   
   <dialog id="pst-search-dialog">
     
@@ -102,9 +117,9 @@
 </div>
 
   
-    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
 <div class="bd-header__inner bd-page-width">
-  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+  <button type="button" class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
     <span class="fa-solid fa-bars"></span>
   </button>
   
@@ -146,7 +161,7 @@
         <div class="navbar-item navbar-persistent--container">
           
 
-<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+<button type="button" class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
  <i class="fa-solid fa-magnifying-glass"></i>
  <span class="search-button__default-text">Search</span>
  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
@@ -156,11 +171,18 @@
       
         <div class="navbar-item">
 
-<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
-  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
-  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
-  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
-</button></div>
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button type="button" class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
       
     </div>
     
@@ -169,7 +191,7 @@
   
     <div class="navbar-persistent--mobile">
 
-<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+<button type="button" class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
  <i class="fa-solid fa-magnifying-glass"></i>
  <span class="search-button__default-text">Search</span>
  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
@@ -178,7 +200,7 @@
   
 
   
-    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+    <button type="button" class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
       <span class="fa-solid fa-outdent"></span>
     </button>
   
@@ -232,11 +254,18 @@
         
           <div class="navbar-item">
 
-<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
-  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
-  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
-  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
-</button></div>
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button type="button" class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
         
       </div>
     
@@ -255,8 +284,9 @@
 </ul>
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="similarity.html">Molecular similarity on GPU</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Force field optimization on GPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="fire_minimizer.html">FIRE minimizer</a></li>
+<li class="toctree-l1"><a class="reference internal" href="clustering.html">Clustering and diversity selection</a></li>
+<li class="toctree-l1 current active"><a aria-current="page" class="current reference internal" href="#">Force field optimization on GPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="3d_minimizers.html">3D minimizers</a></li>
 <li class="toctree-l1"><a class="reference internal" href="autotune.html">Hardware autotuning</a></li>
 <li class="toctree-l1"><a class="reference internal" href="agent_skill.html">Cursor / agent skill</a></li>
 </ul>
@@ -269,6 +299,10 @@
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.crossTanimotoSimilarityMemoryConstrained.html">crossTanimotoSimilarityMemoryConstrained</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.crossCosineSimilarity.html">crossCosineSimilarity</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.crossCosineSimilarityMemoryConstrained.html">crossCosineSimilarityMemoryConstrained</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.aap_similarity.html">aap_similarity</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.TanimotoMetric.html">TanimotoMetric</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.CosineMetric.html">CosineMetric</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.AAPMetric.html">AAPMetric</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.embedMolecules.EmbedMolecules.html">EmbedMolecules</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mmffOptimization.MMFFOptimizeMoleculesConfs.html">MMFFOptimizeMoleculesConfs</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.batchedForcefield.MMFFBatchedForcefield.html">MMFFBatchedForcefield</a></li>
@@ -278,6 +312,14 @@
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.batchedForcefield.UFFBatchElement.html">UFFBatchElement</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.butina.html">butina</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.fused_butina.html">fused_butina</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.dise.html">dise</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.fused_dise.html">fused_dise</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.OutputMode.html">OutputMode</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.ClusterDeviceResult.html">ClusterDeviceResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.pickers.leader.html">leader</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.pickers.fused_leader.html">fused_leader</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.pickers.maxmin.html">maxmin</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.pickers.fused_maxmin.html">fused_maxmin</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.findMCS.html">findMCS</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.MCSConfig.html">MCSConfig</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.MCSBatchResult.html">MCSBatchResult</a></li>
@@ -287,8 +329,17 @@
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.getSubstructMatches.html">getSubstructMatches</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.SubstructSearchConfig.html">SubstructSearchConfig</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.SubstructMatchResults.html">SubstructMatchResults</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substruct_library.SubstructLibrary.html">SubstructLibrary</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.conformerRmsd.GetConformerRMSMatrix.html">GetConformerRMSMatrix</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.conformerRmsd.GetConformerRMSMatrixBatch.html">GetConformerRMSMatrixBatch</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.Calc3DProperties.html">Calc3DProperties</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.Property3D.html">Property3D</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.Device3DPropertyResult.html">Device3DPropertyResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.Dense3DPropertyResult.html">Dense3DPropertyResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.Property3DOptions.html">Property3DOptions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.MomentOptions.html">MomentOptions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.WhimOptions.html">WhimOptions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.GetawayOptions.html">GetawayOptions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.tfd.GetTFDMatrix.html">GetTFDMatrix</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.tfd.GetTFDMatrices.html">GetTFDMatrices</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.types.AsyncGpuResult.html">AsyncGpuResult</a></li>
@@ -390,11 +441,10 @@ of conformers each:</p>
 <span class="kn">from</span><span class="w"> </span><span class="nn">nvmolkit.embedMolecules</span><span class="w"> </span><span class="kn">import</span> <span class="n">EmbedMolecules</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">nvmolkit.mmffOptimization</span><span class="w"> </span><span class="kn">import</span> <span class="n">MMFFOptimizeMoleculesConfs</span>
 
-<span class="n">smiles</span> <span class="o">=</span> <span class="p">[</span><span class="s2">&quot;CCO&quot;</span><span class="p">,</span> <span class="s2">&quot;c1ccccc1O&quot;</span><span class="p">,</span> <span class="s2">&quot;CC(=O)NC1=CC=C(C=C1)O&quot;</span><span class="p">]</span>
+<span class="n">smiles</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"CCO"</span><span class="p">,</span> <span class="s2">"c1ccccc1O"</span><span class="p">,</span> <span class="s2">"CC(=O)NC1=CC=C(C=C1)O"</span><span class="p">]</span>
 <span class="n">mols</span> <span class="o">=</span> <span class="p">[</span><span class="n">Chem</span><span class="o">.</span><span class="n">AddHs</span><span class="p">(</span><span class="n">Chem</span><span class="o">.</span><span class="n">MolFromSmiles</span><span class="p">(</span><span class="n">smi</span><span class="p">))</span> <span class="k">for</span> <span class="n">smi</span> <span class="ow">in</span> <span class="n">smiles</span><span class="p">]</span>
 
 <span class="n">params</span> <span class="o">=</span> <span class="n">ETKDGv3</span><span class="p">()</span>
-<span class="n">params</span><span class="o">.</span><span class="n">useRandomCoords</span> <span class="o">=</span> <span class="kc">True</span>
 
 <span class="c1"># Heterogeneous conformer counts require one EmbedMolecules call per</span>
 <span class="c1"># count; if every molecule needed the same number of conformers, a</span>
@@ -448,7 +498,7 @@ a per-molecule sequence:</p>
 
 <span class="c1"># Molecule 2: MMFF94s variant with a non-default dielectric.</span>
 <span class="n">props_c</span> <span class="o">=</span> <span class="n">AllChem</span><span class="o">.</span><span class="n">MMFFGetMoleculeProperties</span><span class="p">(</span><span class="n">mols</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span>
-<span class="n">props_c</span><span class="o">.</span><span class="n">SetMMFFVariant</span><span class="p">(</span><span class="s2">&quot;MMFF94s&quot;</span><span class="p">)</span>
+<span class="n">props_c</span><span class="o">.</span><span class="n">SetMMFFVariant</span><span class="p">(</span><span class="s2">"MMFF94s"</span><span class="p">)</span>
 <span class="n">props_c</span><span class="o">.</span><span class="n">SetMMFFDielectricConstant</span><span class="p">(</span><span class="mf">4.0</span><span class="p">)</span>
 <span class="n">props_c</span><span class="o">.</span><span class="n">SetMMFFDielectricModel</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>  <span class="c1"># 1 = constant, 2 = distance-dependent</span>
 
@@ -563,20 +613,20 @@ or the top-level
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="similarity.html"
+       href="clustering.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Molecular similarity on GPU</p>
+        <p class="prev-next-title">Clustering and diversity selection</p>
       </div>
     </a>
     <a class="right-next"
-       href="fire_minimizer.html"
+       href="3d_minimizers.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">FIRE minimizer</p>
+        <p class="prev-next-title">3D minimizers</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -599,8 +649,8 @@ or the top-level
     class="page-toc tocsection onthispage">
     <i class="fa-solid fa-list"></i> On this page
   </div>
-  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
-    <ul class="visible nav section-nav flex-column">
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#drop-in-replacement-for-rdkit-s-mmff-uff-optimize-confs">Drop-in replacement for RDKit’s MMFF/UFF optimize-confs</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#batched-forcefield-for-fine-grained-control">Batched forcefield for fine-grained control</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#energy-and-gradient-evaluation">Energy and gradient evaluation</a></li>
@@ -620,9 +670,11 @@ or the top-level
     </div>
   </div>
   
+
   <!-- Scripts loaded after <body> so the DOM is not blocked -->
-  <script defer src="_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
-<script defer src="_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+  <script defer src="_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be"></script>
+<script defer src="_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be"></script>
+
 
   <footer class="bd-footer">
 <div class="bd-footer__inner bd-page-width">
@@ -645,12 +697,7 @@ or the top-level
   
   
   
-  <a class="external" href="https://www.nvidia.com/en-us/about-nvidia/privacy-center/">Manage My Privacy</a>
-   | 
-  
-  
-  
-  <a class="external" href="https://www.nvidia.com/en-us/preferences/start/">Do Not Sell or Share My Data</a>
+  <a class="external" href="https://www.nvidia.com/en-us/about-nvidia/privacy-center/">Your Privacy Choices</a>
    | 
   
   

@@ -1,0 +1,8 @@
+﻿.. SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+Calc3DProperties
+================
+
+.. currentmodule:: nvmolkit.descriptors3d
+
+.. autofunction:: Calc3DProperties

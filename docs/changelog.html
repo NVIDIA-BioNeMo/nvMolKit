@@ -1,5 +1,4 @@
 
-
 <!DOCTYPE html>
 
 
@@ -28,54 +27,70 @@
   </noscript>
   
   <!-- Loaded before other Sphinx assets -->
-  <link href="_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
-<link href="_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+  <link href="_static/styles/theme.css?digest=18bd87630a240e9c25be" rel="stylesheet" />
+<link href="_static/styles/pydata-sphinx-theme.css?digest=18bd87630a240e9c25be" rel="stylesheet" />
 
     <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=03e43079" />
-    <link rel="stylesheet" type="text/css" href="_static/styles/nvidia-sphinx-theme.css?v=df3ac72c" />
-    <link rel="stylesheet" type="text/css" href="_static/jupyter-sphinx.css?v=572af1d6" />
+    <link rel="stylesheet" type="text/css" href="_static/styles/nvidia-sphinx-theme.css?v=933278ad" />
+    <link rel="stylesheet" type="text/css" href="_static/jupyter-sphinx.css" />
     <link rel="stylesheet" type="text/css" href="_static/thebelab.css" />
     <link rel="stylesheet" type="text/css" href="_static/copybutton.css?v=76b2166b" />
   
   <!-- So that users can add custom icons -->
-  <script src="_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <script defer src="_static/scripts/fontawesome.js?digest=18bd87630a240e9c25be"></script>
   <!-- Pre-loaded scripts that we'll load fully later -->
-  <link rel="preload" as="script" href="_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
-<link rel="preload" as="script" href="_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+  <link rel="preload" as="script" href="_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be" />
+<link rel="preload" as="script" href="_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be" />
 
-    <script src="_static/documentation_options.js?v=8fa8b3e9"></script>
-    <script src="_static/doctools.js?v=9bcbadda"></script>
-    <script src="_static/sphinx_highlight.js?v=dc90522c"></script>
+
+
+    <script src="_static/documentation_options.js?v=fe7df9b0"></script>
+    <script src="_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="_static/thebelab-helper.js"></script>
     <script src="_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="_static/copybutton.js?v=f281be69"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@jupyter-widgets/html-manager@^1.0.1/dist/embed-amd.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = 'changelog';</script>
+    <script>DOCUMENTATION_OPTIONS.search_as_you_type = false;</script>
+
     <link rel="icon" href="_static/favicon.png"/>
+
     <link rel="index" title="Index" href="genindex.html" />
     <link rel="search" title="Search" href="search.html" />
     <link rel="prev" title="TuneResult" href="api/generated/nvmolkit.autotune.TuneResult.html" />
 
+
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="color-scheme" content="light dark"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.6.0" />
+  <meta name="docsearch:version" content="0.7.0" />
+  
+    
+    <script src="_static/searchtools.js"></script>
+    <script src="_static/language_data.js"></script>
+    <script src="searchindex.js"></script>
+  
 
 
   </head>
-  
-  
-  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  <body data-default-mode="">
+
 
   
   
   <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+
   
   <div id="pst-scroll-pixel-helper"></div>
   
   <button type="button" class="btn rounded-pill" id="pst-back-to-top">
     <i class="fa-solid fa-arrow-up"></i>Back to top</button>
-
+  
+  
+  
   
   <dialog id="pst-search-dialog">
     
@@ -101,9 +116,9 @@
 </div>
 
   
-    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    <header id="pst-header" class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
 <div class="bd-header__inner bd-page-width">
-  <button class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
+  <button type="button" class="pst-navbar-icon sidebar-toggle primary-toggle" aria-label="Site navigation">
     <span class="fa-solid fa-bars"></span>
   </button>
   
@@ -145,7 +160,7 @@
         <div class="navbar-item navbar-persistent--container">
           
 
-<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+<button type="button" class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
  <i class="fa-solid fa-magnifying-glass"></i>
  <span class="search-button__default-text">Search</span>
  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
@@ -155,11 +170,18 @@
       
         <div class="navbar-item">
 
-<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
-  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
-  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
-  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
-</button></div>
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button type="button" class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
       
     </div>
     
@@ -168,7 +190,7 @@
   
     <div class="navbar-persistent--mobile">
 
-<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+<button type="button" class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
  <i class="fa-solid fa-magnifying-glass"></i>
  <span class="search-button__default-text">Search</span>
  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
@@ -177,7 +199,7 @@
   
 
   
-    <button class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
+    <button type="button" class="pst-navbar-icon sidebar-toggle secondary-toggle" aria-label="On this page">
       <span class="fa-solid fa-outdent"></span>
     </button>
   
@@ -231,11 +253,18 @@
         
           <div class="navbar-item">
 
-<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
-  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
-  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
-  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
-</button></div>
+<div class="theme-switch-container dropdown pst-js-only" data-bs-toggle="tooltip" data-bs-placement="bottom" title="Color mode">
+  <button type="button" class="btn btn-sm nav-link pst-navbar-icon theme-switch-button dropdown-toggle" aria-label="Color mode" data-bs-toggle="dropdown">
+    <i class="theme-switch fa-solid fa-sun fa-lg fa-fw" data-mode="light" title="Light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg fa-fw" data-mode="dark" title="Dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg fa-fw" data-mode="auto" title="System Settings"></i>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="auto"><i class="fa-solid fa-circle-half-stroke fa-lg fa-fw me-1"></i>System Settings</button></li>
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="light"><i class="fa-solid fa-sun fa-lg fa-fw me-1"></i>Light</button></li>
+    <li><button type="button" class="dropdown-item d-flex align-items-center theme-change-button" data-mode="dark"><i class="fa-solid fa-moon fa-lg fa-fw me-1"></i>Dark</button></li>
+  </ul>
+</div></div>
         
       </div>
     
@@ -254,8 +283,9 @@
 </ul>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="similarity.html">Molecular similarity on GPU</a></li>
+<li class="toctree-l1"><a class="reference internal" href="clustering.html">Clustering and diversity selection</a></li>
 <li class="toctree-l1"><a class="reference internal" href="forcefield.html">Force field optimization on GPU</a></li>
-<li class="toctree-l1"><a class="reference internal" href="fire_minimizer.html">FIRE minimizer</a></li>
+<li class="toctree-l1"><a class="reference internal" href="3d_minimizers.html">3D minimizers</a></li>
 <li class="toctree-l1"><a class="reference internal" href="autotune.html">Hardware autotuning</a></li>
 <li class="toctree-l1"><a class="reference internal" href="agent_skill.html">Cursor / agent skill</a></li>
 </ul>
@@ -268,6 +298,10 @@
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.crossTanimotoSimilarityMemoryConstrained.html">crossTanimotoSimilarityMemoryConstrained</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.crossCosineSimilarity.html">crossCosineSimilarity</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.crossCosineSimilarityMemoryConstrained.html">crossCosineSimilarityMemoryConstrained</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.aap_similarity.html">aap_similarity</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.TanimotoMetric.html">TanimotoMetric</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.CosineMetric.html">CosineMetric</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.similarity.AAPMetric.html">AAPMetric</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.embedMolecules.EmbedMolecules.html">EmbedMolecules</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mmffOptimization.MMFFOptimizeMoleculesConfs.html">MMFFOptimizeMoleculesConfs</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.batchedForcefield.MMFFBatchedForcefield.html">MMFFBatchedForcefield</a></li>
@@ -277,6 +311,14 @@
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.batchedForcefield.UFFBatchElement.html">UFFBatchElement</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.butina.html">butina</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.fused_butina.html">fused_butina</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.dise.html">dise</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.fused_dise.html">fused_dise</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.OutputMode.html">OutputMode</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.clustering.ClusterDeviceResult.html">ClusterDeviceResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.pickers.leader.html">leader</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.pickers.fused_leader.html">fused_leader</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.pickers.maxmin.html">maxmin</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.pickers.fused_maxmin.html">fused_maxmin</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.findMCS.html">findMCS</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.MCSConfig.html">MCSConfig</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.mcs.MCSBatchResult.html">MCSBatchResult</a></li>
@@ -286,8 +328,17 @@
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.getSubstructMatches.html">getSubstructMatches</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.SubstructSearchConfig.html">SubstructSearchConfig</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substructure.SubstructMatchResults.html">SubstructMatchResults</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.substruct_library.SubstructLibrary.html">SubstructLibrary</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.conformerRmsd.GetConformerRMSMatrix.html">GetConformerRMSMatrix</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.conformerRmsd.GetConformerRMSMatrixBatch.html">GetConformerRMSMatrixBatch</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.Calc3DProperties.html">Calc3DProperties</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.Property3D.html">Property3D</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.Device3DPropertyResult.html">Device3DPropertyResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.Dense3DPropertyResult.html">Dense3DPropertyResult</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.Property3DOptions.html">Property3DOptions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.MomentOptions.html">MomentOptions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.WhimOptions.html">WhimOptions</a></li>
+<li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.descriptors3d.GetawayOptions.html">GetawayOptions</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.tfd.GetTFDMatrix.html">GetTFDMatrix</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.tfd.GetTFDMatrices.html">GetTFDMatrices</a></li>
 <li class="toctree-l2"><a class="reference internal" href="api/generated/nvmolkit.types.AsyncGpuResult.html">AsyncGpuResult</a></li>
@@ -307,7 +358,7 @@
 </details></li>
 </ul>
 <ul class="current nav bd-sidenav">
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Changelog</a></li>
+<li class="toctree-l1 current active"><a aria-current="page" class="current reference internal" href="#">Changelog</a></li>
 </ul>
 </div>
 </nav></div>
@@ -362,13 +413,79 @@
   <section id="changelog">
 <h1>Changelog<a class="headerlink" href="#changelog" title="Link to this heading">#</a></h1>
 <section id="id1">
-<h2>0.6.0 - 2026-08-13<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<h2>0.7.0 - 2026-10-15<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
 <section id="summary">
 <h3>Summary<a class="headerlink" href="#summary" title="Link to this heading">#</a></h3>
-<p>nvMolKit 0.6.0 adds two new GPU-accelerated capabilities: Maximum Common Substructure (MCS) search and a FIRE minimizer option for MMFF and UFF force field optimization. Fused Butina clustering has been rewritten on a pure CUDA backend, making it over 10x faster and removing the Triton dependency, and Butina clustering now supports <code class="docutils literal notranslate"><span class="pre">reordering=False</span></code> and matches RDKit output exactly. Substructure search is up to 2x faster end to end with a new DFS backend. This release supports RDKit 2025.09.1 through 2026.03.5 and includes all fixes from the v0.5.1 patch release.</p>
+<p>nvMolKit 0.7.0 adds a single-precision mode for force field minimization (MMFF, UFF, BFGS, FIRE) and ETKDG conformer generation, which is roughly an order of magnitude faster on consumer GPUs. It also adds a fused 3D descriptor API, diversity selection (Leader and MaxMin), DISE clustering, an Atom-Atom Path (AAP) similarity metric, a persistent GPU <code class="docutils literal notranslate"><span class="pre">SubstructLibrary</span></code>, and various performance improvements to existing fingerprinting, substructure search, and 3D minimization code.</p>
 </section>
 <section id="contributors">
 <h3>Contributors<a class="headerlink" href="#contributors" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>Ben Fauber (&#64;bf-nv)</p></li>
+<li><p>Eva Xue (&#64;evasnow1992)</p></li>
+<li><p>Kevin Boyd (&#64;scal444)</p></li>
+<li><p>Matthew Neba (&#64;Matthew-Neba)</p></li>
+<li><p>Ohad Mosafi (&#64;ohadmo)</p></li>
+</ul>
+</section>
+<section id="features">
+<h3>Features<a class="headerlink" href="#features" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>Single-precision mode (<code class="docutils literal notranslate"><span class="pre">precision=PrecisionMode.SINGLE</span></code>) for MMFF and UFF force fields, BFGS and FIRE minimizers, and ETKDG distance geometry and ETK stages, available through the MMFF, UFF, <code class="docutils literal notranslate"><span class="pre">BatchedForcefield</span></code>, and <code class="docutils literal notranslate"><span class="pre">EmbedMolecules</span></code> APIs. On consumer GPUs, single precision is roughly an order of magnitude faster than double precision. Validation against RDKit is documented in the 3D minimizers guide (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/266">#266</a>)</p></li>
+<li><p>GPU-accelerated 3D descriptors through the new <code class="docutils literal notranslate"><span class="pre">nvmolkit.descriptors3d.Calc3DProperties</span></code>, which computes a user-selected set of properties in one fused pass over a batch of conformers: PMI, NPR, radius of gyration, shape factors, PBF, WHIM, RDF, MORSE, AUTOCORR3D, USR, USRCAT, and GETAWAY, matching RDKit’s <code class="docutils literal notranslate"><span class="pre">rdMolDescriptors</span></code> (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/341">#341</a>)</p></li>
+<li><p>Atom-Atom Path (AAP) molecule similarity via <code class="docutils literal notranslate"><span class="pre">aap_similarity</span></code>, also usable as <code class="docutils literal notranslate"><span class="pre">metric=&quot;aap&quot;</span></code> in <code class="docutils literal notranslate"><span class="pre">fused_leader</span></code>, <code class="docutils literal notranslate"><span class="pre">fused_maxmin</span></code>, and <code class="docutils literal notranslate"><span class="pre">fused_dise</span></code>, by &#64;bf-nv (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/303">#303</a>)</p></li>
+<li><p>Diversity selection with <code class="docutils literal notranslate"><span class="pre">leader</span></code> and <code class="docutils literal notranslate"><span class="pre">maxmin</span></code> for distance matrices, and <code class="docutils literal notranslate"><span class="pre">fused_leader</span></code> and <code class="docutils literal notranslate"><span class="pre">fused_maxmin</span></code> for packed fingerprints or molecules, following RDKit’s <code class="docutils literal notranslate"><span class="pre">LeaderPicker</span></code> and <code class="docutils literal notranslate"><span class="pre">MaxMinPicker</span></code> (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/339">#339</a>)</p></li>
+<li><p>Directed sphere exclusion (DISE) clustering with <code class="docutils literal notranslate"><span class="pre">dise</span></code> and <code class="docutils literal notranslate"><span class="pre">fused_dise</span></code>, by &#64;bf-nv (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/339">#339</a>)</p></li>
+<li><p>Standardized clustering and diversity selection APIs. Butina, DISE, Leader, and MaxMin each come in a matrix form, which takes a precomputed distance matrix, and a fused form, which computes distances on the fly so memory grows linearly instead of quadratically. Every fused form accepts any similarity metric (<code class="docutils literal notranslate"><span class="pre">&quot;tanimoto&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;cosine&quot;</span></code>, or <code class="docutils literal notranslate"><span class="pre">&quot;aap&quot;</span></code>) and either output mode (<code class="docutils literal notranslate"><span class="pre">OutputMode.DEVICE</span></code> or <code class="docutils literal notranslate"><span class="pre">OutputMode.RDKIT</span></code>), so algorithms, forms, metrics, and output modes combine freely, except that <code class="docutils literal notranslate"><span class="pre">fused_butina</span></code> does not yet support AAP (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/339">#339</a>)</p></li>
+<li><p>Persistent GPU <code class="docutils literal notranslate"><span class="pre">SubstructLibrary</span></code> (<code class="docutils literal notranslate"><span class="pre">nvmolkit.substruct_library.SubstructLibrary</span></code>), the GPU counterpart of RDKit’s <code class="docutils literal notranslate"><span class="pre">SubstructLibrary</span></code>. Target molecules are packed and uploaded once, then searched by any number of queries, with multi-GPU storage, asynchronous concurrent queries within a GPU-memory budget, and pattern-fingerprint prescreening (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/350">#350</a>)</p></li>
+<li><p>ETKDG now supports eigenvalue-based initial coordinate generation (<code class="docutils literal notranslate"><span class="pre">useRandomCoords=False</span></code>), matching RDKit’s initialization and retry behavior (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/288">#288</a>)</p></li>
+<li><p>Device-side conformer pruning for ETKDG, so <code class="docutils literal notranslate"><span class="pre">pruneRmsThresh</span></code> can now be combined with GPU-resident output, by &#64;Matthew-Neba (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/160">#160</a>)</p></li>
+<li><p>Conformer RMSD supports <code class="docutils literal notranslate"><span class="pre">alignment_mode=&quot;pairwise&quot;</span></code> (the default, aligning every pair independently) and <code class="docutils literal notranslate"><span class="pre">alignment_mode=&quot;first-conformer&quot;</span></code> (matching RDKit’s <code class="docutils literal notranslate"><span class="pre">GetConformerRMSMatrix</span></code>) (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/281">#281</a>)</p></li>
+</ul>
+</section>
+<section id="performance-improvements">
+<h3>Performance Improvements<a class="headerlink" href="#performance-improvements" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>Per-molecule BFGS minimizer is 10-40% faster, applying to ETKDG, MMFF, and UFF on the per-molecule backend (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/342">#342</a>, <a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/355">#355</a>)</p></li>
+<li><p>Morgan fingerprint generation is up to 2x faster, through reduced CPU preprocessing and Python transfer overhead (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/267">#267</a>)</p></li>
+<li><p>Tanimoto similarity for queries with few molecules is up to 8x faster (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/284">#284</a>)</p></li>
+<li><p>Substructure search performance has been improved for queries with repeated recursive SMARTS, since each repeated pattern is now solved only once (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/313">#313</a>)</p></li>
+<li><p>ETKDG conformer generation is up to 2x faster for batches with a few hard-to-embed molecules, because retries now keep GPU batches full. The default retry budget is also now bounded per molecule instead of scaling with the largest molecule in the input (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/353">#353</a>)</p></li>
+</ul>
+</section>
+<section id="breaking-changes">
+<h3>Breaking Changes<a class="headerlink" href="#breaking-changes" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">butina</span></code> and <code class="docutils literal notranslate"><span class="pre">fused_butina</span></code> now return a <code class="docutils literal notranslate"><span class="pre">ClusterDeviceResult</span></code> (cluster IDs, centroids, and cluster sizes) by default, or RDKit-format cluster tuples with <code class="docutils literal notranslate"><span class="pre">output=OutputMode.RDKIT</span></code>. The <code class="docutils literal notranslate"><span class="pre">return_centroids</span></code> argument is removed (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/269">#269</a>)</p></li>
+</ul>
+</section>
+<section id="bug-fixes">
+<h3>Bug Fixes<a class="headerlink" href="#bug-fixes" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>Fix <code class="docutils literal notranslate"><span class="pre">countSubstructMatches</span></code> ignoring <code class="docutils literal notranslate"><span class="pre">uniquify=True</span></code>, which returned raw embedding counts that disagreed with RDKit for symmetric queries (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/275">#275</a>)</p></li>
+<li><p>Fix SMARTS hydrogen counts excluding explicit hydrogen neighbors, so queries such as <code class="docutils literal notranslate"><span class="pre">[CH3]</span></code> now match deuterated and explicit-H targets as in RDKit (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/276">#276</a>)</p></li>
+<li><p>Fix plain query atoms (for example from <code class="docutils literal notranslate"><span class="pre">MolFromSmiles</span></code>) being packed as wildcards in substructure search, and route targets with isotopes above 255 or unsupported bond types to the RDKit fallback instead of failing (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/349">#349</a>)</p></li>
+<li><p>Fix ETKDG exiting early on molecules that fail to embed, which previously could skip scheduled retries and fail more often than RDKit (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/300">#300</a>)</p></li>
+<li><p>Fix float32 division in the Tanimoto similarity kernels using approximate rounding, which could order equal distances differently than RDKit in downstream clustering (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/338">#338</a>)</p></li>
+</ul>
+</section>
+<section id="miscellaneous">
+<h3>Miscellaneous<a class="headerlink" href="#miscellaneous" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>Improved shared benchmark tooling, including common CLI, timing, result-reporting, and dataset-loading utilities, and RDKit-side deadlines for long-running baselines</p></li>
+<li><p>Drastically improved CI coverage, and added back linters and static analysis</p></li>
+<li><p>Support for CUDA 13.4 and Rubin GPUs (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/304">#304</a>)</p></li>
+</ul>
+</section>
+</section>
+<section id="id2">
+<h2>0.6.0 - 2026-08-13<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<section id="id3">
+<h3>Summary<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<p>nvMolKit 0.6.0 adds two new GPU-accelerated capabilities: Maximum Common Substructure (MCS) search and a FIRE minimizer option for MMFF and UFF force field optimization. Fused Butina clustering has been rewritten on a pure CUDA backend, making it over 10x faster and removing the Triton dependency, and Butina clustering now supports <code class="docutils literal notranslate"><span class="pre">reordering=False</span></code> and matches RDKit output exactly. Substructure search is up to 2x faster end to end with a new DFS backend. This release supports RDKit 2025.09.1 through 2026.03.5 and includes all fixes from the v0.5.1 patch release.</p>
+</section>
+<section id="id4">
+<h3>Contributors<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Clay Moore (&#64;mooreneural)</p></li>
 <li><p>Eva Xue (&#64;evasnow1992)</p></li>
@@ -377,8 +494,8 @@
 <li><p>Timur Rvachov (&#64;trvachov)</p></li>
 </ul>
 </section>
-<section id="features">
-<h3>Features<a class="headerlink" href="#features" title="Link to this heading">#</a></h3>
+<section id="id5">
+<h3>Features<a class="headerlink" href="#id5" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>GPU-accelerated Maximum Common Substructure (MCS) search via the new <code class="docutils literal notranslate"><span class="pre">nvmolkit.mcs.findMCS</span></code> API. Searches many molecule pairs in one batched call — all pairs of a molecule set, an explicit pair list, or two zipped lists — with configurable atom/bond matching, per-pair timeouts, and a CPU RDKit fallback for oversized inputs. RDKit fMCS options that are not yet supported raise informative errors (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/221">#221</a>)</p></li>
 <li><p>FIRE minimizer as an alternative to BFGS for force field optimization, roughly 2x faster than BFGS for comparable accuracy. Available via <code class="docutils literal notranslate"><span class="pre">minimizerKind=&quot;FIRE&quot;</span></code> in the MMFF and UFF optimization APIs and the <code class="docutils literal notranslate"><span class="pre">BatchedForcefield</span></code> API (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/216">#216</a>)</p></li>
@@ -391,8 +508,8 @@
 <li><p>Reduced per-call launch overhead in similarity computations by &#64;mooreneural (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/ea09e2d8291c747b9ccdf4521f89637ebe2c3bb7">ea09e2d</a>)</p></li>
 </ul>
 </section>
-<section id="bug-fixes">
-<h3>Bug Fixes<a class="headerlink" href="#bug-fixes" title="Link to this heading">#</a></h3>
+<section id="id6">
+<h3>Bug Fixes<a class="headerlink" href="#id6" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>All bug fixes from the <a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/releases/tag/v0.5.1">v0.5.1 patch release</a>, covering ETKDG conformer generation, Morgan fingerprints, fused Butina clustering, TFD, SMARTS handling, MMFF/UFF convergence, and pip packaging</p></li>
 <li><p>Fix a data race in batched MMFF minimization when a molecule’s conformers spanned multiple batches, which could produce incorrect atom typing or crashes at high thread counts (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/236">#236</a>)</p></li>
@@ -401,8 +518,8 @@
 <li><p>CUDA streams belonging to a different GPU are now rejected with a clear error instead of being silently accepted (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/235">#235</a>)</p></li>
 </ul>
 </section>
-<section id="miscellaneous">
-<h3>Miscellaneous<a class="headerlink" href="#miscellaneous" title="Link to this heading">#</a></h3>
+<section id="id7">
+<h3>Miscellaneous<a class="headerlink" href="#id7" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Document fixes for common torch CUDA-backend installation issues with pip, uv, and conda (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/209">#209</a>)</p></li>
 <li><p>New downloadable agent skill teaching LLM coding agents to use nvMolKit, with evals and an NVIDIA skills catalog card (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/434440f">434440f</a>)</p></li>
@@ -410,22 +527,22 @@
 </ul>
 </section>
 </section>
-<section id="id2">
-<h2>0.5.1 - 2026-06-24<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
-<section id="id3">
-<h3>Summary<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<section id="id8">
+<h2>0.5.1 - 2026-06-24<a class="headerlink" href="#id8" title="Link to this heading">#</a></h2>
+<section id="id9">
+<h3>Summary<a class="headerlink" href="#id9" title="Link to this heading">#</a></h3>
 <p>nvMolKit 0.5.1 is a bug fix and quality-of-life release.</p>
 </section>
-<section id="id4">
-<h3>Contributors<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<section id="id10">
+<h3>Contributors<a class="headerlink" href="#id10" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Kevin Boyd (&#64;scal444)</p></li>
 <li><p>Eva Xue (&#64;evasnow1992)</p></li>
 <li><p>Clay Moore (&#64;mooreneural)</p></li>
 </ul>
 </section>
-<section id="id5">
-<h3>Bug Fixes<a class="headerlink" href="#id5" title="Link to this heading">#</a></h3>
+<section id="id11">
+<h3>Bug Fixes<a class="headerlink" href="#id11" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Fix pip wheels failing to import in minimal manylinux/CUDA containers (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/174">#174</a>).</p></li>
 <li><p>Fix incorrect TFD values for molecules with very large conformer sets and avoid invalid values for empty ring-torsion cases, by &#64;mooreneural (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/commit/d265234ca47423a0635c3fe4949086738c10fb08">d265234</a>).</p></li>
@@ -439,22 +556,22 @@
 <li><p>Fix brittle Python import orders for MMFF and UFF optimization modules (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/212">#212</a>).</p></li>
 </ul>
 </section>
-<section id="id6">
-<h3>Miscellaneous<a class="headerlink" href="#id6" title="Link to this heading">#</a></h3>
+<section id="id12">
+<h3>Miscellaneous<a class="headerlink" href="#id12" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Clustering and similarity APIs now accept <code class="docutils literal notranslate"><span class="pre">AsyncGpuResult</span></code>, CUDA tensors, CPU tensors, and NumPy arrays consistently (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/207">#207</a>).</p></li>
 <li><p>Autotune defaults now search fewer redundant batch sizes and avoid oversubscribing CPU threads (<a class="reference external" href="https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/179">#179</a>).</p></li>
 </ul>
 </section>
 </section>
-<section id="id7">
-<h2>0.5.0 - 2026-05-13<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
-<section id="id8">
-<h3>Summary<a class="headerlink" href="#id8" title="Link to this heading">#</a></h3>
+<section id="id13">
+<h2>0.5.0 - 2026-05-13<a class="headerlink" href="#id13" title="Link to this heading">#</a></h2>
+<section id="id14">
+<h3>Summary<a class="headerlink" href="#id14" title="Link to this heading">#</a></h3>
 <p>nvMolKit 0.5.0 adds three new GPU-accelerated APIs: Torsion Fingerprint Deviation (TFD), pairwise conformer RMSD, and UFF force field optimization. It also introduces a <code class="docutils literal notranslate"><span class="pre">BatchedForcefield</span></code> Python API for MMFF and UFF with constraints, custom options, and multi-conformer minimization; a low-memory fused Butina clustering path that avoids the O(N²) distance matrix; a Python autotuning framework for the main APIs; and optional device-side output for ETKDG and forcefield optimization. Blackwell / L-class GPUs (including sm_103/B300) are now supported, the supported RDKit range is now 2025.03.1 through 2026.03.1, and nvMolKit is available via <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">nvmolkit</span></code>.</p>
 </section>
-<section id="id9">
-<h3>Contributors<a class="headerlink" href="#id9" title="Link to this heading">#</a></h3>
+<section id="id15">
+<h3>Contributors<a class="headerlink" href="#id15" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Kevin Boyd (&#64;scal444)</p></li>
 <li><p>Eva Xue (&#64;evasnow1992)</p></li>
@@ -462,8 +579,8 @@
 <li><p>Andrei Volgin (&#64;volgin)</p></li>
 </ul>
 </section>
-<section id="id10">
-<h3>Features<a class="headerlink" href="#id10" title="Link to this heading">#</a></h3>
+<section id="id16">
+<h3>Features<a class="headerlink" href="#id16" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>GPU-accelerated Torsion Fingerprint Deviation (TFD) for batch all-pairs conformer comparison (<a class="reference external" href="https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/71">#71</a>)</p></li>
 <li><p>GPU-accelerated pairwise conformer RMSD matrix computation by &#64;volgin</p></li>
@@ -478,8 +595,8 @@
 <li><p>Support for Blackwell and L-class GPUs, including sm_103 SASS for B300</p></li>
 </ul>
 </section>
-<section id="id11">
-<h3>Bug Fixes<a class="headerlink" href="#id11" title="Link to this heading">#</a></h3>
+<section id="id17">
+<h3>Bug Fixes<a class="headerlink" href="#id17" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Fix latent stream-ordering bug in the MMFF/BFGS minimizer that could race with subsequent operations (<a class="reference external" href="https://github.com/NVIDIA-Digital-Bio/nvMolKit/pull/172">#172</a>)</p></li>
 <li><p>Fix <code class="docutils literal notranslate"><span class="pre">int32</span></code> overflow in substructure pair indexing for batches where <code class="docutils literal notranslate"><span class="pre">numTargets</span> <span class="pre">*</span> <span class="pre">numQueries</span></code> exceeds <code class="docutils literal notranslate"><span class="pre">INT32_MAX</span></code>, which previously caused out-of-bounds writes in <code class="docutils literal notranslate"><span class="pre">hasSubstructMatch</span></code> and <code class="docutils literal notranslate"><span class="pre">countSubstructMatches</span></code> (<a class="reference external" href="https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/169">#169</a>)</p></li>
@@ -487,8 +604,8 @@
 <li><p>Fix empty result handling in substructure search with <code class="docutils literal notranslate"><span class="pre">uniquify</span></code> when all matches were already unique (<a class="reference external" href="https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/112">#112</a>)</p></li>
 </ul>
 </section>
-<section id="id12">
-<h3>Miscellaneous<a class="headerlink" href="#id12" title="Link to this heading">#</a></h3>
+<section id="id18">
+<h3>Miscellaneous<a class="headerlink" href="#id18" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>pip wheel distribution pipeline (<code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">nvmolkit</span></code>) with manylinux_2_28 wheels for CPython 3.11-3.14 (<a class="reference external" href="https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/15">#15</a>)</p></li>
 <li><p>RDKit support range is now 2025.03.1 through 2026.03.1</p></li>
@@ -498,21 +615,21 @@
 </ul>
 </section>
 </section>
-<section id="id13">
-<h2>0.4.0 - 2026-02-23<a class="headerlink" href="#id13" title="Link to this heading">#</a></h2>
-<section id="id14">
-<h3>Summary<a class="headerlink" href="#id14" title="Link to this heading">#</a></h3>
+<section id="id19">
+<h2>0.4.0 - 2026-02-23<a class="headerlink" href="#id19" title="Link to this heading">#</a></h2>
+<section id="id20">
+<h3>Summary<a class="headerlink" href="#id20" title="Link to this heading">#</a></h3>
 <p>nvMolKit 0.4.0 adds GPU-accelerated substructure searching, optional stream control across Python APIs, and enhancements to Butina clustering.</p>
 </section>
-<section id="id15">
-<h3>Contributors<a class="headerlink" href="#id15" title="Link to this heading">#</a></h3>
+<section id="id21">
+<h3>Contributors<a class="headerlink" href="#id21" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Kevin Boyd (&#64;scal444)</p></li>
 <li><p>Eva Xue (&#64;evasnow1992)</p></li>
 </ul>
 </section>
-<section id="id16">
-<h3>Features<a class="headerlink" href="#id16" title="Link to this heading">#</a></h3>
+<section id="id22">
+<h3>Features<a class="headerlink" href="#id22" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>GPU-accelerated substructure search with <code class="docutils literal notranslate"><span class="pre">hasSubstructMatch</span></code>, <code class="docutils literal notranslate"><span class="pre">countSubstructMatches</span></code>, and <code class="docutils literal notranslate"><span class="pre">getSubstructMatches</span></code>. Supports batch queries against batch targets with SMARTS-based query molecules.</p></li>
 <li><p>Optional <code class="docutils literal notranslate"><span class="pre">stream</span></code> parameter added to fingerprint generation, similarity, and Butina clustering APIs, enabling explicit CUDA stream control</p></li>
@@ -520,46 +637,46 @@
 <li><p>Butina clustering performance improved by replacing CPU loops with CUDA Graph conditional nodes (<a class="reference external" href="https://github.com/NVIDIA-Digital-Bio/nvMolKit/pull/72">#72</a>)</p></li>
 </ul>
 </section>
-<section id="id17">
-<h3>Bug Fixes<a class="headerlink" href="#id17" title="Link to this heading">#</a></h3>
+<section id="id23">
+<h3>Bug Fixes<a class="headerlink" href="#id23" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Fix data races when torch operations immediately followed nvMolKit calls on the default stream (Issue <a class="reference external" href="https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/84">#84</a>). Operations now correctly use the current stream or an explicit <code class="docutils literal notranslate"><span class="pre">stream</span></code> parameter (<a class="reference external" href="https://github.com/NVIDIA-Digital-Bio/nvMolKit/issues/36">#36</a>).</p></li>
 <li><p>Fix <code class="docutils literal notranslate"><span class="pre">setup.py</span></code> compatibility on some Python versions and rework CUDA target detection (<a class="reference external" href="https://github.com/NVIDIA-Digital-Bio/nvMolKit/pull/68">#68</a>)</p></li>
 </ul>
 </section>
 </section>
-<section id="id18">
-<h2>0.3.0 - 2025-12-12<a class="headerlink" href="#id18" title="Link to this heading">#</a></h2>
-<section id="id19">
-<h3>Summary<a class="headerlink" href="#id19" title="Link to this heading">#</a></h3>
+<section id="id24">
+<h2>0.3.0 - 2025-12-12<a class="headerlink" href="#id24" title="Link to this heading">#</a></h2>
+<section id="id25">
+<h3>Summary<a class="headerlink" href="#id25" title="Link to this heading">#</a></h3>
 <p>nvMolKit 0.3.0 adds Butina clustering support, improved performance to MMFF relaxation and conformer generation, and increased compatibility with libraries and compilers.</p>
 </section>
-<section id="id20">
-<h3>Contributors<a class="headerlink" href="#id20" title="Link to this heading">#</a></h3>
+<section id="id26">
+<h3>Contributors<a class="headerlink" href="#id26" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Kevin Boyd (&#64;scal444)</p></li>
 <li><p>Eva Xue (&#64;evasnow1992)</p></li>
 <li><p>Xuangui Huang (&#64;stslxg-nv)</p></li>
 </ul>
 </section>
-<section id="id21">
-<h3>Features<a class="headerlink" href="#id21" title="Link to this heading">#</a></h3>
+<section id="id27">
+<h3>Features<a class="headerlink" href="#id27" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Butina clustering API enabled, using distance matrix input. On an H200 GPU, speedups of 400-1000x can be achieved on datasets up to 60k molecules</p></li>
 <li><p>Improvements to BFGS minimizer. Up to 5x speedup compared to nvMolKit v0.2 on batches of small molecules (&lt;20 atoms), with ~10-20% speedup in the general case. Applies to both MMFF relaxation and conformer generation.</p></li>
 <li><p>Conda-forge releases now support RDKit versions 2024.9.6 to 2025.9.3</p></li>
 </ul>
 </section>
-<section id="id22">
-<h3>Bug Fixes<a class="headerlink" href="#id22" title="Link to this heading">#</a></h3>
+<section id="id28">
+<h3>Bug Fixes<a class="headerlink" href="#id28" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Fixed a bug where synchronizations on the wrong stream could lead to data races in tests (Issue #28)</p></li>
 <li><p>Fixed several areas where a memcpy could go out of scope before completing (Issue #28, Issue #29)</p></li>
 <li><p>Fixed a bug where ETKDG would exit early with small CPU counts due to an incorrect identification of resource mis-configuration (Issue #31)</p></li>
 </ul>
 </section>
-<section id="id23">
-<h3>Miscellaneous<a class="headerlink" href="#id23" title="Link to this heading">#</a></h3>
+<section id="id29">
+<h3>Miscellaneous<a class="headerlink" href="#id29" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>(C++) Added support for CUB/CCCL &gt; v2.8</p></li>
 <li><p>(C++) Added support for externally specified CCCL</p></li>
@@ -567,23 +684,23 @@
 </ul>
 </section>
 </section>
-<section id="id24">
-<h2>0.2.0 - 2025-10-24<a class="headerlink" href="#id24" title="Link to this heading">#</a></h2>
-<section id="id25">
-<h3>Summary<a class="headerlink" href="#id25" title="Link to this heading">#</a></h3>
+<section id="id30">
+<h2>0.2.0 - 2025-10-24<a class="headerlink" href="#id30" title="Link to this heading">#</a></h2>
+<section id="id31">
+<h3>Summary<a class="headerlink" href="#id31" title="Link to this heading">#</a></h3>
 <p>nvMolKit 0.2.0 comes with significant usability and feature-completeness improvements to existing functionality. It is also
 the first release to have a <a class="reference external" href="https://anaconda.org/conda-forge/nvmolkit">conda-forge release</a>.</p>
 </section>
-<section id="id26">
-<h3>Contributors<a class="headerlink" href="#id26" title="Link to this heading">#</a></h3>
+<section id="id32">
+<h3>Contributors<a class="headerlink" href="#id32" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Kevin Boyd (&#64;scal444)</p></li>
 <li><p>Eva Xue (&#64;evasnow1992)</p></li>
 <li><p>Ignacio Pickering (&#64;ignaciojpickering)</p></li>
 </ul>
 </section>
-<section id="id27">
-<h3>Features<a class="headerlink" href="#id27" title="Link to this heading">#</a></h3>
+<section id="id33">
+<h3>Features<a class="headerlink" href="#id33" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Add memory-segmented cross-similarity code, enabling larger datasets on systems with limited GPU memory (<a class="reference external" href="https://github.com/NVIDIA-Digital-Bio/nvMolKit/pull/13">#13</a>)</p></li>
 <li><p>Support conformer deduplication in ETKDG conformer generation (<a class="reference external" href="https://github.com/NVIDIA-Digital-Bio/nvMolKit/pull/14">#14</a>)</p></li>
@@ -591,8 +708,8 @@ the first release to have a <a class="reference external" href="https://anaconda
 <li><p>Enable all combinations of (ET)(K)(DG) in conformer generator (<a class="reference external" href="https://github.com/NVIDIA-Digital-Bio/nvMolKit/pull/17">#17</a>)</p></li>
 </ul>
 </section>
-<section id="id28">
-<h3>Bug Fixes<a class="headerlink" href="#id28" title="Link to this heading">#</a></h3>
+<section id="id34">
+<h3>Bug Fixes<a class="headerlink" href="#id34" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Fix compilation error on C++ build with target=native on Hopper architecture GPUs. (<a class="reference external" href="https://github.com/NVIDIA-Digital-Bio/nvMolKit/pull/6">#6</a>)</p></li>
 <li><p>Fix lack of device-set cleanup in multi-GPU code (<a class="reference external" href="https://github.com/NVIDIA-Digital-Bio/nvMolKit/pull/8">#8</a>)</p></li>
@@ -601,17 +718,17 @@ the first release to have a <a class="reference external" href="https://anaconda
 <li><p>Fix crash in most multithreaded APIs whenever exceptions are thrown inside of OpenMP loop. Exceptions now properly propagated to python (<a class="reference external" href="https://github.com/NVIDIA-Digital-Bio/nvMolKit/pull/18">#18</a>)</p></li>
 </ul>
 </section>
-<section id="id29">
-<h3>Miscellaneous<a class="headerlink" href="#id29" title="Link to this heading">#</a></h3>
+<section id="id35">
+<h3>Miscellaneous<a class="headerlink" href="#id35" title="Link to this heading">#</a></h3>
 <ul class="simple">
 <li><p>Removed unsupported Bulk Similarity APIs (<a class="reference external" href="https://github.com/NVIDIA-Digital-Bio/nvMolKit/pull/12">#12</a>)</p></li>
 </ul>
 </section>
 </section>
-<section id="id30">
-<h2>0.0.1  2025-09-09<a class="headerlink" href="#id30" title="Link to this heading">#</a></h2>
-<section id="id31">
-<h3>Summary<a class="headerlink" href="#id31" title="Link to this heading">#</a></h3>
+<section id="id36">
+<h2>0.0.1  2025-09-09<a class="headerlink" href="#id36" title="Link to this heading">#</a></h2>
+<section id="id37">
+<h3>Summary<a class="headerlink" href="#id37" title="Link to this heading">#</a></h3>
 <p>Initial release of nvMolKit. Features include:</p>
 <ul class="simple">
 <li><p>Morgan Fingerprints</p></li>
@@ -661,47 +778,49 @@ the first release to have a <a class="reference external" href="https://anaconda
     class="page-toc tocsection onthispage">
     <i class="fa-solid fa-list"></i> On this page
   </div>
-  <nav class="bd-toc-nav page-toc" aria-labelledby="pst-page-navigation-heading-2">
-    <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">0.6.0 - 2026-08-13</a><ul class="nav section-nav flex-column">
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">0.7.0 - 2026-10-15</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#summary">Summary</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#contributors">Contributors</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#features">Features</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#performance-improvements">Performance Improvements</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#breaking-changes">Breaking Changes</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#bug-fixes">Bug Fixes</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#miscellaneous">Miscellaneous</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">0.5.1 - 2026-06-24</a><ul class="nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">0.6.0 - 2026-08-13</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">Summary</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">Contributors</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">Bug Fixes</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">Miscellaneous</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">Features</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">Bug Fixes</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">Miscellaneous</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">0.5.0 - 2026-05-13</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">Summary</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">Contributors</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">Features</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">0.5.1 - 2026-06-24</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">Summary</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">Contributors</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">Bug Fixes</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id12">Miscellaneous</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id13">0.4.0 - 2026-02-23</a><ul class="nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id13">0.5.0 - 2026-05-13</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id14">Summary</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id15">Contributors</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id16">Features</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id17">Bug Fixes</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id18">Miscellaneous</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id18">0.3.0 - 2025-12-12</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id19">Summary</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id20">Contributors</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id21">Features</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id22">Bug Fixes</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id23">Miscellaneous</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id19">0.4.0 - 2026-02-23</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id20">Summary</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id21">Contributors</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id22">Features</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id23">Bug Fixes</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id24">0.2.0 - 2025-10-24</a><ul class="nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id24">0.3.0 - 2025-12-12</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id25">Summary</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id26">Contributors</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id27">Features</a></li>
@@ -709,8 +828,16 @@ the first release to have a <a class="reference external" href="https://anaconda
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id29">Miscellaneous</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id30">0.0.1  2025-09-09</a><ul class="nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id30">0.2.0 - 2025-10-24</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id31">Summary</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id32">Contributors</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id33">Features</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id34">Bug Fixes</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id35">Miscellaneous</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id36">0.0.1  2025-09-09</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id37">Summary</a></li>
 </ul>
 </li>
 </ul>
@@ -729,9 +856,11 @@ the first release to have a <a class="reference external" href="https://anaconda
     </div>
   </div>
   
+
   <!-- Scripts loaded after <body> so the DOM is not blocked -->
-  <script defer src="_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
-<script defer src="_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+  <script defer src="_static/scripts/bootstrap.js?digest=18bd87630a240e9c25be"></script>
+<script defer src="_static/scripts/pydata-sphinx-theme.js?digest=18bd87630a240e9c25be"></script>
+
 
   <footer class="bd-footer">
 <div class="bd-footer__inner bd-page-width">
@@ -754,12 +883,7 @@ the first release to have a <a class="reference external" href="https://anaconda
   
   
   
-  <a class="external" href="https://www.nvidia.com/en-us/about-nvidia/privacy-center/">Manage My Privacy</a>
-   | 
-  
-  
-  
-  <a class="external" href="https://www.nvidia.com/en-us/preferences/start/">Do Not Sell or Share My Data</a>
+  <a class="external" href="https://www.nvidia.com/en-us/about-nvidia/privacy-center/">Your Privacy Choices</a>
    | 
   
   

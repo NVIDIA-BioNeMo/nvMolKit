@@ -64,7 +64,6 @@ matching nvMolKit API:
 
     mols = [Chem.AddHs(Chem.MolFromSmiles(s)) for s in many_smiles]
     params = ETKDGv3()
-    params.useRandomCoords = True
 
     result = autotune.tune_embed_molecules(
         mols,

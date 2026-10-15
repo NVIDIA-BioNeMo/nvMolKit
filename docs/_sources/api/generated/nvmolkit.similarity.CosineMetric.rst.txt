@@ -1,0 +1,10 @@
+﻿.. SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+CosineMetric
+============
+
+.. currentmodule:: nvmolkit.similarity
+
+.. autoclass:: CosineMetric
+   :members:
+   :inherited-members:

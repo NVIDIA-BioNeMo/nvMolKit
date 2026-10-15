@@ -1,0 +1,10 @@
+﻿.. SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+SubstructLibrary
+================
+
+.. currentmodule:: nvmolkit.substruct_library
+
+.. autoclass:: SubstructLibrary
+   :members:
+   :inherited-members:
