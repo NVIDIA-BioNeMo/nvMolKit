@@ -22,10 +22,10 @@ Usage:
 """
 
 import argparse
-from contextlib import ExitStack
 import gc
 import random
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Callable
 

@@ -23,7 +23,7 @@ def _fail_task(_):
 
 
 def _initialize_multiplier(multiplier):
-    global _multiplier
+    global _multiplier  # noqa: PLW0603 - process-local initializer state
     _multiplier = multiplier
 
 
