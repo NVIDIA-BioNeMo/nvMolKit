@@ -11,6 +11,55 @@ from rdkit import Chem
 from rdkit.Chem import rdFingerprintGenerator
 
 
+@pytest.mark.parametrize("size", [0, 1, 5])
+@pytest.mark.parametrize("cap", [0, 10])
+def test_rdkit_deadline_counts_match_fingerprints(monkeypatch, size, cap):
+    monkeypatch.setattr(morgan_fp_bench, "RDKIT_CHUNK", 2)
+    mols = [Chem.MolFromSmiles("CCO")] * size
+    generator = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=64)
+    timing, fingerprints, measured = morgan_fp_bench._bench_rdkit(generator, mols, 1, 2, 0, cap)
+    expected = generator.GetFingerprints(mols, numThreads=1)
+    assert measured == size
+    assert [fp.ToBitString() for fp in fingerprints] == [fp.ToBitString() for fp in expected]
+    assert len(timing.times_ms) == 2
+
+
+def test_rdkit_deadline_partial_chunk_reports_actual_count(monkeypatch):
+    from bench_utils import TimingResult
+
+    monkeypatch.setattr(morgan_fp_bench, "RDKIT_CHUNK", 2)
+    deadline = SimpleNamespace(active=True, expired=lambda: True)
+
+    def measure(run, **kwargs):
+        run(deadline)
+        return TimingResult([10], progress=kwargs["progress_getter"](), progress_target=5)
+
+    monkeypatch.setattr(morgan_fp_bench, "time_it", measure)
+    generator = rdFingerprintGenerator.GetMorganGenerator()
+    timing, fingerprints, measured = morgan_fp_bench._bench_rdkit(
+        generator, [Chem.MolFromSmiles("CC")] * 5, 1, 1, 0, 1
+    )
+    assert measured == len(fingerprints) == 2
+    assert timing.truncated
+
+
+def test_rdkit_keeps_complete_sample_output_after_discarded_partial_run(monkeypatch):
+    from bench_utils import TimingResult
+
+    monkeypatch.setattr(morgan_fp_bench, "RDKIT_CHUNK", 2)
+
+    def measure(run, **kwargs):
+        run(SimpleNamespace(active=True, expired=lambda: False))
+        run(SimpleNamespace(active=True, expired=lambda: True))
+        assert kwargs["progress_getter"]() == 2
+        return TimingResult([10], progress=5, progress_target=5)
+
+    monkeypatch.setattr(morgan_fp_bench, "time_it", measure)
+    generator = rdFingerprintGenerator.GetMorganGenerator()
+    _, fingerprints, measured = morgan_fp_bench._bench_rdkit(generator, [Chem.MolFromSmiles("CC")] * 5, 1, 2, 0, 1)
+    assert measured == len(fingerprints) == 5
+
+
 def _args(**overrides):
     values = {
         "num_mols": 0,

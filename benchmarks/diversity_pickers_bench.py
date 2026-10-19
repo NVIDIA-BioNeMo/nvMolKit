@@ -85,9 +85,13 @@ def _canonical_clusters(clusters) -> tuple[tuple[int, ...], ...]:
     return tuple(sorted(tuple(sorted(cluster)) for cluster in clusters))
 
 
+# Threads for RDKit's LeaderPicker (also used by the DISE reference). MaxMinPicker has no threading option.
+RDKIT_THREADS = 1
+
+
 def _rdkit_leader(inputs: Inputs, cutoff: float):
     fps = inputs.rdkit_fps
-    return tuple(rdSimDivPickers.LeaderPicker().LazyBitVectorPick(fps, len(fps), cutoff))
+    return tuple(rdSimDivPickers.LeaderPicker().LazyBitVectorPick(fps, len(fps), cutoff, numThreads=RDKIT_THREADS))
 
 
 def _rdkit_dise(inputs: Inputs, cutoff: float):
@@ -265,8 +269,13 @@ def run(
     no_rdkit: bool,
     no_nvmolkit: bool,
     output: str | None,
+    rdkit_max_size: int = 0,
 ) -> list[dict[str, float | int | str | bool]]:
-    """Prepare fingerprints for the largest size and benchmark each sweep point."""
+    """Prepare fingerprints for the largest size and benchmark each sweep point.
+
+    ``rdkit_max_size`` (0 = no cap) limits the RDKit comparison to sizes it can finish; larger sizes are
+    nvMolKit-only, and are skipped entirely when nvMolKit is disabled.
+    """
     if no_rdkit and no_nvmolkit:
         raise ValueError("cannot disable both RDKit and nvMolKit")
     if any(size < 1 for size in sizes):
@@ -300,15 +309,19 @@ def run(
     try:
         for size in sorted(set(sizes)):
             inputs = None  # Release the previous size's matrix before building the next.
+            skip_rdkit = no_rdkit or (rdkit_max_size > 0 and size > rdkit_max_size)
+            if skip_rdkit and no_nvmolkit:
+                print(f"\nSkipping {size} molecules: above --rdkit_max_size={rdkit_max_size} with nvMolKit disabled")
+                continue
             use_matrix = "matrix" in forms and not no_nvmolkit and size <= matrix_max_size
             fingerprints = None if all_fingerprints is None else all_fingerprints[:size].contiguous()
             matrix = _distance_matrix(fingerprints) if use_matrix else None
             inputs = Inputs(
                 num_mols=size,
-                rdkit_fps=None if all_rdkit_fps is None else list(all_rdkit_fps[:size]),
+                rdkit_fps=None if all_rdkit_fps is None or skip_rdkit else list(all_rdkit_fps[:size]),
                 fingerprints=fingerprints,
                 matrix=matrix,
-                condensed=_condensed(matrix) if use_matrix and not no_rdkit and "maxmin" in operations else None,
+                condensed=_condensed(matrix) if use_matrix and not skip_rdkit and "maxmin" in operations else None,
                 seed=seed,
             )
             for name in operations:
@@ -317,7 +330,7 @@ def run(
                     print(f"\n=== {name}, {size} molecules, {operation.parameter}={value} ===", flush=True)
                     rows.append(
                         _benchmark_point(
-                            name, operation, value, inputs, forms, runs, warmups, validate, no_rdkit, no_nvmolkit
+                            name, operation, value, inputs, forms, runs, warmups, validate, skip_rdkit, no_nvmolkit
                         )
                     )
     finally:
@@ -350,10 +363,21 @@ def main() -> None:
     parser.add_argument("--warmups", type=int, default=1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--prep_workers", type=int, default=0, help="Fingerprint workers (0 = all available CPUs)")
+    parser.add_argument(
+        "--rdkit_threads", type=int, default=1, help="Threads for RDKit's LeaderPicker (MaxMinPicker is serial)"
+    )
+    parser.add_argument(
+        "--rdkit_max_size",
+        type=int,
+        default=0,
+        help="Largest size compared against RDKit; larger sizes are nvMolKit-only (0 = no cap)",
+    )
     parser.add_argument("--no_validate", action="store_true")
     parser.add_argument("--output", default=None, help="Optional CSV output path")
     add_backend_selection_args(parser)
     args = parser.parse_args()
+    global RDKIT_THREADS  # noqa: PLW0603 - set once from the CLI before any timing
+    RDKIT_THREADS = args.rdkit_threads
     run(
         smiles_path=args.smiles,
         sizes=args.sizes,
@@ -372,6 +396,7 @@ def main() -> None:
         no_rdkit=args.no_rdkit,
         no_nvmolkit=args.no_nvmolkit,
         output=args.output,
+        rdkit_max_size=args.rdkit_max_size,
     )
 
 

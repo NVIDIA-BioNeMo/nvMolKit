@@ -64,11 +64,13 @@ from bench_utils import (
     Deadline,
     add_backend_selection_args,
     add_rdkit_max_seconds_arg,
+    available_physical_cpu_count,
     load_pickle,
     load_smarts,
     load_smiles,
     print_csv_rows,
     process_map_bounded,
+    ready_spawn_pool,
     write_csv_rows,
 )
 from bench_utils import (
@@ -85,6 +87,14 @@ from nvmolkit.substructure import (
 )
 
 OPTUNA_AVAILABLE = nv_autotune.is_available()
+
+
+def _auto_preprocessing_threads(worker_threads: int, num_gpus: int, physical_cores: int | None = None) -> int:
+    """Use CPU threads not already reserved for per-GPU workers."""
+    physical_cores = max(1, available_physical_cpu_count() if physical_cores is None else physical_cores)
+    num_gpus = max(1, num_gpus)
+    effective_workers = min(4, max(1, physical_cores // num_gpus)) if worker_threads == -1 else max(1, worker_threads)
+    return max(1, physical_cores - num_gpus * effective_workers)
 
 
 def time_it(func: Callable, runs: int = 1, gpu_sync: bool = False) -> tuple[float, float]:
@@ -183,6 +193,9 @@ def bench_rdkit_substruct(
             (start, mol_binaries[start : start + batch_size]) for start in range(0, len(mol_binaries), batch_size)
         ]
 
+        # Workers are started (and the module re-imported) before timing; only matching is measured.
+        pool = ready_spawn_pool(threads, _rdkit_worker_init, (query_binaries, max_matches))
+
         @nvtx.annotate("substruct_run_mp", color="yellow")
         def run(deadline: Deadline):
             nonlocal complete_results_data, results_data, pairs_done_this_run
@@ -191,8 +204,7 @@ def bench_rdkit_substruct(
                 batches,
                 max_workers=threads,
                 deadline=deadline,
-                initializer=_rdkit_worker_init,
-                initargs=(query_binaries, max_matches),
+                pool=pool,
             )
             completed = dict(mapped.results)
             pairs_done_this_run = sum(len(rows) * num_queries for rows in completed.values())
@@ -220,14 +232,19 @@ def bench_rdkit_substruct(
             if pairs_done_this_run == pairs_total:
                 complete_results_data = results_data
 
-    timing = _time_it(
-        run,
-        runs=runs,
-        warmups=0,
-        max_seconds=max_seconds,
-        progress_getter=lambda: pairs_done_this_run,
-        progress_target=pairs_total,
-    )
+    try:
+        timing = _time_it(
+            run,
+            runs=runs,
+            warmups=0,
+            max_seconds=max_seconds,
+            progress_getter=lambda: pairs_done_this_run,
+            progress_target=pairs_total,
+        )
+    finally:
+        if threads > 1:
+            pool.terminate()
+            pool.join()
     if timing.progress is None:
         raise RuntimeError("bounded timing did not report progress")
     last_pairs = timing.progress
@@ -395,6 +412,12 @@ def main():
         help="Target wall-clock seconds per Optuna trial (default: 10.0)",
     )
     parser.add_argument(
+        "--autotune_cpu_budget",
+        type=int,
+        default=None,
+        help=("CPU-core budget used to bound the autotune search space. Default: detected physical core count"),
+    )
+    parser.add_argument(
         "--autotune_calibration_size",
         type=int,
         default=0,
@@ -490,7 +513,11 @@ def main():
             print(f"    batch_size: {args.batch_size}")
             print(f"    num_gpus: {args.num_gpus}")
             print(f"    workers: {args.workers if args.workers >= 0 else 'auto'}")
-            print(f"    prep_threads: {args.prep_threads if args.prep_threads >= 0 else 'auto'}")
+            if args.prep_threads == -1 and not args.autotune and not args.autotune_load:
+                selected_prep_threads = _auto_preprocessing_threads(args.workers, args.num_gpus)
+                print(f"    prep_threads: {selected_prep_threads} (auto)")
+            else:
+                print(f"    prep_threads: {args.prep_threads if args.prep_threads >= 0 else 'auto'}")
 
     print("\nLoading molecules...")
     if args.pickle:
@@ -532,6 +559,9 @@ def main():
         print("\nRun configuration:")
         print(f"  SMARTS file: {smarts_path}")
         print(f"  Mode: {mode}")
+        selected_prep_threads = config_row["prep_threads"]
+        if selected_prep_threads == -1 and not args.autotune and not args.autotune_load:
+            selected_prep_threads = _auto_preprocessing_threads(config_row["workers"], config_row["num_gpus"])
         if not args.no_nvmolkit:
             print("  nvmolkit config:")
             if args.autotune_load and args.algorithm is None:
@@ -541,7 +571,13 @@ def main():
             print(f"    batch_size: {config_row['batch_size']}")
             print(f"    num_gpus: {config_row['num_gpus']}")
             print(f"    workers: {config_row['workers'] if config_row['workers'] >= 0 else 'auto'}")
-            print(f"    prep_threads: {config_row['prep_threads'] if config_row['prep_threads'] >= 0 else 'auto'}")
+            if config_row["prep_threads"] >= 0:
+                prep_threads_label = str(selected_prep_threads)
+            elif not args.autotune and not args.autotune_load:
+                prep_threads_label = f"{selected_prep_threads} (auto)"
+            else:
+                prep_threads_label = "auto"
+            print(f"    prep_threads: {prep_threads_label}")
 
         if smarts_path in smarts_cache:
             queries, _ = smarts_cache[smarts_path]
@@ -604,8 +640,14 @@ def main():
                     )
                     explicit_calibration = None
                     if args.autotune_calibration_size > 0:
+                        if args.autotune_calibration_size > len(mols):
+                            print(
+                                "Error: --autotune_calibration_size="
+                                f"{args.autotune_calibration_size} exceeds the {len(mols)} loaded molecules"
+                            )
+                            sys.exit(1)
                         rng = random.Random(args.autotune_seed)
-                        size = min(args.autotune_calibration_size, len(mols))
+                        size = args.autotune_calibration_size
                         explicit_calibration = rng.sample(range(len(mols)), size)
                     tune_result = nv_autotune.tune_substructure(
                         mols,
@@ -617,6 +659,7 @@ def main():
                         n_trials=args.autotune_trials,
                         target_seconds_per_trial=args.autotune_time_budget,
                         calibration_set=explicit_calibration,
+                        cpu_budget=args.autotune_cpu_budget,
                         seed=args.autotune_seed,
                         verbose=True,
                     )
@@ -635,7 +678,7 @@ def main():
                     config = SubstructSearchConfig()
                     config.batchSize = config_row["batch_size"]
                     config.workerThreads = config_row["workers"]
-                    config.preprocessingThreads = config_row["prep_threads"]
+                    config.preprocessingThreads = selected_prep_threads
                     config.gpuIds = gpu_ids
                     if args.max_matches > 0:
                         config.maxMatches = args.max_matches
