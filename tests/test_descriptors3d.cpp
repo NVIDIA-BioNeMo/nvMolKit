@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <random>
 #include <stdexcept>
@@ -758,7 +759,7 @@ TEST_F(Descriptors3DTest, RejectsUnknownPropertyValue) {
                                               Property3D::PMI2,
                                               Property3D::PMI3,
                                               Property3D::RadiusOfGyration,
-                                              static_cast<Property3D>(nvMolKit::kAllProperty3D.size())};
+                                              static_cast<Property3D>(std::numeric_limits<int>::max())};
   EXPECT_THROW(nvMolKit::calc3DProperties<double>(mols_, properties, nvMolKit::Property3DOptions{}, nullptr),
                std::invalid_argument);
   EXPECT_THROW(
