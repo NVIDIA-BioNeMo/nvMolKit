@@ -43,7 +43,6 @@ ln -sf "${MINIFORGE_PREFIX}/etc/profile.d/conda.sh" /etc/profile.d/conda.sh
 conda activate base
 
 conda config --add channels conda-forge --add channels nvidia
-# Include compiler activation so CMake uses Conda's dependency and runtime paths.
 conda install -q -y \
     mamba \
     "python=${PYTHON_VERSION}" \
