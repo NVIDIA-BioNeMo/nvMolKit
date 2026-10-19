@@ -75,6 +75,7 @@ struct PinnedHostBuffer {
 class PinnedHostBufferPool {
  public:
   void initialize(int poolSize, int maxBatchSize, int maxMatchIndicesEstimate, int maxPatternsPerDepth);
+  void prepare(int poolSize, int maxBatchSize, int maxMatchIndicesEstimate, int maxPatternsPerDepth);
 
   PinnedHostBuffer* acquire();
   void              release(PinnedHostBuffer* buffer);
@@ -87,6 +88,9 @@ class PinnedHostBufferPool {
 
   std::vector<std::unique_ptr<PinnedHostBuffer>>      buffers_;
   std::unique_ptr<ThreadSafeQueue<PinnedHostBuffer*>> available_;
+  int                                                 maxBatchSize_            = 0;
+  int                                                 maxMatchIndicesEstimate_ = 0;
+  int                                                 maxPatternsPerDepth_     = 0;
 };
 
 }  // namespace nvMolKit

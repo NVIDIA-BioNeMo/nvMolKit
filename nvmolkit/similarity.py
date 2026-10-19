@@ -13,18 +13,127 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""GPU-accelerated similarity calculations between fingerprints.
+"""GPU-accelerated molecular and fingerprint similarity calculations.
 
 This module provides GPU-accelerated implementations of common RDKit operations
-found in the DataStructs module, including similarity calculations between fingerprints.
+found in the DataStructs module, along with molecular similarity methods.
 """
+
+from dataclasses import dataclass
+from typing import Literal, TypeAlias
 
 import numpy as np
 import torch
 
-from nvmolkit import _DataStructs
+from nvmolkit import _clustering, _DataStructs
 from nvmolkit._fingerprint_inputs import _prepare_packed_fingerprints
-from nvmolkit.types import ArrayInput, AsyncGpuResult
+from nvmolkit.types import ArrayInput, AsyncGpuResult, _resolve_cuda_stream
+
+
+@dataclass(frozen=True)
+class TanimotoMetric:
+    """Tanimoto similarity on packed fingerprints for fused clustering and selection.
+
+    ``metric="tanimoto"`` is equivalent.
+    """
+
+
+@dataclass(frozen=True)
+class CosineMetric:
+    """Cosine similarity on packed fingerprints for fused clustering and selection.
+
+    ``metric="cosine"`` is equivalent.
+    """
+
+
+@dataclass(frozen=True)
+class AAPMetric:
+    """Approximate Atom-Atom Path (AAP) similarity on RDKit molecules.
+
+    ``metric="aap"`` is equivalent to ``AAPMetric()``. Fused clustering and
+    selection score each selected molecule against the candidates.
+
+    Molecules must be nonempty, contain at most 64 atoms including explicit
+    hydrogens, and use only single, double, triple, and aromatic bonds. Other
+    inputs raise :class:`ValueError` whose second argument maps ``"none"``,
+    ``"empty"``, ``"too_many_atoms"``, and ``"unsupported_bond"`` to lists of
+    input indices.
+
+    Attributes:
+        max_path_length: Maximum rooted path length in bonds.
+        histogram_bins: Number of hashed path bins, from 1 through 32767.
+        sinkhorn_iterations: Number of Sinkhorn normalization iterations.
+        sinkhorn_temperature: Positive Sinkhorn temperature, at least the
+            smallest positive normal float32 value.
+    """
+
+    max_path_length: int = 7
+    histogram_bins: int = 2048
+    sinkhorn_iterations: int = 8
+    sinkhorn_temperature: float = 0.104
+
+
+Metric: TypeAlias = Literal["tanimoto", "cosine", "aap"] | TanimotoMetric | CosineMetric | AAPMetric
+
+_DEFAULT_AAP_METRIC = AAPMetric()
+_NAMED_METRICS = {"tanimoto": TanimotoMetric(), "cosine": CosineMetric(), "aap": _DEFAULT_AAP_METRIC}
+
+
+def _resolve_metric(metric: Metric) -> TanimotoMetric | CosineMetric | AAPMetric:
+    if isinstance(metric, (TanimotoMetric, CosineMetric, AAPMetric)):
+        return metric
+    if isinstance(metric, str) and metric in _NAMED_METRICS:
+        return _NAMED_METRICS[metric]
+    raise ValueError(
+        "metric must be 'tanimoto', 'cosine', 'aap', or a TanimotoMetric, CosineMetric, or AAPMetric instance, "
+        f"got {metric!r}"
+    )
+
+
+def _resolve_aap_metric(metric: Literal["aap"] | AAPMetric) -> AAPMetric:
+    resolved = _resolve_metric(metric)
+    if not isinstance(resolved, AAPMetric):
+        raise TypeError(f"metric must be 'aap' or an AAPMetric, got {metric!r}")
+    return resolved
+
+
+def aap_similarity(
+    left,
+    right,
+    *,
+    metric: Literal["aap"] | AAPMetric = _DEFAULT_AAP_METRIC,
+    stream: torch.cuda.Stream | None = None,
+) -> float:
+    """Compute approximate Atom-Atom Path (AAP) similarity between two molecules.
+
+    The score is directed: ``aap_similarity(a, b)`` and ``aap_similarity(b, a)``
+    can differ. Input requirements are described in :class:`AAPMetric`.
+
+    Args:
+        left: Reference RDKit molecule.
+        right: Candidate RDKit molecule.
+        metric: AAP parameters, or ``"aap"`` for the defaults.
+        stream: CUDA stream to use. If None, uses the current stream.
+
+    Returns:
+        Similarity in the interval ``[0, 1]``.
+
+    Note:
+        For method details, see `Gobbi et al. (2015)
+        <https://doi.org/10.1186/s13321-015-0056-8>`_.
+    """
+    metric = _resolve_aap_metric(metric)
+    active_stream = _resolve_cuda_stream(stream)
+    return _clustering.aap_similarity(
+        left,
+        right,
+        metric.max_path_length,
+        metric.histogram_bins,
+        metric.sinkhorn_iterations,
+        metric.sinkhorn_temperature,
+        active_stream.cuda_stream,
+    )
+
 
 # --------------------------------
 # Tanimoto similarity

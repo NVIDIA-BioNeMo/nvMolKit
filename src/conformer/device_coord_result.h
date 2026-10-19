@@ -66,6 +66,32 @@ struct DeviceCoordResult {
   int                        nMols = 0;
 };
 
+/**
+ * @brief Non-owning view of the coordinate fields of a DeviceCoordResult-shaped batch.
+ *
+ * Lets consumers read conformer coordinates from either a C++ @ref DeviceCoordResult or externally
+ * owned device buffers (e.g. a Python @c Device3DResult) without copying. Buffer layouts and length
+ * relationships match @ref DeviceCoordResult; the caller keeps the underlying storage alive for the
+ * lifetime of any stream work that reads it.
+ */
+struct DeviceCoordView {
+  const double*  positions     = nullptr;
+  const int32_t* atomStarts    = nullptr;
+  const int32_t* molIndices    = nullptr;
+  int            numConformers = 0;
+  int            nMols         = 0;
+  int64_t        numAtoms      = 0;  //!< Rows in @ref positions; consumers bound atomStarts ranges by it.
+};
+
+inline DeviceCoordView makeDeviceCoordView(const DeviceCoordResult& result) {
+  return DeviceCoordView{result.positions.data(),
+                         result.atomStarts.data(),
+                         result.molIndices.data(),
+                         static_cast<int>(result.molIndices.size()),
+                         result.nMols,
+                         static_cast<int64_t>(result.positions.size() / 3)};
+}
+
 }  // namespace nvMolKit
 
 #endif  // NVMOLKIT_DEVICE_COORD_RESULT_H

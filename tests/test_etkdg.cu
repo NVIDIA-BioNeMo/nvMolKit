@@ -19,7 +19,9 @@
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
+#include <mutex>
 #include <unordered_map>
 
 #include "rdkit_extensions/conformer_pruning.h"
@@ -431,6 +433,59 @@ TEST_F(ETKDGPipelineUpdateConformersTestFixture, UpdateConformersStage) {
   }
 }
 
+TEST_F(ETKDGPipelineUpdateConformersTestFixture, UpdateConformersStageKeepsLowestAttemptIds) {
+  // Three attempts for the same molecule succeed in one batch, in an order unrelated to their attempt IDs. With room
+  // for two conformers, the two lowest IDs must survive regardless of arrival order.
+  RDKit::ROMol*                            mol        = mols_[0];
+  const std::vector<RDKit::ROMol*>         batchMols  = {mol, mol, mol};
+  const std::vector<int>                   attemptIds = {7, 2, 5};
+  std::vector<nvMolKit::detail::EmbedArgs> eargs(batchMols.size());
+  for (auto& earg : eargs) {
+    earg.dim = 3;
+  }
+
+  const int    nAtoms = static_cast<int>(mol->getNumAtoms());
+  ETKDGContext context;
+  context.nTotalSystems = batchMols.size();
+  context.activeThisStage.resize(context.nTotalSystems);
+  context.activeThisStage.copyFromHost(std::vector<uint8_t>(batchMols.size(), 1));
+  context.systemHost.atomStarts = {0};
+  for (size_t i = 0; i < batchMols.size(); ++i) {
+    context.systemHost.atomStarts.push_back(static_cast<int>(i + 1) * nAtoms);
+  }
+  // Tag each batch slot's coordinates with its attempt ID.
+  std::vector<double> positions(batchMols.size() * nAtoms * 3);
+  for (size_t i = 0; i < batchMols.size(); ++i) {
+    std::fill_n(positions.begin() + i * nAtoms * 3, nAtoms * 3, static_cast<double>(attemptIds[i]));
+  }
+  context.systemDevice.positions.resize(positions.size());
+  context.systemDevice.positions.copyFromHost(positions);
+
+  std::unordered_map<const RDKit::ROMol*, std::vector<std::unique_ptr<Conformer>>> conformers;
+  nvMolKit::PinnedHostVector<double>                                               positionsScratch(positions.size());
+  nvMolKit::PinnedHostVector<uint8_t>                                              activeScratch(batchMols.size());
+  std::mutex                                                                       mutex;
+  nvMolKit::detail::ETKDGUpdateConformersStage                                     stage(batchMols,
+                                                     eargs,
+                                                     conformers,
+                                                     positionsScratch,
+                                                     activeScratch,
+                                                     nullptr,
+                                                     &mutex,
+                                                     /*maxConformersPerMol=*/2,
+                                                     attemptIds);
+  stage.execute(context);
+
+  const auto& kept = conformers.at(mol);
+  ASSERT_EQ(kept.size(), 2u);
+  std::vector<double> keptTags;
+  for (const auto& conf : kept) {
+    keptTags.push_back(conf->getAtomPos(0).x);
+  }
+  std::sort(keptTags.begin(), keptTags.end());
+  EXPECT_THAT(keptTags, testing::ElementsAre(2.0, 5.0));
+}
+
 TEST_F(ETKDGPipelineUpdateConformersTestFixture, UpdateConformersStageWithInactiveMolecule) {
   // Create eargs with dim=3 for all molecules
   std::vector<nvMolKit::detail::EmbedArgs> eargs;
@@ -513,7 +568,8 @@ namespace {
 void testEnergyImprovement(const std::vector<RDKit::ROMol*>&    mols,
                            int                                  confsPerMolecule = 1,
                            RDKit::DGeomHelpers::EmbedParameters params           = RDKit::DGeomHelpers::ETKDGv3,
-                           nvMolKit::BfgsBackend                backend = nvMolKit::BfgsBackend::PER_MOLECULE) {
+                           nvMolKit::BfgsBackend                backend          = nvMolKit::BfgsBackend::PER_MOLECULE,
+                           nvMolKit::PrecisionMode              precision        = nvMolKit::PrecisionMode::FULL) {
   // Store initial energies for each molecule
   std::vector<double> initialEnergies;
   initialEnergies.reserve(mols.size());
@@ -526,6 +582,16 @@ void testEnergyImprovement(const std::vector<RDKit::ROMol*>&    mols,
     nvMolKit::detail::EmbedArgs                 eargs;
     std::vector<std::unique_ptr<RDGeom::Point>> positions;
     std::unique_ptr<ForceFields::ForceField>    field;
+
+    // Embedding starts from random coordinates, so measure the starting energy at a random-coordinate start.
+    // An eigenvector-embedded reference can already sit below a legitimate DG local minimum.
+    auto randomOption            = RDKit::DGeomHelpers::ETKDGv3;
+    randomOption.useRandomCoords = true;
+    {
+      nvMolKit::detail::EmbedArgs              randomEargs;
+      std::unique_ptr<ForceFields::ForceField> randomField;
+      nvMolKit::DGeomHelpers::setupRDKitFFWithPos(mol, randomOption, randomField, randomEargs, positions);
+    }
 
     // Use RDKit's default first minimization force field for energy comparison
     auto option = RDKit::DGeomHelpers::ETKDGv3;
@@ -546,7 +612,17 @@ void testEnergyImprovement(const std::vector<RDKit::ROMol*>&    mols,
   hardwareOptions.batchSize            = 100;
   hardwareOptions.batchesPerGpu        = 10;
 
-  nvMolKit::embedMolecules(mols, params, confsPerMolecule, -1, true, nullptr, hardwareOptions, backend);
+  nvMolKit::embedMolecules(mols,
+                           params,
+                           confsPerMolecule,
+                           -1,
+                           true,
+                           nullptr,
+                           hardwareOptions,
+                           backend,
+                           nvMolKit::CoordinateOutput::RDKIT_CONFORMERS,
+                           -1,
+                           precision);
 
   // Calculate and verify final energies for each molecule and conformer
   for (size_t i = 0; i < mols.size(); ++i) {
@@ -580,6 +656,22 @@ void testEnergyImprovement(const std::vector<RDKit::ROMol*>&    mols,
         << ") should be less than initial energy (" << initialEnergies[i] << ")";
     }
   }
+}
+
+TEST(DGPrecisionModes, SinglePrecisionPerMoleculePipelineImprovesEnergy) {
+  std::vector<std::unique_ptr<RDKit::ROMol>> ownedMols;
+  getMols(getTestDataFolderPath() + "/MMFF94_dative.sdf", ownedMols, /*count=*/3);
+  ASSERT_EQ(ownedMols.size(), 3);
+  std::vector<RDKit::ROMol*> mols;
+  for (auto& mol : ownedMols) {
+    mol->clearConformers();
+    mols.push_back(mol.get());
+  }
+  testEnergyImprovement(mols,
+                        1,
+                        RDKit::DGeomHelpers::ETKDGv3,
+                        nvMolKit::BfgsBackend::PER_MOLECULE,
+                        nvMolKit::PrecisionMode::SINGLE);
 }
 
 // Helper function to compare conformer energies between RDKit and nvMolKit

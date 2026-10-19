@@ -311,7 +311,6 @@ class RecursivePaintTest : public ::testing::Test {
     std::vector<BatchedPatternEntry> scratchPatternEntries;
     preprocessRecursiveSmarts(SubstructTemplateConfig::Config_T128_Q64_B8,
                               targetDevice,
-                              queryHost,
                               leafSubpatterns,
                               *results_,
                               numQueries_,

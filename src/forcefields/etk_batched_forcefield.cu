@@ -13,7 +13,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "src/forcefields/dist_geom_kernels.h"
 #include "src/forcefields/etk_batched_forcefield.h"
+#include "src/utils/device_convert.cuh"
 
 namespace nvMolKit {
 
@@ -29,14 +31,24 @@ ETKBatchedForcefield::ETKBatchedForcefield(const DistGeom::BatchedMolecularSyste
                                            const std::vector<int>&                       atomStartsHost,
                                            const bool                                    useBasicKnowledge,
                                            BatchedForcefieldMetadata                     metadata,
-                                           const cudaStream_t                            stream)
-    : BatchedForcefield(ForceFieldType::ETK, 3, atomStartsHost, nullptr, std::move(metadata)),
+                                           const cudaStream_t                            stream,
+                                           const PrecisionMode                           precision)
+    // ETK evaluates xyz terms, but the ETKDG minimization stage retains the
+    // four-strided coordinate buffer until minimization is complete.
+    : BatchedForcefield(ForceFieldType::ETK, 4, atomStartsHost, nullptr, std::move(metadata)),
       term_(useBasicKnowledge ? DistGeom::ETKTerm::ALL : DistGeom::ETKTerm::PLAIN) {
   atomStartsDevice_.setStream(stream);
-  DistGeom::setStreams(systemDevice_, stream);
-  DistGeom::sendContribsAndIndicesToDevice3D(molSystemHost, systemDevice_);
+  if (usesSinglePrecision(precision)) {
+    auto& buffers = systemDevice_.emplace<DistGeom::BatchedMolecular3DDeviceBuffersSingle>();
+    DistGeom::setStreams(buffers, stream);
+    DistGeom::sendContribsAndIndicesToDevice3D(molSystemHost, buffers);
+  } else {
+    auto& buffers = systemDevice_.emplace<DistGeom::BatchedMolecular3DDeviceBuffers>();
+    DistGeom::setStreams(buffers, stream);
+    DistGeom::sendContribsAndIndicesToDevice3D(molSystemHost, buffers);
+    allocateEnergyScratch(molSystemHost, buffers);
+  }
   atomStartsDevice_.setFromVector(atomStartsHost);
-  allocateEnergyScratch(molSystemHost, systemDevice_);
   setAtomStartsDevice(atomStartsDevice_.data());
 }
 
@@ -44,7 +56,22 @@ cudaError_t ETKBatchedForcefield::computeEnergy(double*        energyOuts,
                                                 const double*  positions,
                                                 const uint8_t* activeSystemMask,
                                                 cudaStream_t   stream) {
-  return DistGeom::computeEnergyETK(systemDevice_,
+  if (std::holds_alternative<DistGeom::BatchedMolecular3DDeviceBuffersSingle>(systemDevice_)) {
+    singleConversion_.positions.setStream(stream);
+    singleConversion_.energies.setStream(stream);
+    singleConversion_.positions.resize(totalPositions());
+    singleConversion_.energies.resize(numMolecules());
+    auto err = detail::convertDeviceArray(singleConversion_.positions.data(), positions, totalPositions(), stream);
+    if (err == cudaSuccess) {
+      err =
+        computeEnergy(singleConversion_.energies.data(), singleConversion_.positions.data(), activeSystemMask, stream);
+    }
+    return err == cudaSuccess ?
+             detail::convertDeviceArray(energyOuts, singleConversion_.energies.data(), numMolecules(), stream) :
+             err;
+  }
+  auto& buffers = std::get<DistGeom::BatchedMolecular3DDeviceBuffers>(systemDevice_);
+  return DistGeom::computeEnergyETK(buffers,
                                     energyOuts,
                                     atomStartsDevice_.data(),
                                     positions,
@@ -58,7 +85,25 @@ cudaError_t ETKBatchedForcefield::computeGradients(double*        grad,
                                                    const double*  positions,
                                                    const uint8_t* activeSystemMask,
                                                    cudaStream_t   stream) {
-  return DistGeom::computeGradientsETK(systemDevice_,
+  if (std::holds_alternative<DistGeom::BatchedMolecular3DDeviceBuffersSingle>(systemDevice_)) {
+    singleConversion_.positions.setStream(stream);
+    singleConversion_.gradients.setStream(stream);
+    singleConversion_.positions.resize(totalPositions());
+    singleConversion_.gradients.resize(totalPositions());
+    auto err = detail::convertDeviceArray(singleConversion_.positions.data(), positions, totalPositions(), stream);
+    if (err != cudaSuccess)
+      return err;
+    singleConversion_.gradients.zero();
+    err = computeGradients(singleConversion_.gradients.data(),
+                           singleConversion_.positions.data(),
+                           activeSystemMask,
+                           stream);
+    return err == cudaSuccess ?
+             detail::convertDeviceArray(grad, singleConversion_.gradients.data(), totalPositions(), stream) :
+             err;
+  }
+  auto& buffers = std::get<DistGeom::BatchedMolecular3DDeviceBuffers>(systemDevice_);
+  return DistGeom::computeGradientsETK(buffers,
                                        grad,
                                        atomStartsDevice_.data(),
                                        positions,
@@ -71,13 +116,72 @@ cudaError_t ETKBatchedForcefield::computePlanarEnergy(double*        energyOuts,
                                                       const double*  positions,
                                                       const uint8_t* activeSystemMask,
                                                       cudaStream_t   stream) {
-  return DistGeom::computePlanarEnergy(systemDevice_,
+  if (std::holds_alternative<DistGeom::BatchedMolecular3DDeviceBuffersSingle>(systemDevice_)) {
+    singleConversion_.positions.setStream(stream);
+    singleConversion_.energies.setStream(stream);
+    singleConversion_.positions.resize(totalPositions());
+    singleConversion_.energies.resize(numMolecules());
+    const auto err =
+      detail::convertDeviceArray(singleConversion_.positions.data(), positions, totalPositions(), stream);
+    if (err != cudaSuccess)
+      return err;
+    const auto& buffers = std::get<DistGeom::BatchedMolecular3DDeviceBuffersSingle>(systemDevice_);
+    const auto  launchError =
+      DistGeom::launchPlanarEnergyKernelETK(numMolecules(),
+                                            DistGeom::toEnergy3DForceContribsDevicePtr(buffers),
+                                            DistGeom::toBatchedIndices3DDevicePtr(buffers, atomStartsDevice_.data()),
+                                            singleConversion_.positions.data(),
+                                            singleConversion_.energies.data(),
+                                            activeSystemMask,
+                                            stream);
+    return launchError == cudaSuccess ?
+             detail::convertDeviceArray(energyOuts, singleConversion_.energies.data(), numMolecules(), stream) :
+             launchError;
+  }
+  auto& buffers = std::get<DistGeom::BatchedMolecular3DDeviceBuffers>(systemDevice_);
+  return DistGeom::computePlanarEnergy(buffers,
                                        energyOuts,
                                        atomStartsDevice_.data(),
                                        positions,
                                        activeSystemMask,
                                        positions,
                                        stream);
+}
+
+cudaError_t ETKBatchedForcefield::computeEnergy(float*         energyOuts,
+                                                const float*   positions,
+                                                const uint8_t* activeSystemMask,
+                                                cudaStream_t   stream) {
+  if (!std::holds_alternative<DistGeom::BatchedMolecular3DDeviceBuffersSingle>(systemDevice_)) {
+    return cudaErrorInvalidValue;
+  }
+  const auto& buffers = std::get<DistGeom::BatchedMolecular3DDeviceBuffersSingle>(systemDevice_);
+  return DistGeom::launchBlockPerMolEnergyKernelETK(
+    numMolecules(),
+    DistGeom::toEnergy3DForceContribsDevicePtr(buffers),
+    DistGeom::toBatchedIndices3DDevicePtr(buffers, atomStartsDevice_.data()),
+    positions,
+    energyOuts,
+    activeSystemMask,
+    stream);
+}
+
+cudaError_t ETKBatchedForcefield::computeGradients(float*         grad,
+                                                   const float*   positions,
+                                                   const uint8_t* activeSystemMask,
+                                                   cudaStream_t   stream) {
+  if (!std::holds_alternative<DistGeom::BatchedMolecular3DDeviceBuffersSingle>(systemDevice_)) {
+    return cudaErrorInvalidValue;
+  }
+  const auto& buffers = std::get<DistGeom::BatchedMolecular3DDeviceBuffersSingle>(systemDevice_);
+  return DistGeom::launchBlockPerMolGradKernelETK(
+    numMolecules(),
+    DistGeom::toEnergy3DForceContribsDevicePtr(buffers),
+    DistGeom::toBatchedIndices3DDevicePtr(buffers, atomStartsDevice_.data()),
+    positions,
+    grad,
+    activeSystemMask,
+    stream);
 }
 
 }  // namespace nvMolKit

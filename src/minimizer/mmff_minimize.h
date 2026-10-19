@@ -25,6 +25,7 @@
 #include "src/hardware_options.h"
 #include "src/minimizer/bfgs_minimize.h"
 #include "src/minimizer/fire_minimizer.h"
+#include "src/precision/precision_mode.h"
 
 namespace RDKit {
 class ROMol;
@@ -43,13 +44,15 @@ std::vector<std::vector<double>> MMFFOptimizeMoleculesConfsBfgs(std::vector<RDKi
                                                                 int                         maxIters    = 200,
                                                                 const MMFFProperties&       properties  = {},
                                                                 const BatchHardwareOptions& perfOptions = {},
-                                                                BfgsBackend backend = BfgsBackend::HYBRID);
+                                                                BfgsBackend   backend   = BfgsBackend::HYBRID,
+                                                                PrecisionMode precision = PrecisionMode::FULL);
 
 std::vector<std::vector<double>> MMFFOptimizeMoleculesConfsBfgs(std::vector<RDKit::ROMol*>&        mols,
                                                                 int                                maxIters,
                                                                 const std::vector<MMFFProperties>& properties,
                                                                 const BatchHardwareOptions&        perfOptions = {},
-                                                                BfgsBackend backend = BfgsBackend::HYBRID);
+                                                                BfgsBackend   backend   = BfgsBackend::HYBRID,
+                                                                PrecisionMode precision = PrecisionMode::FULL);
 
 //! \brief Result from constraint-aware MMFF minimization.
 //!
@@ -99,7 +102,8 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfs(
   BfgsBackend                                                  backend     = BfgsBackend::HYBRID,
   CoordinateOutput                                             output      = CoordinateOutput::RDKIT_CONFORMERS,
   int                                                          targetGpu   = -1,
-  const DeviceCoordResult*                                     deviceInput = nullptr);
+  const DeviceCoordResult*                                     deviceInput = nullptr,
+  PrecisionMode                                                precision   = PrecisionMode::FULL);
 
 //! \brief Minimize MMFF energies with FIRE 2.0 and report per-conformer convergence.
 //! \param mols Molecules whose conformers provide the initial coordinates. In
@@ -127,7 +131,8 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
   const BatchHardwareOptions&                                  perfOptions = {},
   FireBackend                                                  backend     = FireBackend::HYBRID,
   CoordinateOutput                                             output      = CoordinateOutput::RDKIT_CONFORMERS,
-  int                                                          targetGpu   = -1);
+  int                                                          targetGpu   = -1,
+  PrecisionMode                                                precision   = PrecisionMode::FULL);
 
 //! \brief Minimize MMFF energies with FIRE 2.0 and return the final energy of each conformer.
 //! \note Use @ref MMFFMinimizeMoleculesConfsFire when convergence status is required.
@@ -136,7 +141,8 @@ std::vector<std::vector<double>> MMFFOptimizeMoleculesConfsFire(std::vector<RDKi
                                                                 const FireOptions&                 fireOptions = {},
                                                                 const std::vector<MMFFProperties>& properties  = {},
                                                                 const BatchHardwareOptions&        perfOptions = {},
-                                                                FireBackend backend = FireBackend::HYBRID);
+                                                                FireBackend   backend   = FireBackend::HYBRID,
+                                                                PrecisionMode precision = PrecisionMode::FULL);
 
 }  // namespace nvMolKit::MMFF
 #endif  // NVMOLKIT_MMFF_MINIMIZE_H

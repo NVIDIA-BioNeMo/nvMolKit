@@ -21,7 +21,7 @@ so individual bench scripts can ``from bench_utils import time_it, load_smiles``
 
 from bench_utils.cli import add_backend_selection_args
 from bench_utils.concurrent import BoundedProcessMapResult, process_map_bounded
-from bench_utils.loaders import load_pickle, load_sdf, load_smarts, load_smiles
+from bench_utils.loaders import load_csv, load_pickle, load_sdf, load_smarts, load_smiles
 from bench_utils.molprep import (
     available_cpu_count,
     clone_mols_with_conformers,
@@ -48,6 +48,7 @@ __all__ = [
     "available_cpu_count",
     "clone_mols_with_conformers",
     "embed_and_jitter",
+    "load_csv",
     "load_pickle",
     "load_sdf",
     "load_smarts",

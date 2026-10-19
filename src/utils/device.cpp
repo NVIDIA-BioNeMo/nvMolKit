@@ -79,7 +79,7 @@ bool streamIsOnCurrentDevice(cudaStream_t stream) {
 std::optional<cudaStream_t> acquireExternalStream(std::uintptr_t streamPtr) {
   // External APIs transport the opaque CUDA stream handle as an integer.
   // NOLINTNEXTLINE(performance-no-int-to-ptr)
-  auto stream = reinterpret_cast<cudaStream_t>(streamPtr);
+  auto* stream = reinterpret_cast<cudaStream_t>(streamPtr);
   if (streamPtr == 0) {
     return stream;
   }

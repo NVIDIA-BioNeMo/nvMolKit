@@ -426,7 +426,7 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
         const int root = roots.lowest();
         roots.clearLowest();
         atomicOr(&out.paint.recursiveBits[out.paint.outputPairIdx * out.paint.maxTargetAtoms + root],
-                 1u << out.paint.patternId);
+                 out.paint.patternMask);
       }
     } else {
       unsigned char mapping[1];
@@ -473,7 +473,7 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
       // first hit settles the root and skips the rest of its subtree.
       if (!terminals.empty()) {
         atomicOr(&out.paint.recursiveBits[out.paint.outputPairIdx * out.paint.maxTargetAtoms + mapping[0]],
-                 1u << out.paint.patternId);
+                 out.paint.patternMask);
         verdict.rootDone = true;
       }
     } else {

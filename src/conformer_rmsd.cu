@@ -21,64 +21,13 @@
 #include "src/conformer/device_conformer_pruning.h"
 #include "src/conformer_rmsd.h"
 #include "src/utils/cuda_error_check.h"
+#include "src/utils/symmetric_eigenvalues_3x3.cuh"
 
 namespace nvMolKit {
 
 // ---------------------------------------------------------------------------
 // Device helpers
 // ---------------------------------------------------------------------------
-
-/// Compute eigenvalues of a 3x3 symmetric matrix using Cardano's analytical formula.
-/// Input: upper triangle {a00, a01, a02, a11, a12, a22}.
-/// Output: three eigenvalues in descending order.
-__device__ __forceinline__ void symmetricEigenvalues3x3(const double a00,
-                                                        const double a01,
-                                                        const double a02,
-                                                        const double a11,
-                                                        const double a12,
-                                                        const double a22,
-                                                        double&      e0,
-                                                        double&      e1,
-                                                        double&      e2) {
-  // Characteristic polynomial:  λ³ - p λ² + q λ - r = 0
-  const double p       = a00 + a11 + a22;  // trace
-  // Pre-compute pairwise products reused in both q and r.
-  const double a00_a11 = a00 * a11;
-  const double a00_a22 = a00 * a22;
-  const double a11_a22 = a11 * a22;
-  const double q       = a00_a11 + a00_a22 + a11_a22 - a01 * a01 - a02 * a02 - a12 * a12;
-  const double r       = a00_a11 * a22 + 2.0 * a01 * a02 * a12 - a00 * a12 * a12 - a11 * a02 * a02 - a22 * a01 * a01;
-
-  // Shift to depressed cubic:  t³ + pt' + q' = 0  where λ = t + p/3
-  const double p3        = p / 3.0;
-  const double pp        = (p * p - 3.0 * q) / 9.0;  // -p'/3
-  const double qq        = (2.0 * p * p * p - 9.0 * p * q + 27.0 * r) / 54.0;
-  // Three real roots (guaranteed for real symmetric matrices).  Near-degenerate
-  // inputs are handled by the fmax guards on sqrtPP and the acos argument below.
-  const double sqrtPP    = sqrt(fmax(pp, 0.0));
-  const double theta     = acos(fmin(fmax(qq / fmax(sqrtPP * sqrtPP * sqrtPP, 1e-30), -1.0), 1.0)) / 3.0;
-  const double twoSqrtPP = 2.0 * sqrtPP;
-  e0                     = twoSqrtPP * cos(theta) + p3;
-  e1                     = twoSqrtPP * cos(theta - 2.0 * M_PI / 3.0) + p3;
-  e2                     = twoSqrtPP * cos(theta - 4.0 * M_PI / 3.0) + p3;
-
-  // Sort descending
-  if (e1 > e0) {
-    double t = e0;
-    e0       = e1;
-    e1       = t;
-  }
-  if (e2 > e0) {
-    double t = e0;
-    e0       = e2;
-    e2       = t;
-  }
-  if (e2 > e1) {
-    double t = e1;
-    e1       = e2;
-    e2       = t;
-  }
-}
 
 /// Compute determinant of a 3x3 matrix stored as scalar elements.
 __device__ __forceinline__ double det3x3(const double h00,

@@ -57,13 +57,24 @@ class MiniBatchPlanner {
                         int                        miniBatchPairOffset,
                         int                        maxPairsInMiniBatch) const;
 
+  /** Prepare one-query work for a selected set of persistent target indices. */
+  void prepareSelectedTargetsMiniBatch(MiniBatchPlan&             plan,
+                                       PinnedHostBuffer&          buffer,
+                                       const ThreadWorkerContext& ctx,
+                                       const LeafSubpatterns&     leafSubpatterns,
+                                       const std::vector<int>&    selectedTargetIndices,
+                                       int                        selectionOffset,
+                                       int                        maxTargetsInMiniBatch) const;
+
  private:
   void precomputePipelineSchedule(MiniBatchPlan& plan, const ThreadWorkerContext& ctx, PinnedHostBuffer& buffer) const;
 
   void prepareRecursiveMiniBatch(MiniBatchPlan&             plan,
                                  const ThreadWorkerContext& ctx,
                                  const LeafSubpatterns&     leafSubpatterns,
-                                 PinnedHostBuffer&          buffer) const;
+                                 PinnedHostBuffer&          buffer,
+                                 int                        firstTarget,
+                                 int                        numTargets) const;
 };
 
 }  // namespace nvMolKit

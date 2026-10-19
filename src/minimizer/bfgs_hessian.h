@@ -36,6 +36,20 @@ void updateInverseHessianBFGSBatch(int            numActiveSystems,
                                    const int*     activeSystemIndices,
                                    cudaStream_t   stream = nullptr);
 
+void updateInverseHessianBFGSBatch(int            numActiveSystems,
+                                   const int16_t* statuses,
+                                   const int*     hessianStarts,
+                                   const int*     atomStarts,
+                                   float*         invHessians,
+                                   float*         dGrads,
+                                   float*         xis,
+                                   float*         hessDGrads,
+                                   const float*   grads,
+                                   int            dataDim,
+                                   bool           hasLargeMolecule,
+                                   const int*     activeSystemIndices,
+                                   cudaStream_t   stream = nullptr);
+
 }  // namespace nvMolKit
 
 #endif  // NVMOLKIT_BFGS_HESSIAN_H

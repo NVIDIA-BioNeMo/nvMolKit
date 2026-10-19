@@ -67,6 +67,48 @@ constexpr double FOURTH_DIM_MINIMIZE_FOURTH_DIM_WEIGHT =
 }  // namespace
 
 namespace nvMolKit {
+namespace detail {
+
+EmbedArgs cloneEmbedArgs(const EmbedArgs& source) {
+#if RDKIT_VERSION_MAJOR > 2026 || (RDKIT_VERSION_MAJOR == 2026 && RDKIT_VERSION_MINOR >= 9)
+  EmbedArgs result;
+  result.dim                = source.dim;
+  result.mmat               = source.mmat;
+  result.chiralCenters      = source.chiralCenters;
+  result.tetrahedralCarbons = source.tetrahedralCarbons;
+  result.doubleBondEnds     = source.doubleBondEnds;
+  result.stereoDoubleBonds  = source.stereoDoubleBonds;
+  result.posVec             = source.posVec;
+  result.stage              = source.stage;
+
+  const auto& original         = source.etkdgDetails;
+  auto&       copied           = result.etkdgDetails;
+  copied.torsionParamKind      = original.torsionParamKind;
+  copied.expTorsionAtoms       = original.expTorsionAtoms;
+  copied.expTorsionAngles      = original.expTorsionAngles;
+  copied.torsionIdx            = original.torsionIdx;
+  copied.improperAtoms         = original.improperAtoms;
+  copied.bonds                 = original.bonds;
+  copied.angles                = original.angles;
+  copied.atomNums              = original.atomNums;
+  copied.boundsMatForceScaling = original.boundsMatForceScaling;
+  copied.constrainedAtoms      = original.constrainedAtoms;
+  copied.distMat               = original.distMat;
+  copied.forceConsts           = original.forceConsts;
+  copied.path14Configs         = original.path14Configs;
+  copied.phiToEnergy           = original.phiToEnergy;
+  copied.phiToGrad             = original.phiToGrad;
+  if (original.internalCoords != nullptr) {
+    copied.internalCoords = std::make_unique<RDKit::DGeomHelpers::InternalCoordinates>(*original.internalCoords);
+  }
+  return result;
+#else
+  return source;
+#endif
+}
+
+}  // namespace detail
+
 namespace DGeomHelpers {
 namespace EmbeddingOps {
 bool generateInitialCoords(const std::vector<std::unique_ptr<RDGeom::Point>>& positions,

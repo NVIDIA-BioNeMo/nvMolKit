@@ -44,6 +44,7 @@ void MiniBatchResultsDevice::setStream(cudaStream_t stream) {
   overflowBuffer_.setStream(stream);
   recursiveMatchBits_.setStream(stream);
   labelMatrixBuffer_.setStream(stream);
+  overflowFlags_.setStream(stream);
 }
 
 void MiniBatchResultsDevice::allocateMiniBatch(int        miniBatchSize,
@@ -191,8 +192,9 @@ RDKitFallbackQueue::RDKitFallbackQueue(const std::vector<const RDKit::ROMol*>* t
       maxMatches_(maxMatches) {}
 
 void RDKitFallbackQueue::enqueue(const std::vector<RDKitFallbackEntry>& entries) {
-  if (entries.empty())
+  if (entries.empty()) {
     return;
+  }
   queue_.pushBatch(entries);
 }
 

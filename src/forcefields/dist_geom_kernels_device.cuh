@@ -13,62 +13,46 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifndef NVMOLKIT_DISTGEOM_KERNELS_DEVICE_CUH
-#define NVMOLKIT_DISTGEOM_KERNELS_DEVICE_CUH
-
-#include <cooperative_groups.h>
-
-#include "src/forcefields/dist_geom_kernels.h"
-#include "src/forcefields/kernel_utils.cuh"
-
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-constexpr double RAD2DEG = 180.0 / M_PI;
-
-using namespace nvMolKit::FFKernelUtils;
-
-namespace nvMolKit {
-namespace DistGeom {
-
+// Instantiated by dist_geom_kernels_device_dispatch.cuh for each arithmetic type.
+// DG_REAL and the DG_* math macros must be defined before inclusion.
 // --------------
 // DG terms
 // --------------
 
 template <int dimension>
-static __device__ __forceinline__ double distViolationEnergy(const double* pos,
-                                                             const int     idx1,
-                                                             const int     idx2,
-                                                             const double  lb2,
-                                                             const double  ub2,
-                                                             const double  weight) {
-  const int    posIdx1   = idx1 * dimension;
-  const int    posIdx2   = idx2 * dimension;
-  const double distance2 = distanceSquaredPosIdx<dimension>(pos, posIdx1, posIdx2);
-  double       val       = 0.0;
+static __device__ __forceinline__ DG_REAL distViolationEnergy(const DG_REAL* pos,
+                                                              const int      idx1,
+                                                              const int      idx2,
+                                                              const DG_REAL  lb2,
+                                                              const DG_REAL  ub2,
+                                                              const DG_REAL  weight) {
+  const int     posIdx1   = idx1 * dimension;
+  const int     posIdx2   = idx2 * dimension;
+  const DG_REAL distance2 = distanceSquaredPosIdx<dimension>(pos, posIdx1, posIdx2);
+  DG_REAL       val       = DG_REAL(0.0);
   if (distance2 > ub2) {
-    val = (distance2 / ub2) - 1.0;
+    val = (distance2 / ub2) - DG_REAL(1.0);
   } else if (distance2 < lb2) {
-    val = ((2 * lb2) / (lb2 + distance2)) - 1.0;
+    val = ((2 * lb2) / (lb2 + distance2)) - DG_REAL(1.0);
   }
-  if (val > 0.0) {
+  if (val > DG_REAL(0.0)) {
     return weight * val * val;
   }
-  return 0.0;
+  return DG_REAL(0.0);
 }
 
 template <int dimension>
-static __device__ __forceinline__ void distViolationGrad(const double* pos,
-                                                         const int     idx1,
-                                                         const int     idx2,
-                                                         const double  lb2,
-                                                         const double  ub2,
-                                                         const double  weight,
-                                                         double*       grad) {
+static __device__ __forceinline__ void distViolationGrad(const DG_REAL* pos,
+                                                         const int      idx1,
+                                                         const int      idx2,
+                                                         const DG_REAL  lb2,
+                                                         const DG_REAL  ub2,
+                                                         const DG_REAL  weight,
+                                                         DG_REAL*       grad) {
   const int   posIdx1   = idx1 * dimension;
   const int   posIdx2   = idx2 * dimension;
   const float distance2 = distanceSquaredPosIdx<dimension>(pos, posIdx1, posIdx2);
-  float       preFactor = 0.0;
+  float       preFactor = 0.0f;
   if (distance2 > ub2) {
     preFactor = 4.f * ((distance2 / ub2) - 1.0f) / ub2;
   } else if (distance2 < lb2) {
@@ -96,20 +80,20 @@ static __device__ __forceinline__ void distViolationGrad(const double* pos,
 }
 
 template <typename T>
-static __device__ __forceinline__ T calcChiralVolume(const int&    posIdx1,
-                                                     const int&    posIdx2,
-                                                     const int&    posIdx3,
-                                                     const int&    posIdx4,
-                                                     const double* pos,
-                                                     T&            v1x,
-                                                     T&            v1y,
-                                                     T&            v1z,
-                                                     T&            v2x,
-                                                     T&            v2y,
-                                                     T&            v2z,
-                                                     T&            v3x,
-                                                     T&            v3y,
-                                                     T&            v3z) {
+static __device__ __forceinline__ T calcChiralVolume(const int&     posIdx1,
+                                                     const int&     posIdx2,
+                                                     const int&     posIdx3,
+                                                     const int&     posIdx4,
+                                                     const DG_REAL* pos,
+                                                     T&             v1x,
+                                                     T&             v1y,
+                                                     T&             v1z,
+                                                     T&             v2x,
+                                                     T&             v2y,
+                                                     T&             v2z,
+                                                     T&             v3x,
+                                                     T&             v3y,
+                                                     T&             v3z) {
   v1x = pos[posIdx1 + 0] - pos[posIdx4 + 0];
   v1y = pos[posIdx1 + 1] - pos[posIdx4 + 1];
   v1z = pos[posIdx1 + 2] - pos[posIdx4 + 2];
@@ -129,22 +113,21 @@ static __device__ __forceinline__ T calcChiralVolume(const int&    posIdx1,
 }
 
 template <int dimension>
-static __device__ __forceinline__ double chiralViolationEnergy(const double* pos,
-                                                               const int     idx1,
-                                                               const int     idx2,
-                                                               const int     idx3,
-                                                               const int     idx4,
-                                                               const double  lb,
-                                                               const double  ub,
-                                                               const double  weight) {
+static __device__ __forceinline__ DG_REAL chiralViolationEnergy(const DG_REAL* pos,
+                                                                const int      idx1,
+                                                                const int      idx2,
+                                                                const int      idx3,
+                                                                const int      idx4,
+                                                                const DG_REAL  lb,
+                                                                const DG_REAL  ub,
+                                                                const DG_REAL  weight) {
   const int posIdx1 = idx1 * dimension;
   const int posIdx2 = idx2 * dimension;
   const int posIdx3 = idx3 * dimension;
   const int posIdx4 = idx4 * dimension;
 
-  double v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z;
-  // Using the float version of this causes drift on the order of ~10^-5, so stay in double precision.
-  double vol = calcChiralVolume(posIdx1, posIdx2, posIdx3, posIdx4, pos, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z);
+  DG_REAL v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z;
+  DG_REAL vol = calcChiralVolume(posIdx1, posIdx2, posIdx3, posIdx4, pos, v1x, v1y, v1z, v2x, v2y, v2z, v3x, v3y, v3z);
 
   if (vol < lb) {
     return weight * (vol - lb) * (vol - lb);
@@ -152,19 +135,19 @@ static __device__ __forceinline__ double chiralViolationEnergy(const double* pos
   if (vol > ub) {
     return weight * (vol - ub) * (vol - ub);
   }
-  return 0.0;
+  return DG_REAL(0.0);
 }
 
 template <int dimension>
-static __device__ __forceinline__ void chiralViolationGrad(const double* pos,
-                                                           const int     idx1,
-                                                           const int     idx2,
-                                                           const int     idx3,
-                                                           const int     idx4,
-                                                           const double  lb,
-                                                           const double  ub,
-                                                           const double  weight,
-                                                           double*       grad) {
+static __device__ __forceinline__ void chiralViolationGrad(const DG_REAL* pos,
+                                                           const int      idx1,
+                                                           const int      idx2,
+                                                           const int      idx3,
+                                                           const int      idx4,
+                                                           const DG_REAL  lb,
+                                                           const DG_REAL  ub,
+                                                           const DG_REAL  weight,
+                                                           DG_REAL*       grad) {
   const int posIdx1 = idx1 * dimension;
   const int posIdx2 = idx2 * dimension;
   const int posIdx3 = idx3 * dimension;
@@ -209,25 +192,25 @@ static __device__ __forceinline__ void chiralViolationGrad(const double* pos,
 }
 
 template <int dimension>
-static __device__ __forceinline__ double fourthDimEnergy(const double* pos, const int idx, const double weight) {
+static __device__ __forceinline__ DG_REAL fourthDimEnergy(const DG_REAL* pos, const int idx, const DG_REAL weight) {
   if constexpr (dimension != 4) {
-    return 0.0;
+    return DG_REAL(0.0);
   }
-  const int    posIdx    = idx * dimension;
-  const double fourthVal = pos[posIdx + 3];
+  const int     posIdx    = idx * dimension;
+  const DG_REAL fourthVal = pos[posIdx + 3];
   return weight * fourthVal * fourthVal;
 }
 
 template <int dimension>
-static __device__ __forceinline__ void fourthDimGrad(const double* pos,
-                                                     const int     idx,
-                                                     const double  weight,
-                                                     double*       grad) {
+static __device__ __forceinline__ void fourthDimGrad(const DG_REAL* pos,
+                                                     const int      idx,
+                                                     const DG_REAL  weight,
+                                                     DG_REAL*       grad) {
   if constexpr (dimension != 4) {
     return;
   }
-  const int    posIdx    = idx * dimension;
-  const double fourthVal = pos[posIdx + 3];
+  const int     posIdx    = idx * dimension;
+  const DG_REAL fourthVal = pos[posIdx + 3];
   atomicAdd(&grad[posIdx + 3], weight * fourthVal);
 }
 
@@ -235,9 +218,9 @@ static __device__ __forceinline__ void fourthDimGrad(const double* pos,
 // ETK Terms
 // ----------------------
 
-static __device__ __forceinline__ float calcTorsionEnergyM6(const double* forceConstants,
-                                                            const int*    signs,
-                                                            const double  cosPhi) {
+static __device__ __forceinline__ float calcTorsionEnergyM6(const DG_PARAM_REAL* forceConstants,
+                                                            const int*           signs,
+                                                            const DG_REAL        cosPhi) {
   const float cosPhi2 = cosPhi * cosPhi;
   const float cosPhi3 = cosPhi * cosPhi2;
   const float cosPhi4 = cosPhi * cosPhi3;
@@ -255,67 +238,64 @@ static __device__ __forceinline__ float calcTorsionEnergyM6(const double* forceC
           forceConstants[4] * (1.0f + signs[4] * cos5Phi) + forceConstants[5] * (1.0f + signs[5] * cos6Phi));
 }
 
-static __device__ __forceinline__ double calcTorsionCosPhi(const double* pos,
-                                                           const int     posIdx1,
-                                                           const int     posIdx2,
-                                                           const int     posIdx3,
-                                                           const int     posIdx4) {
-  double r1x = pos[posIdx1 + 0] - pos[posIdx2 + 0];
-  double r1y = pos[posIdx1 + 1] - pos[posIdx2 + 1];
-  double r1z = pos[posIdx1 + 2] - pos[posIdx2 + 2];
+static __device__ __forceinline__ DG_REAL
+calcTorsionCosPhi(const DG_REAL* pos, const int posIdx1, const int posIdx2, const int posIdx3, const int posIdx4) {
+  DG_REAL r1x = pos[posIdx1 + 0] - pos[posIdx2 + 0];
+  DG_REAL r1y = pos[posIdx1 + 1] - pos[posIdx2 + 1];
+  DG_REAL r1z = pos[posIdx1 + 2] - pos[posIdx2 + 2];
 
-  double r2x = pos[posIdx3 + 0] - pos[posIdx2 + 0];
-  double r2y = pos[posIdx3 + 1] - pos[posIdx2 + 1];
-  double r2z = pos[posIdx3 + 2] - pos[posIdx2 + 2];
+  DG_REAL r2x = pos[posIdx3 + 0] - pos[posIdx2 + 0];
+  DG_REAL r2y = pos[posIdx3 + 1] - pos[posIdx2 + 1];
+  DG_REAL r2z = pos[posIdx3 + 2] - pos[posIdx2 + 2];
 
-  double r3x = pos[posIdx2 + 0] - pos[posIdx3 + 0];
-  double r3y = pos[posIdx2 + 1] - pos[posIdx3 + 1];
-  double r3z = pos[posIdx2 + 2] - pos[posIdx3 + 2];
+  DG_REAL r3x = pos[posIdx2 + 0] - pos[posIdx3 + 0];
+  DG_REAL r3y = pos[posIdx2 + 1] - pos[posIdx3 + 1];
+  DG_REAL r3z = pos[posIdx2 + 2] - pos[posIdx3 + 2];
 
-  double r4x = pos[posIdx4 + 0] - pos[posIdx3 + 0];
-  double r4y = pos[posIdx4 + 1] - pos[posIdx3 + 1];
-  double r4z = pos[posIdx4 + 2] - pos[posIdx3 + 2];
+  DG_REAL r4x = pos[posIdx4 + 0] - pos[posIdx3 + 0];
+  DG_REAL r4y = pos[posIdx4 + 1] - pos[posIdx3 + 1];
+  DG_REAL r4z = pos[posIdx4 + 2] - pos[posIdx3 + 2];
 
-  double t1x, t1y, t1z;
+  DG_REAL t1x, t1y, t1z;
   crossProduct(r1x, r1y, r1z, r2x, r2y, r2z, t1x, t1y, t1z);
 
-  double t2x, t2y, t2z;
+  DG_REAL t2x, t2y, t2z;
   crossProduct(r3x, r3y, r3z, r4x, r4y, r4z, t2x, t2y, t2z);
 
-  const double t1_lenSquared      = t1x * t1x + t1y * t1y + t1z * t1z;
-  const double t2_lenSquared      = t2x * t2x + t2y * t2y + t2z * t2z;
-  const double lenSquaredCombined = t1_lenSquared * t2_lenSquared;
+  const DG_REAL t1_lenSquared      = t1x * t1x + t1y * t1y + t1z * t1z;
+  const DG_REAL t2_lenSquared      = t2x * t2x + t2y * t2y + t2z * t2z;
+  const DG_REAL lenSquaredCombined = t1_lenSquared * t2_lenSquared;
 
-  if (isDoubleZero(lenSquaredCombined)) {
-    return 0.0;
+  if (DG_IS_ZERO(lenSquaredCombined)) {
+    return DG_REAL(0.0);
   }
-  const double invLenComb = rsqrtf(lenSquaredCombined);
-  double       cosPhi     = dotProduct(t1x, t1y, t1z, t2x, t2y, t2z) * invLenComb;
+  const DG_REAL invLenComb = DG_RSQRTF(lenSquaredCombined);
+  DG_REAL       cosPhi     = dotProduct(t1x, t1y, t1z, t2x, t2y, t2z) * invLenComb;
   clipToOne(cosPhi);
   return cosPhi;
 }
 
-static __device__ __forceinline__ double torsionAngleEnergy(const double* pos,
-                                                            const int     idx1,
-                                                            const int     idx2,
-                                                            const int     idx3,
-                                                            const int     idx4,
-                                                            const double* forceConstants,
-                                                            const int*    signs) {
+static __device__ __forceinline__ DG_REAL torsionAngleEnergy(const DG_REAL*       pos,
+                                                             const int            idx1,
+                                                             const int            idx2,
+                                                             const int            idx3,
+                                                             const int            idx4,
+                                                             const DG_PARAM_REAL* forceConstants,
+                                                             const int*           signs) {
   const int posIdx1 = idx1 * 4;
   const int posIdx2 = idx2 * 4;
   const int posIdx3 = idx3 * 4;
   const int posIdx4 = idx4 * 4;
 
-  double cosPhi = calcTorsionCosPhi(pos, posIdx1, posIdx2, posIdx3, posIdx4);
+  DG_REAL cosPhi = calcTorsionCosPhi(pos, posIdx1, posIdx2, posIdx3, posIdx4);
   return calcTorsionEnergyM6(forceConstants, signs, cosPhi);
 }
 
-static __device__ __forceinline__ float calcInversionCosY(const double* pos,
-                                                          const int     posIdx1,
-                                                          const int     posIdx2,
-                                                          const int     posIdx3,
-                                                          const int     posIdx4) {
+static __device__ __forceinline__ float calcInversionCosY(const DG_REAL* pos,
+                                                          const int      posIdx1,
+                                                          const int      posIdx2,
+                                                          const int      posIdx3,
+                                                          const int      posIdx4) {
   constexpr float inversionZeroTol = 1.0e-16f;
 
   float rJIx = pos[posIdx1 + 0] - pos[posIdx2 + 0];
@@ -341,7 +321,7 @@ static __device__ __forceinline__ float calcInversionCosY(const double* pos,
   float nx, ny, nz;
   crossProduct(rJIx, rJIy, rJIz, rJKx, rJKy, rJKz, nx, ny, nz);
 
-  const float norm_factor = rsqrtf(l2JI * l2JK);
+  const float norm_factor = DG_RSQRTF(l2JI * l2JK);
   nx *= norm_factor;
   ny *= norm_factor;
   nz *= norm_factor;
@@ -351,61 +331,61 @@ static __device__ __forceinline__ float calcInversionCosY(const double* pos,
     return 0.0f;
   }
 
-  return dotProduct(nx, ny, nz, rJLx, rJLy, rJLz) * rsqrtf(l2JL) * rsqrtf(l2n);
+  return dotProduct(nx, ny, nz, rJLx, rJLy, rJLz) * DG_RSQRTF(l2JL) * DG_RSQRTF(l2n);
 }
 
-static __device__ __forceinline__ double inversionEnergy(const double* pos,
-                                                         const int     idx1,
-                                                         const int     idx2,
-                                                         const int     idx3,
-                                                         const int     idx4,
-                                                         const double  C0,
-                                                         const double  C1,
-                                                         const double  C2,
-                                                         const double  forceConstant) {
+static __device__ __forceinline__ DG_REAL inversionEnergy(const DG_REAL* pos,
+                                                          const int      idx1,
+                                                          const int      idx2,
+                                                          const int      idx3,
+                                                          const int      idx4,
+                                                          const DG_REAL  C0,
+                                                          const DG_REAL  C1,
+                                                          const DG_REAL  C2,
+                                                          const DG_REAL  forceConstant) {
   const int posIdx1 = idx1 * 4;
   const int posIdx2 = idx2 * 4;
   const int posIdx3 = idx3 * 4;
   const int posIdx4 = idx4 * 4;
 
-  double cosY = calcInversionCosY(pos, posIdx1, posIdx2, posIdx3, posIdx4);
+  DG_REAL cosY = calcInversionCosY(pos, posIdx1, posIdx2, posIdx3, posIdx4);
 
-  const double sinYSq = 1.0 - cosY * cosY;
-  const double sinY   = ((sinYSq > 0.0) ? sqrtf(sinYSq) : 0.0);
-  const double cos2W  = 2.0 * sinY * sinY - 1.0;
+  const DG_REAL sinYSq = DG_REAL(1.0) - cosY * cosY;
+  const DG_REAL sinY   = ((sinYSq > DG_REAL(0.0)) ? DG_SQRTF(sinYSq) : DG_REAL(0.0));
+  const DG_REAL cos2W  = DG_REAL(2.0) * sinY * sinY - DG_REAL(1.0);
 
   return forceConstant * (C0 + C1 * sinY + C2 * cos2W);
 }
 
-static __device__ __forceinline__ double distanceConstraintEnergy(const double* pos,
-                                                                  const int     idx1,
-                                                                  const int     idx2,
-                                                                  const double  minLen,
-                                                                  const double  maxLen,
-                                                                  const double  forceConstant) {
-  const int    posIdx1   = idx1 * 4;
-  const int    posIdx2   = idx2 * 4;
-  const double distance2 = distanceSquaredPosIdx(pos, posIdx1, posIdx2, 3);
+static __device__ __forceinline__ DG_REAL distanceConstraintEnergy(const DG_REAL* pos,
+                                                                   const int      idx1,
+                                                                   const int      idx2,
+                                                                   const DG_REAL  minLen,
+                                                                   const DG_REAL  maxLen,
+                                                                   const DG_REAL  forceConstant) {
+  const int     posIdx1   = idx1 * 4;
+  const int     posIdx2   = idx2 * 4;
+  const DG_REAL distance2 = distanceSquaredPosIdx(pos, posIdx1, posIdx2, 3);
 
-  const double minLen2 = minLen * minLen;
-  const double maxLen2 = maxLen * maxLen;
+  const DG_REAL minLen2 = minLen * minLen;
+  const DG_REAL maxLen2 = maxLen * maxLen;
 
-  double difference = 0.0;
+  DG_REAL difference = DG_REAL(0.0);
   if (distance2 < minLen2) {
-    difference = minLen - sqrtf(distance2);
+    difference = minLen - DG_SQRTF(distance2);
   } else if (distance2 > maxLen2) {
-    difference = sqrtf(distance2) - maxLen;
+    difference = DG_SQRTF(distance2) - maxLen;
   } else {
-    return 0.0;
+    return DG_REAL(0.0);
   }
 
-  return 0.5 * forceConstant * difference * difference;
+  return DG_REAL(0.5) * forceConstant * difference * difference;
 }
 
-static __device__ __forceinline__ double computeAngleTerm(const double angle,
-                                                          const double minAngle,
-                                                          const double maxAngle) {
-  double angleTerm = 0.0;
+static __device__ __forceinline__ DG_REAL computeAngleTerm(const DG_REAL angle,
+                                                           const DG_REAL minAngle,
+                                                           const DG_REAL maxAngle) {
+  DG_REAL angleTerm = DG_REAL(0.0);
   if (angle < minAngle) {
     angleTerm = angle - minAngle;
   } else if (angle > maxAngle) {
@@ -414,87 +394,86 @@ static __device__ __forceinline__ double computeAngleTerm(const double angle,
   return angleTerm;
 }
 
-static __device__ __forceinline__ double angleConstraintEnergy(const double* pos,
-                                                               const int     idx1,
-                                                               const int     idx2,
-                                                               const int     idx3,
-                                                               const double  minAngle,
-                                                               const double  maxAngle,
-                                                               const double  forceConstant) {
+static __device__ __forceinline__ DG_REAL angleConstraintEnergy(const DG_REAL* pos,
+                                                                const int      idx1,
+                                                                const int      idx2,
+                                                                const int      idx3,
+                                                                const DG_REAL  minAngle,
+                                                                const DG_REAL  maxAngle,
+                                                                const DG_REAL  forceConstant) {
   const int posIdx1 = idx1 * 4;
   const int posIdx2 = idx2 * 4;
   const int posIdx3 = idx3 * 4;
 
-  double dx1 = pos[posIdx1 + 0] - pos[posIdx2 + 0];
-  double dy1 = pos[posIdx1 + 1] - pos[posIdx2 + 1];
-  double dz1 = pos[posIdx1 + 2] - pos[posIdx2 + 2];
+  DG_REAL dx1 = pos[posIdx1 + 0] - pos[posIdx2 + 0];
+  DG_REAL dy1 = pos[posIdx1 + 1] - pos[posIdx2 + 1];
+  DG_REAL dz1 = pos[posIdx1 + 2] - pos[posIdx2 + 2];
 
-  double dx2 = pos[posIdx3 + 0] - pos[posIdx2 + 0];
-  double dy2 = pos[posIdx3 + 1] - pos[posIdx2 + 1];
-  double dz2 = pos[posIdx3 + 2] - pos[posIdx2 + 2];
+  DG_REAL dx2 = pos[posIdx3 + 0] - pos[posIdx2 + 0];
+  DG_REAL dy2 = pos[posIdx3 + 1] - pos[posIdx2 + 1];
+  DG_REAL dz2 = pos[posIdx3 + 2] - pos[posIdx2 + 2];
 
-  const double dist1Sq  = dx1 * dx1 + dy1 * dy1 + dz1 * dz1;
-  const double dist2Sq  = dx2 * dx2 + dy2 * dy2 + dz2 * dz2;
-  const double distTerm = dist1Sq * dist2Sq;
-  if (isDoubleZero(distTerm)) {
-    return 0.0;
+  const DG_REAL dist1Sq  = dx1 * dx1 + dy1 * dy1 + dz1 * dz1;
+  const DG_REAL dist2Sq  = dx2 * dx2 + dy2 * dy2 + dz2 * dz2;
+  const DG_REAL distTerm = dist1Sq * dist2Sq;
+  if (DG_IS_ZERO(distTerm)) {
+    return DG_REAL(0.0);
   }
 
-  const double dot      = dx1 * dx2 + dy1 * dy2 + dz1 * dz2;
-  // This double precision sqrt is sensitive, can't downcast.
-  const double cosTheta = clamp(dot * rsqrt(distTerm), -1.0, 1.0);
-  const double angle    = RAD2DEG * acos(cosTheta);
+  const DG_REAL dot      = dx1 * dx2 + dy1 * dy2 + dz1 * dz2;
+  const DG_REAL cosTheta = clamp(dot * DG_RSQRT(distTerm), -DG_REAL(1.0), DG_REAL(1.0));
+  const DG_REAL angle    = RAD2DEG * DG_ACOS(cosTheta);
 
-  const double angleTerm = computeAngleTerm(angle, minAngle, maxAngle);
+  const DG_REAL angleTerm = computeAngleTerm(angle, minAngle, maxAngle);
   return forceConstant * angleTerm * angleTerm;
 }
 
-static __device__ __forceinline__ void torsionAngleGrad(const double* pos,
-                                                        const int     idx1,
-                                                        const int     idx2,
-                                                        const int     idx3,
-                                                        const int     idx4,
-                                                        const double* forceConstants,  // 6 components
-                                                        const int*    signs,           // 6 components
-                                                        double*       grad) {
+static __device__ __forceinline__ void torsionAngleGrad(const DG_REAL*       pos,
+                                                        const int            idx1,
+                                                        const int            idx2,
+                                                        const int            idx3,
+                                                        const int            idx4,
+                                                        const DG_PARAM_REAL* forceConstants,  // 6 components
+                                                        const int*           signs,           // 6 components
+                                                        DG_REAL*             grad) {
   const int posIdx1 = idx1 * 4;
   const int posIdx2 = idx2 * 4;
   const int posIdx3 = idx3 * 4;
   const int posIdx4 = idx4 * 4;
 
   // Calculate bond vectors r1 = p1-p2, r2 = p3-p2
-  const double r1x = pos[posIdx1 + 0] - pos[posIdx2 + 0];
-  const double r1y = pos[posIdx1 + 1] - pos[posIdx2 + 1];
-  const double r1z = pos[posIdx1 + 2] - pos[posIdx2 + 2];
+  const DG_REAL r1x = pos[posIdx1 + 0] - pos[posIdx2 + 0];
+  const DG_REAL r1y = pos[posIdx1 + 1] - pos[posIdx2 + 1];
+  const DG_REAL r1z = pos[posIdx1 + 2] - pos[posIdx2 + 2];
 
-  const double r2x = pos[posIdx3 + 0] - pos[posIdx2 + 0];
-  const double r2y = pos[posIdx3 + 1] - pos[posIdx2 + 1];
-  const double r2z = pos[posIdx3 + 2] - pos[posIdx2 + 2];
+  const DG_REAL r2x = pos[posIdx3 + 0] - pos[posIdx2 + 0];
+  const DG_REAL r2y = pos[posIdx3 + 1] - pos[posIdx2 + 1];
+  const DG_REAL r2z = pos[posIdx3 + 2] - pos[posIdx2 + 2];
 
   // Calculate bond vectors r3 = p2-p3, r4 = p4-p3
-  const double r3x = -r2x;
-  const double r3y = -r2y;
-  const double r3z = -r2z;
+  const DG_REAL r3x = -r2x;
+  const DG_REAL r3y = -r2y;
+  const DG_REAL r3z = -r2z;
 
-  const double r4x = pos[posIdx4 + 0] - pos[posIdx3 + 0];
-  const double r4y = pos[posIdx4 + 1] - pos[posIdx3 + 1];
-  const double r4z = pos[posIdx4 + 2] - pos[posIdx3 + 2];
+  const DG_REAL r4x = pos[posIdx4 + 0] - pos[posIdx3 + 0];
+  const DG_REAL r4y = pos[posIdx4 + 1] - pos[posIdx3 + 1];
+  const DG_REAL r4z = pos[posIdx4 + 2] - pos[posIdx3 + 2];
 
   // Calculate plane normals via cross products: t0 = r1 × r2, t1 = r3 × r4
-  double t0x, t0y, t0z;
+  DG_REAL t0x, t0y, t0z;
   crossProduct(r1x, r1y, r1z, r2x, r2y, r2z, t0x, t0y, t0z);
 
-  double t1x, t1y, t1z;
+  DG_REAL t1x, t1y, t1z;
   crossProduct(r3x, r3y, r3z, r4x, r4y, r4z, t1x, t1y, t1z);
 
   // Calculate lengths and check for degeneracy
-  const double d02 = t0x * t0x + t0y * t0y + t0z * t0z;
-  const double d12 = t1x * t1x + t1y * t1y + t1z * t1z;
-  if (isDoubleZero(d02) || isDoubleZero(d12)) {
+  const DG_REAL d02 = t0x * t0x + t0y * t0y + t0z * t0z;
+  const DG_REAL d12 = t1x * t1x + t1y * t1y + t1z * t1z;
+  if (DG_IS_ZERO(d02) || DG_IS_ZERO(d12)) {
     return;
   }
-  const double inv_d0 = rsqrt(t0x * t0x + t0y * t0y + t0z * t0z);
-  const double inv_d1 = rsqrt(t1x * t1x + t1y * t1y + t1z * t1z);
+  const DG_REAL inv_d0 = DG_RSQRT(t0x * t0x + t0y * t0y + t0z * t0z);
+  const DG_REAL inv_d1 = DG_RSQRT(t1x * t1x + t1y * t1y + t1z * t1z);
 
   t0x *= inv_d0;
   t0y *= inv_d0;
@@ -504,60 +483,63 @@ static __device__ __forceinline__ void torsionAngleGrad(const double* pos,
   t1z *= inv_d1;
 
   // Calculate cosine of torsion angle
-  double cosPhi = dotProduct(t0x, t0y, t0z, t1x, t1y, t1z);
+  DG_REAL cosPhi = dotProduct(t0x, t0y, t0z, t1x, t1y, t1z);
   clipToOne(cosPhi);
 
   // Calculate sinPhi
-  const double sinPhiSq = 1.0 - cosPhi * cosPhi;
-  const double sinPhi   = (sinPhiSq > 0.0) ? sqrtf(sinPhiSq) : 0.0;
+  const DG_REAL sinPhiSq = DG_REAL(1.0) - cosPhi * cosPhi;
+  const DG_REAL sinPhi   = (sinPhiSq > DG_REAL(0.0)) ? DG_SQRTF(sinPhiSq) : DG_REAL(0.0);
 
   // Calculate derivatives for dE/dPhi
-  const double cosPhi2 = cosPhi * cosPhi;
-  const double cosPhi3 = cosPhi * cosPhi2;
-  const double cosPhi4 = cosPhi * cosPhi3;
-  const double cosPhi5 = cosPhi * cosPhi4;
+  const DG_REAL cosPhi2 = cosPhi * cosPhi;
+  const DG_REAL cosPhi3 = cosPhi * cosPhi2;
+  const DG_REAL cosPhi4 = cosPhi * cosPhi3;
+  const DG_REAL cosPhi5 = cosPhi * cosPhi4;
 
-  const double dE_dPhi =
-    (-forceConstants[0] * signs[0] * sinPhi - 2.0 * forceConstants[1] * signs[1] * (2.0 * cosPhi * sinPhi) -
-     3.0 * forceConstants[2] * signs[2] * (4.0 * cosPhi2 * sinPhi - sinPhi) -
-     4.0 * forceConstants[3] * signs[3] * (8.0 * cosPhi3 * sinPhi - 4.0 * cosPhi * sinPhi) -
-     5.0 * forceConstants[4] * signs[4] * (16.0 * cosPhi4 * sinPhi - 12.0 * cosPhi2 * sinPhi + sinPhi) -
-     6.0 * forceConstants[5] * signs[5] * (32.0 * cosPhi5 * sinPhi - 32.0 * cosPhi3 * sinPhi + 6.0 * cosPhi * sinPhi));
+  const DG_REAL dE_dPhi =
+    (-forceConstants[0] * signs[0] * sinPhi -
+     DG_REAL(2.0) * forceConstants[1] * signs[1] * (DG_REAL(2.0) * cosPhi * sinPhi) -
+     DG_REAL(3.0) * forceConstants[2] * signs[2] * (DG_REAL(4.0) * cosPhi2 * sinPhi - sinPhi) -
+     DG_REAL(4.0) * forceConstants[3] * signs[3] * (DG_REAL(8.0) * cosPhi3 * sinPhi - DG_REAL(4.0) * cosPhi * sinPhi) -
+     DG_REAL(5.0) * forceConstants[4] * signs[4] *
+       (DG_REAL(16.0) * cosPhi4 * sinPhi - DG_REAL(12.0) * cosPhi2 * sinPhi + sinPhi) -
+     DG_REAL(6.0) * forceConstants[5] * signs[5] *
+       (DG_REAL(32.0) * cosPhi5 * sinPhi - DG_REAL(32.0) * cosPhi3 * sinPhi + DG_REAL(6.0) * cosPhi * sinPhi));
 
-  const double sinTerm = -dE_dPhi * (isDoubleZero(sinPhi) ? (1.0 / cosPhi) : (1.0 / sinPhi));
+  const DG_REAL sinTerm = -dE_dPhi * (DG_IS_ZERO(sinPhi) ? (DG_REAL(1.0) / cosPhi) : (DG_REAL(1.0) / sinPhi));
 
   // Calculate dCos_dT components on-the-fly and compute gradients directly
-  const double dCos_dT0x = inv_d0 * (t1x - cosPhi * t0x);
-  const double dCos_dT0y = inv_d0 * (t1y - cosPhi * t0y);
-  const double dCos_dT0z = inv_d0 * (t1z - cosPhi * t0z);
-  const double dCos_dT1x = inv_d1 * (t0x - cosPhi * t1x);
-  const double dCos_dT1y = inv_d1 * (t0y - cosPhi * t1y);
-  const double dCos_dT1z = inv_d1 * (t0z - cosPhi * t1z);
+  const DG_REAL dCos_dT0x = inv_d0 * (t1x - cosPhi * t0x);
+  const DG_REAL dCos_dT0y = inv_d0 * (t1y - cosPhi * t0y);
+  const DG_REAL dCos_dT0z = inv_d0 * (t1z - cosPhi * t0z);
+  const DG_REAL dCos_dT1x = inv_d1 * (t0x - cosPhi * t1x);
+  const DG_REAL dCos_dT1y = inv_d1 * (t0y - cosPhi * t1y);
+  const DG_REAL dCos_dT1z = inv_d1 * (t0z - cosPhi * t1z);
 
   // Atom 1 gradient: grad1 = sinTerm * (dCos_dT0 × r2)
-  const double g1x = sinTerm * (dCos_dT0z * r2y - dCos_dT0y * r2z);
-  const double g1y = sinTerm * (dCos_dT0x * r2z - dCos_dT0z * r2x);
-  const double g1z = sinTerm * (dCos_dT0y * r2x - dCos_dT0x * r2y);
+  const DG_REAL g1x = sinTerm * (dCos_dT0z * r2y - dCos_dT0y * r2z);
+  const DG_REAL g1y = sinTerm * (dCos_dT0x * r2z - dCos_dT0z * r2x);
+  const DG_REAL g1z = sinTerm * (dCos_dT0y * r2x - dCos_dT0x * r2y);
 
   // Atom 4 gradient: grad4 = sinTerm * (dCos_dT1 × r3)
-  const double g4x = sinTerm * (dCos_dT1y * r3z - dCos_dT1z * r3y);
-  const double g4y = sinTerm * (dCos_dT1z * r3x - dCos_dT1x * r3z);
-  const double g4z = sinTerm * (dCos_dT1x * r3y - dCos_dT1y * r3x);
+  const DG_REAL g4x = sinTerm * (dCos_dT1y * r3z - dCos_dT1z * r3y);
+  const DG_REAL g4y = sinTerm * (dCos_dT1z * r3x - dCos_dT1x * r3z);
+  const DG_REAL g4z = sinTerm * (dCos_dT1x * r3y - dCos_dT1y * r3x);
 
   // Atom 2 gradient: more complex, involves both cross products
-  const double g2x =
+  const DG_REAL g2x =
     sinTerm * (dCos_dT0y * (r2z - r1z) + dCos_dT0z * (r1y - r2y) + dCos_dT1y * (-r4z) + dCos_dT1z * (r4y));
-  const double g2y =
+  const DG_REAL g2y =
     sinTerm * (dCos_dT0x * (r1z - r2z) + dCos_dT0z * (r2x - r1x) + dCos_dT1x * (r4z) + dCos_dT1z * (-r4x));
-  const double g2z =
+  const DG_REAL g2z =
     sinTerm * (dCos_dT0x * (r2y - r1y) + dCos_dT0y * (r1x - r2x) + dCos_dT1x * (-r4y) + dCos_dT1y * (r4x));
 
   // Atom 3 gradient: grad3 = -(grad1 + grad2 + grad4) by conservation
-  const double g3x =
+  const DG_REAL g3x =
     sinTerm * (dCos_dT0y * r1z + dCos_dT0z * (-r1y) + dCos_dT1y * (r4z - r3z) + dCos_dT1z * (r3y - r4y));
-  const double g3y =
+  const DG_REAL g3y =
     sinTerm * (dCos_dT0x * (-r1z) + dCos_dT0z * r1x + dCos_dT1x * (r3z - r4z) + dCos_dT1z * (r4x - r3x));
-  const double g3z =
+  const DG_REAL g3z =
     sinTerm * (dCos_dT0x * r1y + dCos_dT0y * (-r1x) + dCos_dT1x * (r4y - r3y) + dCos_dT1y * (r3x - r4x));
 
   // Add gradients using atomic operations
@@ -575,16 +557,16 @@ static __device__ __forceinline__ void torsionAngleGrad(const double* pos,
   atomicAdd(&grad[posIdx4 + 2], g4z);
 }
 
-static __device__ __forceinline__ void inversionGrad(const double* pos,
-                                                     const int     idx1,
-                                                     const int     idx2,
-                                                     const int     idx3,
-                                                     const int     idx4,
-                                                     const double  C0,
-                                                     const double  C1,
-                                                     const double  C2,
-                                                     const double  forceConstant,
-                                                     double*       grad) {
+static __device__ __forceinline__ void inversionGrad(const DG_REAL* pos,
+                                                     const int      idx1,
+                                                     const int      idx2,
+                                                     const int      idx3,
+                                                     const int      idx4,
+                                                     const DG_REAL  C0,
+                                                     const DG_REAL  C1,
+                                                     const DG_REAL  C2,
+                                                     const DG_REAL  forceConstant,
+                                                     DG_REAL*       grad) {
   // Get positions for all four atoms
   const int posIdx1 = idx1 * 4;
   const int posIdx2 = idx2 * 4;
@@ -592,28 +574,28 @@ static __device__ __forceinline__ void inversionGrad(const double* pos,
   const int posIdx4 = idx4 * 4;
 
   // Calculate vectors
-  double rJIx = pos[posIdx1 + 0] - pos[posIdx2 + 0];
-  double rJIy = pos[posIdx1 + 1] - pos[posIdx2 + 1];
-  double rJIz = pos[posIdx1 + 2] - pos[posIdx2 + 2];
+  DG_REAL rJIx = pos[posIdx1 + 0] - pos[posIdx2 + 0];
+  DG_REAL rJIy = pos[posIdx1 + 1] - pos[posIdx2 + 1];
+  DG_REAL rJIz = pos[posIdx1 + 2] - pos[posIdx2 + 2];
 
-  double rJKx = pos[posIdx3 + 0] - pos[posIdx2 + 0];
-  double rJKy = pos[posIdx3 + 1] - pos[posIdx2 + 1];
-  double rJKz = pos[posIdx3 + 2] - pos[posIdx2 + 2];
+  DG_REAL rJKx = pos[posIdx3 + 0] - pos[posIdx2 + 0];
+  DG_REAL rJKy = pos[posIdx3 + 1] - pos[posIdx2 + 1];
+  DG_REAL rJKz = pos[posIdx3 + 2] - pos[posIdx2 + 2];
 
-  double rJLx = pos[posIdx4 + 0] - pos[posIdx2 + 0];
-  double rJLy = pos[posIdx4 + 1] - pos[posIdx2 + 1];
-  double rJLz = pos[posIdx4 + 2] - pos[posIdx2 + 2];
+  DG_REAL rJLx = pos[posIdx4 + 0] - pos[posIdx2 + 0];
+  DG_REAL rJLy = pos[posIdx4 + 1] - pos[posIdx2 + 1];
+  DG_REAL rJLz = pos[posIdx4 + 2] - pos[posIdx2 + 2];
 
-  const double dJIsq = rJIx * rJIx + rJIy * rJIy + rJIz * rJIz;
-  const double dJKsq = rJKx * rJKx + rJKy * rJKy + rJKz * rJKz;
-  const double dJLsq = rJLx * rJLx + rJLy * rJLy + rJLz * rJLz;
-  if (isDoubleZero(dJIsq) || isDoubleZero(dJKsq) || isDoubleZero(dJLsq)) {
+  const DG_REAL dJIsq = rJIx * rJIx + rJIy * rJIy + rJIz * rJIz;
+  const DG_REAL dJKsq = rJKx * rJKx + rJKy * rJKy + rJKz * rJKz;
+  const DG_REAL dJLsq = rJLx * rJLx + rJLy * rJLy + rJLz * rJLz;
+  if (DG_IS_ZERO(dJIsq) || DG_IS_ZERO(dJKsq) || DG_IS_ZERO(dJLsq)) {
     return;
   }
   // Calculate lengths
-  float invdJI = rsqrtf(dJIsq);
-  float invdJK = rsqrtf(dJKsq);
-  float invdJL = rsqrtf(dJLsq);
+  float invdJI = DG_RSQRTF(dJIsq);
+  float invdJK = DG_RSQRTF(dJKsq);
+  float invdJL = DG_RSQRTF(dJLsq);
 
   // Normalize vectors
   rJIx *= invdJI;
@@ -627,64 +609,66 @@ static __device__ __forceinline__ void inversionGrad(const double* pos,
   rJLz *= invdJL;
 
   // Calculate n = (-rJI) × rJK
-  double nx, ny, nz;
+  DG_REAL nx, ny, nz;
   crossProduct(-rJIx, -rJIy, -rJIz, rJKx, rJKy, rJKz, nx, ny, nz);
 
   // Normalize n
-  double inv_n_len = rsqrtf(nx * nx + ny * ny + nz * nz);
+  DG_REAL inv_n_len = DG_RSQRTF(nx * nx + ny * ny + nz * nz);
   nx *= inv_n_len;
   ny *= inv_n_len;
   nz *= inv_n_len;
 
   // Calculate cosY and clamp
-  double cosY = dotProduct(nx, ny, nz, rJLx, rJLy, rJLz);
+  DG_REAL cosY = dotProduct(nx, ny, nz, rJLx, rJLy, rJLz);
   clipToOne(cosY);
 
   // Calculate sinY
-  const double sinYSq = 1.0 - cosY * cosY;
-  const double sinY   = fmaxf(sqrtf(sinYSq), 1.0e-8f);
+  const DG_REAL sinYSq  = DG_REAL(1.0) - cosY * cosY;
+  const DG_REAL rawSinY = DG_SQRTF(sinYSq);
+  const DG_REAL sinY    = rawSinY > DG_REAL(1.0e-8) ? rawSinY : DG_REAL(1.0e-8);
 
   // Calculate cosTheta and clamp
-  double cosTheta = dotProduct(rJIx, rJIy, rJIz, rJKx, rJKy, rJKz);
+  DG_REAL cosTheta = dotProduct(rJIx, rJIy, rJIz, rJKx, rJKy, rJKz);
   clipToOne(cosTheta);
 
   // Calculate sinTheta
-  const double sinThetaSq = 1.0 - cosTheta * cosTheta;
-  const double sinTheta   = fmaxf(sqrtf(sinThetaSq), 1.0e-8f);
+  const DG_REAL sinThetaSq  = DG_REAL(1.0) - cosTheta * cosTheta;
+  const DG_REAL rawSinTheta = DG_SQRTF(sinThetaSq);
+  const DG_REAL sinTheta    = rawSinTheta > DG_REAL(1.0e-8) ? rawSinTheta : DG_REAL(1.0e-8);
 
   // Calculate dE_dW
-  const double dE_dW = -forceConstant * (C1 * cosY - 4.0 * C2 * cosY * sinY);
+  const DG_REAL dE_dW = -forceConstant * (C1 * cosY - DG_REAL(4.0) * C2 * cosY * sinY);
 
   // Calculate cross products for gradient terms
-  double t1x, t1y, t1z;  // rJL × rJK
+  DG_REAL t1x, t1y, t1z;  // rJL × rJK
   crossProduct(rJLx, rJLy, rJLz, rJKx, rJKy, rJKz, t1x, t1y, t1z);
 
-  double t2x, t2y, t2z;  // rJI × rJL
+  DG_REAL t2x, t2y, t2z;  // rJI × rJL
   crossProduct(rJIx, rJIy, rJIz, rJLx, rJLy, rJLz, t2x, t2y, t2z);
 
-  double t3x, t3y, t3z;  // rJK × rJI
+  DG_REAL t3x, t3y, t3z;  // rJK × rJI
   crossProduct(rJKx, rJKy, rJKz, rJIx, rJIy, rJIz, t3x, t3y, t3z);
 
   // Calculate terms for gradient
-  const double inverseTerm1   = 1.0 / (sinY * sinTheta);
-  const double term2          = cosY / (sinY * sinThetaSq);
-  const double cosY_over_sinY = cosY / sinY;
+  const DG_REAL inverseTerm1   = DG_REAL(1.0) / (sinY * sinTheta);
+  const DG_REAL term2          = cosY / (sinY * sinThetaSq);
+  const DG_REAL cosY_over_sinY = cosY / sinY;
 
   // Compute gradient components on-the-fly and apply directly
   // Atom 1 gradient components
-  const double tg1x = (t1x * inverseTerm1 - (rJIx - rJKx * cosTheta) * term2) * invdJI;
-  const double tg1y = (t1y * inverseTerm1 - (rJIy - rJKy * cosTheta) * term2) * invdJI;
-  const double tg1z = (t1z * inverseTerm1 - (rJIz - rJKz * cosTheta) * term2) * invdJI;
+  const DG_REAL tg1x = (t1x * inverseTerm1 - (rJIx - rJKx * cosTheta) * term2) * invdJI;
+  const DG_REAL tg1y = (t1y * inverseTerm1 - (rJIy - rJKy * cosTheta) * term2) * invdJI;
+  const DG_REAL tg1z = (t1z * inverseTerm1 - (rJIz - rJKz * cosTheta) * term2) * invdJI;
 
   // Atom 3 gradient components
-  const double tg3x = (t2x * inverseTerm1 - (rJKx - rJIx * cosTheta) * term2) * invdJK;
-  const double tg3y = (t2y * inverseTerm1 - (rJKy - rJIy * cosTheta) * term2) * invdJK;
-  const double tg3z = (t2z * inverseTerm1 - (rJKz - rJIz * cosTheta) * term2) * invdJK;
+  const DG_REAL tg3x = (t2x * inverseTerm1 - (rJKx - rJIx * cosTheta) * term2) * invdJK;
+  const DG_REAL tg3y = (t2y * inverseTerm1 - (rJKy - rJIy * cosTheta) * term2) * invdJK;
+  const DG_REAL tg3z = (t2z * inverseTerm1 - (rJKz - rJIz * cosTheta) * term2) * invdJK;
 
   // Atom 4 gradient components
-  const double tg4x = (t3x * inverseTerm1 - rJLx * cosY_over_sinY) * invdJL;
-  const double tg4y = (t3y * inverseTerm1 - rJLy * cosY_over_sinY) * invdJL;
-  const double tg4z = (t3z * inverseTerm1 - rJLz * cosY_over_sinY) * invdJL;
+  const DG_REAL tg4x = (t3x * inverseTerm1 - rJLx * cosY_over_sinY) * invdJL;
+  const DG_REAL tg4y = (t3y * inverseTerm1 - rJLy * cosY_over_sinY) * invdJL;
+  const DG_REAL tg4z = (t3z * inverseTerm1 - rJLz * cosY_over_sinY) * invdJL;
 
   // Add gradients using atomic operations
   atomicAdd(&grad[posIdx1 + 0], dE_dW * tg1x);
@@ -704,102 +688,102 @@ static __device__ __forceinline__ void inversionGrad(const double* pos,
   atomicAdd(&grad[posIdx4 + 2], dE_dW * tg4z);
 }
 
-static __device__ __forceinline__ void distanceConstraintGrad(const double* pos,
-                                                              const int     idx1,
-                                                              const int     idx2,
-                                                              const double  minLen,
-                                                              const double  maxLen,
-                                                              const double  forceConstant,
-                                                              double*       grad) {
-  const double minLen2 = minLen * minLen;
-  const double maxLen2 = maxLen * maxLen;
-  const int    posIdx1 = idx1 * 4;
-  const int    posIdx2 = idx2 * 4;
+static __device__ __forceinline__ void distanceConstraintGrad(const DG_REAL* pos,
+                                                              const int      idx1,
+                                                              const int      idx2,
+                                                              const DG_REAL  minLen,
+                                                              const DG_REAL  maxLen,
+                                                              const DG_REAL  forceConstant,
+                                                              DG_REAL*       grad) {
+  const DG_REAL minLen2 = minLen * minLen;
+  const DG_REAL maxLen2 = maxLen * maxLen;
+  const int     posIdx1 = idx1 * 4;
+  const int     posIdx2 = idx2 * 4;
 
   // Calculate squared distance
-  const double distance2 = distanceSquaredPosIdx(pos, posIdx1, posIdx2, 3);
+  const DG_REAL distance2 = distanceSquaredPosIdx(pos, posIdx1, posIdx2, 3);
 
   // Check if distance is outside bounds and calculate preFactor
-  double preFactor;
+  DG_REAL preFactor;
   if (distance2 < minLen2) {
-    const double distance = sqrt(distance2);
-    preFactor             = forceConstant * (distance - minLen) / fmax(1.0e-8, distance);
+    const DG_REAL distance = DG_SQRT(distance2);
+    preFactor              = forceConstant * (distance - minLen) / DG_FMAX(DG_REAL(1.0e-8), distance);
   } else if (distance2 > maxLen2) {
-    const double distance = sqrt(distance2);
-    preFactor             = forceConstant * (distance - maxLen) / fmax(1.0e-8, distance);
+    const DG_REAL distance = DG_SQRT(distance2);
+    preFactor              = forceConstant * (distance - maxLen) / DG_FMAX(DG_REAL(1.0e-8), distance);
   } else {
     return;  // Distance within bounds, no gradient contribution
   }
 
   // Calculate and accumulate gradients for each component
   for (int i = 0; i < 3; i++) {
-    const double dGrad = preFactor * (pos[posIdx1 + i] - pos[posIdx2 + i]);
+    const DG_REAL dGrad = preFactor * (pos[posIdx1 + i] - pos[posIdx2 + i]);
     atomicAdd(&grad[posIdx1 + i], dGrad);
     atomicAdd(&grad[posIdx2 + i], -dGrad);
   }
 }
 
 // Angle constraint gradient
-static __device__ __forceinline__ void angleConstraintGrad(const double* pos,
-                                                           const int     idx1,
-                                                           const int     idx2,
-                                                           const int     idx3,
-                                                           const double  minAngle,
-                                                           const double  maxAngle,
-                                                           const double  forceConstant,
-                                                           double*       grad) {
+static __device__ __forceinline__ void angleConstraintGrad(const DG_REAL* pos,
+                                                           const int      idx1,
+                                                           const int      idx2,
+                                                           const int      idx3,
+                                                           const DG_REAL  minAngle,
+                                                           const DG_REAL  maxAngle,
+                                                           const DG_REAL  forceConstant,
+                                                           DG_REAL*       grad) {
   // Get positions for all three atoms
   const int posIdx1 = idx1 * 4;
   const int posIdx2 = idx2 * 4;
   const int posIdx3 = idx3 * 4;
 
   // Calculate vectors r1 = p1 - p2 and r2 = p3 - p2
-  double r1x = pos[posIdx1 + 0] - pos[posIdx2 + 0];
-  double r1y = pos[posIdx1 + 1] - pos[posIdx2 + 1];
-  double r1z = pos[posIdx1 + 2] - pos[posIdx2 + 2];
+  DG_REAL r1x = pos[posIdx1 + 0] - pos[posIdx2 + 0];
+  DG_REAL r1y = pos[posIdx1 + 1] - pos[posIdx2 + 1];
+  DG_REAL r1z = pos[posIdx1 + 2] - pos[posIdx2 + 2];
 
-  double r2x = pos[posIdx3 + 0] - pos[posIdx2 + 0];
-  double r2y = pos[posIdx3 + 1] - pos[posIdx2 + 1];
-  double r2z = pos[posIdx3 + 2] - pos[posIdx2 + 2];
+  DG_REAL r2x = pos[posIdx3 + 0] - pos[posIdx2 + 0];
+  DG_REAL r2y = pos[posIdx3 + 1] - pos[posIdx2 + 1];
+  DG_REAL r2z = pos[posIdx3 + 2] - pos[posIdx2 + 2];
 
   // Calculate squared lengths and take max with 1.0e-5 as in RDKit
-  const double r1LengthSq = fmax(1.0e-5, r1x * r1x + r1y * r1y + r1z * r1z);
-  const double r2LengthSq = fmax(1.0e-5, r2x * r2x + r2y * r2y + r2z * r2z);
-  const double denom      = rsqrt(r1LengthSq * r2LengthSq);
+  const DG_REAL r1LengthSq = DG_FMAX(DG_REAL(1.0e-5), r1x * r1x + r1y * r1y + r1z * r1z);
+  const DG_REAL r2LengthSq = DG_FMAX(DG_REAL(1.0e-5), r2x * r2x + r2y * r2y + r2z * r2z);
+  const DG_REAL denom      = DG_RSQRT(r1LengthSq * r2LengthSq);
 
   // Calculate cosine of angle using dot product
-  double cosTheta = dotProduct(r1x, r1y, r1z, r2x, r2y, r2z) * denom;
+  DG_REAL cosTheta = dotProduct(r1x, r1y, r1z, r2x, r2y, r2z) * denom;
 
   // Clamp cosTheta to [-1, 1]
   clipToOne(cosTheta);
 
   // Convert to degrees using RDKit's RAD2DEG constant
-  const double angle = RAD2DEG * acos(cosTheta);
+  const DG_REAL angle = RAD2DEG * DG_ACOS(cosTheta);
 
   // Calculate angle term using the separate device function
-  const double angleTerm = computeAngleTerm(angle, minAngle, maxAngle);
+  const DG_REAL angleTerm = computeAngleTerm(angle, minAngle, maxAngle);
 
   // Calculate dE_dTheta
-  const double dE_dTheta = 2.0 * RAD2DEG * forceConstant * angleTerm;
+  const DG_REAL dE_dTheta = DG_REAL(2.0) * RAD2DEG * forceConstant * angleTerm;
 
   // Calculate cross product rp = r2 × r1
-  double rpx, rpy, rpz;
+  DG_REAL rpx, rpy, rpz;
   crossProduct(r2x, r2y, r2z, r1x, r1y, r1z, rpx, rpy, rpz);
 
   // Calculate length of rp and prefactor
-  const double rpLengthSq  = fmax(rpx * rpx + rpy * rpy + rpz * rpz, 1e-10);
-  const double rpLengthInv = rsqrt(rpLengthSq);
-  const double prefactor   = dE_dTheta * rpLengthInv;
+  const DG_REAL rpLengthSq  = DG_FMAX(rpx * rpx + rpy * rpy + rpz * rpz, 1e-10);
+  const DG_REAL rpLengthInv = DG_RSQRT(rpLengthSq);
+  const DG_REAL prefactor   = dE_dTheta * rpLengthInv;
 
   // Calculate t factors
-  const double t1 = -prefactor / r1LengthSq;
-  const double t2 = prefactor / r2LengthSq;
+  const DG_REAL t1 = -prefactor / r1LengthSq;
+  const DG_REAL t2 = prefactor / r2LengthSq;
 
   // Calculate cross products for gradients
-  double dedp1x, dedp1y, dedp1z;  // r1 × rp
+  DG_REAL dedp1x, dedp1y, dedp1z;  // r1 × rp
   crossProduct(r1x, r1y, r1z, rpx, rpy, rpz, dedp1x, dedp1y, dedp1z);
 
-  double dedp3x, dedp3y, dedp3z;  // r2 × rp
+  DG_REAL dedp3x, dedp3y, dedp3z;  // r2 × rp
   crossProduct(r2x, r2y, r2z, rpx, rpy, rpz, dedp3x, dedp3y, dedp3z);
 
   // Scale the cross products by t factors
@@ -812,9 +796,9 @@ static __device__ __forceinline__ void angleConstraintGrad(const double* pos,
   dedp3z *= t2;
 
   // Calculate middle point gradient as negative sum of other two
-  const double dedp2x = -(dedp1x + dedp3x);
-  const double dedp2y = -(dedp1y + dedp3y);
-  const double dedp2z = -(dedp1z + dedp3z);
+  const DG_REAL dedp2x = -(dedp1x + dedp3x);
+  const DG_REAL dedp2y = -(dedp1y + dedp3y);
+  const DG_REAL dedp2z = -(dedp1z + dedp3z);
 
   // Accumulate gradients using atomic operations
   atomicAdd(&grad[posIdx1 + 0], dedp1x);
@@ -831,16 +815,16 @@ static __device__ __forceinline__ void angleConstraintGrad(const double* pos,
 }
 
 template <int dimension>
-static __device__ __inline__ double molEnergyDG(const EnergyForceContribsDevicePtr& terms,
-                                                const BatchedIndicesDevicePtr&      systemIndices,
-                                                const double*                       molCoords,
-                                                const int                           molIdx,
-                                                const double                        chiralWeight,
-                                                const double                        fourthDimWeight,
-                                                const int                           tid) {
+static __device__ __inline__ DG_REAL molEnergyDG(const EnergyForceContribsDevicePtr& terms,
+                                                 const BatchedIndicesDevicePtr&      systemIndices,
+                                                 const DG_REAL*                      molCoords,
+                                                 const int                           molIdx,
+                                                 const DG_REAL                       chiralWeight,
+                                                 const DG_REAL                       fourthDimWeight,
+                                                 const int                           tid) {
   const int atomStart = systemIndices.atomStarts[molIdx];
 
-  double energy = 0.0;
+  DG_REAL energy = DG_REAL(0.0);
 
   namespace cg            = cooperative_groups;
   constexpr int WARP_SIZE = 32;
@@ -927,11 +911,11 @@ static __device__ __inline__ double molEnergyDG(const EnergyForceContribsDeviceP
 template <int dimension>
 static __device__ __inline__ void molGradDG(const EnergyForceContribsDevicePtr& terms,
                                             const BatchedIndicesDevicePtr&      systemIndices,
-                                            const double*                       molCoords,
-                                            double*                             molGrad,
+                                            const DG_REAL*                      molCoords,
+                                            DG_REAL*                            molGrad,
                                             const int                           molIdx,
-                                            const double                        chiralWeight,
-                                            const double                        fourthDimWeight,
+                                            const DG_REAL                       chiralWeight,
+                                            const DG_REAL                       fourthDimWeight,
                                             const int                           tid) {
   const int atomStart = systemIndices.atomStarts[molIdx];
 
@@ -1016,14 +1000,14 @@ static __device__ __inline__ void molGradDG(const EnergyForceContribsDevicePtr& 
   }
 }
 
-static __device__ __inline__ double molEnergyETK(const Energy3DForceContribsDevicePtr& terms,
-                                                 const BatchedIndices3DDevicePtr&      systemIndices,
-                                                 const double*                         molCoords,
-                                                 const int                             molIdx,
-                                                 const int                             tid) {
+static __device__ __inline__ DG_REAL molEnergyETK(const Energy3DForceContribsDevicePtr& terms,
+                                                  const BatchedIndices3DDevicePtr&      systemIndices,
+                                                  const DG_REAL*                        molCoords,
+                                                  const int                             molIdx,
+                                                  const int                             tid) {
   const int atomStart = systemIndices.atomStarts[molIdx];
 
-  double energy = 0.0;
+  DG_REAL energy = DG_REAL(0.0);
 
   namespace cg            = cooperative_groups;
   constexpr int WARP_SIZE = 32;
@@ -1063,7 +1047,7 @@ static __device__ __inline__ double molEnergyETK(const Energy3DForceContribsDevi
   const auto& [a13_idx1s, a13_idx2s, a13_idx3s, a13_minAngle, a13_maxAngle]     = terms.angle13Terms;
   const auto& [dlr_idx1s, dlr_idx2s, dlr_minLen, dlr_maxLen, dlr_forceConstant] = terms.longRangeDistTerms;
 
-  constexpr double defaultAngleForceConstant = 1.0;
+  constexpr DG_REAL defaultAngleForceConstant = DG_REAL(1.0);
 
   // Calculate number of warps needed for each term type
   const int warpsForTorsion  = (numTorsion + WARP_SIZE - 1) / WARP_SIZE;
@@ -1186,8 +1170,8 @@ static __device__ __inline__ double molEnergyETK(const Energy3DForceContribsDevi
 
 static __device__ __inline__ void molGradETK(const Energy3DForceContribsDevicePtr& terms,
                                              const BatchedIndices3DDevicePtr&      systemIndices,
-                                             const double*                         molCoords,
-                                             double*                               grad,
+                                             const DG_REAL*                        molCoords,
+                                             DG_REAL*                              grad,
                                              const int                             molIdx,
                                              const int                             tid) {
   const int atomStart = systemIndices.atomStarts[molIdx];
@@ -1230,7 +1214,7 @@ static __device__ __inline__ void molGradETK(const Energy3DForceContribsDevicePt
   const auto& [a13_idx1s, a13_idx2s, a13_idx3s, a13_minAngle, a13_maxAngle]     = terms.angle13Terms;
   const auto& [dlr_idx1s, dlr_idx2s, dlr_minLen, dlr_maxLen, dlr_forceConstant] = terms.longRangeDistTerms;
 
-  constexpr double defaultAngleForceConstant = 1.0;
+  constexpr DG_REAL defaultAngleForceConstant = DG_REAL(1.0);
 
   // Calculate number of warps needed for each term type
   const int warpsForTorsion  = (numTorsion + WARP_SIZE - 1) / WARP_SIZE;
@@ -1354,8 +1338,3 @@ static __device__ __inline__ void molGradETK(const Energy3DForceContribsDevicePt
     }
   }
 }
-
-}  // namespace DistGeom
-}  // namespace nvMolKit
-
-#endif  // NVMOLKIT_DISTGEOM_KERNELS_DEVICE_CUH

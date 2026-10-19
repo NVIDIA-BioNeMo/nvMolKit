@@ -24,10 +24,12 @@ import torch
 # These imports populate Boost.Python's global converter registry. Keep this
 # bootstrap sequence developer-controlled so future binding dependencies are
 # not silently reordered by the formatter.
+# PrecisionMode must be registered before extensions that expose it as a
+# default argument.
 # isort: off
+from nvmolkit import _types
 from nvmolkit import _arrayHelpers  # noqa: F401
 from nvmolkit import _embedMolecules  # type: ignore
-from nvmolkit import _types
 # isort: on
 
 
@@ -298,6 +300,10 @@ class HardwareOptions:
         if unknown:
             raise KeyError(f"Unknown HardwareOptions keys: {sorted(unknown)}")
         return cls(**{key: data[key] for key in known if key in data})
+
+
+PrecisionMode = _types.PrecisionMode
+"""Device precision mode: :attr:`FULL` or :attr:`SINGLE`."""
 
 
 class AsyncGpuResult:

@@ -24,7 +24,7 @@ Conda is the recommended way to install nvMolKit, matching the recommended distr
 you have a variant of conda installed and activated, such as [Miniconda](https://docs.conda.io/en/latest/miniconda.html) 
 or [Miniforge](https://conda-forge.org/download/).
 
-nvMolKit v0.6.0 supports RDKit 2025.09.1 through 2026.03.5. To install:
+nvMolKit v0.7.0 supports RDKit 2025.09.6 and 2026.03.1 through 2026.03.6. To install:
 
 ```bash
 conda install -c conda-forge nvmolkit
@@ -59,7 +59,7 @@ Replace `cu128` with another CUDA 12 backend from the PyTorch install page if th
 compatible with your driver.
 
 The wheel published to PyPI is built against a single RDKit release per
-nvMolKit version (RDKit 2026.03.5 for nvMolKit v0.6.0), due to versioning
+nvMolKit version (RDKit 2026.03.6 for nvMolKit v0.7.0), due to versioning
 limitations in PyPI's dependency management system.
 
 Use this path if you do not have a constraint on which RDKit version to use;
@@ -73,12 +73,12 @@ To install nvMolKit pinned to a particular RDKit:
 
 ```bash
 RDKIT_VERSION=2025.9.6
-NVMOLKIT_VERSION=0.6.0
+NVMOLKIT_VERSION=0.7.0
 pip install nvmolkit==${NVMOLKIT_VERSION}+rdkit${RDKIT_VERSION} \
     --extra-index-url https://nvidia-bionemo.github.io/nvMolKit/wheels/rdkit${RDKIT_VERSION}/simple/
 ```
 
-Replace `2025.9.6` with the RDKit version you want. Variants published for nvMolKit v0.6.0 include every version between 2025.09.1 and 2026.03.5.
+Replace `2025.9.6` with the RDKit version you want. Variants published for nvMolKit v0.7.0 cover RDKit 2025.09.6 and 2026.03.1 through 2026.03.6.
 
 
 ### Installation from Source
@@ -114,20 +114,20 @@ sudo apt-get install clang-15 clang-format-15 clang-tidy-15
 
 ##### CUDA Installation
 
-Install NVIDIA CUDA Toolkit (version 12.5 or later) following [NVIDIA's official installation guide](https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=22.04&target_type=deb_network).
+Install NVIDIA CUDA Toolkit (version 12.6 or later) following [NVIDIA's official installation guide](https://developer.nvidia.com/cuda-downloads?target_os=Linux&target_arch=x86_64&Distribution=Ubuntu&target_version=22.04&target_type=deb_network).
 
 ##### CMake
 
-nvMolKit requires CMake >= 3.26. Update if needed, for example on Ubuntu:
+nvMolKit requires CMake >= 3.30. Update if needed, for example on Ubuntu:
 
 ```bash
 # Remove old CMake
 sudo apt remove --purge --auto-remove cmake
 
-# Install CMake 3.30.1
-wget https://github.com/Kitware/CMake/releases/download/v3.30.1/cmake-3.30.1-linux-x86_64.sh
-chmod +x cmake-3.30.1-linux-x86_64.sh
-sudo ./cmake-3.30.1-linux-x86_64.sh --prefix=/usr/local --skip-license
+# Install CMake 3.30.9
+wget https://github.com/Kitware/CMake/releases/download/v3.30.9/cmake-3.30.9-linux-x86_64.sh
+chmod +x cmake-3.30.9-linux-x86_64.sh
+sudo ./cmake-3.30.9-linux-x86_64.sh --prefix=/usr/local --skip-license
 
 # Verify installation
 cmake --version
@@ -178,10 +178,11 @@ pip install pytest
 (cd nvmolkit/tests && pytest -v .)
 ```
 
-#### Docker containers
+#### Docker container
 
-Materials for building docker containers are in [`admin/container`](admin/container). [HPCCM](https://github.com/NVIDIA/hpc-container-maker)
-builds docker files from yaml configs. See the [README](admin/container/hpccm_build.py) for config definitions.
+The maintained container definition is
+[`admin/container/manylinux_2_28_cuda12.Dockerfile`](admin/container/manylinux_2_28_cuda12.Dockerfile).
+It provides the CUDA 12.9 and GCC 14 environment used by the GitHub Actions pip-wheel workflow.
 
 
 ## Developer Guide
@@ -244,8 +245,8 @@ docker build -f admin/container/manylinux_2_28_cuda12.Dockerfile \
   -t nvmolkit-manylinux-cuda12:test .
 pip install cibuildwheel
 CIBW_MANYLINUX_X86_64_IMAGE=nvmolkit-manylinux-cuda12:test \
-  RDKIT_VERSION=2026.3.5 \
-  bash admin/deploy/build_pip_wheels.sh 2026.3.5 wheelhouse
+  RDKIT_VERSION=2026.3.6 \
+  bash admin/deploy/build_pip_wheels.sh 2026.3.6 wheelhouse
 ```
 
 To narrow the matrix while iterating, set `CIBW_BUILD=cp312-manylinux_x86_64` (or whichever python tag you care about) before invoking the script. Wheels land in `wheelhouse/`.

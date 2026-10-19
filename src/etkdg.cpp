@@ -19,8 +19,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <memory>
 #include <mutex>
+#include <type_traits>
 #include <unordered_map>
+#include <variant>
 
 #include "rdkit_extensions/conformer_pruning.h"
 #include "src/conformer/device_conformer_pruning.h"
@@ -42,10 +45,12 @@ namespace {
 class ETKDGCollectDeviceCoordsStage final : public detail::ETKDGStage {
  public:
   ETKDGCollectDeviceCoordsStage(std::vector<int>                 batchGlobalMolIds,
+                                std::vector<int>                 batchAttemptIds,
                                 int                              dim,
                                 detail::DeviceCoordCollectorCap& cap,
                                 detail::DeviceCoordCollector&    collector)
       : batchGlobalMolIds_(std::move(batchGlobalMolIds)),
+        batchAttemptIds_(std::move(batchAttemptIds)),
         dim_(dim),
         cap_(cap),
         collector_(collector) {}
@@ -56,6 +61,7 @@ class ETKDGCollectDeviceCoordsStage final : public detail::ETKDGStage {
                          ctx.activeThisStage,
                          dim_,
                          batchGlobalMolIds_,
+                         batchAttemptIds_,
                          cap_,
                          collector_);
   }
@@ -63,26 +69,22 @@ class ETKDGCollectDeviceCoordsStage final : public detail::ETKDGStage {
 
  private:
   std::vector<int>                 batchGlobalMolIds_;
+  std::vector<int>                 batchAttemptIds_;
   int                              dim_;
   detail::DeviceCoordCollectorCap& cap_;
   detail::DeviceCoordCollector&    collector_;
 };
 
-// Helper function to calculate max iterations
-unsigned int calculateMaxIterations(const std::vector<RDKit::ROMol*>& mols, unsigned int maxIterations) {
-  // TODO: Support per-molecule maxIterations to match RDKit's implementation.
-  // Current implementation uses a single maxIterations value for all molecules.
-  // Consider adding a vector of maxIterations to the context for per-molecule control.
-  if (maxIterations == 0) {
-    // Find maximum number of atoms
-    unsigned int maxAtoms = 0;
-    for (const auto& mol : mols) {
-      maxAtoms = std::max(maxAtoms, mol->getNumAtoms());
-    }
-    constexpr unsigned int kIterationsPerAtom = 10;
-    maxIterations                             = kIterationsPerAtom * maxAtoms;
+// Per-molecule iteration limit. Matches RDKit: an unset (0) EmbedParameters::maxIterations means 10 * numAtoms of
+// each molecule, and an explicit value applies to every molecule.
+std::vector<int> calculateMaxIterations(const std::vector<RDKit::ROMol*>& mols, unsigned int maxIterations) {
+  constexpr unsigned int kIterationsPerAtom = 10;
+  std::vector<int>       result;
+  result.reserve(mols.size());
+  for (const auto& mol : mols) {
+    result.push_back(static_cast<int>(maxIterations == 0 ? kIterationsPerAtom * mol->getNumAtoms() : maxIterations));
   }
-  return maxIterations;
+  return result;
 }
 }  // anonymous namespace
 
@@ -97,7 +99,8 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
                                                 const BatchHardwareOptions&                 hardwareOptions,
                                                 BfgsBackend                                 backend,
                                                 CoordinateOutput                            output,
-                                                int                                         targetGpu) {
+                                                int                                         targetGpu,
+                                                PrecisionMode                               precision) {
   const ScopedNvtxRange fullRange("EmbedMolecules");
   const bool            deviceOutput = output == CoordinateOutput::DEVICE;
 
@@ -191,9 +194,9 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
   prepareExceptionRegistry.rethrow();
 
   // Set max iterations if not specified
-  if (maxIterations == -1) {
-    maxIterations = static_cast<int>(calculateMaxIterations(sortedMols, paramsCopy.maxIterations));
-  }
+  const std::vector<int> maxIterationsPerMol = maxIterations == -1 ?
+                                                 calculateMaxIterations(sortedMols, paramsCopy.maxIterations) :
+                                                 std::vector<int>(sortedMols.size(), maxIterations);
   coordsRange.pop();
 
   // Initialize failures structure if needed (outer vector is per stage, inner is per conformer)
@@ -257,7 +260,7 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
   const int    effectiveBatchSize = (batchSize <= 0) ? static_cast<int>(numUniqueMols) : batchSize;
 
   // Create result tracker for work dispatch
-  detail::Scheduler Scheduler(static_cast<int>(numUniqueMols), confsPerMolecule, maxIterations);
+  detail::Scheduler Scheduler(confsPerMolecule, maxIterationsPerMol);
 
   // Shared completion flag
   std::atomic<bool> workComplete{false};
@@ -273,11 +276,21 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
       cudaStream_t     streamPtr = streamsPerThread[omp_get_thread_num()].stream();
       const int        deviceId  = devicesPerThread[omp_get_thread_num()];
       const WithDevice dev(deviceId);
-      auto             minimizer = std::make_unique<BfgsBatchMinimizer>(4,  // dataDim for ETKDG (4D distance geometry)
-                                                            DebugLevel::NONE,
-                                                            true,  // scaleGrads
-                                                            streamPtr,
-                                                            backend);
+      // The minimizer's working precision is fixed for the thread; minimize stages are built against it.
+      std::variant<std::unique_ptr<BfgsBatchMinimizer>, std::unique_ptr<BfgsBatchMinimizerSingle>> minimizer;
+      if (usesSinglePrecision(precision)) {
+        minimizer = std::make_unique<BfgsBatchMinimizerSingle>(4,  // dataDim for ETKDG (4D distance geometry)
+                                                               DebugLevel::NONE,
+                                                               true,  // scaleGrads
+                                                               streamPtr,
+                                                               backend);
+      } else {
+        minimizer = std::make_unique<BfgsBatchMinimizer>(4,  // dataDim for ETKDG (4D distance geometry)
+                                                         DebugLevel::NONE,
+                                                         true,  // scaleGrads
+                                                         streamPtr,
+                                                         backend);
+      }
       std::unordered_map<const RDKit::ROMol*, nvMolKit::DistGeom::EnergyForceContribsHost>   dgCache;
       std::unordered_map<const RDKit::ROMol*, nvMolKit::DistGeom::Energy3DForceContribsHost> etkCache;
       // Pinned reusable buffers for common copies.
@@ -288,8 +301,10 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
 
       while (!workComplete.load()) {
         // Dispatch work for this thread
-        std::vector<int> attemptIds;
-        std::vector<int> molIds = Scheduler.dispatch(effectiveBatchSize, &attemptIds);
+        std::vector<int>       attemptIds;
+        std::vector<int>       molIds              = Scheduler.dispatch(effectiveBatchSize, &attemptIds);
+        // Writeback keeps the lowest successful attempt IDs per molecule; the coord-gen stage consumes its own copy.
+        const std::vector<int> writebackAttemptIds = attemptIds;
 
         if (molIds.empty()) {
           workComplete.store(true);
@@ -313,7 +328,7 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
         for (const int molId : molIds) {
           // Use the original unique molecules and their prepared eargs
           batchMolsWithConfs.push_back(sortedMols[molId]);
-          batchEargs.push_back(eargs[molId]);
+          batchEargs.push_back(detail::cloneEmbedArgs(eargs[molId]));
           coordinateDimensions.push_back(eargs[molId].chiralCenters.empty() ? 3 : 4);
         }
 
@@ -345,21 +360,34 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
                                                                         std::move(coordinateDimensions)));
         }
 
-        // First minimize, then first round of chiral checks.
-        auto                           firstMinStage    = std::make_unique<detail::DistGeomMinimizeStage>(constMolPtrs,
-                                                                             batchEargs,
-                                                                             paramsCopy,
-                                                                             *context,
-                                                                             *minimizer,
-                                                                             1.0,
-                                                                             0.1,
-                                                                             400,
-                                                                             true,
-                                                                             "First Minimization",
-                                                                             streamPtr,
-                                                                             &dgCache);
-        detail::DistGeomMinimizeStage* firstMinStagePtr = firstMinStage.get();
-        stages.push_back(std::move(firstMinStage));
+        // First minimize, then first round of chiral checks. The fourth-dimension stage reuses the first
+        // stage's setup and is queued after the chiral checks.
+        std::unique_ptr<detail::ETKDGStage> fourthDimMinStage;
+        std::visit(
+          [&](auto& typedMinimizer) {
+            using Real         = typename std::decay_t<decltype(*typedMinimizer)>::Scalar;
+            auto firstMinStage = std::make_unique<detail::DistGeomMinimizeStageT<Real>>(constMolPtrs,
+                                                                                        batchEargs,
+                                                                                        paramsCopy,
+                                                                                        *context,
+                                                                                        *typedMinimizer,
+                                                                                        1.0,
+                                                                                        0.1,
+                                                                                        400,
+                                                                                        true,
+                                                                                        "First Minimization",
+                                                                                        streamPtr,
+                                                                                        &dgCache);
+            fourthDimMinStage =
+              std::make_unique<detail::DistGeomMinimizeWrapperStageT<Real>>(*firstMinStage,
+                                                                            0.2,
+                                                                            1.0,
+                                                                            200,
+                                                                            false,
+                                                                            "Fourth Dimension Minimization");
+            stages.push_back(std::move(firstMinStage));
+          },
+          minimizer);
         stages.push_back(std::make_unique<detail::ETKDGTetrahedralCheckStage>(*context, batchEargs, dim, streamPtr));
 
         // Only add first chiral check if enforceChirality is enabled
@@ -372,21 +400,21 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
         }
 
         // Second + 3rd minimize, then double bond checks.
-        stages.push_back(std::make_unique<detail::DistGeomMinimizeWrapperStage>(*firstMinStagePtr,
-                                                                                0.2,
-                                                                                1.0,
-                                                                                200,
-                                                                                false,
-                                                                                "Fourth Dimension Minimization"));
+        stages.push_back(std::move(fourthDimMinStage));
         // (ET)(K)DG: Add experimental torsion minimization stage only if needed to match RDKit's logic.
         if (paramsCopy.useExpTorsionAnglePrefs || paramsCopy.useBasicKnowledge) {
-          stages.push_back(std::make_unique<detail::ETKMinimizationStage>(constMolPtrs,
-                                                                          batchEargs,
-                                                                          paramsCopy,
-                                                                          *context,
-                                                                          *minimizer,
-                                                                          streamPtr,
-                                                                          &etkCache));
+          std::visit(
+            [&](auto& typedMinimizer) {
+              using Real = typename std::decay_t<decltype(*typedMinimizer)>::Scalar;
+              stages.push_back(std::make_unique<detail::ETKMinimizationStageT<Real>>(constMolPtrs,
+                                                                                     batchEargs,
+                                                                                     paramsCopy,
+                                                                                     *context,
+                                                                                     *typedMinimizer,
+                                                                                     streamPtr,
+                                                                                     &etkCache));
+            },
+            minimizer);
         }
 
         // Final chiral and stereochem checks
@@ -415,8 +443,11 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
           for (size_t i = 0; i < molIds.size(); ++i) {
             originalMolIds[i] = sortedToOriginal[static_cast<size_t>(molIds[i])];
           }
-          stages.push_back(
-            std::make_unique<ETKDGCollectDeviceCoordsStage>(std::move(originalMolIds), dim, collectorsCap, collector));
+          stages.push_back(std::make_unique<ETKDGCollectDeviceCoordsStage>(std::move(originalMolIds),
+                                                                           writebackAttemptIds,
+                                                                           dim,
+                                                                           collectorsCap,
+                                                                           collector));
         } else {
           stages.push_back(std::make_unique<detail::ETKDGUpdateConformersStage>(batchMolsWithConfs,
                                                                                 batchEargs,
@@ -425,7 +456,8 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
                                                                                 activeScratch,
                                                                                 streamPtr,
                                                                                 &conformer_mutex,
-                                                                                confsPerMolecule));
+                                                                                confsPerMolecule,
+                                                                                writebackAttemptIds));
         }
 
         // Create and run driver
@@ -477,7 +509,8 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
 
   if (deviceOutput) {
     // Gather the results on one GPU before pruning.
-    auto result = detail::finalizeOnTarget(collectorsPerThread, targetGpu, static_cast<int>(mols.size()));
+    auto result =
+      detail::finalizeOnTarget(collectorsPerThread, targetGpu, static_cast<int>(mols.size()), confsPerMolecule);
     return detail::pruneDeviceConformers(std::move(result), mols, params);
   }
 
@@ -488,6 +521,10 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
     try {
       auto iter = conformers.find(mol);
       if (iter != conformers.end()) {
+        // Attempt-ID order, so RMS pruning sees conformers in a timing-independent order.
+        std::stable_sort(iter->second.begin(), iter->second.end(), [](const auto& a, const auto& b) {
+          return a->getId() < b->getId();
+        });
         nvmolkit::addConformersToMoleculeWithPruning(*mol, iter->second, params);
       }
     } catch (...) {

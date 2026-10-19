@@ -39,10 +39,10 @@ jobs:
       matrix:
         include:
           # Min python + min rdkit + min cuda supported by the feedstock.
-          - python: "3.10"
+          - python: "3.11"
             rdkit: "2025.9.2"
             cuda: "12.6"
-            config: linux_64_c_compiler_version13c_stdlib_version2.17cuda_compiler_version12.6cxx_compiler_version13libboost_devel1.86libboost_headers1.86libboost_python_devel1.86librdkit_dev2025.9.2_h6537a540
+            config: linux_64_c_compiler_version13c_stdlib_version2.17cuda_compiler_version12.6cxx_compiler_version13libboost_devel1.86libboost_headers1.86libboost_python_devel1.86librdkit_dev2025.9.2_hd597ba9d
           # Intermediate python + intermediate rdkit, covers the middle cuda.
           - python: "3.12"
             rdkit: "2025.9.6"

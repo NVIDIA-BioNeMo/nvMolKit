@@ -51,6 +51,7 @@ target_link_libraries(
           mmff_batched_forcefield
           rdkit_mmff_flattened
           forcefield_constraints
+          device_convert
           device_vector
           OpenMP::OpenMP_CXX
           openmp_helpers

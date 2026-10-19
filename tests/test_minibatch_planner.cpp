@@ -199,3 +199,89 @@ TEST(MiniBatchPlannerTest, BuildsScheduleAndRecursiveEntries) {
 
   pool.release(buffer);
 }
+
+TEST(MiniBatchPlannerTest, BuildsSelectedTargetPairs) {
+  const std::vector<int> targetAtomCounts{2, 5, 3, 7, 4};
+  const std::vector<int> queryAtomCounts{2};
+  const std::vector<int> queryPipelineDepths{0};
+  const std::vector<int> selectedTargetIndices{1, 4};
+
+  ThreadWorkerContext ctx;
+  ctx.queryAtomCounts     = queryAtomCounts.data();
+  ctx.queryPipelineDepths = queryPipelineDepths.data();
+  ctx.targetAtomCounts    = &targetAtomCounts;
+  ctx.numTargets          = static_cast<int>(targetAtomCounts.size());
+  ctx.numQueries          = 1;
+
+  PinnedHostBufferPool pool;
+  pool.initialize(1, static_cast<int>(selectedTargetIndices.size()), 1, 1);
+  PinnedHostBuffer* buffer = pool.acquire();
+  ASSERT_NE(buffer, nullptr);
+
+  MiniBatchPlanner planner;
+  MiniBatchPlan    plan;
+  LeafSubpatterns  leafSubpatterns;
+  planner.prepareSelectedTargetsMiniBatch(plan,
+                                          *buffer,
+                                          ctx,
+                                          leafSubpatterns,
+                                          selectedTargetIndices,
+                                          0,
+                                          static_cast<int>(selectedTargetIndices.size()));
+
+  EXPECT_EQ(plan.numPairsInMiniBatch, 2);
+  EXPECT_EQ(buffer->pairIndices[0], 1);
+  EXPECT_EQ(buffer->pairIndices[1], 4);
+  EXPECT_EQ(buffer->miniBatchPairMatchStarts[0], 0);
+  EXPECT_EQ(buffer->miniBatchPairMatchStarts[1], 10);
+  EXPECT_EQ(buffer->miniBatchPairMatchStarts[2], 18);
+  EXPECT_EQ(plan.totalMatchIndices, 18);
+  EXPECT_EQ(plan.maxPipelineDepthInMiniBatch, 0);
+
+  // A later mini-batch of the same selection starts at its own first selected target.
+  MiniBatchPlan secondPlan;
+  planner.prepareSelectedTargetsMiniBatch(secondPlan, *buffer, ctx, leafSubpatterns, selectedTargetIndices, 1, 1);
+  EXPECT_EQ(secondPlan.miniBatchPairOffset, 1);
+  EXPECT_EQ(secondPlan.numPairsInMiniBatch, 1);
+  EXPECT_EQ(secondPlan.firstTargetInMiniBatch, 4);
+  EXPECT_EQ(buffer->pairIndices[0], 4);
+  EXPECT_EQ(buffer->miniBatchPairMatchStarts[1], 8);
+  EXPECT_EQ(secondPlan.totalMatchIndices, 8);
+
+  pool.release(buffer);
+}
+
+TEST(PinnedHostBufferPoolTest, ReusesAllocationsAfterPrepare) {
+  PinnedHostBufferPool pool;
+  pool.initialize(1, 32, 0, 8);
+  PinnedHostBuffer* first = pool.acquire();
+  ASSERT_NE(first, nullptr);
+  auto* firstData = first->pairIndices.data();
+  pool.release(first);
+
+  pool.prepare(1, 32, 0, 8);
+  PinnedHostBuffer* reused = pool.acquire();
+  ASSERT_NE(reused, nullptr);
+  EXPECT_EQ(reused->pairIndices.data(), firstData);
+  pool.release(reused);
+
+  pool.shutdown();
+  pool.prepare(1, 32, 0, 8);
+  EXPECT_NE(pool.acquire(), nullptr);
+}
+
+TEST(PinnedHostBufferPoolTest, PrepareGrowsUndersizedBuffers) {
+  PinnedHostBufferPool pool;
+  pool.initialize(1, 32, 0, 8);
+
+  pool.prepare(2, 64, 0, 8);
+  PinnedHostBuffer* first  = pool.acquire();
+  PinnedHostBuffer* second = pool.acquire();
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+  EXPECT_NE(first, second);
+  EXPECT_GE(first->pairIndices.size(), 64U);
+  EXPECT_GE(second->pairIndices.size(), 64U);
+  pool.release(first);
+  pool.release(second);
+}

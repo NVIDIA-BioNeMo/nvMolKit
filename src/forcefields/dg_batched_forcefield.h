@@ -16,8 +16,12 @@
 #ifndef NVMOLKIT_DG_BATCHED_FORCEFIELD_H
 #define NVMOLKIT_DG_BATCHED_FORCEFIELD_H
 
+#include <variant>
+
 #include "src/forcefields/batched_forcefield.h"
 #include "src/forcefields/dist_geom.h"
+#include "src/forcefields/precision_workspace.h"
+#include "src/precision/precision_mode.h"
 
 namespace nvMolKit {
 
@@ -26,7 +30,7 @@ namespace nvMolKit {
 //! This wrapper exposes DG host-side data through the generic
 //! `BatchedForcefield` interface so batched BFGS can call into DG energy and
 //! gradient evaluation without keeping DG-specific dispatch in the minimizer.
-class DGBatchedForcefield final : public BatchedForcefield {
+class DGBatchedForcefield final : public BatchedForcefield, public SinglePrecisionBatchedForcefield {
  public:
   //! \brief Builds a generic batched-forcefield view over DG host data.
   //! \param molSystemHost Flattened DG host-side system description.
@@ -39,8 +43,9 @@ class DGBatchedForcefield final : public BatchedForcefield {
                       const std::vector<int>&                     atomStartsHost,
                       double                                      chiralWeight,
                       double                                      fourthDimWeight,
-                      BatchedForcefieldMetadata                   metadata = {},
-                      cudaStream_t                                stream   = nullptr);
+                      BatchedForcefieldMetadata                   metadata  = {},
+                      cudaStream_t                                stream    = nullptr,
+                      PrecisionMode                               precision = PrecisionMode::FULL);
 
   //! \brief Computes DG energies through the generic batched-forcefield API.
   cudaError_t computeEnergy(double*        energyOuts,
@@ -49,16 +54,24 @@ class DGBatchedForcefield final : public BatchedForcefield {
                             cudaStream_t   stream           = nullptr) override;
 
   //! \brief Computes DG gradients through the generic batched-forcefield API.
-  cudaError_t computeGradients(double*        grad,
-                               const double*  positions,
-                               const uint8_t* activeSystemMask = nullptr,
-                               cudaStream_t   stream           = nullptr) override;
+  cudaError_t   computeGradients(double*        grad,
+                                 const double*  positions,
+                                 const uint8_t* activeSystemMask = nullptr,
+                                 cudaStream_t   stream           = nullptr) override;
+  cudaError_t   computeEnergy(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
+  cudaError_t   computeGradients(float*, const float*, const uint8_t* = nullptr, cudaStream_t = nullptr) override;
+  PrecisionMode precision() const override {
+    return std::holds_alternative<DistGeom::BatchedMolecularDeviceBuffersSingle>(systemDevice_) ?
+             PrecisionMode::SINGLE :
+             PrecisionMode::FULL;
+  }
 
  private:
-  DistGeom::BatchedMolecularDeviceBuffers systemDevice_;
-  AsyncDeviceVector<int>                  atomStartsDevice_;
-  double                                  chiralWeight_    = 1.0;
-  double                                  fourthDimWeight_ = 0.1;
+  std::variant<DistGeom::BatchedMolecularDeviceBuffers, DistGeom::BatchedMolecularDeviceBuffersSingle> systemDevice_;
+  AsyncDeviceVector<int>              atomStartsDevice_;
+  SingleForcefieldConversionWorkspace singleConversion_;
+  double                              chiralWeight_    = 1.0;
+  double                              fourthDimWeight_ = 0.1;
 };
 
 }  // namespace nvMolKit

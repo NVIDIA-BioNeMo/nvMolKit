@@ -41,15 +41,15 @@ struct ZeroBuffersSpec {
  * @brief Per-pattern metadata for batched recursive preprocessing kernel.
  *
  * Each entry describes one recursive pattern in the combined batch:
- * which main query it belongs to, what bit to paint, and where the
+ * which main query it belongs to, what bits to paint, and where the
  * pattern data starts in the combined pattern batch.
  */
 struct BatchedPatternEntry {
-  int mainQueryIdx;     ///< Index of the main query this pattern belongs to
-  int patternId;        ///< Bit position (0-31) to paint for this pattern
-  int patternMolIdx;    ///< Index into the combined patterns MoleculesDevice
-  int depth;            ///< Nesting depth (0=leaf, higher=parent of children)
-  int localIdInParent;  ///< Bit position in parent's input (for nested patterns)
+  int      mainQueryIdx;     ///< Index of the main query this pattern belongs to
+  uint32_t patternMask;      ///< Bits to paint for all equivalent occurrences
+  int      patternMolIdx;    ///< Index into the combined patterns MoleculesDevice
+  int      depth;            ///< Nesting depth (0=leaf, higher=parent of children)
+  int      localIdInParent;  ///< Bit position in parent's input (for nested patterns)
 };
 
 // =============================================================================

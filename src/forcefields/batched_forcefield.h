@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "src/minimizer/bfgs_types.h"
+#include "src/precision/precision_mode.h"
 
 namespace nvMolKit {
 
@@ -146,6 +147,24 @@ class BatchedForcefield {
   const int*                atomStartsDevice_ = nullptr;
   BatchedForcefieldMetadata metadata_;
   ForceFieldType            type_;
+};
+
+//! Interface for force fields that evaluate coordinates, energies, and gradients in single precision.
+class SinglePrecisionBatchedForcefield {
+ public:
+  virtual ~SinglePrecisionBatchedForcefield() = default;
+
+  //! Precision this instance was built to evaluate in. The float overloads are only valid for SINGLE.
+  virtual PrecisionMode precision() const = 0;
+
+  virtual cudaError_t computeEnergy(float*         energyOuts,
+                                    const float*   positions,
+                                    const uint8_t* activeSystemMask = nullptr,
+                                    cudaStream_t   stream           = nullptr)    = 0;
+  virtual cudaError_t computeGradients(float*         grad,
+                                       const float*   positions,
+                                       const uint8_t* activeSystemMask = nullptr,
+                                       cudaStream_t   stream           = nullptr) = 0;
 };
 
 }  // namespace nvMolKit

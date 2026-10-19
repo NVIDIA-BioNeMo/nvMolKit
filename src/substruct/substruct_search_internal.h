@@ -259,12 +259,14 @@ class RDKitFallbackQueue {
 class FallbackQueueProducerGuard {
  public:
   explicit FallbackQueueProducerGuard(RDKitFallbackQueue* queue) : queue_(queue) {
-    if (queue_)
+    if (queue_) {
       queue_->registerProducer();
+    }
   }
   ~FallbackQueueProducerGuard() {
-    if (queue_)
+    if (queue_) {
       queue_->unregisterProducer();
+    }
   }
   FallbackQueueProducerGuard(const FallbackQueueProducerGuard&)            = delete;
   FallbackQueueProducerGuard& operator=(const FallbackQueueProducerGuard&) = delete;

@@ -18,6 +18,7 @@
 #include <cuda_runtime.h>
 #include <GraphMol/DistGeomHelpers/Embedder.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <utility>
 #include <vector>
@@ -41,8 +42,10 @@ DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                       
   const WithDevice     withDevice(result.gpuId);
   std::vector<int32_t> atomStarts(result.atomStarts.size());
   std::vector<int32_t> molIndices(numConformers);
+  std::vector<int32_t> confIndices(numConformers);
   result.atomStarts.copyToHost(atomStarts);
   result.molIndices.copyToHost(molIndices);
+  result.confIndices.copyToHost(confIndices);
   cudaCheckError(cudaStreamSynchronize(nullptr));
 
   std::vector<ConformerPruningMolInfo> molInfos(mols.size());
@@ -58,8 +61,9 @@ DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                       
     confBegin += info.confCount;
   }
 
-  // Conformers from different molecules may be interleaved, so group their IDs
-  // while preserving each molecule's input order.
+  // Conformers from different molecules may be interleaved, so group their IDs by molecule. Within a molecule, order
+  // them by conformer index (the attempt-ID rank for ETKDG output), with ties in input order. RMS pruning is greedy
+  // and order-dependent, and the input order depends on which worker collected which attempt.
   std::vector<int32_t> groupedConfIds(numConformers);
   std::vector<int>     nextConf(molInfos.size());
   for (size_t molIdx = 0; molIdx < molInfos.size(); ++molIdx) {
@@ -68,6 +72,11 @@ DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                       
   for (size_t confIdx = 0; confIdx < numConformers; ++confIdx) {
     const int molIdx                   = molIndices[confIdx];
     groupedConfIds[nextConf[molIdx]++] = static_cast<int32_t>(confIdx);
+  }
+  for (const auto& info : molInfos) {
+    std::stable_sort(groupedConfIds.begin() + info.confBegin,
+                     groupedConfIds.begin() + info.confBegin + info.confCount,
+                     [&](const int32_t a, const int32_t b) { return confIndices[a] < confIndices[b]; });
   }
 
   // Store RDKit's heavy-atom and symmetry mappings back-to-back so each
@@ -124,14 +133,22 @@ DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                       
       keptAtoms += static_cast<size_t>(atomStarts[confIdx + 1] - atomStarts[confIdx]);
     }
   }
-  if (keptConformers == numConformers) {
-    // If every conformer survives, keep the coordinates and only renumber the
-    // conformers within each molecule because the input may be interleaved.
-    std::vector<int32_t> renumberedConfIndices(numConformers);
-    std::vector<int32_t> nextConfIndex(mols.size(), 0);
-    for (size_t confIdx = 0; confIdx < numConformers; ++confIdx) {
-      renumberedConfIndices[confIdx] = nextConfIndex[static_cast<size_t>(molIndices[confIdx])]++;
+
+  // Number the survivors within each molecule in pruning order, not buffer order.
+  std::vector<int32_t> survivorConfIndex(numConformers, 0);
+  {
+    std::vector<int32_t> nextSurvivor(mols.size(), 0);
+    for (const int32_t confIdx : groupedConfIds) {
+      if (keep[static_cast<size_t>(confIdx)] != 0) {
+        survivorConfIndex[static_cast<size_t>(confIdx)] = nextSurvivor[static_cast<size_t>(molIndices[confIdx])]++;
+      }
     }
+  }
+
+  if (keptConformers == numConformers) {
+    // If every conformer survives, keep the coordinates and only renumber the conformers within each molecule
+    // because the input may be interleaved or out of order.
+    const std::vector<int32_t>& renumberedConfIndices = survivorConfIndex;
     result.confIndices.copyFromHost(renumberedConfIndices);
     cudaCheckError(cudaStreamSynchronize(nullptr));
     return result;
@@ -149,7 +166,6 @@ DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                       
   std::vector<int32_t> compactedMolIndices(keptConformers);
   std::vector<int32_t> compactedConfIndices(keptConformers);
   std::vector<int32_t> sourceConformerIds(keptConformers);
-  std::vector<int32_t> nextConfIndex(mols.size(), 0);
 
   // Build the compact result metadata on the CPU.
   size_t dstAtom = 0;
@@ -163,7 +179,7 @@ DeviceCoordResult pruneDeviceConformers(DeviceCoordResult                       
     compactedAtomStarts[dstConf + 1] = static_cast<int32_t>(dstAtom);
     const int32_t molIdx             = molIndices[srcConf];
     compactedMolIndices[dstConf]     = molIdx;
-    compactedConfIndices[dstConf]    = nextConfIndex[static_cast<size_t>(molIdx)]++;
+    compactedConfIndices[dstConf]    = survivorConfIndex[srcConf];
     sourceConformerIds[dstConf]      = static_cast<int32_t>(srcConf);
     ++dstConf;
   }

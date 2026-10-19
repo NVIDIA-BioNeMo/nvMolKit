@@ -151,8 +151,8 @@ void MorganInvariantsGenerator::ComputeInvariantsInto(const std::vector<const RD
         deltaMass = static_cast<int>(tAtom->getMass() - periodicTable->getAtomicWeight(tAtom->getAtomicNum()));
       }
 
-      const auto explicitImplicitHs  = static_cast<unsigned int>(tAtom->getNumExplicitHs() + tAtom->getNumImplicitHs());
-      const unsigned int totalDegree = explicitImplicitHs + bondCounts[atomIdx];
+      const auto         explicitImplicitHs        = tAtom->getNumExplicitHs() + tAtom->getNumImplicitHs();
+      const unsigned int totalDegree               = explicitImplicitHs + bondCounts[atomIdx];
       const unsigned int totalHsIncludingNeighbors = explicitImplicitHs + neighboringHydrogenCounts[atomIdx];
 
       const bool isInRing = ringInfo->numAtomRings(tAtom->getIdx()) > 0;

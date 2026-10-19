@@ -129,8 +129,13 @@ target_link_libraries(smarts_filter PRIVATE molecules molData ${RDKit_LIBS})
 add_executable(test_flattened_builder test_flattened_builder.cu)
 target_link_libraries(
   test_flattened_builder
-  PRIVATE ${RDKit_LIBS} rdkit_mmff_flattened rdkit_dist_geom_flattened
-          device_vector test_utils embedder_utils)
+  PRIVATE ${RDKit_LIBS}
+          rdkit_mmff_flattened
+          rdkit_dist_geom_flattened
+          device_vector
+          test_utils
+          embedder_utils
+          nvmolkit_versions)
 
 add_executable(test_mmff test_mmff.cu)
 target_link_libraries(
@@ -336,6 +341,9 @@ target_link_libraries(test_etkdg_result_tracker PRIVATE etkdg_impl)
 add_executable(test_butina test_butina.cpp)
 target_link_libraries(test_butina PRIVATE butina device)
 
+add_executable(test_diversity_pickers test_diversity_pickers.cu)
+target_link_libraries(test_diversity_pickers PRIVATE diversity_pickers device)
+
 add_executable(test_boolean_tree test_boolean_tree.cu)
 target_link_libraries(test_boolean_tree PRIVATE substruct_definitions device)
 
@@ -370,6 +378,15 @@ target_link_libraries(
   test_substructure_search PRIVATE substructure_search molecules device
                                    substruct_validation ${RDKit_LIBS})
 
+add_executable(test_pattern_screen test_pattern_screen.cu)
+target_link_libraries(
+  test_pattern_screen PRIVATE pattern_screen molecules device test_utils
+                              molData ${RDKit_LIBS})
+
+add_executable(test_substruct_library test_substruct_library.cu)
+target_link_libraries(test_substruct_library PRIVATE substruct_library
+                                                     ${RDKit_LIBS})
+
 add_executable(test_substruct_algos test_substruct_algos.cu)
 target_link_libraries(
   test_substruct_algos PRIVATE substruct_definitions molecules device
@@ -395,6 +412,20 @@ target_link_libraries(
   test_substruct_label_integration PRIVATE substructure_search molecules device
                                            test_utils molData ${RDKit_LIBS})
 
+add_executable(test_descriptors3d test_descriptors3d.cpp)
+target_link_libraries(
+  test_descriptors3d PRIVATE ${RDKit_LIBS} descriptors3d_mol
+                             conformer_coord_upload device)
+
+add_executable(test_descriptors3d_whim_arithmetic
+               test_descriptors3d_whim_arithmetic.cu)
+target_link_libraries(test_descriptors3d_whim_arithmetic
+                      PRIVATE descriptors3d cuda_error_check)
+
+add_executable(test_descriptors3d_topology test_descriptors3d_topology.cu)
+target_link_libraries(test_descriptors3d_topology PRIVATE descriptors3d
+                                                          cuda_error_check)
+
 add_executable(test_tfd_cpu test_tfd_cpu.cpp)
 target_link_libraries(test_tfd_cpu PRIVATE ${RDKit_LIBS} tfd_cpu test_utils
                                            nvmolkit_versions)
@@ -413,8 +444,12 @@ target_link_libraries(test_tfd PRIVATE ${RDKit_LIBS} tfd_gpu tfd_cpu
                                        device_vector test_utils)
 
 set(TEST_LIST
+    test_descriptors3d
+    test_descriptors3d_whim_arithmetic
+    test_descriptors3d_topology
     test_boolean_tree
     test_butina
+    test_diversity_pickers
     test_bfgs_hessian
     test_tfd_cpu
     test_tfd_kernels
@@ -459,6 +494,8 @@ set(TEST_LIST
     test_substruct_algos
     test_warp_dfs
     test_substructure_search
+    test_pattern_screen
+    test_substruct_library
     test_substructure_integration
     test_substruct_label_integration
     test_similarity

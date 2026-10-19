@@ -41,6 +41,9 @@ namespace detail {
  * @param dim               Source dimensionality (4 for ETKDG).
  * @param batchGlobalMolIds Length must equal @c srcAtomStarts.size() - 1; entry i is the
  *                          global molecule index of batch slot i.
+ * @param batchAttemptIds   Length must equal the batch size; entry i is batch slot i's per-molecule attempt
+ *                          number. When a molecule is full, only conformers with lower IDs than the highest
+ *                          one kept are accepted.
  * @param cap               Shared cap state across all collectors; updated atomically.
  * @param collector         Thread-local accumulator to append into.
  *
@@ -53,6 +56,7 @@ void appendActive(const AsyncDeviceVector<double>&  srcPositions,
                   const AsyncDeviceVector<uint8_t>& active,
                   int                               dim,
                   const std::vector<int>&           batchGlobalMolIds,
+                  const std::vector<int>&           batchAttemptIds,
                   DeviceCoordCollectorCap&          cap,
                   DeviceCoordCollector&             collector);
 

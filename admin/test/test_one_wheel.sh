@@ -133,9 +133,11 @@ elif [ "$mode" = "full" ]; then
         testRoot=$VENV_ROOT/rdkit${rdkit}_py${py}_tests
         testRunDir=$testRoot/run
         rm -rf "$testRoot"
-        mkdir -p "$testRoot/nvmolkit" "$testRoot/tests" "$testRunDir"
+        mkdir -p "$testRoot/nvmolkit" "$testRoot/tests" "$testRoot/skills" "$testRunDir"
         cp -a "$REPO/nvmolkit/tests" "$testRoot/nvmolkit/"
         cp -a "$REPO/tests/test_data" "$testRoot/tests/"
+        cp -a "$REPO/skills/nvmolkit-usage" "$testRoot/skills/"
+        cp "$REPO/pyproject.toml" "$testRoot/"
         find "$testRoot" -type d -name __pycache__ -prune -exec rm -rf {} +
     fi
     if [ "${rc:-0}" -eq 0 ] && ! run_step_in_dir "pytest" "$testRunDir" "$venv/bin/pytest" \

@@ -312,7 +312,7 @@ __global__ void testGSIPaintKernel(
   int                                                                   maxTargetAtoms,
   int                                                                   outputPairIdx) {
   BitMatrix2DView<MaxTargetAtoms, MaxQueryAtoms> labelMatrix(labelMatrixStorage);
-  nvMolKit::PaintModeParams                      paintParams{recursiveBits, patternId, maxTargetAtoms, outputPairIdx};
+  nvMolKit::PaintModeParams paintParams{recursiveBits, 1u << patternId, maxTargetAtoms, outputPairIdx};
 
   gsiBFSSearchGPU<MaxTargetAtoms, MaxQueryAtoms, MaxBondsPerAtom, SubstructOutputMode::PaintBits>(target,
                                                                                                   query,
