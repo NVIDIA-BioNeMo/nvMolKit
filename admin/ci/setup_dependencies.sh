@@ -43,15 +43,15 @@ ln -sf "${MINIFORGE_PREFIX}/etc/profile.d/conda.sh" /etc/profile.d/conda.sh
 conda activate base
 
 conda config --add channels conda-forge --add channels nvidia
-# Keep GCC 13 for CUDA 12.6 compatibility; prebuilt RDKit needs the GCC 14+ runtime.
+# Include compiler activation so CMake uses Conda's dependency and runtime paths.
 conda install -q -y \
     mamba \
     "python=${PYTHON_VERSION}" \
     "rdkit=${RDKIT_VERSION}" \
     "gcc=13.*" \
     "gxx=13.*" \
-    "libgcc-ng>=14" \
-    "libstdcxx-ng>=14" \
+    "gcc_linux-${ARCH/x86_64/64}=13.*" \
+    "gxx_linux-${ARCH/x86_64/64}=13.*" \
     libboost-devel \
     libboost-headers \
     libboost-python-devel \
@@ -59,10 +59,3 @@ conda install -q -y \
     pytest \
     "cmake=3.30.*" \
     eigen
-
-# Prefer Conda's newer runtime when linking and running against prebuilt RDKit.
-mkdir -p "${CONDA_PREFIX}/etc/conda/activate.d"
-cat > "${CONDA_PREFIX}/etc/conda/activate.d/zz_nvmolkit_runtime.sh" <<'EOF'
-export LDFLAGS="-L${CONDA_PREFIX}/lib -Wl,-rpath,${CONDA_PREFIX}/lib${LDFLAGS:+ ${LDFLAGS}}"
-export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
-EOF
