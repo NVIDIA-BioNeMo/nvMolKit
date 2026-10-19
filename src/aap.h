@@ -28,7 +28,7 @@ struct AapOptions {
   int   sinkhornIterations  = 8;
   float sinkhornTemperature = 0.104F;
   /** Maximum host descriptor workers, including the caller; -1 selects hardware concurrency. */
-  int numThreads = -1;
+  int   numThreads          = -1;
 };
 
 /** Molecules that AAP cannot process, grouped by reason as input indices. */

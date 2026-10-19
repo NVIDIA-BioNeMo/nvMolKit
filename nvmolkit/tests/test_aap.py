@@ -321,7 +321,9 @@ def test_aap_similarity_and_clustering_are_deterministic_across_streams(num_thre
     molecules = [left, left, right, _mol("c1ccccc1")]
     streams = [torch.cuda.Stream(), torch.cuda.Stream()]
 
-    scores = [aap_similarity(left, right, metric=AAPMetric(num_threads=num_threads), stream=stream) for stream in streams]
+    scores = [
+        aap_similarity(left, right, metric=AAPMetric(num_threads=num_threads), stream=stream) for stream in streams
+    ]
     labels = [
         _cluster_ids(molecules, similarity_threshold=0.2, stream=stream, num_threads=num_threads) for stream in streams
     ]

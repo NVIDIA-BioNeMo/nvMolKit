@@ -11,14 +11,14 @@
 namespace nvMolKit::detail {
 
 /** Select host descriptor workers from the molecule count and CPU budget. */
-inline std::size_t aapDescriptorThreadCount(const std::size_t numMolecules,
-                                          const int         requestedThreads,
-                                          const unsigned int availableThreads) {
+inline std::size_t aapDescriptorThreadCount(const std::size_t  numMolecules,
+                                            const int          requestedThreads,
+                                            const unsigned int availableThreads) {
   if (requestedThreads != -1 && requestedThreads <= 0) {
     throw std::invalid_argument("numThreads must be -1 or positive");
   }
   constexpr std::size_t kMoleculesPerThread = 64;
-  const std::size_t threadLimit = requestedThreads == -1 ? std::max(1U, availableThreads) : requestedThreads;
+  const std::size_t     threadLimit = requestedThreads == -1 ? std::max(1U, availableThreads) : requestedThreads;
   return std::clamp<std::size_t>(numMolecules / kMoleculesPerThread, 1, threadLimit);
 }
 
