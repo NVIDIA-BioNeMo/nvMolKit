@@ -509,26 +509,33 @@ __device__ __forceinline__ DclvAtomDots<Real> dclvAtomDots(const Real*         c
     const Real vdwDotZ   = uz * radius;
     bool       probeOpen = kProbe;
     bool       vdwOpen   = kVdw;
-    auto       test      = [&](const DclvNeighbor<Real>& other) {
-      if constexpr (kProbe) {
-        probeOpen =
-          probeOpen && !dclvCovers(other.x, other.y, other.z, other.radius + probe, probeDotX, probeDotY, probeDotZ);
-      }
-      if constexpr (kVdw) {
-        vdwOpen = vdwOpen && !dclvCovers(other.x, other.y, other.z, other.radius, vdwDotX, vdwDotY, vdwDotZ);
-      }
-    };
     if (cached) {
       for (int neighborIdx = 0; neighborIdx < numNeighbors && (probeOpen || vdwOpen); ++neighborIdx) {
-        test(neighbors[neighborIdx]);
+        const auto& neighbor = neighbors[neighborIdx];
+        if constexpr (kProbe) {
+          probeOpen =
+            probeOpen &&
+            !dclvCovers(neighbor.x, neighbor.y, neighbor.z, neighbor.radius + probe, probeDotX, probeDotY, probeDotZ);
+        }
+        if constexpr (kVdw) {
+          vdwOpen =
+            vdwOpen && !dclvCovers(neighbor.x, neighbor.y, neighbor.z, neighbor.radius, vdwDotX, vdwDotY, vdwDotZ);
+        }
       }
     } else {
       for (int other = 0; other < numAtoms && (probeOpen || vdwOpen); ++other) {
         if (other != atomIdx) {
-          test(DclvNeighbor<Real>{centered[other * 3 + 0] - px,
-                                  centered[other * 3 + 1] - py,
-                                  centered[other * 3 + 2] - pz,
-                                  static_cast<Real>(radii[other])});
+          const Real deltaX      = centered[other * 3 + 0] - px;
+          const Real deltaY      = centered[other * 3 + 1] - py;
+          const Real deltaZ      = centered[other * 3 + 2] - pz;
+          const Real otherRadius = static_cast<Real>(radii[other]);
+          if constexpr (kProbe) {
+            probeOpen =
+              probeOpen && !dclvCovers(deltaX, deltaY, deltaZ, otherRadius + probe, probeDotX, probeDotY, probeDotZ);
+          }
+          if constexpr (kVdw) {
+            vdwOpen = vdwOpen && !dclvCovers(deltaX, deltaY, deltaZ, otherRadius, vdwDotX, vdwDotY, vdwDotZ);
+          }
         }
       }
     }
@@ -585,15 +592,6 @@ __global__ void dclv3DKernel(const DeviceCoordView        coordinates,
   if (conformerIdx >= coordinates.numConformers) {
     return;  // Uniform across the warp.
   }
-  auto writeRow = [&](const Real(&values)[kNumDclvColumns]) {
-    if (lane == 0) {
-      for (int column = 0; column < kNumDclvColumns; ++column) {
-        if (outputs.values[column] != nullptr) {
-          outputs.values[column][conformerIdx] = values[column];
-        }
-      }
-    }
-  };
   const ConformerAtoms atoms   = loadConformer(coordinates, nullptr, inputs.moleculeAtomStarts, conformerIdx);
   bool                 valid   = atoms.valid;
   const double*        radii   = nullptr;
@@ -625,11 +623,13 @@ __global__ void dclv3DKernel(const DeviceCoordView        coordinates,
     centreZ                   = groupAllReduceSum<kWarpSize>(sumZ) * inverseAtoms;
   }
   if (!valid) {
-    Real nanRow[kNumDclvColumns];
-    for (Real& value : nanRow) {
-      value = static_cast<Real>(nan(""));
+    if (lane == 0) {
+      for (int column = 0; column < kNumDclvColumns; ++column) {
+        if (outputs.values[column] != nullptr) {
+          outputs.values[column][conformerIdx] = static_cast<Real>(nan(""));
+        }
+      }
     }
-    writeRow(nanRow);
     return;
   }
 
@@ -683,16 +683,29 @@ __global__ void dclv3DKernel(const DeviceCoordView        coordinates,
         radius * radius * (x * dots.vdwX + y * dots.vdwY + z * dots.vdwZ + radius * dots.vdwCount) * kVolumeScale;
     }
   }
-  const Real values[kNumDclvColumns] = {
-    surfaceArea,
-    polarArea,
-    volume,
-    vdwVolume,
-    polarVolume,
-    surfaceArea / cbrt(Real(36 * M_PI) * volume * volume),
-    vdwVolume / volume,
-  };
-  writeRow(values);
+  if (lane == 0) {
+    if (outputs.values[kDclvSurfaceArea] != nullptr) {
+      outputs.values[kDclvSurfaceArea][conformerIdx] = surfaceArea;
+    }
+    if (outputs.values[kDclvPolarSurfaceArea] != nullptr) {
+      outputs.values[kDclvPolarSurfaceArea][conformerIdx] = polarArea;
+    }
+    if (outputs.values[kDclvVolume] != nullptr) {
+      outputs.values[kDclvVolume][conformerIdx] = volume;
+    }
+    if (outputs.values[kDclvVdwVolume] != nullptr) {
+      outputs.values[kDclvVdwVolume][conformerIdx] = vdwVolume;
+    }
+    if (outputs.values[kDclvPolarVolume] != nullptr) {
+      outputs.values[kDclvPolarVolume][conformerIdx] = polarVolume;
+    }
+    if (outputs.values[kDclvCompactness] != nullptr) {
+      outputs.values[kDclvCompactness][conformerIdx] = surfaceArea / cbrt(Real(36 * M_PI) * volume * volume);
+    }
+    if (outputs.values[kDclvPackingDensity] != nullptr) {
+      outputs.values[kDclvPackingDensity][conformerIdx] = vdwVolume / volume;
+    }
+  }
 }
 
 template <typename Real, bool kProbe, bool kVdw>

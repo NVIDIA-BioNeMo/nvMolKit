@@ -790,6 +790,29 @@ def test_dclv_device_coordinates_far_from_origin(precision):
     _assert_dclv_matches(far, near, precision)
 
 
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_dclv_stream_ordering_empty_inputs_and_mixed_selection(precision):
+    mols = [_embed("CCO", 3, 137), Chem.MolFromSmiles("CC"), _embed("CCN", 2, 139)]
+    stream = torch.cuda.Stream()
+    with torch.cuda.stream(stream):
+        coordinates = _device_result_from_molecules(mols)
+        result = Calc3DProperties(
+            mols, (*DCLV_PROPERTIES, Property3D.PMI1), coordinates=coordinates, precision=precision, stream=stream
+        )
+        values = [result[prop] for prop in DCLV_PROPERTIES]
+        moments = result[Property3D.PMI1]
+        labels = (result.mol_indices, result.conf_indices)
+    del result, coordinates
+    gc.collect()
+    _assert_dclv_matches(np.column_stack([value.numpy() for value in values]), _rdkit_dclv_rows(mols), precision)
+    _assert_matches_rdkit(moments.numpy(), _reference_rows(mols, (Property3D.PMI1,), True)[:, 0], precision)
+    np.testing.assert_array_equal(labels[0].numpy(), [0, 0, 0, 2, 2])
+    np.testing.assert_array_equal(labels[1].numpy(), [0, 1, 2, 0, 1])
+    for empty_mols in ([], [Chem.MolFromSmiles("CC")], [Chem.MolFromSmiles("")]):
+        empty = Calc3DProperties(empty_mols, DCLV_PROPERTIES, precision=precision, stream=stream)
+        assert all(empty[prop].torch().shape == (0,) for prop in DCLV_PROPERTIES)
+
+
 def test_dclv_rejects_invalid_probe_radius_only_when_requested():
     mol = _embed("CCO", 1, 5)
     for probe_radius in (-0.1, float("nan"), float("inf")):
