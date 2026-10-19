@@ -86,6 +86,8 @@ jobs:
           set -xeuo pipefail
           . /usr/local/anaconda/etc/profile.d/conda.sh
           conda activate base
+          # shellcheck source=admin/ci/use_conda_runtime.sh
+          . "${GITHUB_WORKSPACE}/admin/ci/use_conda_runtime.sh"
           # Installing the native build dependencies into base can replace
           # conda-libmamba-solver. Use the standalone solver retained by the
           # setup step so this transaction cannot fall back to classic conda.
@@ -107,6 +109,8 @@ jobs:
           set -xeuo pipefail
           . /usr/local/anaconda/etc/profile.d/conda.sh
           conda activate base
+          # shellcheck source=admin/ci/use_conda_runtime.sh
+          . "${GITHUB_WORKSPACE}/admin/ci/use_conda_runtime.sh"
           python - <<'PY'
           import torch
 
@@ -128,6 +132,8 @@ jobs:
           set -xeuo pipefail
           . /usr/local/anaconda/etc/profile.d/conda.sh
           conda activate base
+          # shellcheck source=admin/ci/use_conda_runtime.sh
+          . "${GITHUB_WORKSPACE}/admin/ci/use_conda_runtime.sh"
           export CMAKE_ARGS="-DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc -DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES}"
           CMAKE_BUILD_PARALLEL_LEVEL="$(nproc)"
           export CMAKE_BUILD_PARALLEL_LEVEL
@@ -144,6 +150,8 @@ jobs:
           set -xeuo pipefail
           . /usr/local/anaconda/etc/profile.d/conda.sh
           conda activate base
+          # shellcheck source=admin/ci/use_conda_runtime.sh
+          . "${GITHUB_WORKSPACE}/admin/ci/use_conda_runtime.sh"
           python -m pytest \
             "${GITHUB_WORKSPACE}/nvmolkit/tests" \
             --tb=short \

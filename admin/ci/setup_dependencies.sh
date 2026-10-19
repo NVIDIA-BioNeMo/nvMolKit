@@ -43,12 +43,15 @@ ln -sf "${MINIFORGE_PREFIX}/etc/profile.d/conda.sh" /etc/profile.d/conda.sh
 conda activate base
 
 conda config --add channels conda-forge --add channels nvidia
+# Keep GCC 13 for CUDA 12.6 compatibility; prebuilt RDKit needs the GCC 14+ runtime.
 conda install -q -y \
     mamba \
     "python=${PYTHON_VERSION}" \
     "rdkit=${RDKIT_VERSION}" \
     "gcc=13.*" \
     "gxx=13.*" \
+    "libgcc-ng>=14" \
+    "libstdcxx-ng>=14" \
     libboost-devel \
     libboost-headers \
     libboost-python-devel \
@@ -56,3 +59,6 @@ conda install -q -y \
     pytest \
     "cmake=3.30.*" \
     eigen
+
+# Fail before a full CUDA build if the C++ linker or loader selects an old runtime.
+python "$(dirname "${BASH_SOURCE[0]}")/test_conda_runtime.py" -v
