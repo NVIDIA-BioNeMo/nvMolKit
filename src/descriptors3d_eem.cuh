@@ -43,7 +43,7 @@ template <typename Real> struct EemWorkspace {
   __host__ __device__ static constexpr int64_t bytes(const int64_t numAtoms) {
     return systemBytes(numAtoms) + alignTo8((numAtoms + 1) * static_cast<int64_t>(sizeof(double) + sizeof(int32_t)));
   }
-  __device__ static EemWorkspace at(unsigned char* base, const int numAtoms) {
+  __device__ __forceinline__ static EemWorkspace at(unsigned char* base, const int numAtoms) {
     EemWorkspace workspace;
     workspace.system        = reinterpret_cast<Real*>(base);
     workspace.firstSolution = reinterpret_cast<double*>(base + systemBytes(numAtoms));
@@ -59,7 +59,8 @@ template <typename Real> struct EemWorkspace {
  *        last column the forward-eliminated right-hand side, and `pivots[k]` the row swapped into row k. Ties
  *        between pivot candidates go to the lowest row.
  */
-template <typename Real> __device__ void factorAugmentedSystem(Real* system, int32_t* pivots, const int size) {
+template <typename Real>
+__device__ __forceinline__ void factorAugmentedSystem(Real* system, int32_t* pivots, const int size) {
   __shared__ int pivotRow;
   const int      stride = size + 1;
   const int      lane   = static_cast<int>(threadIdx.x) % kWarpSize;
@@ -115,7 +116,7 @@ template <typename Real> __device__ void factorAugmentedSystem(Real* system, int
 
 //! Block-collective. Column-oriented forward substitution with the unit-lower factor, in place on the
 //! right-hand-side column.
-template <typename Real> __device__ void forwardSubstitute(Real* system, const int size) {
+template <typename Real> __device__ __forceinline__ void forwardSubstitute(Real* system, const int size) {
   const int stride = size + 1;
   for (int k = 0; k < size - 1; ++k) {
     const Real solved = system[k * stride + size];
@@ -128,7 +129,7 @@ template <typename Real> __device__ void forwardSubstitute(Real* system, const i
 
 //! Block-collective. Column-oriented back substitution with the upper factor, leaving the solution in the
 //! right-hand-side column.
-template <typename Real> __device__ void backSubstitute(Real* system, const int size) {
+template <typename Real> __device__ __forceinline__ void backSubstitute(Real* system, const int size) {
   const int stride = size + 1;
   for (int k = size - 1; k >= 0; --k) {
     const Real solution = system[k * stride + size] / system[k * stride + k];
@@ -193,11 +194,9 @@ eemSystemEntry(const EemConformer& conformer, const int row, const int col, bool
  *        column by the correction of one iterative-refinement step, keeping the solution in
  *        `workspace.firstSolution`.
  *
- * FP64 required: the residual. float32 elimination of the bordered system accumulates rounding that grows with
- * the atom count, ~3e-4 absolute on 160-340-atom conformers against ~5e-7 from rounding the entries alone
- * (measured); one refinement step with the float32 factors and a float64 residual recovers ~5e-10.
+ * FP64 residuals correct float32 elimination error using the existing factors.
  */
-__device__ inline void refineEemSolution(const EemConformer& conformer, const EemWorkspace<float>& workspace) {
+__device__ __forceinline__ void refineEemSolution(const EemConformer& conformer, const EemWorkspace<float>& workspace) {
   const int size   = conformer.numAtoms + 1;
   const int stride = size + 1;
   float*    system = workspace.system;
@@ -256,11 +255,14 @@ __global__ void __launch_bounds__(kEemBlockSize) eemChargesKernel(const DeviceCo
       paramStart = inputs.moleculeAtomStarts[moleculeIdx];
       valid      = inputs.moleculeAtomStarts[moleculeIdx + 1] - paramStart == numAtoms;
     }
-    bool missingParameters = false;
+    bool invalidAtom = false;
     for (int atomIdx = static_cast<int>(threadIdx.x); valid && atomIdx < numAtoms; atomIdx += blockDim.x) {
-      missingParameters |= !isfinite(inputs.eemElectronegativity[paramStart + atomIdx]);
+      invalidAtom |= !isfinite(inputs.eemElectronegativity[paramStart + atomIdx]);
+      for (int axis = 0; axis < 3; ++axis) {
+        invalidAtom |= !isfinite(coordinates.positions[(atomStart + atomIdx) * 3 + axis]);
+      }
     }
-    valid = valid && !__syncthreads_or(missingParameters);
+    valid = valid && !__syncthreads_or(invalidAtom);
 
     bool               coincident = false;
     EemConformer       conformer{};

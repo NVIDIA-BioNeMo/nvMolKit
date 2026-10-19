@@ -62,8 +62,7 @@ class Property3D(Enum):
     - ``EEMcharges``: RDKit's ``CalcEEMcharges`` electronegativity-equalization
       partial charges, one value per atom. As in RDKit, a molecule's charges
       sum to the negative of its formal charge. Conformers containing an
-      element beyond bromine or a bond order above 3, for which RDKit reads
-      undefined parameters, conformers with coincident atoms (or non-finite
+      element or bond type without nonzero parameters, conformers with coincident atoms (or non-finite
       coordinates), for which RDKit returns all-zero charges, and molecules
       that cannot be kekulized, which RDKit rejects, produce NaN.
     """
@@ -208,7 +207,7 @@ class Dense3DPropertyResult:
 
 
 class Device3DPropertyResult(Mapping[str, AsyncGpuResult]):
-    """Per-conformer 3D properties on the GPU, labeled by molecule and conformer.
+    """Conformer-dependent 3D properties on the GPU, labeled by molecule and conformer.
 
     Behaves as a read-only mapping from property name to an :class:`~nvmolkit.types.AsyncGpuResult`
     whose first dimension is ``n_conformers``, in request order. Scalar properties have shape
@@ -223,7 +222,7 @@ class Device3DPropertyResult(Mapping[str, AsyncGpuResult]):
     molecule's atom order. With ``Device3DResult`` coordinates, rows match its ``values`` rows
     one-to-one, and rows outside every conformer's range hold NaN.
 
-    Row ``i`` of every property belongs to conformer ``conf_indices[i]`` of input molecule
+    Conformer row ``i`` belongs to conformer ``conf_indices[i]`` of input molecule
     ``mol_indices[i]``. ``conf_indices`` is the conformer's position within its molecule, not
     its RDKit conformer ID.
     When the properties were calculated from a ``Device3DResult``, rows follow that result and the

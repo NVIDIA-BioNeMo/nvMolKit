@@ -79,6 +79,25 @@ DCLV_GETTERS = {
 }
 
 
+def _calc_rdkit_eem(mol: Chem.Mol, conf_id: int) -> list[float]:
+    """Reference charges, with NaN for unsupported types or invalid coordinates."""
+    missing = [math.nan] * mol.GetNumAtoms()
+    molecule = Chem.Mol(mol)
+    try:
+        Chem.Kekulize(molecule, clearAromaticFlags=True)
+    except Chem.MolSanitizeException:
+        return missing
+    supported_elements = {1: {1, 6, 7, 8, 9, 16, 17, 35}, 2: {6, 7, 8, 15, 16}, 3: {6, 7}}
+    for atom in molecule.GetAtoms():
+        bond_order = max((int(bond.GetBondTypeAsDouble()) for bond in atom.GetBonds()), default=1)
+        if atom.GetAtomicNum() not in supported_elements.get(bond_order, set()):
+            return missing
+    positions = molecule.GetConformer(conf_id).GetPositions()
+    if not np.isfinite(positions).all() or len(np.unique(positions, axis=0)) != len(positions):
+        return missing
+    return rdMolDescriptors.CalcEEMcharges(molecule, confId=conf_id)
+
+
 def _calc_rdkit_property(mol: Chem.Mol, conf_id: int, prop: Property3D) -> float | list[float]:
     """Calculate one property using the options mirrored by the benchmark."""
     if prop == Property3D.SPHEROCITY_INDEX:
@@ -103,7 +122,7 @@ def _calc_rdkit_property(mol: Chem.Mol, conf_id: int, prop: Property3D) -> float
     if prop == Property3D.USRCAT:
         return rdMolDescriptors.GetUSRCAT(mol, confId=conf_id)
     if prop == Property3D.EEM_CHARGES:
-        return rdMolDescriptors.CalcEEMcharges(mol, confId=conf_id)
+        return _calc_rdkit_eem(mol, conf_id)
     if prop == Property3D.GETAWAY:
         if len(Chem.GetMolFrags(mol)) > 1:
             # RDKit's GETAWAY does not finish in reasonable time on multi-fragment molecules.
@@ -209,7 +228,6 @@ def _validate(
                 np.testing.assert_allclose(actual, expected[prop], rtol=DCLV_RELATIVE_TOLERANCES[precision], atol=atol)
                 continue
             if prop == Property3D.EEM_CHARGES:
-                # Atoms RDKit has no parameters for are NaN in both.
                 eem_atol = EEM_TOLERANCES[precision] if tolerance is None else tolerance
                 np.testing.assert_allclose(actual, expected[prop], rtol=0, atol=eem_atol, equal_nan=True)
                 continue

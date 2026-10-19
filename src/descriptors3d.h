@@ -271,7 +271,8 @@ struct Property3DDeviceInputs {
   const double*  eemHardness           = nullptr;
   //! EEMcharges: per molecule, the sum of formal charges.
   const double*  moleculeFormalCharges = nullptr;
-  //! WHIM, AUTOCORR3D, GETAWAY: largest molecule atom count in the batch (host value). Sizes WHIM's
+  //! WHIM, AUTOCORR3D, GETAWAY, EEMcharges: largest molecule atom count in the batch (host value). Sizes EEM's
+  //! linear-system scratch and WHIM's
   //! per-conformer symmetry-search scratch (rows with more atoms produce NaN) and, with 0 or above 3072 atoms,
   //! leaves AUTOCORR3D and GETAWAY without the shared bond-distance table.
   int32_t        maxMoleculeAtoms      = 0;

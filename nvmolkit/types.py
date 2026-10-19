@@ -534,8 +534,8 @@ class _AtomRowIndex(NamedTuple):
     """Dense ``(molecule, conformer, atom)`` position of every per-atom row of a CSR conformer batch."""
 
     rows: "torch.Tensor"
-    mol: "torch.Tensor"
-    conf: "torch.Tensor"
+    molecule: "torch.Tensor"
+    conformer: "torch.Tensor"
     atom: "torch.Tensor"
     conf_mask: "torch.Tensor"
     atom_mask: "torch.Tensor"
@@ -561,11 +561,13 @@ def _atom_row_index(
     first_slot = (torch.cumsum(sizes, 0) - sizes).repeat_interleave(sizes)
     atom = torch.arange(int(sizes.sum().item()), device=device, dtype=torch.int64) - first_slot
     rows = starts[:-1].repeat_interleave(sizes) + atom
-    mol = mols.repeat_interleave(sizes)
-    conf = confs.repeat_interleave(sizes)
+    molecule = mols.repeat_interleave(sizes)
+    conformer = confs.repeat_interleave(sizes)
     atom_mask = torch.zeros((n_mols, max_confs, max_atoms), dtype=torch.bool, device=device)
-    atom_mask[mol, conf, atom] = True
-    return _AtomRowIndex(rows=rows, mol=mol, conf=conf, atom=atom, conf_mask=conf_mask, atom_mask=atom_mask)
+    atom_mask[molecule, conformer, atom] = True
+    return _AtomRowIndex(
+        rows=rows, molecule=molecule, conformer=conformer, atom=atom, conf_mask=conf_mask, atom_mask=atom_mask
+    )
 
 
 def _scatter_atom_rows(values: "torch.Tensor", index: _AtomRowIndex, pad_value: float) -> "torch.Tensor":
@@ -573,5 +575,5 @@ def _scatter_atom_rows(values: "torch.Tensor", index: _AtomRowIndex, pad_value: 
     dense = torch.full(
         (*index.atom_mask.shape, *values.shape[1:]), pad_value, dtype=values.dtype, device=values.device
     )
-    dense[index.mol, index.conf, index.atom] = values[index.rows]
+    dense[index.molecule, index.conformer, index.atom] = values[index.rows]
     return dense

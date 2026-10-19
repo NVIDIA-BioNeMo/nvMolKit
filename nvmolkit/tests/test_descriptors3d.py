@@ -1074,3 +1074,44 @@ def test_eem_atoms_with_zero_parameters_give_nan_unlike_rdkit(precision):
     assert np.isnan(charges[:uncovered_rows]).all()
     assert np.abs(_rdkit_eem_rows(uncovered)).max() > 5  # RDKit's zero-parameter charges
     _assert_eem_matches_rdkit(charges[uncovered_rows:], _rdkit_eem_rows([ethanol]), precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -float("inf")])
+@pytest.mark.parametrize("smiles", ["[Br-]", "CCO"])
+def test_eem_nonfinite_coordinates_invalidate_only_their_conformer(precision, invalid, smiles):
+    molecule = Chem.MolFromSmiles(smiles)
+    for _ in range(2):
+        conformer = Chem.Conformer(molecule.GetNumAtoms())
+        for atom_idx in range(molecule.GetNumAtoms()):
+            conformer.SetAtomPosition(atom_idx, Point3D(1.5 * atom_idx, 0, 0))
+        molecule.AddConformer(conformer, assignId=True)
+    molecule.GetConformer(0).SetAtomPosition(0, Point3D(invalid, 0, 0))
+    result = Calc3DProperties([molecule], Property3D.EEM_CHARGES, precision=precision)
+    charges = result[Property3D.EEM_CHARGES].numpy()
+    assert np.isnan(charges[: molecule.GetNumAtoms()]).all()
+    expected = np.asarray(rdMolDescriptors.CalcEEMcharges(molecule, confId=1))
+    _assert_eem_matches_rdkit(charges[molecule.GetNumAtoms() :], expected, precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_global_workspace_and_custom_stream(precision):
+    molecule = Chem.MolFromSmiles("O" + "C" * 119)
+    conformer = Chem.Conformer(molecule.GetNumAtoms())
+    for atom_idx in range(molecule.GetNumAtoms()):
+        angle = 1.9 * atom_idx
+        conformer.SetAtomPosition(atom_idx, Point3D(1.4 * np.cos(angle), 1.4 * np.sin(angle), 0.55 * atom_idx))
+    molecule.AddConformer(conformer, assignId=True)
+    stream = torch.cuda.Stream()
+    result = Calc3DProperties([molecule], Property3D.EEM_CHARGES, precision=precision, stream=stream)
+    _assert_eem_matches_rdkit(result[Property3D.EEM_CHARGES].numpy(), _rdkit_eem_rows([molecule]), precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_empty_batches_and_molecules_without_conformers(precision):
+    for molecules in ([], [Chem.MolFromSmiles("CCO")]):
+        result = Calc3DProperties(molecules, Property3D.EEM_CHARGES, precision=precision)
+        assert result.n_conformers == 0
+        assert result[Property3D.EEM_CHARGES].torch().numel() == 0
+        dense = result.dense()
+        assert dense.values[Property3D.EEM_CHARGES.value].shape == (len(molecules), 0, 0)
