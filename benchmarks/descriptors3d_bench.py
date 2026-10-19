@@ -27,6 +27,7 @@ from bench_utils import (
     embed_and_jitter,
     load_smiles,
     print_csv_rows,
+    process_map_bounded,
     process_pool,
     slice_conformers,
     throughput_per_s,
@@ -223,11 +224,14 @@ def _time_rdkit(
     with process_pool(threads, _rdkit_worker_init, initargs) as pool:
 
         def run(deadline: Deadline | None = None) -> None:
-            done[0] = 0
-            for count in pool.imap(_rdkit_worker_range, ranges):
-                done[0] += count
-                if deadline is not None and deadline.expired():
-                    break
+            mapped = process_map_bounded(
+                _rdkit_worker_range,
+                ranges,
+                max_workers=threads,
+                deadline=deadline if deadline is not None else Deadline(0),
+                pool=pool,
+            )
+            done[0] = sum(mapped.results)
 
         if max_seconds > 0:
             timing = time_it(

@@ -163,21 +163,18 @@ def _bench_rdkit(
         with nvtx.annotate("morgan_rdkit_production_run", color="yellow"):
             compute(deadline)
 
-    for _ in range(warmups):
-        with nvtx.annotate("morgan_rdkit_warmup", color="purple"):
-            compute(None)
     if max_seconds > 0:
         timing = time_it(
             production_run,
             runs=runs,
-            warmups=0,
+            warmups=warmups,
             max_seconds=max_seconds,
             progress_getter=lambda: processed[0],
             progress_target=len(mols),
         )
         measured = timing.progress if timing.progress is not None else processed[0]
     else:
-        timing = time_it(production_run, runs=runs, warmups=0)
+        timing = time_it(production_run, runs=runs, warmups=warmups)
         measured = len(mols)
     if measured == len(mols) and complete_fingerprints is not None:
         fingerprints = complete_fingerprints

@@ -65,13 +65,13 @@ from bench_utils import (
     Deadline,
     add_backend_selection_args,
     add_rdkit_max_seconds_arg,
-    auto_preprocessing_threads,
     load_pickle,
     load_smarts,
     load_smiles,
     print_csv_rows,
     process_map_bounded,
     process_pool,
+    resolve_substructure_threads,
     write_csv_rows,
 )
 from bench_utils import (
@@ -501,11 +501,7 @@ def main():
             print(f"    batch_size: {args.batch_size}")
             print(f"    num_gpus: {args.num_gpus}")
             print(f"    workers: {args.workers if args.workers >= 0 else 'auto'}")
-            if args.prep_threads == -1 and not args.autotune and not args.autotune_load:
-                selected_prep_threads = auto_preprocessing_threads(args.workers, args.num_gpus)
-                print(f"    prep_threads: {selected_prep_threads} (auto)")
-            else:
-                print(f"    prep_threads: {args.prep_threads if args.prep_threads >= 0 else 'auto'}")
+            print(f"    prep_threads: {args.prep_threads if args.prep_threads >= 0 else 'auto'}")
 
     print("\nLoading molecules...")
     if args.pickle:
@@ -547,9 +543,12 @@ def main():
         print("\nRun configuration:")
         print(f"  SMARTS file: {smarts_path}")
         print(f"  Mode: {mode}")
+        selected_workers = config_row["workers"]
         selected_prep_threads = config_row["prep_threads"]
-        if selected_prep_threads == -1 and not args.autotune and not args.autotune_load:
-            selected_prep_threads = auto_preprocessing_threads(config_row["workers"], config_row["num_gpus"])
+        if not args.autotune and not args.autotune_load:
+            selected_workers, selected_prep_threads = resolve_substructure_threads(
+                selected_workers, config_row["num_gpus"], selected_prep_threads
+            )
         if not args.no_nvmolkit:
             print("  nvmolkit config:")
             if args.autotune_load and args.algorithm is None:
@@ -558,7 +557,7 @@ def main():
                 print(f"    algorithm: {algorithm}")
             print(f"    batch_size: {config_row['batch_size']}")
             print(f"    num_gpus: {config_row['num_gpus']}")
-            print(f"    workers: {config_row['workers'] if config_row['workers'] >= 0 else 'auto'}")
+            print(f"    workers: {selected_workers if selected_workers >= 0 else 'auto'}")
             if config_row["prep_threads"] >= 0:
                 prep_threads_label = str(selected_prep_threads)
             elif not args.autotune and not args.autotune_load:
@@ -665,7 +664,7 @@ def main():
                 else:
                     config = SubstructSearchConfig()
                     config.batchSize = config_row["batch_size"]
-                    config.workerThreads = config_row["workers"]
+                    config.workerThreads = selected_workers
                     config.preprocessingThreads = selected_prep_threads
                     config.gpuIds = gpu_ids
                     if args.max_matches > 0:

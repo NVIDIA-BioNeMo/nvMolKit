@@ -208,7 +208,12 @@ def test_slice_conformers_copies_and_limits_each_molecule():
     assert mol.GetNumConformers() == 3
 
 
-def test_auto_preprocessing_threads_reserves_worker_budget():
-    assert molprep.auto_preprocessing_threads(worker_threads=8, num_gpus=8, physical_cores=128) == 64
-    assert molprep.auto_preprocessing_threads(worker_threads=-1, num_gpus=8, physical_cores=128) == 96
-    assert molprep.auto_preprocessing_threads(worker_threads=8, num_gpus=8, physical_cores=32) == 1
+def test_substructure_thread_resolution_uses_one_explicit_budget():
+    assert molprep.resolve_substructure_threads(worker_threads=-1, num_gpus=8, physical_cores=30) == (3, 6)
+    assert molprep.resolve_substructure_threads(worker_threads=8, num_gpus=8, physical_cores=128) == (8, 64)
+    assert molprep.resolve_substructure_threads(worker_threads=-1, num_gpus=8, physical_cores=128) == (4, 96)
+    assert molprep.resolve_substructure_threads(worker_threads=8, num_gpus=8, physical_cores=32) == (8, 1)
+    assert molprep.resolve_substructure_threads(worker_threads=-1, num_gpus=1, physical_cores=1) == (1, 1)
+    assert molprep.resolve_substructure_threads(
+        worker_threads=-1, num_gpus=8, preprocessing_threads=2, physical_cores=30
+    ) == (3, 2)

@@ -244,9 +244,16 @@ def embed_and_jitter(
     return out
 
 
-def auto_preprocessing_threads(worker_threads: int, num_gpus: int, physical_cores: int | None = None) -> int:
-    """Use CPU threads not already reserved for per-GPU workers."""
+def resolve_substructure_threads(
+    worker_threads: int,
+    num_gpus: int,
+    preprocessing_threads: int = -1,
+    physical_cores: int | None = None,
+) -> tuple[int, int]:
+    """Return explicit per-GPU workers and preprocessing threads from one CPU budget."""
     physical_cores = max(1, available_physical_cpu_count() if physical_cores is None else physical_cores)
     num_gpus = max(1, num_gpus)
     effective_workers = min(4, max(1, physical_cores // num_gpus)) if worker_threads == -1 else max(1, worker_threads)
-    return max(1, physical_cores - num_gpus * effective_workers)
+    if preprocessing_threads == -1:
+        preprocessing_threads = max(1, physical_cores - num_gpus * effective_workers)
+    return effective_workers, preprocessing_threads

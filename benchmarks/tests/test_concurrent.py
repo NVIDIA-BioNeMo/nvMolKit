@@ -57,6 +57,19 @@ def test_process_map_bounded_retains_completed_results_on_timeout():
     assert all(not worker.is_alive() for worker in workers)
 
 
+def test_process_map_bounded_counts_fast_results_behind_a_slow_first_task():
+    with process_pool(3) as pool:
+        result = process_map_bounded(
+            _sleep_and_return,
+            [(2.0, 1), (0.001, 2), (0.001, 3)],
+            max_workers=3,
+            deadline=Deadline(0.25),
+            pool=pool,
+        )
+    assert sorted(result.results) == [2, 3]
+    assert result.timed_out
+
+
 @pytest.mark.parametrize("max_workers", [1, 2, 3])
 def test_process_pool_initializes_reuses_and_closes_workers(max_workers):
     with process_pool(max_workers, _initialize_multiplier, (7,)) as pool:
