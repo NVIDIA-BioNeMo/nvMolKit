@@ -48,12 +48,7 @@ from bench_utils import (
     time_it,
     write_csv_rows,
 )
-from bench_utils.autotune_support import (
-    EMBED_SEARCH_SPACE_OVERRIDES,
-    add_precision_arg,
-    autotune_at_precision,
-    precision_mode,
-)
+from bench_utils.precision import add_precision_arg, precision_mode
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdDistGeom
 from tqdm.contrib.concurrent import process_map
@@ -378,6 +373,8 @@ def main() -> None:
     parser.add_argument("--output", "-o", default=None, help="Optional path to write the CSV results")
 
     args = parser.parse_args()
+    if args.autotune and args.precision != "full":
+        parser.error("SINGLE autotuning is unsupported; use explicit hardware options or --autotune_load")
 
     input_paths = [p for p in (args.smiles, args.sdf, args.pickle) if p]
     if not input_paths:
@@ -499,22 +496,19 @@ def main() -> None:
                     rng = random.Random(args.autotune_seed)
                     size = args.autotune_calibration_size
                     explicit_calibration = rng.sample(range(len(mols)), size)
-                # The tuner times trials at full precision unless told otherwise; tune at the benchmarked precision.
-                with autotune_at_precision("nvmolkit.autotune.tune_embed_molecules", "EmbedMolecules", args.precision):
-                    tune_result = nv_autotune.tune_embed_molecules(
-                        mols,
-                        params,
-                        confsPerMolecule=args.confs_per_mol,
-                        maxIterations=args.max_iterations,
-                        gpuIds=gpu_ids,
-                        n_trials=args.autotune_trials,
-                        target_seconds_per_trial=args.autotune_time_budget,
-                        calibration_set=explicit_calibration,
-                        cpu_budget=args.autotune_cpu_budget,
-                        search_space_overrides=EMBED_SEARCH_SPACE_OVERRIDES,
-                        seed=args.autotune_seed,
-                        verbose=True,
-                    )
+                tune_result = nv_autotune.tune_embed_molecules(
+                    mols,
+                    params,
+                    confsPerMolecule=args.confs_per_mol,
+                    maxIterations=args.max_iterations,
+                    gpuIds=gpu_ids,
+                    n_trials=args.autotune_trials,
+                    target_seconds_per_trial=args.autotune_time_budget,
+                    calibration_set=explicit_calibration,
+                    cpu_budget=args.autotune_cpu_budget,
+                    seed=args.autotune_seed,
+                    verbose=True,
+                )
                 hardware_options = tune_result.best_config
                 config_source = "autotuned"
                 print(

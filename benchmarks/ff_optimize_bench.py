@@ -54,12 +54,7 @@ from bench_utils import (
     time_it,
     write_csv_rows,
 )
-from bench_utils.autotune_support import (
-    FF_SEARCH_SPACE_OVERRIDES,
-    add_precision_arg,
-    autotune_at_precision,
-    precision_mode,
-)
+from bench_utils.precision import add_precision_arg, precision_mode
 from rdkit import Chem
 from rdkit.Chem import AllChem
 
@@ -380,6 +375,8 @@ def main() -> None:
     parser.add_argument("--output", "-o", default=None, help="Optional path to write the CSV results")
 
     args = parser.parse_args()
+    if args.autotune and args.precision != "full":
+        parser.error("SINGLE autotuning is unsupported; use explicit hardware options or --autotune_load")
 
     input_paths = [p for p in (args.smiles, args.sdf, args.pickle) if p]
     if not input_paths:
@@ -523,20 +520,12 @@ def main() -> None:
                 "calibration_set": explicit_calibration,
                 "seed": args.autotune_seed,
                 "cpu_budget": args.autotune_cpu_budget,
-                "search_space_overrides": FF_SEARCH_SPACE_OVERRIDES,
                 "verbose": True,
             }
-            # The tuner times trials at full precision unless told otherwise; tune at the benchmarked precision.
             if args.ff == "mmff":
-                with autotune_at_precision(
-                    "nvmolkit.autotune.tune_mmff_optimize", "MMFFOptimizeMoleculesConfs", args.precision
-                ):
-                    tune_result = nv_autotune.tune_mmff_optimize(mols, **tune_kwargs)
+                tune_result = nv_autotune.tune_mmff_optimize(mols, **tune_kwargs)
             else:
-                with autotune_at_precision(
-                    "nvmolkit.autotune.tune_uff_optimize", "UFFOptimizeMoleculesConfs", args.precision
-                ):
-                    tune_result = nv_autotune.tune_uff_optimize(mols, **tune_kwargs)
+                tune_result = nv_autotune.tune_uff_optimize(mols, **tune_kwargs)
             hardware_options = tune_result.best_config
             config_source = "autotuned"
             print(

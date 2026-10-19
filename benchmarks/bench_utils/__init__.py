@@ -20,9 +20,10 @@ so individual bench scripts can ``from bench_utils import time_it, load_smiles``
 """
 
 from bench_utils.cli import add_backend_selection_args
-from bench_utils.concurrent import BoundedProcessMapResult, process_map_bounded, ready_spawn_pool
+from bench_utils.concurrent import BoundedProcessMapResult, process_map_bounded, process_pool
 from bench_utils.loaders import load_csv, load_pickle, load_sdf, load_smarts, load_smiles
 from bench_utils.molprep import (
+    auto_preprocessing_threads,
     available_cpu_count,
     available_physical_cpu_count,
     clone_mols_with_conformers,
@@ -46,6 +47,7 @@ __all__ = [
     "TimingResult",
     "add_backend_selection_args",
     "add_rdkit_max_seconds_arg",
+    "auto_preprocessing_threads",
     "available_cpu_count",
     "available_physical_cpu_count",
     "clone_mols_with_conformers",
@@ -59,7 +61,7 @@ __all__ = [
     "prep_mols",
     "print_csv_rows",
     "process_map_bounded",
-    "ready_spawn_pool",
+    "process_pool",
     "result_fieldnames",
     "slice_conformers",
     "throughput_per_s",

@@ -206,3 +206,9 @@ def test_slice_conformers_copies_and_limits_each_molecule():
     assert sliced[0] is not mol
     assert sliced[0].GetNumConformers() == 2
     assert mol.GetNumConformers() == 3
+
+
+def test_auto_preprocessing_threads_reserves_worker_budget():
+    assert molprep.auto_preprocessing_threads(worker_threads=8, num_gpus=8, physical_cores=128) == 64
+    assert molprep.auto_preprocessing_threads(worker_threads=-1, num_gpus=8, physical_cores=128) == 96
+    assert molprep.auto_preprocessing_threads(worker_threads=8, num_gpus=8, physical_cores=32) == 1

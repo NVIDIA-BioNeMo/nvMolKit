@@ -242,3 +242,11 @@ def embed_and_jitter(
             perturb_conformer(mol.GetConformer(base_conf_id), seed=seed + mol_idx * confs_per_mol)
 
     return out
+
+
+def auto_preprocessing_threads(worker_threads: int, num_gpus: int, physical_cores: int | None = None) -> int:
+    """Use CPU threads not already reserved for per-GPU workers."""
+    physical_cores = max(1, available_physical_cpu_count() if physical_cores is None else physical_cores)
+    num_gpus = max(1, num_gpus)
+    effective_workers = min(4, max(1, physical_cores // num_gpus)) if worker_threads == -1 else max(1, worker_threads)
+    return max(1, physical_cores - num_gpus * effective_workers)

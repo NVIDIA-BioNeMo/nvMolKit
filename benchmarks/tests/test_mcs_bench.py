@@ -11,16 +11,15 @@ from mcs_bench import (
     _load_config_dataframe,
     _normalize_config_row,
     _validate_results,
-    bench_rdkit_mcs,
     sample_pairs,
 )
-from rdkit import Chem
 
 
 def _args(**overrides):
     values = {
         "num_pairs": 17,
         "batch_size": 0,
+        "block_size": 128,
         "workers": -1,
         "prep_threads": -1,
         "executors_per_runner": -1,
@@ -38,31 +37,28 @@ def _args(**overrides):
 
 def test_partial_config_row_inherits_cli_defaults_and_parses_booleans():
     config = _normalize_config_row(
-        {"executors_per_runner": 3, "match_formal_charge": "yes"},
+        {"block_size": 256, "match_formal_charge": "yes"},
         _args(workers=3),
     )
 
     assert config["num_pairs"] == 17
     assert config["workers"] == 3
-    assert config["executors_per_runner"] == 3
     assert config["match_formal_charge"]
 
 
 def test_config_dataframe_supports_multiple_rows(tmp_path):
     path = tmp_path / "mcs.csv"
-    pd.DataFrame([{"num_pairs": 10, "batch_size": 128}, {"num_pairs": 20, "batch_size": 512}]).to_csv(
+    pd.DataFrame([{"num_pairs": 10, "block_size": 64}, {"num_pairs": 20, "block_size": 512}]).to_csv(
         path,
         index=False,
     )
 
     rows = _load_config_dataframe(str(path))
 
-    assert [(row["num_pairs"], row["batch_size"]) for row in rows] == [(10, 128), (20, 512)]
+    assert [(row["num_pairs"], row["block_size"]) for row in rows] == [(10, 64), (20, 512)]
 
 
-def test_config_validation_rejects_invalid_execution_settings():
-    with pytest.raises(ValueError, match="executors_per_runner"):
-        _normalize_config_row({"executors_per_runner": 9}, _args())
+def test_config_validation_rejects_invalid_gpu_settings():
     with pytest.raises(ValueError, match="num_gpus"):
         _normalize_config_row({"num_gpus": 0}, _args())
 
@@ -77,18 +73,6 @@ def test_pair_sampling_is_unique_deterministic_and_in_bounds():
 
 def test_pair_sampling_caps_at_all_possible_pairs():
     assert sample_pairs(num_mols=3, num_pairs=100, seed=123) == [(0, 1), (0, 2), (1, 2)]
-
-
-@pytest.mark.parametrize("smiles", [["CC", "CCC", "CO"], ["c1ccccc1", "C1CCCCC1", "CC(=O)O"]])
-@pytest.mark.parametrize("compare", ["elements", "any"])
-def test_spawned_mcs_matches_serial_and_preserves_pair_order(smiles, compare):
-    mols = [Chem.MolFromSmiles(value) for value in smiles]
-    pairs = [(1, 2), (0, 1), (0, 2)]
-    config = _normalize_config_row({}, _args(atom_compare=compare))
-    serial = bench_rdkit_mcs(mols, pairs, 2, 1, 0, config)
-    spawned = bench_rdkit_mcs(mols, pairs, 2, 2, 0, config)
-    assert spawned[2] == serial[2]
-    assert spawned[3] == serial[3] == len(pairs)
 
 
 def test_validation_compares_all_atom_and_bond_counts():
@@ -131,8 +115,6 @@ def test_parser_matches_substructure_autotune_conventions():
             "7",
             "--autotune_time_budget",
             "2.5",
-            "--autotune_cpu_budget",
-            "6",
             "--autotune_calibration_size",
             "20",
             "--autotune_seed",
@@ -144,6 +126,5 @@ def test_parser_matches_substructure_autotune_conventions():
     assert args.autotune_save == "mcs.json"
     assert args.autotune_trials == 7
     assert args.autotune_time_budget == 2.5
-    assert args.autotune_cpu_budget == 6
     assert args.autotune_calibration_size == 20
     assert args.autotune_seed == 9

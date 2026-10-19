@@ -27,7 +27,7 @@ from bench_utils import (
     embed_and_jitter,
     load_smiles,
     print_csv_rows,
-    ready_spawn_pool,
+    process_pool,
     slice_conformers,
     throughput_per_s,
     time_it,
@@ -220,8 +220,7 @@ def _time_rdkit(
     total = sum(mol.GetNumConformers() for mol in mols)
     done = [0]
     initargs = ([mol.ToBinary() for mol in mols], [prop.value for prop in properties])
-    # spawn, not fork: the parent already runs CUDA/torch threads, and a forked child can inherit a held lock.
-    with ready_spawn_pool(threads, _rdkit_worker_init, initargs) as pool:
+    with process_pool(threads, _rdkit_worker_init, initargs) as pool:
 
         def run(deadline: Deadline | None = None) -> None:
             done[0] = 0
@@ -243,7 +242,6 @@ def _time_rdkit(
         else:
             timing = time_it(run, runs=runs, warmups=warmups)
             measured = total
-        pool.terminate()
     return timing, measured
 
 

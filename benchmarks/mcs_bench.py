@@ -22,6 +22,7 @@ Usage:
 """
 
 import argparse
+from contextlib import ExitStack
 import gc
 import random
 import sys
@@ -37,14 +38,13 @@ from bench_utils import (
     load_pickle,
     load_smiles,
     print_csv_rows,
-    ready_spawn_pool,
+    process_pool,
     throughput_per_s,
     write_csv_rows,
 )
 from bench_utils import (
     time_it as _time_it,
 )
-from bench_utils.autotune_support import MCS_SEARCH_SPACE_OVERRIDES
 from rdkit import Chem
 from rdkit.Chem import rdFMCS
 
@@ -208,43 +208,42 @@ def bench_rdkit_mcs(
     complete_results_data: list[tuple[int, int]] | None = None
     pairs_done = 0
 
-    if threads > 1:
-        mol_binaries = [mol.ToBinary() for mol in mols]
-        chunksize = 1 if max_seconds > 0 else max(1, len(pairs) // (threads * 8))
+    with ExitStack() as workers:
+        if threads > 1:
+            mol_binaries = [mol.ToBinary() for mol in mols]
+            chunksize = 1 if max_seconds > 0 else max(1, len(pairs) // (threads * 8))
 
-        # Workers are started (and the module re-imported) before timing; only FindMCS is measured.
-        pool = ready_spawn_pool(threads, _rdkit_worker_init, (mol_binaries, config_row))
+            pool = workers.enter_context(process_pool(threads, _rdkit_worker_init, (mol_binaries, config_row)))
 
-        @nvtx.annotate("mcs_rdkit_run_mp", color="yellow")
-        def run(deadline: Deadline) -> None:
-            nonlocal complete_results_data, pairs_done, results_data
-            results_data = []
-            pairs_done = 0
-            for result in pool.imap(_rdkit_worker_pair, pairs, chunksize=chunksize):
-                results_data.append(result)
-                pairs_done += 1
-                if deadline.expired():
-                    break
-            if pairs_done == len(pairs):
-                complete_results_data = results_data
+            @nvtx.annotate("mcs_rdkit_run_mp", color="yellow")
+            def run(deadline: Deadline) -> None:
+                nonlocal complete_results_data, pairs_done, results_data
+                results_data = []
+                pairs_done = 0
+                for result in pool.imap(_rdkit_worker_pair, pairs, chunksize=chunksize):
+                    results_data.append(result)
+                    pairs_done += 1
+                    if deadline.expired():
+                        break
+                if pairs_done == len(pairs):
+                    complete_results_data = results_data
 
-    else:
+        else:
 
-        @nvtx.annotate("mcs_rdkit_run", color="yellow")
-        def run(deadline: Deadline) -> None:
-            nonlocal complete_results_data, pairs_done, results_data
-            results_data = []
-            pairs_done = 0
-            for idx_a, idx_b in pairs:
-                result = rdFMCS.FindMCS([mols[idx_a], mols[idx_b]], params)
-                results_data.append((int(result.numAtoms), int(result.numBonds)))
-                pairs_done += 1
-                if deadline.expired():
-                    break
-            if pairs_done == len(pairs):
-                complete_results_data = results_data
+            @nvtx.annotate("mcs_rdkit_run", color="yellow")
+            def run(deadline: Deadline) -> None:
+                nonlocal complete_results_data, pairs_done, results_data
+                results_data = []
+                pairs_done = 0
+                for idx_a, idx_b in pairs:
+                    result = rdFMCS.FindMCS([mols[idx_a], mols[idx_b]], params)
+                    results_data.append((int(result.numAtoms), int(result.numBonds)))
+                    pairs_done += 1
+                    if deadline.expired():
+                        break
+                if pairs_done == len(pairs):
+                    complete_results_data = results_data
 
-    try:
         timing = _time_it(
             run,
             runs=runs,
@@ -253,10 +252,6 @@ def bench_rdkit_mcs(
             progress_getter=lambda: pairs_done,
             progress_target=len(pairs),
         )
-    finally:
-        if threads > 1:
-            pool.terminate()
-            pool.join()
     if timing.progress is None:
         raise RuntimeError("bounded timing did not report progress")
     measured_pairs = timing.progress
@@ -547,7 +542,6 @@ def main() -> None:
                         n_trials=args.autotune_trials,
                         target_seconds_per_trial=args.autotune_time_budget,
                         cpu_budget=args.autotune_cpu_budget,
-                        search_space_overrides=MCS_SEARCH_SPACE_OVERRIDES,
                         seed=args.autotune_seed,
                         verbose=True,
                     )

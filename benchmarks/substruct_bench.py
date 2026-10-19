@@ -52,6 +52,7 @@ Usage:
 """
 
 import argparse
+from contextlib import ExitStack
 import gc
 import random
 import sys
@@ -64,13 +65,13 @@ from bench_utils import (
     Deadline,
     add_backend_selection_args,
     add_rdkit_max_seconds_arg,
-    available_physical_cpu_count,
+    auto_preprocessing_threads,
     load_pickle,
     load_smarts,
     load_smiles,
     print_csv_rows,
     process_map_bounded,
-    ready_spawn_pool,
+    process_pool,
     write_csv_rows,
 )
 from bench_utils import (
@@ -87,14 +88,6 @@ from nvmolkit.substructure import (
 )
 
 OPTUNA_AVAILABLE = nv_autotune.is_available()
-
-
-def _auto_preprocessing_threads(worker_threads: int, num_gpus: int, physical_cores: int | None = None) -> int:
-    """Use CPU threads not already reserved for per-GPU workers."""
-    physical_cores = max(1, available_physical_cpu_count() if physical_cores is None else physical_cores)
-    num_gpus = max(1, num_gpus)
-    effective_workers = min(4, max(1, physical_cores // num_gpus)) if worker_threads == -1 else max(1, worker_threads)
-    return max(1, physical_cores - num_gpus * effective_workers)
 
 
 def time_it(func: Callable, runs: int = 1, gpu_sync: bool = False) -> tuple[float, float]:
@@ -179,60 +172,59 @@ def bench_rdkit_substruct(
     complete_results_data = None
     pairs_done_this_run = 0
 
-    if threads > 1:
-        mol_binaries = [mol.ToBinary() for mol in mols]
-        query_binaries = [q.ToBinary() for q in queries]
-        if mode == "hasSubstructMatch":
-            worker_func = _rdkit_worker_has_batch
-        elif mode == "countSubstructMatches":
-            worker_func = _rdkit_worker_count_batch
+    with ExitStack() as workers:
+        if threads > 1:
+            mol_binaries = [mol.ToBinary() for mol in mols]
+            query_binaries = [q.ToBinary() for q in queries]
+            if mode == "hasSubstructMatch":
+                worker_func = _rdkit_worker_has_batch
+            elif mode == "countSubstructMatches":
+                worker_func = _rdkit_worker_count_batch
+            else:
+                worker_func = _rdkit_worker_get_batch
+            batch_size = max(1, len(mol_binaries) // (threads * 8))
+            batches = [
+                (start, mol_binaries[start : start + batch_size]) for start in range(0, len(mol_binaries), batch_size)
+            ]
+
+            pool = workers.enter_context(process_pool(threads, _rdkit_worker_init, (query_binaries, max_matches)))
+
+            @nvtx.annotate("substruct_run_mp", color="yellow")
+            def run(deadline: Deadline):
+                nonlocal complete_results_data, results_data, pairs_done_this_run
+                mapped = process_map_bounded(
+                    worker_func,
+                    batches,
+                    max_workers=threads,
+                    deadline=deadline,
+                    pool=pool,
+                )
+                completed = dict(mapped.results)
+                pairs_done_this_run = sum(len(rows) * num_queries for rows in completed.values())
+                results_data = [row for start in sorted(completed) for row in completed[start]]
+                if pairs_done_this_run == pairs_total:
+                    complete_results_data = results_data
         else:
-            worker_func = _rdkit_worker_get_batch
-        batch_size = max(1, len(mol_binaries) // (threads * 8))
-        batches = [
-            (start, mol_binaries[start : start + batch_size]) for start in range(0, len(mol_binaries), batch_size)
-        ]
+            if mode == "hasSubstructMatch":
+                match_fn = lambda mol, query: mol.HasSubstructMatch(query, params)  # noqa: E731
+            elif mode == "countSubstructMatches":
+                match_fn = lambda mol, query: len(mol.GetSubstructMatches(query, params))  # noqa: E731
+            else:
+                match_fn = lambda mol, query: mol.GetSubstructMatches(query, params)  # noqa: E731
 
-        # Workers are started (and the module re-imported) before timing; only matching is measured.
-        pool = ready_spawn_pool(threads, _rdkit_worker_init, (query_binaries, max_matches))
+            @nvtx.annotate("substruct_run", color="yellow")
+            def run(deadline):
+                nonlocal complete_results_data, results_data, pairs_done_this_run
+                results_data = []
+                pairs_done_this_run = 0
+                for mol in mols:
+                    if deadline.expired():
+                        break
+                    results_data.append([match_fn(mol, query) for query in queries])
+                    pairs_done_this_run += num_queries
+                if pairs_done_this_run == pairs_total:
+                    complete_results_data = results_data
 
-        @nvtx.annotate("substruct_run_mp", color="yellow")
-        def run(deadline: Deadline):
-            nonlocal complete_results_data, results_data, pairs_done_this_run
-            mapped = process_map_bounded(
-                worker_func,
-                batches,
-                max_workers=threads,
-                deadline=deadline,
-                pool=pool,
-            )
-            completed = dict(mapped.results)
-            pairs_done_this_run = sum(len(rows) * num_queries for rows in completed.values())
-            results_data = [row for start in sorted(completed) for row in completed[start]]
-            if pairs_done_this_run == pairs_total:
-                complete_results_data = results_data
-    else:
-        if mode == "hasSubstructMatch":
-            match_fn = lambda mol, query: mol.HasSubstructMatch(query, params)  # noqa: E731
-        elif mode == "countSubstructMatches":
-            match_fn = lambda mol, query: len(mol.GetSubstructMatches(query, params))  # noqa: E731
-        else:
-            match_fn = lambda mol, query: mol.GetSubstructMatches(query, params)  # noqa: E731
-
-        @nvtx.annotate("substruct_run", color="yellow")
-        def run(deadline):
-            nonlocal complete_results_data, results_data, pairs_done_this_run
-            results_data = []
-            pairs_done_this_run = 0
-            for mol in mols:
-                if deadline.expired():
-                    break
-                results_data.append([match_fn(mol, query) for query in queries])
-                pairs_done_this_run += num_queries
-            if pairs_done_this_run == pairs_total:
-                complete_results_data = results_data
-
-    try:
         timing = _time_it(
             run,
             runs=runs,
@@ -241,10 +233,6 @@ def bench_rdkit_substruct(
             progress_getter=lambda: pairs_done_this_run,
             progress_target=pairs_total,
         )
-    finally:
-        if threads > 1:
-            pool.terminate()
-            pool.join()
     if timing.progress is None:
         raise RuntimeError("bounded timing did not report progress")
     last_pairs = timing.progress
@@ -514,7 +502,7 @@ def main():
             print(f"    num_gpus: {args.num_gpus}")
             print(f"    workers: {args.workers if args.workers >= 0 else 'auto'}")
             if args.prep_threads == -1 and not args.autotune and not args.autotune_load:
-                selected_prep_threads = _auto_preprocessing_threads(args.workers, args.num_gpus)
+                selected_prep_threads = auto_preprocessing_threads(args.workers, args.num_gpus)
                 print(f"    prep_threads: {selected_prep_threads} (auto)")
             else:
                 print(f"    prep_threads: {args.prep_threads if args.prep_threads >= 0 else 'auto'}")
@@ -561,7 +549,7 @@ def main():
         print(f"  Mode: {mode}")
         selected_prep_threads = config_row["prep_threads"]
         if selected_prep_threads == -1 and not args.autotune and not args.autotune_load:
-            selected_prep_threads = _auto_preprocessing_threads(config_row["workers"], config_row["num_gpus"])
+            selected_prep_threads = auto_preprocessing_threads(config_row["workers"], config_row["num_gpus"])
         if not args.no_nvmolkit:
             print("  nvmolkit config:")
             if args.autotune_load and args.algorithm is None:

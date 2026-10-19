@@ -6,7 +6,8 @@
 import multiprocessing
 import multiprocessing.pool
 import os
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from multiprocessing import TimeoutError as MultiprocessingTimeoutError
 from queue import Empty
@@ -36,14 +37,15 @@ def _initialize_worker(ready_queue, initializer, initargs) -> None:
     ready_queue.put((True, os.getpid()))
 
 
-def ready_spawn_pool(
+@contextmanager
+def process_pool(
     max_workers: int,
     initializer: Callable[..., Any] | None = None,
     initargs: tuple[Any, ...] = (),
     *,
     startup_timeout: float = 120.0,
-) -> multiprocessing.pool.Pool:
-    """Spawn and initialize every worker before timing, avoiding inherited CUDA locks.
+) -> Iterator[multiprocessing.pool.Pool]:
+    """Manage spawned workers, including initialization before the context body.
 
     Initialization failures or a stalled startup terminate the pool and raise. The timeout bounds
     total startup time; it is separate from the benchmark's measured work deadline.
@@ -71,7 +73,11 @@ def ready_spawn_pool(
     finally:
         ready_queue.close()
         ready_queue.join_thread()
-    return pool
+    try:
+        yield pool
+    finally:
+        pool.terminate()
+        pool.join()
 
 
 def process_map_bounded(
@@ -93,15 +99,15 @@ def process_map_bounded(
     Result order is completion order; include an index in each result when
     input order must be reconstructed.
 
-    Pass ``pool`` (from :func:`ready_spawn_pool`) to reuse workers started outside the timed region; it
+    Pass ``pool`` (from :func:`process_pool`) to reuse workers started outside the timed region; it
     is left open unless the deadline expires, in which case it is terminated and must not be reused.
     """
     if not items:
         return BoundedProcessMapResult([], False)
 
-    owns_pool = pool is None
-    if owns_pool:
-        pool = ready_spawn_pool(max_workers, initializer, initargs)
+    if pool is None:
+        with process_pool(max_workers, initializer, initargs) as workers:
+            return process_map_bounded(function, items, max_workers=max_workers, deadline=deadline, pool=workers)
     completed: list[OutputT] = []
     timed_out = False
     try:
@@ -125,8 +131,5 @@ def process_map_bounded(
     finally:
         if timed_out:
             pool.terminate()
-            pool.join()
-        elif owns_pool:
-            pool.close()
             pool.join()
     return BoundedProcessMapResult(completed, timed_out)
