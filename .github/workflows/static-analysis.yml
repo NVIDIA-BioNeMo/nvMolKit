@@ -71,6 +71,4 @@ jobs:
           # shellcheck source=/dev/null
           . /usr/local/anaconda/etc/profile.d/conda.sh
           conda activate base
-          # shellcheck source=admin/ci/use_conda_runtime.sh
-          . "${GITHUB_WORKSPACE}/admin/ci/use_conda_runtime.sh"
           bash admin/run_clang_tidy.sh

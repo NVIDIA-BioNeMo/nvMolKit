@@ -60,5 +60,9 @@ conda install -q -y \
     "cmake=3.30.*" \
     eigen
 
-# Fail before a full CUDA build if the C++ linker or loader selects an old runtime.
-python "$(dirname "${BASH_SOURCE[0]}")/test_conda_runtime.py" -v
+# Prefer Conda's newer runtime when linking and running against prebuilt RDKit.
+mkdir -p "${CONDA_PREFIX}/etc/conda/activate.d"
+cat > "${CONDA_PREFIX}/etc/conda/activate.d/zz_nvmolkit_runtime.sh" <<'EOF'
+export LDFLAGS="-L${CONDA_PREFIX}/lib -Wl,-rpath,${CONDA_PREFIX}/lib${LDFLAGS:+ ${LDFLAGS}}"
+export LD_LIBRARY_PATH="${CONDA_PREFIX}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+EOF

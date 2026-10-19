@@ -61,8 +61,6 @@ jobs:
         run: |
           set -xeo pipefail
           . /usr/local/anaconda/etc/profile.d/conda.sh && conda activate base
-          # shellcheck source=admin/ci/use_conda_runtime.sh
-          . "${GITHUB_WORKSPACE}/admin/ci/use_conda_runtime.sh"
           export LD_LIBRARY_PATH="/usr/local/cuda/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
@@ -78,8 +76,6 @@ jobs:
         run: |
           set -xeo pipefail
           . /usr/local/anaconda/etc/profile.d/conda.sh && conda activate base
-          # shellcheck source=admin/ci/use_conda_runtime.sh
-          . "${GITHUB_WORKSPACE}/admin/ci/use_conda_runtime.sh"
           cmake --build build --parallel $(nproc)
 
       - name: Test
@@ -87,6 +83,4 @@ jobs:
         run: |
           set -xeo pipefail
           . /usr/local/anaconda/etc/profile.d/conda.sh && conda activate base
-          # shellcheck source=admin/ci/use_conda_runtime.sh
-          . "${GITHUB_WORKSPACE}/admin/ci/use_conda_runtime.sh"
           ctest --test-dir build --output-on-failure
