@@ -16,7 +16,7 @@
 #include <gtest/gtest.h>
 #include <omp.h>
 
-#include <chrono>
+#include <atomic>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
@@ -90,17 +90,24 @@ TEST(OpenMPExceptionRegistryTest, OnlyFirstExceptionCapturedUnderRace) {
   }
   OpenMPExceptionRegistry exceptionHandler;
 
-  constexpr int kSleepMicroseconds = 100;
-#pragma omp parallel for default(none) shared(exceptionHandler, kSleepMicroseconds)
+  // The other threads wait for thread 3 to store first, then race each other to store. A sleep-based delay is not
+  // enough here: OpenMP thread startup can exceed it on many-core hosts.
+  std::atomic<bool> firstStored{false};
+#pragma omp parallel for default(none) shared(exceptionHandler, firstStored) schedule(static, 1)
   for (int i = 0; i < kNumThreads; ++i) {
     try {
       if (i == 3) {
         throw std::runtime_error("thread 3 immediate exception");
       }
-      std::this_thread::sleep_for(std::chrono::microseconds(kSleepMicroseconds));
+      while (!firstStored.load()) {
+        std::this_thread::yield();
+      }
       throw std::runtime_error("delayed exception");
     } catch (...) {
       exceptionHandler.store(std::current_exception());
+      if (i == 3) {
+        firstStored.store(true);
+      }
     }
   }
 
