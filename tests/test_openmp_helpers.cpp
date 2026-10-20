@@ -91,24 +91,34 @@ TEST(OpenMPExceptionRegistryTest, OnlyFirstExceptionCapturedUnderRace) {
   OpenMPExceptionRegistry exceptionHandler;
 
   // The other threads wait for thread 3 to store first, then race each other to store. A sleep-based delay is not
-  // enough here: OpenMP thread startup can exceed it on many-core hosts.
+  // enough here: OpenMP thread startup can exceed it on many-core hosts. The wait requires a full team, which
+  // omp_get_max_threads() does not guarantee (e.g. OMP_THREAD_LIMIT, dynamic adjustment), so check the real team size.
   std::atomic<bool> firstStored{false};
-#pragma omp parallel for default(none) shared(exceptionHandler, firstStored) schedule(static, 1)
-  for (int i = 0; i < kNumThreads; ++i) {
-    try {
-      if (i == 3) {
-        throw std::runtime_error("thread 3 immediate exception");
-      }
-      while (!firstStored.load()) {
-        std::this_thread::yield();
-      }
-      throw std::runtime_error("delayed exception");
-    } catch (...) {
-      exceptionHandler.store(std::current_exception());
-      if (i == 3) {
-        firstStored.store(true);
+  std::atomic<bool> teamTooSmall{false};
+#pragma omp parallel default(none) shared(exceptionHandler, firstStored, teamTooSmall) num_threads(kNumThreads)
+  {
+    if (omp_get_num_threads() < kNumThreads) {
+      teamTooSmall.store(true);
+    } else {
+      const int threadIdx = omp_get_thread_num();
+      try {
+        if (threadIdx == 3) {
+          throw std::runtime_error("thread 3 immediate exception");
+        }
+        while (!firstStored.load()) {
+          std::this_thread::yield();
+        }
+        throw std::runtime_error("delayed exception");
+      } catch (...) {
+        exceptionHandler.store(std::current_exception());
+        if (threadIdx == 3) {
+          firstStored.store(true);
+        }
       }
     }
+  }
+  if (teamTooSmall.load()) {
+    GTEST_SKIP() << "OpenMP team smaller than requested; cannot run concurrency test";
   }
 
   try {
