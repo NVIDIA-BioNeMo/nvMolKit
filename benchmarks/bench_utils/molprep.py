@@ -29,6 +29,9 @@ JITTER_CENTER = 1.3
 JITTER_SPREAD = 0.6
 
 
+EMBED_TIMEOUT_SECONDS = 120
+
+
 def available_cpu_count() -> int:
     """Return CPUs available to this process across supported Python versions."""
     process_cpu_count = getattr(os, "process_cpu_count", None)
@@ -38,6 +41,41 @@ def available_cpu_count() -> int:
         return len(os.sched_getaffinity(0))
     except AttributeError:
         return os.cpu_count() or 1
+
+
+def _physical_cpu_count_from_cpuinfo(cpuinfo: str, available_cpu_ids: set[int]) -> int | None:
+    """Count physical cores represented by the available Linux CPU IDs."""
+    physical_cores: set[tuple[str, str]] = set()
+    for record in cpuinfo.split("\n\n"):
+        fields = {}
+        for line in record.splitlines():
+            key, separator, value = line.partition(":")
+            if separator:
+                fields[key.strip()] = value.strip()
+        try:
+            processor = int(fields["processor"])
+            physical_id = fields["physical id"]
+            core_id = fields["core id"]
+        except (KeyError, ValueError):
+            continue
+        if processor in available_cpu_ids:
+            physical_cores.add((physical_id, core_id))
+    return len(physical_cores) or None
+
+
+def available_physical_cpu_count() -> int:
+    """Return affinity-visible physical CPU cores, falling back to logical CPUs."""
+    try:
+        available_cpu_ids = set(os.sched_getaffinity(0))
+    except AttributeError:
+        available_cpu_ids = set(range(os.cpu_count() or 1))
+
+    try:
+        with open("/proc/cpuinfo") as cpuinfo_file:
+            physical = _physical_cpu_count_from_cpuinfo(cpuinfo_file.read(), available_cpu_ids)
+    except OSError:
+        physical = None
+    return physical or max(1, len(available_cpu_ids))
 
 
 def prep_mols(
@@ -139,6 +177,8 @@ def _embed_one(args_tuple: tuple[int, bytes], seed: int, add_hs: bool, min_atoms
     params = rdDistGeom.ETKDGv3()
     params.useRandomCoords = True
     params.randomSeed = seed + idx
+    # Untimed setup: a molecule that cannot embed in this long is dropped rather than stalling the run.
+    params.timeout = EMBED_TIMEOUT_SECONDS
     try:
         conf_id = rdDistGeom.EmbedMolecule(mol, params=params)
     except Exception:
@@ -202,3 +242,25 @@ def embed_and_jitter(
             perturb_conformer(mol.GetConformer(base_conf_id), seed=seed + mol_idx * confs_per_mol)
 
     return out
+
+
+def resolve_substructure_threads(
+    worker_threads: int,
+    num_gpus: int,
+    preprocessing_threads: int = -1,
+    physical_cores: int | None = None,
+) -> tuple[int, int]:
+    """Return explicit per-GPU workers and preprocessing threads from one CPU budget.
+
+    Preprocessing needs at least one thread, even when GPU workers use the entire budget.
+    This intentionally oversubscribes by one thread when the workers fill the budget;
+    explicit worker counts and one worker per GPU take priority over the core estimate,
+    so larger oversubscription is possible with those settings or very few cores.
+    Explicit preprocessing counts are also honored rather than capped to the budget.
+    """
+    physical_cores = max(1, available_physical_cpu_count() if physical_cores is None else physical_cores)
+    num_gpus = max(1, num_gpus)
+    effective_workers = min(4, max(1, physical_cores // num_gpus)) if worker_threads == -1 else max(1, worker_threads)
+    if preprocessing_threads == -1:
+        preprocessing_threads = max(1, physical_cores - num_gpus * effective_workers)
+    return effective_workers, preprocessing_threads

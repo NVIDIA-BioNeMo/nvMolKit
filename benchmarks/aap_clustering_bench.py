@@ -5,6 +5,7 @@
 
 import argparse
 import importlib
+import importlib.util
 import math
 import random
 import sys
@@ -42,7 +43,17 @@ def _load_rdkit_reference():
     try:
         return importlib.import_module("rdkit.Contrib.AtomAtomSimilarity.AtomAtomPathSimilarity")
     except ImportError:
+        pass
+    # Conda installs RDKit's Contrib tree under share/RDKit/Contrib, which is not an importable package.
+    from rdkit import RDConfig
+
+    path = Path(RDConfig.RDContribDir) / "AtomAtomSimilarity" / "AtomAtomPathSimilarity.py"
+    if not path.exists():
         return None
+    spec = importlib.util.spec_from_file_location("AtomAtomPathSimilarity", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _load_ligand_clustering_cpu_reference():

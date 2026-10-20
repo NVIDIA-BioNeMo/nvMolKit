@@ -9,8 +9,10 @@ from collections.abc import Sequence
 import nvtx
 import torch
 from bench_utils import (
+    Deadline,
     TimingResult,
     add_backend_selection_args,
+    add_rdkit_max_seconds_arg,
     load_pickle,
     load_sdf,
     load_smiles,
@@ -50,6 +52,10 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Fingerprint bit count (default: 2048)",
     )
     parser.add_argument("--rdkit_threads", type=int, default=1, help="RDKit fingerprint threads (default: 1)")
+    add_rdkit_max_seconds_arg(
+        parser,
+        extra_help=f"With a cap, RDKit fingerprints {RDKIT_CHUNK} molecules per call and stops at a chunk boundary.",
+    )
     parser.add_argument(
         "--prep_threads",
         type=int,
@@ -115,6 +121,9 @@ def _load_molecules(args: argparse.Namespace) -> tuple[list[Chem.Mol], str, str]
     return load_pickle(args.pickle, args.num_mols, seed=args.seed), args.pickle, "pickle"
 
 
+RDKIT_CHUNK = 50000
+
+
 @nvtx.annotate("bench_rdkit_morgan", color="green")
 def _bench_rdkit(
     generator,
@@ -122,22 +131,54 @@ def _bench_rdkit(
     num_threads: int,
     runs: int,
     warmups: int,
-) -> tuple[TimingResult, Sequence]:
-    fingerprints = ()
+    max_seconds: float = 0.0,
+) -> tuple[TimingResult, Sequence, int]:
+    """Time RDKit fingerprinting; return ``(timing, fingerprints, molecules_processed)``.
 
-    def compute() -> None:
-        nonlocal fingerprints
-        fingerprints = generator.GetFingerprints(mols, numThreads=num_threads)
+    Without a cap the whole input is one ``GetFingerprints`` call. With ``max_seconds > 0`` one deadline
+    is shared across the timed runs and molecules are fingerprinted in chunks, stopping at a chunk
+    boundary; timing and the processed count come from the same retained sample set.
+    """
+    fingerprints: list = []
+    processed = [0]
+    complete_fingerprints = None
 
-    def production_run() -> None:
+    def compute(deadline: Deadline | None = None) -> None:
+        nonlocal fingerprints, complete_fingerprints
+        if deadline is None or not deadline.active:
+            fingerprints = list(generator.GetFingerprints(mols, numThreads=num_threads))
+            processed[0] = len(mols)
+            complete_fingerprints = fingerprints
+            return
+        fingerprints = []
+        for start in range(0, len(mols), RDKIT_CHUNK):
+            fingerprints.extend(generator.GetFingerprints(mols[start : start + RDKIT_CHUNK], numThreads=num_threads))
+            if deadline.expired():
+                break
+        processed[0] = len(fingerprints)
+        if processed[0] == len(mols):
+            complete_fingerprints = fingerprints
+
+    def production_run(deadline: Deadline | None = None) -> None:
         with nvtx.annotate("morgan_rdkit_production_run", color="yellow"):
-            compute()
+            compute(deadline)
 
-    for _ in range(warmups):
-        with nvtx.annotate("morgan_rdkit_warmup", color="purple"):
-            compute()
-    timing = time_it(production_run, runs=runs, warmups=0)
-    return timing, fingerprints
+    if max_seconds > 0:
+        timing = time_it(
+            production_run,
+            runs=runs,
+            warmups=warmups,
+            max_seconds=max_seconds,
+            progress_getter=lambda: processed[0],
+            progress_target=len(mols),
+        )
+        measured = timing.progress if timing.progress is not None else processed[0]
+    else:
+        timing = time_it(production_run, runs=runs, warmups=warmups)
+        measured = len(mols)
+    if measured == len(mols) and complete_fingerprints is not None:
+        fingerprints = complete_fingerprints
+    return timing, fingerprints, measured
 
 
 def _bench_nvmolkit(
@@ -260,11 +301,14 @@ def main() -> None:
     if not args.no_rdkit:
         print("\nRunning RDKit Morgan fingerprint benchmark...")
         rdkit_generator = rdFingerprintGenerator.GetMorganGenerator(radius=args.radius, fpSize=args.fp_size)
-        timing, fingerprints = _bench_rdkit(rdkit_generator, mols, args.rdkit_threads, args.runs, args.warmups)
+        timing, fingerprints, rdkit_processed = _bench_rdkit(
+            rdkit_generator, mols, args.rdkit_threads, args.runs, args.warmups, args.rdkit_max_seconds
+        )
         rdkit_result = (timing, fingerprints)
         print(
             f"  median {timing.median_ms:.3f} ms (+/- {timing.std_ms:.3f} ms), "
-            f"{throughput_per_s(len(mols), timing.median_ms):.2f} mols/s"
+            f"{throughput_per_s(rdkit_processed, timing.median_ms):.2f} mols/s"
+            f"  [processed {rdkit_processed}/{len(mols)} mols]"
         )
 
     nvmolkit_results: list[tuple[int, TimingResult]] = []
@@ -288,7 +332,9 @@ def main() -> None:
                 f"{throughput_per_s(len(mols), timing.median_ms):.2f} mols/s"
             )
             if args.validate and rdkit_result is not None:
-                checked = _validate_fingerprints(rdkit_result[1], fingerprints, args.validation_mols)
+                checked = _validate_fingerprints(
+                    rdkit_result[1], fingerprints[: len(rdkit_result[1])], args.validation_mols
+                )
                 print(f"\nValidation passed for {checked} fingerprints (prep_threads={prep_threads})")
                 validated = True
 
@@ -298,14 +344,14 @@ def main() -> None:
     rdkit_mols_per_second = None
     rows = []
     if rdkit_result is not None:
-        rdkit_mols_per_second = throughput_per_s(len(mols), rdkit_result[0].median_ms)
+        rdkit_mols_per_second = throughput_per_s(rdkit_processed, rdkit_result[0].median_ms)
         rows.append(
             _result_row(
                 "rdkit",
                 rdkit_result[0],
                 input_file=input_file,
                 input_type=input_type,
-                num_mols=len(mols),
+                num_mols=rdkit_processed,
                 args=args,
             )
         )
