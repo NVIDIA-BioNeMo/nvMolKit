@@ -217,3 +217,15 @@ def test_substructure_thread_resolution_uses_one_explicit_budget():
     assert molprep.resolve_substructure_threads(
         worker_threads=-1, num_gpus=8, preprocessing_threads=2, physical_cores=30
     ) == (3, 2)
+
+
+@pytest.mark.parametrize(
+    "workers, gpus, cores, expected",
+    [(-1, 8, 32, (4, 1)), (-1, 1, 4, (4, 1)), (-1, 8, 4, (1, 1)), (8, 8, 32, (8, 1))],
+)
+def test_substructure_threads_keep_required_workers_when_budget_is_exhausted(workers, gpus, cores, expected):
+    assert molprep.resolve_substructure_threads(workers, gpus, physical_cores=cores) == expected
+
+
+def test_substructure_threads_honor_explicit_preprocessing_over_budget():
+    assert molprep.resolve_substructure_threads(4, 8, preprocessing_threads=3, physical_cores=32) == (4, 3)

@@ -250,7 +250,14 @@ def resolve_substructure_threads(
     preprocessing_threads: int = -1,
     physical_cores: int | None = None,
 ) -> tuple[int, int]:
-    """Return explicit per-GPU workers and preprocessing threads from one CPU budget."""
+    """Return explicit per-GPU workers and preprocessing threads from one CPU budget.
+
+    Preprocessing needs at least one thread, even when GPU workers use the entire budget.
+    This intentionally oversubscribes by one thread when the workers fill the budget;
+    explicit worker counts and one worker per GPU take priority over the core estimate,
+    so larger oversubscription is possible with those settings or very few cores.
+    Explicit preprocessing counts are also honored rather than capped to the budget.
+    """
     physical_cores = max(1, available_physical_cpu_count() if physical_cores is None else physical_cores)
     num_gpus = max(1, num_gpus)
     effective_workers = min(4, max(1, physical_cores // num_gpus)) if worker_threads == -1 else max(1, worker_threads)

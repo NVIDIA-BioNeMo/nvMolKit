@@ -368,7 +368,7 @@ def run(
                         gpu_sync=True,
                     )
                     row.update(_timing_fields("nvmolkit", nvmolkit_timing, num_conformers))
-                    if rdkit_timing is not None:
+                    if rdkit_timing is not None and row["rdkit_conformers_per_s"] > 0:
                         row["speedup"] = row["nvmolkit_conformers_per_s"] / row["rdkit_conformers_per_s"]
                     if coordinates is not None:
                         device_timing = time_it(
@@ -384,7 +384,7 @@ def run(
                             gpu_sync=True,
                         )
                         row.update(_timing_fields("nvmolkit_device_input", device_timing, num_conformers))
-                        if rdkit_timing is not None:
+                        if rdkit_timing is not None and row["rdkit_conformers_per_s"] > 0:
                             row["device_input_speedup"] = (
                                 row["nvmolkit_device_input_conformers_per_s"] / row["rdkit_conformers_per_s"]
                             )
