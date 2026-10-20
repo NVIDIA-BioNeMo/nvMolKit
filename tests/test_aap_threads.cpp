@@ -38,3 +38,15 @@ TEST(AapThreads, RejectsInvalidBudgets) {
     EXPECT_THROW(nvMolKit::detail::aapDescriptorThreadCount(4096, budget, 128), std::invalid_argument);
   }
 }
+
+TEST(AapThreads, SharedValidationAcceptsAutoAndPositiveBudgets) {
+  for (const int budget : {-1, 1, 2, std::numeric_limits<int>::max()}) {
+    EXPECT_NO_THROW(nvMolKit::detail::validateAapThreadCount(budget));
+  }
+}
+
+TEST(AapThreads, SharedValidationRejectsInvalidBudgets) {
+  for (const int budget : {0, -2, -100, std::numeric_limits<int>::min()}) {
+    EXPECT_THROW(nvMolKit::detail::validateAapThreadCount(budget), std::invalid_argument);
+  }
+}

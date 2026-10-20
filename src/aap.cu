@@ -126,9 +126,7 @@ void collectRootedPathBins(const RDKit::ROMol&                   mol,
 }
 
 void validateOptions(const AapOptions& options) {
-  if (options.numThreads != -1 && options.numThreads <= 0) {
-    throw std::invalid_argument("numThreads must be -1 or positive");
-  }
+  detail::validateAapThreadCount(options.numThreads);
   if (options.maxPathLength <= 0) {
     throw std::invalid_argument("maxPathLength must be positive");
   }
