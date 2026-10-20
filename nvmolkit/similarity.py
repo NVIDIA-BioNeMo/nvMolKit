@@ -65,12 +65,16 @@ class AAPMetric:
         sinkhorn_iterations: Number of Sinkhorn normalization iterations.
         sinkhorn_temperature: Positive Sinkhorn temperature, at least the
             smallest positive normal float32 value.
+        num_threads: Maximum CPU descriptor workers, including the calling
+            thread. -1 uses hardware concurrency; positive values set a limit.
+            Small inputs may use fewer workers.
     """
 
     max_path_length: int = 7
     histogram_bins: int = 2048
     sinkhorn_iterations: int = 8
     sinkhorn_temperature: float = 0.104
+    num_threads: int = -1
 
 
 Metric: TypeAlias = Literal["tanimoto", "cosine", "aap"] | TanimotoMetric | CosineMetric | AAPMetric
@@ -112,7 +116,8 @@ def aap_similarity(
     Args:
         left: Reference RDKit molecule.
         right: Candidate RDKit molecule.
-        metric: AAP parameters, or ``"aap"`` for the defaults.
+        metric: AAP parameters, or ``"aap"`` for the defaults. Use
+            ``AAPMetric(num_threads=4)`` to limit CPU descriptor workers.
         stream: CUDA stream to use. If None, uses the current stream.
 
     Returns:
@@ -132,6 +137,7 @@ def aap_similarity(
         metric.sinkhorn_iterations,
         metric.sinkhorn_temperature,
         active_stream.cuda_stream,
+        metric.num_threads,
     )
 
 
