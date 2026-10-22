@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cub/block/block_reduce.cuh>
 #include <cub/device/device_radix_sort.cuh>
 #include <limits>
 #include <stdexcept>
@@ -17,6 +18,7 @@
 #include "src/bitbirch.h"
 #include "src/bitbirch_common.cuh"
 #include "src/bitbirch_internal.h"
+#include "src/utils/cub_helpers.cuh"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/host_vector.h"
 #include "src/utils/nvtx.h"
@@ -88,15 +90,19 @@ struct Tree {
   int                  maxSlots;
 };
 
+using IntegerReduce = cub::BlockReduce<unsigned long long, kBlockSize>;
+using TermsReduce   = cub::BlockReduce<bitbirch::ISimTanimotoTerms, kBlockSize>;
+
 //! Per-block scratch for reductions and broadcasts.
 struct Scratch {
   const std::uint32_t* rows[kBlockSize];  //!< Row pointers resolved for one chunk of addRows.
   bool                 rowIsSums[kBlockSize];
-  unsigned long long   integers[2][kNumWarps];
-  double               reals[2][kNumWarps];
-  float                values[kNumWarps];
-  int                  positions[kNumWarps];
-  int                  broadcast[2];
+  union {
+    IntegerReduce::TempStorage integers;
+    TermsReduce::TempStorage   terms;
+  } reduce;
+  unsigned long long reduced;  //!< Result of the last blockReduce.
+  int                broadcast[3];
 };
 
 //! Per-bit sums owned by one thread; see kBitParts.
@@ -213,22 +219,24 @@ __device__ void addRows(Bits& bits, const Tree& tree, const int numItems, Scratc
   }
 }
 
-//! Block-wide sum; every thread gets the total.
-__device__ unsigned long long blockSum(unsigned long long value, Scratch& scratch) {
-  for (int offset = 16; offset > 0; offset /= 2) {
-    value += __shfl_xor_sync(0xffffffffU, value, offset);
+//! Block-wide reduction; every thread gets the result.
+template <typename Op>
+__device__ unsigned long long blockReduce(const unsigned long long value, Op op, Scratch& scratch) {
+  __syncthreads();  // Earlier users of the storage and the result are done.
+  const unsigned long long result = IntegerReduce(scratch.reduce.integers).Reduce(value, op);
+  if (threadIdx.x == 0) {
+    scratch.reduced = result;
   }
   __syncthreads();
-  if (threadIdx.x % 32 == 0) {
-    scratch.integers[0][threadIdx.x / 32] = value;
-  }
-  __syncthreads();
-  value = 0;
-  for (int warp = 0; warp < kNumWarps; ++warp) {
-    value += scratch.integers[0][warp];
-  }
-  __syncthreads();
-  return value;
+  return scratch.reduced;
+}
+
+__device__ unsigned long long blockSum(const unsigned long long value, Scratch& scratch) {
+  return blockReduce(value, cubSum(), scratch);
+}
+
+__device__ unsigned long long blockMin(const unsigned long long value, Scratch& scratch) {
+  return blockReduce(value, cubMin(), scratch);
 }
 
 // Stores bits as the entry's sums, majority centroid and member count, giving a
@@ -281,60 +289,27 @@ __device__ void storeEntry(const Tree&         tree,
 }
 
 // Whether a cluster with these per-bit sums and count members passes the iSIM
-// threshold. While count^2 * numBits <= 2^52 every iSIM term is an integer below
-// 2^53, so 64-bit integer sums equal the FP64 sums in any order; larger
-// clusters sum FP64 terms in a fixed order.
+// threshold. Every iSIM term is an integer, so FP64 sums are exact while they
+// stay below 2^53, and the fixed reduction order keeps larger sums deterministic.
 __device__ bool passesThreshold(const Tree&         tree,
                                 const Bits&         bits,
                                 const std::uint64_t count,
                                 const double        threshold,
                                 Scratch&            scratch) {
-  const bool exact = count <= (1ULL << 26) && count * count <= (1ULL << 52) / static_cast<std::uint64_t>(tree.numBits);
-  unsigned long long          commonPairs = 0;
-  unsigned long long          mismatches  = 0;
   bitbirch::ISimTanimotoTerms terms{};
 #pragma unroll
   for (int part = 0; part < kBitParts; ++part) {
     if (part * kBlockSize + static_cast<int>(threadIdx.x) < tree.numBits) {
-      const std::uint64_t sum = bits.parts[part];
-      if (exact) {
-        commonPairs += sum * (sum - 1) / 2;
-        mismatches += sum * (count - sum);
-      } else {
-        bitbirch::accumulateISimTanimotoTerm(terms, sum, count);
-      }
+      bitbirch::accumulateISimTanimotoTerm(terms, bits.parts[part], count);
     }
   }
-  for (int offset = 16; offset > 0; offset /= 2) {
-    if (exact) {
-      commonPairs += __shfl_down_sync(0xffffffffU, commonPairs, offset);
-      mismatches += __shfl_down_sync(0xffffffffU, mismatches, offset);
-    } else {
-      terms.commonPairs += __shfl_down_sync(0xffffffffU, terms.commonPairs, offset);
-      terms.mismatches += __shfl_down_sync(0xffffffffU, terms.mismatches, offset);
-    }
-  }
-  const int warp = threadIdx.x / 32;
-  if (threadIdx.x % 32 == 0) {
-    scratch.integers[0][warp] = commonPairs;
-    scratch.integers[1][warp] = mismatches;
-    scratch.reals[0][warp]    = terms.commonPairs;
-    scratch.reals[1][warp]    = terms.mismatches;
-  }
-  __syncthreads();
+  __syncthreads();  // Earlier users of the reduction storage are done.
+  const auto total =
+    TermsReduce(scratch.reduce.terms)
+      .Reduce(terms, [](const bitbirch::ISimTanimotoTerms& lhs, const bitbirch::ISimTanimotoTerms& rhs) {
+        return bitbirch::ISimTanimotoTerms{lhs.commonPairs + rhs.commonPairs, lhs.mismatches + rhs.mismatches};
+      });
   if (threadIdx.x == 0) {
-    bitbirch::ISimTanimotoTerms total{};
-    unsigned long long          totalCommon     = 0;
-    unsigned long long          totalMismatches = 0;
-    for (int index = 0; index < kNumWarps; ++index) {
-      totalCommon += scratch.integers[0][index];
-      totalMismatches += scratch.integers[1][index];
-      total.commonPairs += scratch.reals[0][index];
-      total.mismatches += scratch.reals[1][index];
-    }
-    if (exact) {
-      total = {static_cast<double>(totalCommon), static_cast<double>(totalMismatches)};
-    }
     scratch.broadcast[1] = bitbirch::isimTanimotoAtLeast(total, count, threshold);
   }
   __syncthreads();
@@ -342,32 +317,15 @@ __device__ bool passesThreshold(const Tree&         tree,
 }
 
 // Index with the greatest value over the block, the lowest index on ties, or -1
-// when no thread holds one (index INT_MAX).
-__device__ int blockArgMax(float value, int index, Scratch& scratch) {
-  for (int offset = 16; offset > 0; offset /= 2) {
-    const float otherValue = __shfl_down_sync(0xffffffffU, value, offset);
-    const int   otherIndex = __shfl_down_sync(0xffffffffU, index, offset);
-    if (otherValue > value || (otherValue == value && otherIndex < index)) {
-      value = otherValue;
-      index = otherIndex;
-    }
-  }
-  if (threadIdx.x % 32 == 0) {
-    scratch.values[threadIdx.x / 32]    = value;
-    scratch.positions[threadIdx.x / 32] = index;
-  }
-  __syncthreads();
-  if (threadIdx.x == 0) {
-    for (int warp = 1; warp < kNumWarps; ++warp) {
-      if (scratch.values[warp] > value || (scratch.values[warp] == value && scratch.positions[warp] < index)) {
-        value = scratch.values[warp];
-        index = scratch.positions[warp];
-      }
-    }
-    scratch.broadcast[0] = index == INT_MAX ? -1 : index;
-  }
-  __syncthreads();
-  return scratch.broadcast[0];
+// when no thread holds one (index INT_MAX). Values are nonnegative, so their
+// FP32 bits order like the values; the low word inverts the index so the lowest
+// wins ties, and a key of zero means no index.
+__device__ int blockArgMax(const float value, const int index, Scratch& scratch) {
+  const unsigned long long key  = index == INT_MAX ? 0ULL :
+                                                     static_cast<unsigned long long>(__float_as_uint(value)) << 32 |
+                                                      (0xffffffffU - static_cast<std::uint32_t>(index));
+  const unsigned long long best = blockReduce(key, cubMax(), scratch);
+  return best == 0 ? -1 : static_cast<int>(0xffffffffU - static_cast<std::uint32_t>(best));
 }
 
 // Position of the entry most similar to query, the first one on ties, or -1 for
@@ -529,21 +487,6 @@ __device__ __forceinline__ unsigned long long tilePairsMin(const Tree&    tree,
     best = min(best, key);
   }
   return best;
-}
-
-__device__ unsigned long long blockMin(unsigned long long value, Scratch& scratch) {
-  for (int offset = 16; offset > 0; offset /= 2) {
-    value = min(value, __shfl_xor_sync(0xffffffffU, value, offset));
-  }
-  if (threadIdx.x % 32 == 0) {
-    scratch.integers[0][threadIdx.x / 32] = value;
-  }
-  __syncthreads();
-  for (int warp = 0; warp < kNumWarps; ++warp) {
-    value = min(value, scratch.integers[0][warp]);
-  }
-  __syncthreads();
-  return value;
 }
 
 //! Tile pair index work of numTiles tiles, row-major over lhs <= rhs.
@@ -921,18 +864,18 @@ __device__ bool insertRows(const Tree&    tree,
         const std::uint32_t* centroid = centroidOf(tree, entry);
         for (int later = query + 1 + static_cast<int>(threadIdx.x / 32); later < width; later += kNumWarps) {
           int intersection = 0;
-          int bits         = 0;
+          int centroidBits = 0;
           for (int word = threadIdx.x % 32; word < numWords; word += 32) {
             intersection += __popc(centroid[word] & batch.queries[later][word]);
-            bits += __popc(centroid[word]);
+            centroidBits += __popc(centroid[word]);
           }
           for (int offset = 16; offset > 0; offset /= 2) {
             intersection += __shfl_xor_sync(0xffffffffU, intersection, offset);
-            bits += __shfl_xor_sync(0xffffffffU, bits, offset);
+            centroidBits += __shfl_xor_sync(0xffffffffU, centroidBits, offset);
           }
           if (threadIdx.x % 32 == 0) {
             counts[later * tree.stride + position] =
-              packCounts(intersection, bits + batch.queryBits[later] - intersection);
+              packCounts(intersection, centroidBits + batch.queryBits[later] - intersection);
           }
         }
       }
@@ -956,12 +899,16 @@ __device__ bool insertRows(const Tree&    tree,
       }
       ++size;
     }
-    if (threadIdx.x == 0 && entry >= 0) {
-      tree.labels[row]       = entry;
-      tree.entryFirst[entry] = min(tree.entryFirst[entry], row);
+    if (threadIdx.x == 0) {
+      if (entry >= 0) {
+        tree.labels[row]       = entry;
+        tree.entryFirst[entry] = min(tree.entryFirst[entry], row);
+      }
+      // Other blocks may fail while this one runs, so one read decides for every thread.
+      scratch.broadcast[2] = *tree.status;
     }
     __syncthreads();
-    if (size > tree.branchingFactor || *tree.status != kSuccess) {
+    if (size > tree.branchingFactor || scratch.broadcast[2] != kSuccess) {
       return true;
     }
   }
@@ -1072,11 +1019,11 @@ __global__ void refreshKernel(const Tree     tree,
     if (slot >= deltaCapacity || target < 0) {
       *tree.status = target < 0 ? kInvalidTree : kCapacity;
     }
-    deltaSlots[node]       = slot;
-    scratch.broadcast[0]   = slot;
+    deltaSlots[node]     = slot;
+    scratch.broadcast[0] = slot;
     // The node's run in the sorted batch, for leaves.
-    scratch.broadcast[1]   = lowerBound(keys, count, node);
-    scratch.integers[1][0] = lowerBound(keys, count, node + 1);
+    scratch.broadcast[1] = lowerBound(keys, count, node);
+    scratch.broadcast[2] = lowerBound(keys, count, node + 1);
   }
   __syncthreads();
   const int slot = scratch.broadcast[0];
@@ -1087,7 +1034,7 @@ __global__ void refreshKernel(const Tree     tree,
   unsigned long long added = 0;
   if (tree.nodeLeaf[node]) {
     const int begin = scratch.broadcast[1];
-    const int end   = static_cast<int>(scratch.integers[1][0]);
+    const int end   = scratch.broadcast[2];
     addRows(delta, tree, end - begin, scratch, [&](const int index, bool&) -> const std::uint32_t* {
       const int row = tree.batchBegin + values[begin + index];
       if (tree.labels[row] < 0) {
@@ -1377,16 +1324,22 @@ __global__ void collectLeavesKernel(const Tree tree,
   }
 }
 
+// One thread per centroid word, or per cluster without centroids, so the copy is coalesced.
 __global__ void numberClustersKernel(const Tree     tree,
                                      const int      numClusters,
+                                     const int      width,
                                      const int*     leafEntries,
                                      std::uint32_t* centroids) {
-  const int cluster = blockIdx.x * blockDim.x + threadIdx.x;
-  if (cluster < numClusters) {
-    const int entry        = leafEntries[cluster];
-    tree.entryFirst[entry] = cluster;
-    for (int word = 0; centroids != nullptr && word < tree.numWords; ++word) {
-      centroids[static_cast<std::size_t>(cluster) * tree.numWords + word] = centroidOf(tree, entry)[word];
+  const std::size_t item = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (item < static_cast<std::size_t>(numClusters) * width) {
+    const int cluster = static_cast<int>(item / width);
+    const int word    = static_cast<int>(item % width);
+    const int entry   = leafEntries[cluster];
+    if (centroids != nullptr) {
+      centroids[item] = centroidOf(tree, entry)[word];
+    }
+    if (word == 0) {
+      tree.entryFirst[entry] = cluster;
     }
   }
 }
@@ -1823,9 +1776,12 @@ class TreeBuilder {
     if (options_.returnCentroids) {
       result.centroids.resize(static_cast<std::size_t>(numClusters) * numWords_);
     }
-    numberClustersKernel<<<(numClusters + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream_>>>(
+    const int         width = options_.returnCentroids ? numWords_ : 1;
+    const std::size_t items = static_cast<std::size_t>(numClusters) * width;
+    numberClustersKernel<<<static_cast<unsigned>((items + kBlockSize - 1) / kBlockSize), kBlockSize, 0, stream_>>>(
       tree_,
       numClusters,
+      width,
       sortedLeafEntries.data(),
       options_.returnCentroids ? result.centroids.data() : nullptr);
     cudaCheckError(cudaGetLastError());

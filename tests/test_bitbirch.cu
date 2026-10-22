@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <future>
 #include <limits>
+#include <random>
 #include <stdexcept>
 #include <vector>
 
@@ -440,6 +441,62 @@ TEST(BitBirch, WarmupBoundariesAndIndependentGroupsPreserveLabels) {
   EXPECT_EQ(result.numClusters, 3);
   EXPECT_EQ(result.labels, expected);
   EXPECT_EQ(result.centroids, (std::vector<std::uint32_t>{0x3U, 0xCU, 0x2U}));
+}
+
+TEST(BitBirch, GroupedRoundsKeepClusterInvariantsOnGeneratedData) {
+  // Noisy copies of random prototypes, past the ordered warm-up so grouped merges run. Raw mt19937 output is
+  // specified by the standard, so the data is the same on every platform.
+  constexpr int              numWords  = 8;
+  constexpr int              rows      = 20000;
+  constexpr double           threshold = 0.6;
+  std::mt19937               rng(7);
+  std::vector<std::uint32_t> prototypes(200 * numWords);
+  for (auto& word : prototypes) {
+    word = rng() & rng() & rng();
+  }
+  std::vector<std::uint32_t> fingerprints(static_cast<std::size_t>(rows) * numWords);
+  for (int row = 0; row < rows; ++row) {
+    const auto prototype = rng() % 200;
+    for (int word = 0; word < numWords; ++word) {
+      fingerprints[row * numWords + word] =
+        prototypes[prototype * numWords + word] ^ (rng() & rng() & rng() & rng() & rng());
+    }
+  }
+  const auto clustering = clusterPackedRows(fingerprints, numWords, threshold, treeOptions(50, 1024, true));
+  const auto repeat     = clusterPackedRows(fingerprints, numWords, threshold, treeOptions(50, 1024, true));
+  EXPECT_EQ(repeat.labels, clustering.labels);
+  EXPECT_EQ(repeat.centroids, clustering.centroids);
+
+  std::vector<std::vector<int>> members(clustering.numClusters);
+  for (int row = 0; row < rows; ++row) {
+    ASSERT_GE(clustering.labels[row], 0);
+    ASSERT_LT(clustering.labels[row], clustering.numClusters);
+    members[clustering.labels[row]].push_back(row);
+  }
+  int lateMerges = 0;
+  for (int cluster = 0; cluster < clustering.numClusters; ++cluster) {
+    const auto& rowsOf = members[cluster];
+    ASSERT_FALSE(rowsOf.empty());
+    if (cluster > 0) {
+      EXPECT_LT(members[cluster - 1].front(), rowsOf.front());
+    }
+    lateMerges += rowsOf.front() < 16384 && rowsOf.back() >= 16384;
+    nvMolKit::bitbirch::ISimTanimotoTerms terms{};
+    for (int word = 0; word < numWords; ++word) {
+      std::uint32_t centroid = 0;
+      for (int bit = 0; bit < 32; ++bit) {
+        std::uint64_t sum = 0;
+        for (const int row : rowsOf) {
+          sum += (fingerprints[row * numWords + word] >> bit) & 1U;
+        }
+        nvMolKit::bitbirch::accumulateISimTanimotoTerm(terms, sum, rowsOf.size());
+        centroid |= static_cast<std::uint32_t>(nvMolKit::bitbirch::majorityCentroidBit(sum, rowsOf.size())) << bit;
+      }
+      EXPECT_EQ(clustering.centroids[cluster * numWords + word], centroid) << "cluster " << cluster;
+    }
+    EXPECT_TRUE(nvMolKit::bitbirch::isimTanimotoAtLeast(terms, rowsOf.size(), threshold)) << "cluster " << cluster;
+  }
+  EXPECT_GT(lateMerges, 0);
 }
 
 TEST(BitBirch, ConcurrentCallsUseIndependentStreamsAndWidths) {

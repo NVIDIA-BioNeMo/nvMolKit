@@ -342,7 +342,7 @@ add_executable(test_butina test_butina.cpp)
 target_link_libraries(test_butina PRIVATE butina device)
 
 add_executable(test_bitbirch test_bitbirch.cu)
-target_link_libraries(test_bitbirch PRIVATE bitbirch device_vector)
+target_link_libraries(test_bitbirch PRIVATE bitbirch device device_vector)
 
 add_executable(test_aap_threads test_aap_threads.cpp)
 
