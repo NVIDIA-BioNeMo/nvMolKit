@@ -139,11 +139,17 @@ def _pack_device_coordinates(mols: list[Chem.Mol]) -> Device3DResult:
     )
 
 
+def _dclv_radii(mol: Chem.Mol) -> list[float]:
+    """Van der Waals radii per atom; RDKit 2025.09.1 has no default-radii DCLV constructor."""
+    table = Chem.GetPeriodicTable()
+    return [table.GetRvdw(atom.GetAtomicNum()) for atom in mol.GetAtoms()]
+
+
 def _calc_rdkit_conformer(
     mol: Chem.Mol, conf_id: int, properties: tuple[Property3D, ...]
 ) -> dict[Property3D, float | list[float]]:
     dclv = (
-        rdMolDescriptors.DoubleCubicLatticeVolume(mol, confId=conf_id)
+        rdMolDescriptors.DoubleCubicLatticeVolume(mol, _dclv_radii(mol), confId=conf_id)
         if any(prop in DCLV_GETTERS for prop in properties)
         else None
     )

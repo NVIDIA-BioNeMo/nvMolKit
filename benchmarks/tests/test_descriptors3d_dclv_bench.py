@@ -44,16 +44,20 @@ def test_dclv_reference_reuses_one_construction_per_conformer_and_timed_call(mon
         for conformer in molecule.GetConformers():
             for prop in expected:
                 value = (
-                    getattr(constructor(molecule, confId=conformer.GetId()), bench.DCLV_GETTERS[prop])()
+                    getattr(
+                        constructor(molecule, bench._dclv_radii(molecule), confId=conformer.GetId()),
+                        bench.DCLV_GETTERS[prop],
+                    )()
                     if prop in bench.DCLV_GETTERS
                     else bench._calc_rdkit_property(molecule, conformer.GetId(), prop)
                 )
                 expected[prop].append(value)
     constructions = []
 
-    def counted_constructor(molecule, **kwargs):
+    def counted_constructor(molecule, radii, **kwargs):
+        assert radii == bench._dclv_radii(molecule)
         constructions.append((molecule, kwargs["confId"]))
-        return constructor(molecule, **kwargs)
+        return constructor(molecule, radii, **kwargs)
 
     monkeypatch.setattr(bench.rdMolDescriptors, "DoubleCubicLatticeVolume", counted_constructor)
     expected_constructions = [
@@ -129,10 +133,10 @@ def test_timed_worker_constructs_dclv_once_and_reads_each_requested_getter(
         return calculator(molecule, conf_id, prop)
 
     class CountedDclv:
-        def __init__(self, molecule, *, confId):
+        def __init__(self, molecule, radii, *, confId):
             constructions.append(confId)
             self.conf_id = confId
-            self.reference = constructor(molecule, confId=confId)
+            self.reference = constructor(molecule, radii, confId=confId)
 
         def __getattr__(self, name):
             def read_property():

@@ -676,10 +676,15 @@ def test_getaway_precision_ignored_when_not_requested(precision_digits):
 def _rdkit_dclv_rows(mols, options=None):
     """RDKit's DoubleCubicLatticeVolume getters, one column per DCLV_PROPERTIES entry."""
     options = DclvOptions() if options is None else options
+    table = Chem.GetPeriodicTable()
     rows = []
     for mol in mols:
+        # RDKit 2025.09.1 has no default-radii constructor, so pass the van der Waals radii it would use.
+        radii = [table.GetRvdw(atom.GetAtomicNum()) for atom in mol.GetAtoms()]
         for conf in mol.GetConformers():
-            dclv = rdMolDescriptors.DoubleCubicLatticeVolume(mol, probeRadius=options.probeRadius, confId=conf.GetId())
+            dclv = rdMolDescriptors.DoubleCubicLatticeVolume(
+                mol, radii, probeRadius=options.probeRadius, confId=conf.GetId()
+            )
             polar = {"includeSandP": options.includeSandP, "includeHs": options.includeHs}
             rows.append(
                 [
