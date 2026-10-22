@@ -99,7 +99,7 @@ add_library(
   etkdg_stages
   etkdg_stage_coordgen.cu etkdg_stage_distgeom_minimize.cu
   etkdg_stage_update_conformers.cu etkdg_stage_stereochem_checks.cu
-  etkdg_stage_etk_minimization.cu)
+  etkdg_stage_etk_minimization.cu etkdg_stage_aio_minimization.cu)
 target_link_libraries(
   etkdg_stages
   PUBLIC bfgs
@@ -107,6 +107,7 @@ target_link_libraries(
           device_vector
           ${RDKit_LIBS}
           dg_batched_forcefield
+          aio_etkdg_batched_forcefield
           etk_batched_forcefield
           ff_kernel_utils
           dist_geom
@@ -130,6 +131,7 @@ target_link_libraries(
           rdkit_dist_geom_flattened
           etkdg_impl
           etkdg_stages
+          nvmolkit_versions
           openmp_helpers
           OpenMP::OpenMP_CXX)
 

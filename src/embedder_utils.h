@@ -40,6 +40,7 @@
 #include <boost/dynamic_bitset.hpp>
 #include <boost/shared_ptr.hpp>
 #include <map>
+#include <memory>
 #include <utility>
 
 using namespace RDKit;
@@ -75,6 +76,8 @@ struct EmbedArgs {
   std::vector<std::pair<std::vector<unsigned int>, int>>            stereoDoubleBonds;
   std::vector<double>                                               posVec;
   MinimizeStage                                                     stage = MinimizeStage::FirstMinimize;
+  //! Owns the topological distance matrix etkdgDetails.distMat points into; clones share it.
+  std::shared_ptr<double[]>                                         topologicalDistances;
 };
 
 //! Copy prepared arguments for one conformer attempt, including owned RDKit state.
@@ -95,7 +98,7 @@ enum class Dimensionality {
 /**
  * @brief Throws ValueErrorException for embedding parameters that nvMolKit does not implement yet
  *
- * Unsupported: ETversion other than 1 or 2, all-in-one refinement (useLegacyImplementation=false), and on
+ * Unsupported: ETversion other than 1 or 2, and on
  * RDKit >= 2026.09, embedForceField other than UFF, onlyInitialEmbedding and internal-coordinate initial embedding.
  */
 void validateSupportedEmbedParameters(const RDKit::DGeomHelpers::EmbedParameters& params);

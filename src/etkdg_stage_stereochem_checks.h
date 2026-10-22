@@ -179,8 +179,10 @@ class ETKDGDoubleBondGeometryCheckStage final : public ETKDGStage {
  public:
   ETKDGDoubleBondGeometryCheckStage(const ETKDGContext&           ctx,
                                     const std::vector<EmbedArgs>& eargs,
-                                    int                           dim    = 4,
-                                    cudaStream_t                  stream = nullptr);
+                                    int                           dim             = 4,
+                                    cudaStream_t                  stream          = nullptr,
+                                    double                        linearTol       = 1e-3,
+                                    bool                          checkSP2Centers = false);
 
   void execute(ETKDGContext& ctx) override;
 
@@ -193,8 +195,27 @@ class ETKDGDoubleBondGeometryCheckStage final : public ETKDGStage {
   AsyncDeviceVector<int> idx2;
   AsyncDeviceVector<int> sysIdx;
 
-  int          dim_    = 4;
-  cudaStream_t stream_ = nullptr;
+  int          dim_             = 4;
+  cudaStream_t stream_          = nullptr;
+  double       linearTol_       = 1e-3;
+  bool         checkSP2Centers_ = false;
+};
+
+//! Rejects atom pairs that are closer than both RDKit's clash threshold and
+//! their lower distance bound.
+class ETKDGClashCheckStage final : public ETKDGStage {
+ public:
+  ETKDGClashCheckStage(const ETKDGContext& ctx, const std::vector<EmbedArgs>& eargs, cudaStream_t stream = nullptr);
+
+  void        execute(ETKDGContext& ctx) override;
+  std::string name() const override { return "Clash check"; }
+
+ private:
+  AsyncDeviceVector<int>    idx0;
+  AsyncDeviceVector<int>    idx1;
+  AsyncDeviceVector<int>    sysIdx;
+  AsyncDeviceVector<double> lowerBoundSquared;
+  cudaStream_t              stream_ = nullptr;
 };
 
 }  // namespace detail

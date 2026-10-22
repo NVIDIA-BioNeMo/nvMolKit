@@ -505,6 +505,25 @@ nvMolKit::DistGeom::EnergyForceContribsHost constructForceFieldContribs(
   return contribs;
 }
 
+nvMolKit::DistGeom::Energy3DForceContribsHost constructImproperCheckContribs(
+  const ::ForceFields::CrystalFF::CrystalFFDetails& etkdgDetails,
+  const unsigned int                                numAtoms) {
+  nvMolKit::DistGeom::Energy3DForceContribsHost contribs;
+  boost::dynamic_bitset<>                       isImproperConstrained(numAtoms);
+  addImproperTorsionTerms(contribs, etkdgDetails, numAtoms, IMPROPER_TORSION_FORCE_SCALING, isImproperConstrained);
+  for (const auto& angle : etkdgDetails.angles) {
+    if (angle[3]) {
+      addAngleConstraintContrib(contribs.angle13Terms,
+                                angle[0],
+                                angle[1],
+                                angle[2],
+                                TRIPLE_BOND_MIN_ANGLE,
+                                TRIPLE_BOND_MAX_ANGLE);
+    }
+  }
+  return contribs;
+}
+
 #if RDKIT_AIO_ETKDG_API
 nvMolKit::DistGeom::AllInOneForceContribsHost constructAllInOneForceFieldContribs(
   const int                                         dim,

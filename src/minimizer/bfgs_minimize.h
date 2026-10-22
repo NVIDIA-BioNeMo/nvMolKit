@@ -85,6 +85,8 @@ template <typename real> struct BfgsBatchMinimizerT {
   //! \param grad Gradient output buffer matching `positions`.
   //! \param energyOuts Per-system energy output buffer.
   //! \param activeSystemMask Optional per-system activity mask for staged minimization.
+  //! \param maxItersPerSystem Optional device array of per-system iteration limits below `numIters`. A system that
+  //!        reaches its limit counts as finished.
   //! \return `false` when all systems converged and `true` when at least one system needs another cycle.
   //! \note This overload is only valid for the batched backend.
   bool minimize(int                        numIters,
@@ -93,7 +95,8 @@ template <typename real> struct BfgsBatchMinimizerT {
                 AsyncDeviceVector<double>& positions,
                 AsyncDeviceVector<double>& grad,
                 AsyncDeviceVector<double>& energyOuts,
-                const uint8_t*             activeSystemMask = nullptr);
+                const uint8_t*             activeSystemMask  = nullptr,
+                const int*                 maxItersPerSystem = nullptr);
 
   //! \brief Runs MMFF minimization through the per-molecule CUDA kernels.
   //! \param numIters Maximum number of BFGS iterations to perform.
@@ -296,7 +299,8 @@ template <typename real> struct BfgsBatchMinimizerT {
   bool minimizeBatched(int               numIters,
                        double            gradTol,
                        EnergyEvaluator   evaluateEnergy,
-                       GradientEvaluator evaluateGradient);
+                       GradientEvaluator evaluateGradient,
+                       const int*        maxItersPerSystem = nullptr);
 };
 
 using BfgsBatchMinimizer       = BfgsBatchMinimizerT<double>;

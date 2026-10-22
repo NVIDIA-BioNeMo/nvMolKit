@@ -383,6 +383,7 @@ __global__ void doubleBondStereoKernel(const int      numTerms,
 
 __global__ void doubleBondGeometryKernel(const int      numTerms,
                                          const int      positionDimensionality,
+                                         const double   linearTol,
                                          const double*  positions,
                                          const int*     idx0s,
                                          const int*     idx1s,
@@ -390,8 +391,7 @@ __global__ void doubleBondGeometryKernel(const int      numTerms,
                                          const int*     sysIdxs,
                                          const uint8_t* activeThisStage,
                                          uint8_t*       failedThisStage) {
-  constexpr double linearTol = 1e-3;
-  const int        termIdx   = blockIdx.x * blockDim.x + threadIdx.x;
+  const int termIdx = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (termIdx >= numTerms) {
     return;
@@ -432,6 +432,29 @@ __global__ void doubleBondGeometryKernel(const int      numTerms,
   const double dot = FFKernelUtils::dotProduct(dx1, dy1, dz1, dx2, dy2, dz2);
   if ((dot + 1.0) < linearTol) {
     failedThisStage[thisTermSysIdx] = 1;
+  }
+}
+
+__global__ void clashCheckKernel(const int      numPairs,
+                                 const double*  positions,
+                                 const int*     idx0s,
+                                 const int*     idx1s,
+                                 const int*     sysIdxs,
+                                 const double*  lowerBoundsSquared,
+                                 const uint8_t* activeThisStage,
+                                 uint8_t*       failedThisStage) {
+  const int pairIdx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (pairIdx >= numPairs || !activeThisStage[sysIdxs[pairIdx]]) {
+    return;
+  }
+  const int    p0              = idx0s[pairIdx] * 4;
+  const int    p1              = idx1s[pairIdx] * 4;
+  const double dx              = positions[p0] - positions[p1];
+  const double dy              = positions[p0 + 1] - positions[p1 + 1];
+  const double dz              = positions[p0 + 2] - positions[p1 + 2];
+  const double distanceSquared = dx * dx + dy * dy + dz * dz;
+  if (distanceSquared < 0.8 && distanceSquared < lowerBoundsSquared[pairIdx]) {
+    failedThisStage[sysIdxs[pairIdx]] = 1;
   }
 }
 }  // namespace
@@ -764,9 +787,13 @@ void ETKDGDoubleBondStereoCheckStage::loadDataset(const ETKDGContext& ctx, const
 ETKDGDoubleBondGeometryCheckStage::ETKDGDoubleBondGeometryCheckStage(const ETKDGContext&           ctx,
                                                                      const std::vector<EmbedArgs>& eargs,
                                                                      int                           dim,
-                                                                     cudaStream_t                  stream)
+                                                                     cudaStream_t                  stream,
+                                                                     double                        linearTol,
+                                                                     bool                          checkSP2Centers)
     : dim_(dim),
-      stream_(stream) {
+      stream_(stream),
+      linearTol_(linearTol),
+      checkSP2Centers_(checkSP2Centers) {
   idx0.setStream(stream);
   idx1.setStream(stream);
   idx2.setStream(stream);
@@ -784,6 +811,7 @@ void ETKDGDoubleBondGeometryCheckStage::execute(ETKDGContext& ctx) {
   const int     numBlocks = (idx0.size() + blockSize - 1) / blockSize;
   doubleBondGeometryKernel<<<numBlocks, blockSize, 0, stream_>>>(idx0.size(),
                                                                  dim_,
+                                                                 linearTol_,
                                                                  ctx.systemDevice.positions.data(),
                                                                  idx0.data(),
                                                                  idx1.data(),
@@ -806,6 +834,21 @@ void ETKDGDoubleBondGeometryCheckStage::loadDataset(const ETKDGContext& ctx, con
       idx2Host.push_back(idx2 + ctx.systemHost.atomStarts[i]);
       sysIdxHost.push_back(i);
     }
+    if (checkSP2Centers_) {
+      constexpr int triples[3][3] = {
+        {0, 1, 2},
+        {0, 1, 3},
+        {2, 1, 3}
+      };
+      for (const auto& improper : eargs[i].etkdgDetails.improperAtoms) {
+        for (const auto& triple : triples) {
+          idx0Host.push_back(improper[triple[0]] + ctx.systemHost.atomStarts[i]);
+          idx1Host.push_back(improper[triple[1]] + ctx.systemHost.atomStarts[i]);
+          idx2Host.push_back(improper[triple[2]] + ctx.systemHost.atomStarts[i]);
+          sysIdxHost.push_back(i);
+        }
+      }
+    }
   }
 
   idx0.setFromVector(idx0Host);
@@ -813,6 +856,55 @@ void ETKDGDoubleBondGeometryCheckStage::loadDataset(const ETKDGContext& ctx, con
   idx2.setFromVector(idx2Host);
   sysIdx.setFromVector(sysIdxHost);
   cudaStreamSynchronize(idx0.stream());  // Sync before local vectors go out of scope
+}
+
+ETKDGClashCheckStage::ETKDGClashCheckStage(const ETKDGContext&           ctx,
+                                           const std::vector<EmbedArgs>& eargs,
+                                           const cudaStream_t            stream)
+    : stream_(stream) {
+  std::vector<int>    idx0Host;
+  std::vector<int>    idx1Host;
+  std::vector<int>    sysIdxHost;
+  std::vector<double> lowerBoundSquaredHost;
+  for (std::size_t systemIdx = 0; systemIdx < eargs.size(); ++systemIdx) {
+    const auto& bounds     = *eargs[systemIdx].mmat;
+    const int   atomOffset = ctx.systemHost.atomStarts[systemIdx];
+    for (unsigned int i = 1; i < bounds.numRows(); ++i) {
+      for (unsigned int j = 0; j < i; ++j) {
+        idx0Host.push_back(atomOffset + i);
+        idx1Host.push_back(atomOffset + j);
+        sysIdxHost.push_back(systemIdx);
+        const double lowerBound = bounds.getLowerBound(i, j);
+        lowerBoundSquaredHost.push_back(lowerBound * lowerBound);
+      }
+    }
+  }
+  idx0.setStream(stream);
+  idx1.setStream(stream);
+  sysIdx.setStream(stream);
+  lowerBoundSquared.setStream(stream);
+  idx0.setFromVector(idx0Host);
+  idx1.setFromVector(idx1Host);
+  sysIdx.setFromVector(sysIdxHost);
+  lowerBoundSquared.setFromVector(lowerBoundSquaredHost);
+  cudaCheckError(cudaStreamSynchronize(stream));
+}
+
+void ETKDGClashCheckStage::execute(ETKDGContext& ctx) {
+  if (idx0.size() == 0) {
+    return;
+  }
+  constexpr int blockSize = 128;
+  clashCheckKernel<<<(idx0.size() + blockSize - 1) / blockSize, blockSize, 0, stream_>>>(
+    idx0.size(),
+    ctx.systemDevice.positions.data(),
+    idx0.data(),
+    idx1.data(),
+    sysIdx.data(),
+    lowerBoundSquared.data(),
+    ctx.activeThisStage.data(),
+    ctx.failedThisStage.data());
+  cudaCheckError(cudaGetLastError());
 }
 
 }  // namespace detail

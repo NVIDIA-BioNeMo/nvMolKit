@@ -45,6 +45,7 @@
 
 #include <boost/dynamic_bitset.hpp>
 #include <iomanip>
+#include <numeric>
 #include <typeinfo>
 
 #include "rdkit_extensions/topology_bounds_compat.h"
@@ -73,14 +74,15 @@ namespace detail {
 EmbedArgs cloneEmbedArgs(const EmbedArgs& source) {
 #if RDKIT_VERSION_MAJOR > 2026 || (RDKIT_VERSION_MAJOR == 2026 && RDKIT_VERSION_MINOR >= 9)
   EmbedArgs result;
-  result.dim                = source.dim;
-  result.mmat               = source.mmat;
-  result.chiralCenters      = source.chiralCenters;
-  result.tetrahedralCarbons = source.tetrahedralCarbons;
-  result.doubleBondEnds     = source.doubleBondEnds;
-  result.stereoDoubleBonds  = source.stereoDoubleBonds;
-  result.posVec             = source.posVec;
-  result.stage              = source.stage;
+  result.dim                  = source.dim;
+  result.mmat                 = source.mmat;
+  result.chiralCenters        = source.chiralCenters;
+  result.tetrahedralCarbons   = source.tetrahedralCarbons;
+  result.doubleBondEnds       = source.doubleBondEnds;
+  result.stereoDoubleBonds    = source.stereoDoubleBonds;
+  result.posVec               = source.posVec;
+  result.stage                = source.stage;
+  result.topologicalDistances = source.topologicalDistances;
 
   const auto& original         = source.etkdgDetails;
   auto&       copied           = result.etkdgDetails;
@@ -302,6 +304,10 @@ void initETKDG(const ROMol*                                mol,
                ForceFields::CrystalFF::CrystalFFDetails&   etkdgDetails) {
   PRECONDITION(mol, "bad molecule");
   const unsigned int nAtoms = mol->getNumAtoms();
+#if RDKIT_AIO_ETKDG_API
+  etkdgDetails.forceConsts = params.useLegacyImplementation ? ForceFields::CrystalFF::ETKDGForceConsts::SEQ::Cosine :
+                                                              ForceFields::CrystalFF::ETKDGForceConsts::AIO::Cosine;
+#endif
   if (params.useExpTorsionAnglePrefs || params.useBasicKnowledge) {
     ForceFields::CrystalFF::getExperimentalTorsions(*mol,
                                                     etkdgDetails,
@@ -690,11 +696,6 @@ void validateSupportedEmbedParameters(const RDKit::DGeomHelpers::EmbedParameters
       "Only version 1 and 2 of the experimental "
       "torsion-angle preferences (ETversion) supported");
   }
-#if RDKIT_AIO_ETKDG_API
-  if (!params.useLegacyImplementation) {
-    throw ValueErrorException("All-in-one ETKDG refinement (useLegacyImplementation=False) is not supported");
-  }
-#endif
 #if RDKIT_ETKDG_2026_09_API
   using RDKit::DGeomHelpers::InitialEmbeddingMode;
   if (params.embedForceField != RDKit::DGeomHelpers::EmbedFF::UFF) {
@@ -764,6 +765,17 @@ bool prepareEmbedderArgs(ROMol&                                      mol,
 #if RDKIT_ETKDG_2026_09_API
   // RDKit 2026.09 builds the torsion terms after the bounds, which record the forced amide/ester configurations.
   EmbeddingOps::initETKDG(&mol, params, eargs.etkdgDetails);
+#endif
+#if RDKIT_AIO_ETKDG_API
+  if (!params.useLegacyImplementation) {
+    // The all-in-one force field uses it to find 1-2 and 1-3 pairs. The uncached overload gives eargs its own copy;
+    // the matrix cached on the molecule can be replaced while conformer arguments still point at it.
+    std::vector<int> atoms(nAtoms);
+    std::iota(atoms.begin(), atoms.end(), 0);
+    const std::vector<const Bond*> bonds(mol.bonds().begin(), mol.bonds().end());
+    eargs.topologicalDistances.reset(MolOps::getDistanceMat(mol, atoms, bonds));
+    eargs.etkdgDetails.distMat = eargs.topologicalDistances.get();
+  }
 #endif
 
   // Find chiral centers

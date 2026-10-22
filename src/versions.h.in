@@ -13,9 +13,7 @@
 // versions. Consumers select the codepath with `#if RDKIT_NEW_FLAG_API`.
 #define RDKIT_NEW_FLAG_API (RDKIT_VERSION_MAJOR > 2024 || (RDKIT_VERSION_MAJOR == 2024 && RDKIT_VERSION_MINOR >= 9))
 
-// RDKit's all-in-one ETKDG coordinate refinement was released in 2026.03.4.
-// Keep this as a preprocessor macro because EmbedParameters::useLegacyImplementation
-// and CrystalFFDetails::forceConsts do not exist in older supported RDKit headers.
+// Availability of EmbedParameters::useLegacyImplementation and CrystalFFDetails::forceConsts.
 #define RDKIT_AIO_ETKDG_API                                                                                       \
   (RDKIT_VERSION_MAJOR > 2026 ||                                                                                  \
    (RDKIT_VERSION_MAJOR == 2026 &&                                                                                \
@@ -23,8 +21,7 @@
 
 // RDKit 2026.09 sets topology bounds before the ETKDG torsions, records forced amide/ester 1-4 configurations that
 // become torsion terms, keeps at most one experimental torsion per central bond, and adds the initialEmbeddingMode,
-// onlyInitialEmbedding and embedForceField parameters. Preprocessor macro because those members do not exist in older
-// supported RDKit headers.
+// onlyInitialEmbedding and embedForceField parameters.
 #define RDKIT_ETKDG_2026_09_API (RDKIT_VERSION_MAJOR > 2026 || (RDKIT_VERSION_MAJOR == 2026 && RDKIT_VERSION_MINOR >= 9))
 
 #endif  // NVMOLKIT_VERSIONS_H

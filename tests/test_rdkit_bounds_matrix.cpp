@@ -53,8 +53,7 @@ TEST(BoundsMatrixTest, Hexane) {
   mols.emplace_back(RDKit::SmilesToMol(smiles));
   std::vector<const RDKit::ROMol*> molsView{mols[0].get()};
 
-  // Plain distance geometry with macrocycle 1-4 heuristics. Field assignment because RDKit 2026.03.4 removed the
-  // positional EmbedParameters constructor.
+  // Plain distance geometry with macrocycle 1-4 heuristics.
   RDKit::DGeomHelpers::EmbedParameters params;
   params.maxIterations           = 30;
   params.randomSeed              = -1;

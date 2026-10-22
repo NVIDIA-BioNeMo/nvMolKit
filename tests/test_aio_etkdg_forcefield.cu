@@ -27,6 +27,7 @@
 #include "src/forcefields/aio_etkdg_batched_forcefield.h"
 #include "src/forcefields/dist_geom.h"
 #include "src/forcefields/dist_geom_kernels.h"
+#include "src/minimizer/bfgs_minimize.h"
 #include "tests/test_utils.h"
 
 namespace {
@@ -644,6 +645,75 @@ TEST(AllInOneForcefield, SinglePrecisionInterfaceEvaluatesNativelyAndRejectsFull
                 active,
                 toleranceFor(PrecisionMode::SINGLE),
                 0.0);
+}
+
+// ---------------------------------------------
+// Minimizer: per-system iteration limits
+// ---------------------------------------------
+
+//! Minimizes the batch with the first-phase terms. Systems outside active are left alone.
+std::vector<double> minimizeFirstPhase(const Batch&                    batch,
+                                       const DG::AllInOneForceWeights& weights,
+                                       const int                       numIters,
+                                       const std::vector<uint8_t>&     active,
+                                       const std::vector<int>*         limits) {
+  nvMolKit::AllInOneETKDGBatchedForcefield forcefield(batch.system, batch.atomStarts, weights);
+  forcefield.setTorsionTermsEnabled(false);
+  nvMolKit::BfgsBatchMinimizer minimizer(4, nvMolKit::DebugLevel::NONE, true, nullptr, nvMolKit::BfgsBackend::BATCHED);
+  const int                    numMols = static_cast<int>(batch.atomStarts.size()) - 1;
+  AsyncDeviceVector<double>    positions;
+  AsyncDeviceVector<double>    gradient(batch.positions.size());
+  AsyncDeviceVector<double>    energies(numMols);
+  AsyncDeviceVector<uint8_t>   activeDevice;
+  AsyncDeviceVector<int>       limitsDevice;
+  positions.setFromVector(batch.positions);
+  activeDevice.setFromVector(active);
+  if (limits != nullptr) {
+    limitsDevice.setFromVector(*limits);
+  }
+  minimizer.minimize(numIters,
+                     1e-4,
+                     forcefield,
+                     positions,
+                     gradient,
+                     energies,
+                     activeDevice.data(),
+                     limits != nullptr ? limitsDevice.data() : nullptr);
+  std::vector<double> result(batch.positions.size());
+  positions.copyToHost(result);
+  CHECK_CUDA_RETURN(cudaDeviceSynchronize());
+  return result;
+}
+
+//! A system that reaches its own iteration limit stops there, exactly as a run limited to that many iterations does,
+//! while the others continue. RDKit's first all-in-one phase relies on this to stop each molecule at its heavy-atom
+//! count.
+TEST(AllInOneMinimizer, PerSystemIterationLimitsMatchSeparatelyLimitedRuns) {
+  const auto                                 params    = RDKit::DGeomHelpers::ETKDGv3;
+  const auto                                 mols      = sdfMolecules("MMFF94_dative.sdf", 4);
+  auto                                       molecules = prepareMolecules(mols, params);
+  std::vector<DG::AllInOneForceContribsHost> contribs;
+  for (const auto& molecule : molecules) {
+    contribs.push_back(buildContribs(molecule, params));
+  }
+  const auto             batch   = buildBatch(molecules, contribs);
+  const auto             weights = DG::allInOneForceWeights(molecules.front().eargs.etkdgDetails);
+  const std::vector<int> limits{2, 5, 9, 40};
+  const auto together = minimizeFirstPhase(batch, weights, 40, std::vector<uint8_t>(molecules.size(), 1), &limits);
+  for (std::size_t molIdx = 0; molIdx < molecules.size(); ++molIdx) {
+    SCOPED_TRACE("molecule " + std::to_string(molIdx));
+    std::vector<uint8_t> onlyThis(molecules.size(), 0);
+    onlyThis[molIdx]     = 1;
+    const auto separate  = minimizeFirstPhase(batch, weights, limits[molIdx], onlyThis, nullptr);
+    const int  begin     = 4 * batch.atomStarts[molIdx];
+    const int  end       = 4 * batch.atomStarts[molIdx + 1];
+    double     maxChange = 0.0;
+    for (int coord = begin; coord < end; ++coord) {
+      EXPECT_NEAR(together[coord], separate[coord], 1e-9) << "coordinate " << coord - begin;
+      maxChange = std::max(maxChange, std::abs(together[coord] - batch.positions[coord]));
+    }
+    EXPECT_GT(maxChange, 1e-3) << "the molecule should have moved";
+  }
 }
 
 }  // namespace

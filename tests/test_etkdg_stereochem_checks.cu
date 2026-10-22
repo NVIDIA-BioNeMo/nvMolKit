@@ -27,6 +27,7 @@
 
 #include "src/embedder_utils.h"
 #include "src/etkdg_impl.h"
+#include "src/etkdg_stage_aio_minimization.h"
 #include "src/etkdg_stage_stereochem_checks.h"
 #include "src/forcefields/dist_geom.h"
 #include "src/utils/device.h"
@@ -103,6 +104,20 @@ std::pair<std::vector<std::unique_ptr<ROMol>>, std::vector<const ROMol*>> getMol
 
 constexpr int wantNumConfsParsedMMFF = 761;
 
+ETKDGContext makeSingleSystemContext(const std::vector<double>& positions, int numAtoms) {
+  ETKDGContext context;
+  context.nTotalSystems         = 1;
+  context.systemHost.atomStarts = {0, numAtoms};
+  context.systemHost.positions  = positions;
+  nvMolKit::DistGeom::sendContextToDevice(positions,
+                                          context.systemDevice.positions,
+                                          context.systemHost.atomStarts,
+                                          context.systemDevice.atomStarts);
+  context.activeThisStage.setFromVector(std::vector<uint8_t>{1});
+  context.failedThisStage.setFromVector(std::vector<uint8_t>{0});
+  return context;
+}
+
 // Check that all molecules in the set have succeeded, with noted exception counts.
 void allPassChecks(const ETKDGDriver& driver, int expectedExceptions = 0) {
   EXPECT_EQ(driver.numConfsFinished(), wantNumConfsParsedMMFF - expectedExceptions);
@@ -120,6 +135,109 @@ void allPassChecks(const ETKDGDriver& driver, int expectedExceptions = 0) {
   const int  completedCount = std::accumulate(completed.begin(), completed.end(), static_cast<int16_t>(0));
   const int  totalConfs     = failureCounts[0].size();
   EXPECT_EQ(completedCount, totalConfs - expectedExceptions);
+}
+
+TEST(ETKDGAllInOneChecks, ClashUsesLowerBoundInsideThreshold) {
+  struct ClashCase {
+    double  distance;
+    double  lowerBound;
+    uint8_t active;
+    uint8_t expectedFailure;
+  };
+  for (const auto& example : {
+         ClashCase{ 0.2, 1.0, 1, 1},
+         ClashCase{ 0.2, 1.0, 0, 0},
+         ClashCase{ 0.2, 0.1, 1, 0},
+         ClashCase{ 0.5, 0.5, 1, 0},
+         ClashCase{0.89, 1.0, 1, 1},
+         ClashCase{0.90, 1.0, 1, 0}
+  }) {
+    SCOPED_TRACE(example.distance);
+    SCOPED_TRACE(example.lowerBound);
+    SCOPED_TRACE(example.active);
+    auto context = makeSingleSystemContext({0.0, 0.0, 0.0, 0.0, example.distance, 0.0, 0.0, 0.0}, 2);
+    context.activeThisStage.setFromVector(std::vector<uint8_t>{example.active});
+    std::vector<EmbedArgs> arguments(1);
+    arguments[0].mmat = std::make_unique<::DistGeom::BoundsMatrix>(2);
+    arguments[0].mmat->setLowerBound(1, 0, example.lowerBound);
+    arguments[0].mmat->setUpperBound(1, 0, 1.5);
+    ETKDGClashCheckStage stage(context, arguments);
+    stage.execute(context);
+    std::vector<uint8_t> failures(1);
+    context.failedThisStage.copyToHost(failures);
+    CHECK_CUDA_RETURN(cudaDeviceSynchronize());
+    EXPECT_EQ(failures[0], example.expectedFailure);
+  }
+}
+
+TEST(ETKDGAllInOneChecks, SP2CenterUsesStricterGeometryCheck) {
+  auto context =
+    makeSingleSystemContext({-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0}, 4);
+  std::vector<EmbedArgs> eargs(1);
+  eargs[0].etkdgDetails.improperAtoms.push_back({0, 1, 2, 3, 6, 0});
+  ETKDGDoubleBondGeometryCheckStage stage(context, eargs, 4, nullptr, 3e-3, true);
+  stage.execute(context);
+  std::vector<uint8_t> failed(1);
+  context.failedThisStage.copyToHost(failed);
+  CHECK_CUDA_RETURN(cudaDeviceSynchronize());
+  EXPECT_EQ(failed[0], 1);
+}
+
+TEST(ETKDGAllInOneChecks, KTermRejectsBentLinearCenter) {
+  auto context = makeSingleSystemContext({-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0}, 3);
+  std::vector<EmbedArgs> eargs(1);
+  eargs[0].mmat = std::make_unique<::DistGeom::BoundsMatrix>(3);
+  for (unsigned int i = 1; i < 3; ++i) {
+    for (unsigned int j = 0; j < i; ++j) {
+      eargs[0].mmat->setLowerBound(i, j, 0.8);
+      eargs[0].mmat->setUpperBound(i, j, 2.2);
+    }
+  }
+  eargs[0].etkdgDetails.angles.push_back({0, 1, 2, 1});
+  ETKDGKTermCheckStage stage(eargs, context);
+  stage.execute(context);
+  std::vector<uint8_t> failed(1);
+  context.failedThisStage.copyToHost(failed);
+  CHECK_CUDA_RETURN(cudaDeviceSynchronize());
+  EXPECT_EQ(failed[0], 1);
+}
+
+TEST(ETKDGAllInOneChecks, KTermTotalRejectsAccumulatedModerateTerms) {
+  for (const double centerHeight : {0.03, 0.10}) {
+    SCOPED_TRACE(centerHeight);
+    auto                   context = makeSingleSystemContext({1.0,
+                                                              0.0,
+                                                              0.0,
+                                                              0.0,
+                                                              0.0,
+                                                              0.0,
+                                                              centerHeight,
+                                                              0.0,
+                                                              -0.5,
+                                                              0.866025403784,
+                                                              0.0,
+                                                              0.0,
+                                                              -0.5,
+                                                              -0.866025403784,
+                                                              0.0,
+                                                              0.0},
+                                           4);
+    std::vector<EmbedArgs> arguments(1);
+    arguments[0].mmat = std::make_unique<::DistGeom::BoundsMatrix>(4);
+    for (unsigned int first = 1; first < 4; ++first) {
+      for (unsigned int second = 0; second < first; ++second) {
+        arguments[0].mmat->setLowerBound(first, second, 0.8);
+        arguments[0].mmat->setUpperBound(first, second, 2.2);
+      }
+    }
+    arguments[0].etkdgDetails.improperAtoms.push_back({0, 1, 2, 3, 6, 0});
+    ETKDGKTermCheckStage stage(arguments, context);
+    stage.execute(context);
+    std::vector<uint8_t> failures(1);
+    context.failedThisStage.copyToHost(failures);
+    CHECK_CUDA_RETURN(cudaDeviceSynchronize());
+    EXPECT_EQ(failures[0], centerHeight > 0.05);
+  }
 }
 
 // ------------------------------------
