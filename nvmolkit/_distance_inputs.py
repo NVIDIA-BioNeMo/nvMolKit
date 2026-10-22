@@ -15,7 +15,13 @@ def _packed_metric_name(metric: TanimotoMetric | CosineMetric) -> str:
 
 
 def _aap_args(metric: AAPMetric) -> tuple:
-    return (metric.max_path_length, metric.histogram_bins, metric.sinkhorn_iterations, metric.sinkhorn_temperature)
+    return (
+        metric.max_path_length,
+        metric.histogram_bins,
+        metric.sinkhorn_iterations,
+        metric.sinkhorn_temperature,
+        metric.num_threads,
+    )
 
 
 def _prepare_distance_matrix(distance_matrix: ArrayInput, stream: torch.cuda.Stream | None):

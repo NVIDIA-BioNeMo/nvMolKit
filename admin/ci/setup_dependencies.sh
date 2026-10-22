@@ -19,7 +19,7 @@ set -eo pipefail
 PYTHON_VERSION="${1:-3.12}"
 RDKIT_VERSION="${2:-2025.09.1}"
 
-MINIFORGE_VERSION="25.3.0-3"
+MINIFORGE_VERSION="26.7.2-0"
 MINIFORGE_PREFIX="/usr/local/anaconda"
 
 export DEBIAN_FRONTEND=noninteractive
@@ -49,6 +49,8 @@ conda install -q -y \
     "rdkit=${RDKIT_VERSION}" \
     "gcc=13.*" \
     "gxx=13.*" \
+    "gcc_linux-${ARCH/x86_64/64}=13.*" \
+    "gxx_linux-${ARCH/x86_64/64}=13.*" \
     libboost-devel \
     libboost-headers \
     libboost-python-devel \

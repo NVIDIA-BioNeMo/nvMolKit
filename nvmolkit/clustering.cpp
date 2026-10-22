@@ -177,12 +177,17 @@ BOOST_PYTHON_MODULE(_clustering) {
         const int           histogramBins,
         const int           sinkhornIterations,
         const float         sinkhornTemperature,
-        std::uintptr_t      streamPtr) {
+        std::uintptr_t      streamPtr,
+        const int           numThreads) {
       auto streamOpt = nvMolKit::acquireExternalStream(streamPtr);
       if (!streamOpt) {
         throw std::invalid_argument("Invalid CUDA stream");
       }
-      const nvMolKit::AapOptions options{maxPathLength, histogramBins, sinkhornIterations, sinkhornTemperature};
+      const nvMolKit::AapOptions options{maxPathLength,
+                                         histogramBins,
+                                         sinkhornIterations,
+                                         sinkhornTemperature,
+                                         numThreads};
       return nvMolKit::aapSimilarityGpu(left, right, options, *streamOpt);
     },
     (boost::python::arg("left"),
@@ -191,7 +196,8 @@ BOOST_PYTHON_MODULE(_clustering) {
      boost::python::arg("histogram_bins")       = 2048,
      boost::python::arg("sinkhorn_iterations")  = 8,
      boost::python::arg("sinkhorn_temperature") = 0.104F,
-     boost::python::arg("stream")               = 0));
+     boost::python::arg("stream")               = 0,
+     boost::python::arg("num_threads")          = -1));
 
   boost::python::def(
     "aap_leader",
@@ -203,9 +209,14 @@ BOOST_PYTHON_MODULE(_clustering) {
         const int                    histogramBins,
         const int                    sinkhornIterations,
         const float                  sinkhornTemperature,
+        const int                    numThreads,
         const std::uintptr_t         streamPtr) {
       const auto                 stream = requireStream(streamPtr);
-      const nvMolKit::AapOptions options{maxPathLength, histogramBins, sinkhornIterations, sinkhornTemperature};
+      const nvMolKit::AapOptions options{maxPathLength,
+                                         histogramBins,
+                                         sinkhornIterations,
+                                         sinkhornTemperature,
+                                         numThreads};
       auto                       result =
         nvMolKit::aapLeader(moleculePointers(molecules), cutoff, options, pickSize, extractIndices(firstPicks), stream);
       return wrapPickerResult(result);
@@ -218,6 +229,7 @@ BOOST_PYTHON_MODULE(_clustering) {
      boost::python::arg("histogram_bins"),
      boost::python::arg("sinkhorn_iterations"),
      boost::python::arg("sinkhorn_temperature"),
+     boost::python::arg("num_threads"),
      boost::python::arg("stream")));
 
   boost::python::def(
@@ -231,9 +243,14 @@ BOOST_PYTHON_MODULE(_clustering) {
         const int                    histogramBins,
         const int                    sinkhornIterations,
         const float                  sinkhornTemperature,
+        const int                    numThreads,
         const std::uintptr_t         streamPtr) {
       const auto                 stream = requireStream(streamPtr);
-      const nvMolKit::AapOptions options{maxPathLength, histogramBins, sinkhornIterations, sinkhornTemperature};
+      const nvMolKit::AapOptions options{maxPathLength,
+                                         histogramBins,
+                                         sinkhornIterations,
+                                         sinkhornTemperature,
+                                         numThreads};
       auto                       result = nvMolKit::aapMaxMin(moleculePointers(molecules),
                                         pickSize,
                                         options,
@@ -252,6 +269,7 @@ BOOST_PYTHON_MODULE(_clustering) {
      boost::python::arg("histogram_bins"),
      boost::python::arg("sinkhorn_iterations"),
      boost::python::arg("sinkhorn_temperature"),
+     boost::python::arg("num_threads"),
      boost::python::arg("stream")));
 
   boost::python::def(
@@ -263,10 +281,15 @@ BOOST_PYTHON_MODULE(_clustering) {
         const int                  histogramBins,
         const int                  sinkhornIterations,
         const float                sinkhornTemperature,
+        const int                  numThreads,
         const bool                 deviceOutput,
         const std::uintptr_t       streamPtr) {
       const auto                 stream = requireStream(streamPtr);
-      const nvMolKit::AapOptions options{maxPathLength, histogramBins, sinkhornIterations, sinkhornTemperature};
+      const nvMolKit::AapOptions options{maxPathLength,
+                                         histogramBins,
+                                         sinkhornIterations,
+                                         sinkhornTemperature,
+                                         numThreads};
       return wrapClusteringResult(
         nvMolKit::aapDise(moleculePointers(molecules), cutoff, options, nearestAssignment, stream),
         deviceOutput,
@@ -279,6 +302,7 @@ BOOST_PYTHON_MODULE(_clustering) {
      boost::python::arg("histogram_bins"),
      boost::python::arg("sinkhorn_iterations"),
      boost::python::arg("sinkhorn_temperature"),
+     boost::python::arg("num_threads"),
      boost::python::arg("device_output"),
      boost::python::arg("stream")));
 

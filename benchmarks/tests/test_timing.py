@@ -91,6 +91,25 @@ def test_time_it_runs_setup_before_each_iteration_outside_timing(monkeypatch):
     assert timing.times_ms == [250.0]
 
 
+@pytest.mark.parametrize("max_seconds, expected_calls", [(0.0, 4), (-1.0, 4), (10.0, 1)])
+def test_time_it_skips_full_warmups_only_for_positive_caps(max_seconds, expected_calls):
+    deadlines = []
+    setups = []
+    timing = time_it(
+        deadlines.append,
+        runs=1,
+        warmups=3,
+        setup=lambda: setups.append(True),
+        max_seconds=max_seconds,
+        progress_getter=lambda: 1,
+        progress_target=1,
+    )
+    assert len(deadlines) == len(setups) == expected_calls
+    assert all(deadline.active == (max_seconds > 0) for deadline in deadlines)
+    assert len(timing.times_ms) == 1
+    assert timing.progress == 1
+
+
 def test_time_it_deadline_mode_retains_first_partial_sample():
     progress = [0]
     calls = [0]

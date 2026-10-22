@@ -240,8 +240,8 @@ struct Property3DDeviceInputs {
   //! GETAWAY: per molecule, the coordinate row of its default (first) conformer, whose PBF decides HIC's
   //! dimension as in RDKit. Null, or a negative entry, uses each row's own conformer.
   const int32_t* defaultConformerRows  = nullptr;
-  //! DCLV: per atom, RDKit's van der Waals radius (PeriodicTable::getRvdw). Conformers with a radius-0 atom (dummy
-  //! atoms, on which RDKit's DoubleCubicLatticeVolume crashes) produce NaN for every DCLV property.
+  //! DCLV: per atom, RDKit's van der Waals radius (PeriodicTable::getRvdw). Conformers with a zero radius produce
+  //! NaN for every DCLV property.
   const double*  vdwRadii              = nullptr;
   //! DCLV: per atom, its DclvPolarClass bits. DclvOptions selects the classes DCLVPolarSurfaceArea and
   //! DCLVPolarVolume count.

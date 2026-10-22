@@ -438,7 +438,12 @@ TEST(Descriptors3DDclv, MatchesRdkitDoubleCubicLatticeVolume) {
         auto results =
           nvMolKit::calc3DProperties<double>(mols, {kDclvProperties.begin(), kDclvProperties.end()}, options, nullptr);
         for (int confIdx = 0; confIdx < 2; ++confIdx) {
-          RDKit::Descriptors::DoubleCubicLatticeVolume     dclv(*mol, false, true, probeRadius, confIdx);
+          RDKit::Descriptors::DoubleCubicLatticeVolume     dclv(*mol,
+                                                            std::vector<double>{},
+                                                            false,
+                                                            true,
+                                                            probeRadius,
+                                                            confIdx);
           const std::array<double, kDclvProperties.size()> expected = {
             dclv.getSurfaceArea(),
             dclv.getPolarSurfaceArea(includeSandP, includeHs),

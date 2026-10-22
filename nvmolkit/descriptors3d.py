@@ -31,8 +31,7 @@ class Property3D(Enum):
     ``DoubleCubicLatticeVolume`` class (``DCLVSurfaceArea`` is
     ``GetSurfaceArea``, ...), configured by :class:`DclvOptions`. Requesting
     several costs one pass over the surface dots. Conformers containing an atom
-    with a zero van der Waals radius (dummy atoms, on which RDKit crashes)
-    produce NaN.
+    with a zero van der Waals radius produce NaN.
 
     Vector properties, in RDKit's order; every other property is a scalar:
 

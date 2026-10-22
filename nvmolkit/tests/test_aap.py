@@ -14,6 +14,7 @@ from nvmolkit.clustering import (
     OutputMode,
     fused_dise,
 )
+from nvmolkit.pickers import fused_leader, fused_maxmin
 from nvmolkit.similarity import AAPMetric, TanimotoMetric, aap_similarity
 
 
@@ -109,6 +110,8 @@ def test_aap_similarity_options_change_the_computation(option, value):
 @pytest.mark.parametrize(
     "kwargs, message",
     [
+        ({"num_threads": 0}, "numThreads must be -1 or positive"),
+        ({"num_threads": -2}, "numThreads must be -1 or positive"),
         ({"max_path_length": 0}, "maxPathLength must be positive"),
         ({"histogram_bins": 0}, "histogramBins must be between 1 and 32767"),
         ({"histogram_bins": 32768}, "histogramBins must be between 1 and 32767"),
@@ -311,14 +314,19 @@ def test_aap_dise_rejects_invalid_assignment(assignment):
         fused_dise([], cutoff=1.0 - 0.217, metric=AAPMetric(), assignment=assignment)
 
 
-def test_aap_similarity_and_clustering_are_deterministic_across_streams():
+@pytest.mark.parametrize("num_threads", [-1, 1, 2])
+def test_aap_similarity_and_clustering_are_deterministic_across_streams(num_threads):
     left = _mol("CCO")
     right = _mol("CCN")
     molecules = [left, left, right, _mol("c1ccccc1")]
     streams = [torch.cuda.Stream(), torch.cuda.Stream()]
 
-    scores = [aap_similarity(left, right, stream=stream) for stream in streams]
-    labels = [_cluster_ids(molecules, similarity_threshold=0.2, stream=stream) for stream in streams]
+    scores = [
+        aap_similarity(left, right, metric=AAPMetric(num_threads=num_threads), stream=stream) for stream in streams
+    ]
+    labels = [
+        _cluster_ids(molecules, similarity_threshold=0.2, stream=stream, num_threads=num_threads) for stream in streams
+    ]
     assert scores[0] == scores[1]
     assert labels[0] == labels[1]
 
@@ -407,3 +415,38 @@ def test_aap_similarity_rejects_other_metrics(metric, error):
 
     with pytest.raises(error, match="metric must be"):
         aap_similarity(molecule, molecule, metric=metric)
+
+
+@pytest.mark.parametrize("num_threads", [-1, 1, 2, 3, 2147483647])
+def test_aap_thread_budget_preserves_directed_pair_scores(num_threads):
+    metric = AAPMetric(num_threads=num_threads)
+    assert aap_similarity(_mol("CC"), _mol("CCC"), metric=metric) == pytest.approx(1.0 / 3.0, abs=1e-6)
+    assert aap_similarity(_mol("CCC"), _mol("CC"), metric=metric) == pytest.approx(1.0 / 5.0, abs=1e-6)
+
+
+@pytest.mark.parametrize("num_threads", [-1, 1, 2, 3])
+@pytest.mark.parametrize("assignment", ["first", "nearest"])
+def test_aap_thread_budget_preserves_parallel_descriptor_order(num_threads, assignment):
+    molecules = [_mol(smiles) for smiles in ("CCO", "CCN", "c1ccccc1", "CC", "CCC", "N")] * 33
+    actual = _cluster_ids(molecules, num_threads=num_threads, assignment=assignment)
+    expected = _cluster_ids(molecules, num_threads=1, assignment=assignment)
+    assert actual == expected
+    assert len(set(actual)) > 1
+
+
+@pytest.mark.parametrize("num_threads", [-1, 1, 2, 3])
+def test_aap_thread_budget_preserves_picker_order(num_threads):
+    molecules = [_mol(smiles) for smiles in ("CCO", "CCN", "c1ccccc1", "CC", "CCC", "N")] * 33
+    for picker, options in ((fused_leader, {"cutoff": 0.7}), (fused_maxmin, {"pick_size": 5, "seed": 42})):
+        actual = picker(molecules, metric=AAPMetric(num_threads=num_threads), output=OutputMode.RDKIT, **options)
+        expected = picker(molecules, metric=AAPMetric(num_threads=1), output=OutputMode.RDKIT, **options)
+        assert actual == expected
+
+
+@pytest.mark.parametrize("num_threads", [0, -2])
+def test_aap_pickers_reject_invalid_thread_budget_for_empty_input(num_threads):
+    metric = AAPMetric(num_threads=num_threads)
+    with pytest.raises(ValueError, match="numThreads must be -1 or positive"):
+        fused_leader([], cutoff=0.5, metric=metric)
+    with pytest.raises(ValueError, match="numThreads must be -1 or positive"):
+        fused_maxmin([], pick_size=0, metric=metric)

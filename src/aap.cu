@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "src/aap.h"
+#include "src/aap_threads.h"
 #include "src/diversity_picker_algorithms.cuh"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
@@ -125,6 +126,7 @@ void collectRootedPathBins(const RDKit::ROMol&                   mol,
 }
 
 void validateOptions(const AapOptions& options) {
+  detail::validateAapThreadCount(options.numThreads);
   if (options.maxPathLength <= 0) {
     throw std::invalid_argument("maxPathLength must be positive");
   }
@@ -247,11 +249,10 @@ AapHostDescriptors buildDescriptors(const std::vector<const RDKit::ROMol*>& mole
   validateMolecules(molecules);
 
   // Rooted-path enumeration dominates host time and is independent per molecule.
-  constexpr std::size_t           kMoleculesPerThread = 64;
-  const std::size_t               numMolecules        = molecules.size();
+  const std::size_t               numMolecules = molecules.size();
   std::vector<MoleculeDescriptor> perMolecule(numMolecules);
   const std::size_t               numThreads =
-    std::clamp<std::size_t>(numMolecules / kMoleculesPerThread, 1, std::max(1U, std::thread::hardware_concurrency()));
+    detail::aapDescriptorThreadCount(numMolecules, options.numThreads, std::thread::hardware_concurrency());
   std::vector<std::exception_ptr> failures(numThreads);
   const auto                      describeShare = [&](const std::size_t worker) {
     try {

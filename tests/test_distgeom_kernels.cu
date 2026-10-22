@@ -25,6 +25,8 @@
 #include <GraphMol/ForceFieldHelpers/CrystalFF/TorsionAngleContribs.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <random>
 
@@ -42,6 +44,13 @@ namespace {
 constexpr double E_TOL_FUNCTION = 1e-5;
 constexpr double E_TOL_COMBINED = 1e-4;
 constexpr double G_TOL          = 1e-4;
+// Terms the device accumulates in FP32 (experimental torsions) carry error that scales with energy magnitude, so an
+// absolute tolerance is only a few ULPs and flips with host/device rounding differences across platforms.
+constexpr double E_TOL_FP32_REL = 2e-6;
+
+double fp32EnergyTolerance(double wantEnergy) {
+  return std::max(E_TOL_FUNCTION, E_TOL_FP32_REL * std::abs(wantEnergy));
+}
 
 // Copy of term additions for 3D forcefield.
 constexpr double KNOWN_DIST_FORCE_CONSTANT = 100.0;  // Force constant for known distances
@@ -1366,7 +1375,7 @@ TEST_F(ETK3DGpuTestFixture, ExperimentalTorsionEnergySingleMolecule) {
   double gotEnergy =
     getETK3DEnergyTerms(systemDevice, atomStartsDevice, positionsDevice, ETK3DTerm::ExperimentalTorsion)[0];
   ASSERT_NE(wantEnergy, 0.0);
-  EXPECT_NEAR(gotEnergy, wantEnergy, E_TOL_FUNCTION);
+  EXPECT_NEAR(gotEnergy, wantEnergy, fp32EnergyTolerance(wantEnergy));
 }
 
 TEST_F(ETK3DGpuTestFixture, ExperimentalTorsionGradientSingleMolecule) {
@@ -1490,7 +1499,7 @@ TEST_F(ETK3DGpuTestFixture, CombinedEnergiesSingleMolecule) {
     wantEnergy += e;
   }
 
-  EXPECT_NEAR(gotEnergy, wantEnergy, E_TOL_FUNCTION);
+  EXPECT_NEAR(gotEnergy, wantEnergy, fp32EnergyTolerance(wantEnergy));
 }
 
 TEST_F(ETK3DGpuTestFixture, CombinedGradientsSingleMolecue) {
@@ -1530,7 +1539,7 @@ TEST_F(ETK3DGpuTestFixture, PlainCombinedEnergiesSingleMolecule) {
 
   const double wantEnergy = getReferencePlain3DEnergy(mol_.get(), positionsHost.data());
 
-  EXPECT_NEAR(gotEnergy, wantEnergy, E_TOL_FUNCTION);
+  EXPECT_NEAR(gotEnergy, wantEnergy, fp32EnergyTolerance(wantEnergy));
 }
 
 TEST_F(ETK3DGpuTestFixture, PlainCombinedGradientsSingleMolecule) {
