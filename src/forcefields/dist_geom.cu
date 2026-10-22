@@ -1600,7 +1600,6 @@ BatchedIndices3DDevicePtr toBatchedIndices3DDevicePtr(const BatchedMolecular3DDe
 namespace {
 
 void appendOffsetIndices(std::vector<int>& destination, const std::vector<int>& source, const int offset) {
-  destination.reserve(destination.size() + source.size());
   for (const int idx : source) {
     destination.push_back(idx + offset);
   }
