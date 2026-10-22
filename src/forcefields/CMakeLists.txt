@@ -67,3 +67,9 @@ target_link_libraries(
   etk_batched_forcefield
   PUBLIC batched_forcefield dist_geom
   PRIVATE device_vector)
+
+add_library(aio_etkdg_batched_forcefield aio_etkdg_batched_forcefield.cu)
+target_link_libraries(
+  aio_etkdg_batched_forcefield
+  PUBLIC batched_forcefield dist_geom
+  PRIVATE device_vector)

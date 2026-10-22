@@ -1123,6 +1123,33 @@ __global__ void combinedEnergiesKernel(const Terms*                   terms,
   }
 }
 
+//! Zeroes a molecule's gradient, accumulates it with accumulate(molGrad), then stores it in grad. Accumulation runs in
+//! shared memory when the molecule fits and directly in global memory otherwise.
+template <int dimension, typename real, typename Accumulate>
+__device__ void accumulateMolGrad(real* grad, const int atomStart, const int numAtoms, Accumulate&& accumulate) {
+  constexpr int   maxAtomSize = 256;
+  __shared__ real accumGrad[maxAtomSize * 4];  // Support up to 4D
+
+  const int  tid          = threadIdx.x;
+  const bool useSharedMem = numAtoms * dimension <= maxAtomSize * 4;
+  real*      molGradBase  = useSharedMem ? accumGrad : grad + atomStart * dimension;
+
+  for (int i = tid; i < numAtoms * dimension; i += blockSizePerMol) {
+    molGradBase[i] = real{0};
+  }
+  __syncthreads();
+
+  accumulate(molGradBase);
+  __syncthreads();
+
+  if (useSharedMem) {
+    real* globalGrad = grad + (atomStart * dimension);
+    for (int i = tid; i < numAtoms * dimension; i += blockSizePerMol) {
+      globalGrad[i] = molGradBase[i];
+    }
+  }
+}
+
 template <int dimension, typename real, typename Terms>
 __global__ void combinedGradKernel(const Terms*                   terms,
                                    const BatchedIndicesDevicePtr* systemIndices,
@@ -1138,38 +1165,19 @@ __global__ void combinedGradKernel(const Terms*                   terms,
     return;
   }
 
-  const int atomStart = systemIndices->atomStarts[molIdx];
-  const int atomEnd   = systemIndices->atomStarts[molIdx + 1];
-  const int numAtoms  = atomEnd - atomStart;
-
-  constexpr int   maxAtomSize = 256;
-  __shared__ real accumGrad[maxAtomSize * 4];  // Support up to 4D
-
-  const bool useSharedMem = numAtoms * dimension <= maxAtomSize * 4;
-  real*      molGradBase  = useSharedMem ? accumGrad : grad + atomStart * dimension;
-
-  for (int i = tid; i < numAtoms * dimension; i += blockSizePerMol) {
-    molGradBase[i] = real{0};
-  }
-  __syncthreads();
-
+  const int   atomStart = systemIndices->atomStarts[molIdx];
+  const int   numAtoms  = systemIndices->atomStarts[molIdx + 1] - atomStart;
   const real* molCoords = coords + atomStart * dimension;
-  molGradDGDispatch<dimension>(*terms,
-                               *systemIndices,
-                               molCoords,
-                               molGradBase,
-                               molIdx,
-                               chiralWeight,
-                               fourthDimWeight,
-                               tid);
-  __syncthreads();
-
-  if (useSharedMem) {
-    real* globalGrad = grad + (atomStart * dimension);
-    for (int i = tid; i < numAtoms * dimension; i += blockSizePerMol) {
-      globalGrad[i] = molGradBase[i];
-    }
-  }
+  accumulateMolGrad<dimension>(grad, atomStart, numAtoms, [&](real* molGrad) {
+    molGradDGDispatch<dimension>(*terms,
+                                 *systemIndices,
+                                 molCoords,
+                                 molGrad,
+                                 molIdx,
+                                 chiralWeight,
+                                 fourthDimWeight,
+                                 tid);
+  });
 }
 
 template <typename real, typename reduceT, typename Terms>
@@ -1489,6 +1497,201 @@ cudaError_t launchBlockPerMolGradKernelETK(int                                  
                                            const uint8_t*                              activeThisStage,
                                            cudaStream_t                                stream) {
   return launchBlockPerMolGradKernelETKImpl(numMols, terms, systemIndices, coords, grad, activeThisStage, stream);
+}
+
+// All-in-one ETKDG (AIO) combined kernels
+__device__ double molEnergyAIODispatch(const AllInOneContribsDevicePtr& terms,
+                                       const double*                    coords,
+                                       int                              molIdx,
+                                       const AllInOneForceWeights&      weights,
+                                       bool                             includeTorsionTerms,
+                                       int                              tid) {
+  return fp64::molEnergyAIO(terms, coords, molIdx, weights, includeTorsionTerms, tid);
+}
+__device__ float molEnergyAIODispatch(const AllInOneContribsDevicePtrSingle& terms,
+                                      const float*                           coords,
+                                      int                                    molIdx,
+                                      const AllInOneForceWeights&            weights,
+                                      bool                                   includeTorsionTerms,
+                                      int                                    tid) {
+  return fp32::molEnergyAIO(terms, coords, molIdx, weights, includeTorsionTerms, tid);
+}
+
+__device__ void molGradAIODispatch(const AllInOneContribsDevicePtr& terms,
+                                   const double*                    coords,
+                                   double*                          grad,
+                                   int                              molIdx,
+                                   const AllInOneForceWeights&      weights,
+                                   bool                             includeTorsionTerms,
+                                   int                              tid) {
+  fp64::molGradAIO(terms, coords, grad, molIdx, weights, includeTorsionTerms, tid);
+}
+__device__ void molGradAIODispatch(const AllInOneContribsDevicePtrSingle& terms,
+                                   const float*                           coords,
+                                   float*                                 grad,
+                                   int                                    molIdx,
+                                   const AllInOneForceWeights&            weights,
+                                   bool                                   includeTorsionTerms,
+                                   int                                    tid) {
+  fp32::molGradAIO(terms, coords, grad, molIdx, weights, includeTorsionTerms, tid);
+}
+
+template <typename real, typename reduceT, typename Terms>
+__global__ void combinedEnergiesKernelAIO(const Terms                terms,
+                                          const real*                coords,
+                                          real*                      energies,
+                                          const AllInOneForceWeights weights,
+                                          const bool                 includeTorsionTerms,
+                                          const uint8_t*             activeThisStage) {
+  const int molIdx = blockIdx.x;
+  const int tid    = threadIdx.x;
+
+  if (activeThisStage != nullptr && activeThisStage[molIdx] == 0) {
+    if (tid == 0) {
+      energies[molIdx] = 0.0;
+    }
+    return;
+  }
+
+  using BlockReduce = cub::BlockReduce<reduceT, blockSizePerMol>;
+  __shared__ typename BlockReduce::TempStorage tempStorage;
+
+  const int  atomStart = terms.distanceGeometryIndices.atomStarts[molIdx];
+  const real threadEnergy =
+    molEnergyAIODispatch(terms, coords + atomStart * 4, molIdx, weights, includeTorsionTerms, tid);
+  const reduceT blockEnergy = BlockReduce(tempStorage).Sum(static_cast<reduceT>(threadEnergy));
+
+  if (tid == 0) {
+    energies[molIdx] = static_cast<real>(blockEnergy);
+  }
+}
+
+template <typename real, typename Terms>
+__global__ void combinedGradKernelAIO(const Terms                terms,
+                                      const real*                coords,
+                                      real*                      grad,
+                                      const AllInOneForceWeights weights,
+                                      const bool                 includeTorsionTerms,
+                                      const uint8_t*             activeThisStage) {
+  const int molIdx = blockIdx.x;
+  const int tid    = threadIdx.x;
+
+  if (activeThisStage != nullptr && activeThisStage[molIdx] == 0) {
+    return;
+  }
+
+  const int   atomStart = terms.distanceGeometryIndices.atomStarts[molIdx];
+  const int   numAtoms  = terms.distanceGeometryIndices.atomStarts[molIdx + 1] - atomStart;
+  const real* molCoords = coords + atomStart * 4;
+  accumulateMolGrad<4>(grad, atomStart, numAtoms, [&](real* molGrad) {
+    molGradAIODispatch(terms, molCoords, molGrad, molIdx, weights, includeTorsionTerms, tid);
+  });
+}
+
+template <typename real, typename reduceT, typename Terms>
+cudaError_t launchBlockPerMolEnergyKernelAIOImpl(const int                   numMols,
+                                                 const Terms&                terms,
+                                                 const real*                 coords,
+                                                 real*                       energies,
+                                                 const AllInOneForceWeights& weights,
+                                                 const bool                  includeTorsionTerms,
+                                                 const uint8_t*              activeThisStage,
+                                                 cudaStream_t                stream) {
+  if (numMols == 0) {
+    return cudaSuccess;
+  }
+  combinedEnergiesKernelAIO<real, reduceT>
+    <<<numMols, blockSizePerMol, 0, stream>>>(terms, coords, energies, weights, includeTorsionTerms, activeThisStage);
+  return cudaGetLastError();
+}
+
+template <typename real, typename Terms>
+cudaError_t launchBlockPerMolGradKernelAIOImpl(const int                   numMols,
+                                               const Terms&                terms,
+                                               const real*                 coords,
+                                               real*                       grad,
+                                               const AllInOneForceWeights& weights,
+                                               const bool                  includeTorsionTerms,
+                                               const uint8_t*              activeThisStage,
+                                               cudaStream_t                stream) {
+  if (numMols == 0) {
+    return cudaSuccess;
+  }
+  combinedGradKernelAIO<real>
+    <<<numMols, blockSizePerMol, 0, stream>>>(terms, coords, grad, weights, includeTorsionTerms, activeThisStage);
+  return cudaGetLastError();
+}
+
+cudaError_t launchBlockPerMolEnergyKernelAIO(const int                        numMols,
+                                             const AllInOneContribsDevicePtr& terms,
+                                             const double*                    coords,
+                                             double*                          energies,
+                                             const AllInOneForceWeights&      weights,
+                                             const bool                       includeTorsionTerms,
+                                             const uint8_t*                   activeThisStage,
+                                             cudaStream_t                     stream) {
+  return launchBlockPerMolEnergyKernelAIOImpl<double, double>(numMols,
+                                                              terms,
+                                                              coords,
+                                                              energies,
+                                                              weights,
+                                                              includeTorsionTerms,
+                                                              activeThisStage,
+                                                              stream);
+}
+
+cudaError_t launchBlockPerMolEnergyKernelAIO(const int                              numMols,
+                                             const AllInOneContribsDevicePtrSingle& terms,
+                                             const float*                           coords,
+                                             float*                                 energies,
+                                             const AllInOneForceWeights&            weights,
+                                             const bool                             includeTorsionTerms,
+                                             const uint8_t*                         activeThisStage,
+                                             cudaStream_t                           stream) {
+  return launchBlockPerMolEnergyKernelAIOImpl<float, float>(numMols,
+                                                            terms,
+                                                            coords,
+                                                            energies,
+                                                            weights,
+                                                            includeTorsionTerms,
+                                                            activeThisStage,
+                                                            stream);
+}
+
+cudaError_t launchBlockPerMolGradKernelAIO(const int                        numMols,
+                                           const AllInOneContribsDevicePtr& terms,
+                                           const double*                    coords,
+                                           double*                          grad,
+                                           const AllInOneForceWeights&      weights,
+                                           const bool                       includeTorsionTerms,
+                                           const uint8_t*                   activeThisStage,
+                                           cudaStream_t                     stream) {
+  return launchBlockPerMolGradKernelAIOImpl(numMols,
+                                            terms,
+                                            coords,
+                                            grad,
+                                            weights,
+                                            includeTorsionTerms,
+                                            activeThisStage,
+                                            stream);
+}
+
+cudaError_t launchBlockPerMolGradKernelAIO(const int                              numMols,
+                                           const AllInOneContribsDevicePtrSingle& terms,
+                                           const float*                           coords,
+                                           float*                                 grad,
+                                           const AllInOneForceWeights&            weights,
+                                           const bool                             includeTorsionTerms,
+                                           const uint8_t*                         activeThisStage,
+                                           cudaStream_t                           stream) {
+  return launchBlockPerMolGradKernelAIOImpl(numMols,
+                                            terms,
+                                            coords,
+                                            grad,
+                                            weights,
+                                            includeTorsionTerms,
+                                            activeThisStage,
+                                            stream);
 }
 
 template <typename reduceT, typename Terms>

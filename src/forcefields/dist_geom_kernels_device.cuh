@@ -357,6 +357,8 @@ static __device__ __forceinline__ DG_REAL inversionEnergy(const DG_REAL* pos,
   return forceConstant * (C0 + C1 * sinY + C2 * cos2W);
 }
 
+//! The distance is taken over distanceDim coordinates; the gradient only moves xyz, as in RDKit.
+template <int distanceDim = 3>
 static __device__ __forceinline__ DG_REAL distanceConstraintEnergy(const DG_REAL* pos,
                                                                    const int      idx1,
                                                                    const int      idx2,
@@ -365,7 +367,7 @@ static __device__ __forceinline__ DG_REAL distanceConstraintEnergy(const DG_REAL
                                                                    const DG_REAL  forceConstant) {
   const int     posIdx1   = idx1 * 4;
   const int     posIdx2   = idx2 * 4;
-  const DG_REAL distance2 = distanceSquaredPosIdx(pos, posIdx1, posIdx2, 3);
+  const DG_REAL distance2 = distanceSquaredPosIdx<distanceDim>(pos, posIdx1, posIdx2);
 
   const DG_REAL minLen2 = minLen * minLen;
   const DG_REAL maxLen2 = maxLen * maxLen;
@@ -688,6 +690,7 @@ static __device__ __forceinline__ void inversionGrad(const DG_REAL* pos,
   atomicAdd(&grad[posIdx4 + 2], dE_dW * tg4z);
 }
 
+template <int distanceDim = 3>
 static __device__ __forceinline__ void distanceConstraintGrad(const DG_REAL* pos,
                                                               const int      idx1,
                                                               const int      idx2,
@@ -701,7 +704,7 @@ static __device__ __forceinline__ void distanceConstraintGrad(const DG_REAL* pos
   const int     posIdx2 = idx2 * 4;
 
   // Calculate squared distance
-  const DG_REAL distance2 = distanceSquaredPosIdx(pos, posIdx1, posIdx2, 3);
+  const DG_REAL distance2 = distanceSquaredPosIdx<distanceDim>(pos, posIdx1, posIdx2);
 
   // Check if distance is outside bounds and calculate preFactor
   DG_REAL preFactor;
@@ -1336,5 +1339,241 @@ static __device__ __inline__ void molGradETK(const Energy3DForceContribsDevicePt
                                grad);
       }
     }
+  }
+}
+
+// ----------------------------
+// All-in-one ETKDG (AIO) terms
+// ----------------------------
+
+//! Unit bond vectors from the central atom to atoms 1, 3 and 4 of a planarity term, their inverse lengths, and the
+//! sine of the out-of-plane angle between the bond to atom 4 and the plane normal (-rJI) x rJK. Returns false when a
+//! bond or the plane normal is degenerate.
+static __device__ __forceinline__ bool planarityGeometry(const DG_REAL* pos,
+                                                         const int      posIdx1,
+                                                         const int      posIdx2,
+                                                         const int      posIdx3,
+                                                         const int      posIdx4,
+                                                         DG_REAL (&rJI)[3],
+                                                         DG_REAL (&rJK)[3],
+                                                         DG_REAL (&rJL)[3],
+                                                         DG_REAL& invJI,
+                                                         DG_REAL& invJK,
+                                                         DG_REAL& invJL,
+                                                         DG_REAL& sinChi) {
+  for (int i = 0; i < 3; ++i) {
+    rJI[i] = pos[posIdx1 + i] - pos[posIdx2 + i];
+    rJK[i] = pos[posIdx3 + i] - pos[posIdx2 + i];
+    rJL[i] = pos[posIdx4 + i] - pos[posIdx2 + i];
+  }
+  const DG_REAL dJI2 = dotProduct(rJI[0], rJI[1], rJI[2], rJI[0], rJI[1], rJI[2]);
+  const DG_REAL dJK2 = dotProduct(rJK[0], rJK[1], rJK[2], rJK[0], rJK[1], rJK[2]);
+  const DG_REAL dJL2 = dotProduct(rJL[0], rJL[1], rJL[2], rJL[0], rJL[1], rJL[2]);
+  if (DG_IS_ZERO(dJI2) || DG_IS_ZERO(dJK2) || DG_IS_ZERO(dJL2)) {
+    return false;
+  }
+  invJI = DG_RSQRT(dJI2);
+  invJK = DG_RSQRT(dJK2);
+  invJL = DG_RSQRT(dJL2);
+  for (int i = 0; i < 3; ++i) {
+    rJI[i] *= invJI;
+    rJK[i] *= invJK;
+    rJL[i] *= invJL;
+  }
+
+  DG_REAL nx, ny, nz;
+  crossProduct(-rJI[0], -rJI[1], -rJI[2], rJK[0], rJK[1], rJK[2], nx, ny, nz);
+  const DG_REAL normalLength2 = nx * nx + ny * ny + nz * nz;
+  if (DG_IS_ZERO(normalLength2)) {
+    return false;
+  }
+  sinChi = clamp(dotProduct(rJL[0], rJL[1], rJL[2], nx, ny, nz) * DG_RSQRT(normalLength2), -DG_REAL(1.0), DG_REAL(1.0));
+  return true;
+}
+
+static __device__ __forceinline__ DG_REAL planarityEnergy(const DG_REAL* pos,
+                                                          const int      idx1,
+                                                          const int      idx2,
+                                                          const int      idx3,
+                                                          const int      idx4,
+                                                          const DG_REAL  forceConstant) {
+  DG_REAL rJI[3], rJK[3], rJL[3], invJI, invJK, invJL, sinChi;
+  if (!planarityGeometry(pos, idx1 * 4, idx2 * 4, idx3 * 4, idx4 * 4, rJI, rJK, rJL, invJI, invJK, invJL, sinChi)) {
+    return DG_REAL(0.0);
+  }
+  const DG_REAL chi = RAD2DEG * DG_ASIN(sinChi);
+  return DG_REAL(0.5) * forceConstant * chi * chi;
+}
+
+static __device__ __forceinline__ void planarityGrad(const DG_REAL* pos,
+                                                     const int      idx1,
+                                                     const int      idx2,
+                                                     const int      idx3,
+                                                     const int      idx4,
+                                                     const DG_REAL  forceConstant,
+                                                     DG_REAL*       grad) {
+  const int posIdx1 = idx1 * 4;
+  const int posIdx2 = idx2 * 4;
+  const int posIdx3 = idx3 * 4;
+  const int posIdx4 = idx4 * 4;
+
+  DG_REAL rJI[3], rJK[3], rJL[3], invJI, invJK, invJL, sinChi;
+  if (!planarityGeometry(pos, posIdx1, posIdx2, posIdx3, posIdx4, rJI, rJK, rJL, invJI, invJK, invJL, sinChi)) {
+    return;
+  }
+  const DG_REAL cosChi = DG_FMAX(DG_SQRT(DG_FMAX(DG_REAL(1.0) - sinChi * sinChi, DG_REAL(0.0))), DG_REAL(1.0e-8));
+  const DG_REAL dEdChi = forceConstant * RAD2DEG * DG_ASIN(sinChi) * RAD2DEG;
+  const DG_REAL cosTheta =
+    clamp(dotProduct(rJI[0], rJI[1], rJI[2], rJK[0], rJK[1], rJK[2]), -DG_REAL(1.0), DG_REAL(1.0));
+  const DG_REAL sinThetaSq = DG_FMAX(DG_REAL(1.0) - cosTheta * cosTheta, DG_REAL(1.0e-8));
+  const DG_REAL sinTheta   = DG_FMAX(DG_SQRT(sinThetaSq), DG_REAL(1.0e-8));
+
+  DG_REAL t1[3], t2[3], t3[3];
+  crossProduct(rJL[0], rJL[1], rJL[2], rJK[0], rJK[1], rJK[2], t1[0], t1[1], t1[2]);
+  crossProduct(rJI[0], rJI[1], rJI[2], rJL[0], rJL[1], rJL[2], t2[0], t2[1], t2[2]);
+  crossProduct(rJK[0], rJK[1], rJK[2], rJI[0], rJI[1], rJI[2], t3[0], t3[1], t3[2]);
+
+  const DG_REAL inverseTerm1 = DG_REAL(1.0) / (cosChi * sinTheta);
+  const DG_REAL term2        = sinChi / (cosChi * sinThetaSq);
+  const DG_REAL tanChi       = sinChi / cosChi;
+  for (int i = 0; i < 3; ++i) {
+    const DG_REAL tg1 = dEdChi * (t1[i] * inverseTerm1 - (rJI[i] - rJK[i] * cosTheta) * term2) * invJI;
+    const DG_REAL tg3 = dEdChi * (t2[i] * inverseTerm1 - (rJK[i] - rJI[i] * cosTheta) * term2) * invJK;
+    const DG_REAL tg4 = dEdChi * (t3[i] * inverseTerm1 - rJL[i] * tanChi) * invJL;
+    atomicAdd(&grad[posIdx1 + i], tg1);
+    atomicAdd(&grad[posIdx2 + i], -(tg1 + tg3 + tg4));
+    atomicAdd(&grad[posIdx3 + i], tg3);
+    atomicAdd(&grad[posIdx4 + i], tg4);
+  }
+}
+
+//! Per-thread share of a molecule's all-in-one ETKDG energy. molCoords points at the molecule's first atom.
+static __device__ __inline__ DG_REAL molEnergyAIO(const AllInOneContribsDevicePtr& terms,
+                                                  const DG_REAL*                   molCoords,
+                                                  const int                        molIdx,
+                                                  const AllInOneForceWeights&      weights,
+                                                  const bool                       includeTorsionTerms,
+                                                  const int                        tid) {
+  DG_REAL   energy    = molEnergyDG<4>(terms.distanceGeometry,
+                                  terms.distanceGeometryIndices,
+                                  molCoords,
+                                  molIdx,
+                                  static_cast<DG_REAL>(weights.chiral),
+                                  static_cast<DG_REAL>(weights.fourthDim),
+                                  tid);
+  const int atomStart = terms.distanceGeometryIndices.atomStarts[molIdx];
+
+  const auto& harmonic = terms.harmonicDistanceTerms;
+  for (int i = terms.harmonicDistanceTermStarts[molIdx] + tid; i < terms.harmonicDistanceTermStarts[molIdx + 1];
+       i += blockDim.x) {
+    energy += distanceConstraintEnergy<4>(molCoords,
+                                          harmonic.idx1[i] - atomStart,
+                                          harmonic.idx2[i] - atomStart,
+                                          harmonic.minLen[i],
+                                          harmonic.maxLen[i],
+                                          harmonic.forceConstant[i]);
+  }
+  const auto& angle = terms.linearAngleTerms;
+  for (int i = terms.linearAngleTermStarts[molIdx] + tid; i < terms.linearAngleTermStarts[molIdx + 1];
+       i += blockDim.x) {
+    energy += angleConstraintEnergy(molCoords,
+                                    angle.idx1[i] - atomStart,
+                                    angle.idx2[i] - atomStart,
+                                    angle.idx3[i] - atomStart,
+                                    angle.minAngle[i],
+                                    angle.maxAngle[i],
+                                    static_cast<DG_REAL>(weights.linearAngle));
+  }
+  if (!includeTorsionTerms) {
+    return energy;
+  }
+  const auto& torsion = terms.experimentalTorsionTerms;
+  for (int i = terms.experimentalTorsionTermStarts[molIdx] + tid; i < terms.experimentalTorsionTermStarts[molIdx + 1];
+       i += blockDim.x) {
+    energy += torsionAngleEnergy(molCoords,
+                                 torsion.idx1[i] - atomStart,
+                                 torsion.idx2[i] - atomStart,
+                                 torsion.idx3[i] - atomStart,
+                                 torsion.idx4[i] - atomStart,
+                                 &torsion.forceConstants[i * 6],
+                                 &torsion.signs[i * 6]);
+  }
+  const auto& planarity = terms.planarityTerms;
+  for (int i = terms.planarityTermStarts[molIdx] + tid; i < terms.planarityTermStarts[molIdx + 1]; i += blockDim.x) {
+    energy += planarityEnergy(molCoords,
+                              planarity.idx1[i] - atomStart,
+                              planarity.idx2[i] - atomStart,
+                              planarity.idx3[i] - atomStart,
+                              planarity.idx4[i] - atomStart,
+                              static_cast<DG_REAL>(weights.planarity));
+  }
+  return energy;
+}
+
+//! Accumulates a molecule's all-in-one ETKDG gradient into molGrad, which points at the molecule's first atom.
+static __device__ __inline__ void molGradAIO(const AllInOneContribsDevicePtr& terms,
+                                             const DG_REAL*                   molCoords,
+                                             DG_REAL*                         molGrad,
+                                             const int                        molIdx,
+                                             const AllInOneForceWeights&      weights,
+                                             const bool                       includeTorsionTerms,
+                                             const int                        tid) {
+  molGradDG<4>(terms.distanceGeometry,
+               terms.distanceGeometryIndices,
+               molCoords,
+               molGrad,
+               molIdx,
+               static_cast<DG_REAL>(weights.chiral),
+               static_cast<DG_REAL>(weights.fourthDim),
+               tid);
+  const int atomStart = terms.distanceGeometryIndices.atomStarts[molIdx];
+
+  const auto& harmonic = terms.harmonicDistanceTerms;
+  for (int i = terms.harmonicDistanceTermStarts[molIdx] + tid; i < terms.harmonicDistanceTermStarts[molIdx + 1];
+       i += blockDim.x) {
+    distanceConstraintGrad<4>(molCoords,
+                              harmonic.idx1[i] - atomStart,
+                              harmonic.idx2[i] - atomStart,
+                              harmonic.minLen[i],
+                              harmonic.maxLen[i],
+                              harmonic.forceConstant[i],
+                              molGrad);
+  }
+  const auto& angle = terms.linearAngleTerms;
+  for (int i = terms.linearAngleTermStarts[molIdx] + tid; i < terms.linearAngleTermStarts[molIdx + 1];
+       i += blockDim.x) {
+    angleConstraintGrad(molCoords,
+                        angle.idx1[i] - atomStart,
+                        angle.idx2[i] - atomStart,
+                        angle.idx3[i] - atomStart,
+                        angle.minAngle[i],
+                        angle.maxAngle[i],
+                        static_cast<DG_REAL>(weights.linearAngle),
+                        molGrad);
+  }
+  if (!includeTorsionTerms) {
+    return;
+  }
+  const auto& torsion = terms.experimentalTorsionTerms;
+  for (int i = terms.experimentalTorsionTermStarts[molIdx] + tid; i < terms.experimentalTorsionTermStarts[molIdx + 1];
+       i += blockDim.x) {
+    torsionAngleGrad(molCoords,
+                     torsion.idx1[i] - atomStart,
+                     torsion.idx2[i] - atomStart,
+                     torsion.idx3[i] - atomStart,
+                     torsion.idx4[i] - atomStart,
+                     &torsion.forceConstants[i * 6],
+                     &torsion.signs[i * 6],
+                     molGrad);
+  }
+  const auto& planarity = terms.planarityTerms;
+  for (int i = terms.planarityTermStarts[molIdx] + tid; i < terms.planarityTermStarts[molIdx + 1]; i += blockDim.x) {
+    planarityGrad(molCoords,
+                  planarity.idx1[i] - atomStart,
+                  planarity.idx2[i] - atomStart,
+                  planarity.idx3[i] - atomStart,
+                  planarity.idx4[i] - atomStart,
+                  static_cast<DG_REAL>(weights.planarity),
+                  molGrad);
   }
 }

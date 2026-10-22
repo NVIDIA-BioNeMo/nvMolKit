@@ -129,6 +129,31 @@ struct Energy3DForceContribsHost {
   DistanceConstraintContribTerms longRangeDistTerms;
 };
 
+// ------------------------------
+// All-in-one ETKDG (AIO) terms
+// ------------------------------
+
+//! RDKit's all-in-one out-of-plane terms, 0.5 * k * chi^2, where chi is the angle in degrees between the idx2-idx4
+//! bond and the plane of idx1, idx2 and idx3. The force constant is AllInOneForceWeights::planarity.
+struct PlanarityContribTerms {
+  std::vector<int> idx1;
+  std::vector<int> idx2;  // Central atom
+  std::vector<int> idx3;
+  std::vector<int> idx4;
+};
+
+//! Terms of RDKit's all-in-one ETKDG force field for one molecule. The distance-geometry, harmonic distance and linear
+//! angle terms are active in both minimization phases; the experimental torsion and planarity terms only in the second.
+struct AllInOneForceContribsHost {
+  EnergyForceContribsHost        distanceGeometry;
+  //! Flat-bottom 1-2 and 1-3 distance terms, evaluated on 4D distances.
+  DistanceConstraintContribTerms harmonicDistanceTerms;
+  //! Flat-bottom terms holding sp centers linear. The force constant is AllInOneForceWeights::linearAngle.
+  AngleConstraintContribTerms    linearAngleTerms;
+  TorsionAngleContribTerms       experimentalTorsionTerms;
+  PlanarityContribTerms          planarityTerms;
+};
+
 struct BatchedIndicesHost {
   //! Defines the start of each molecule's energy buffer region that will be added to then reduced.
   std::vector<int> energyBufferStarts = {0};
@@ -171,6 +196,20 @@ struct BatchedMolecularSystemHost {
 struct BatchedMolecularSystem3DHost {
   Energy3DForceContribsHost contribs;
   BatchedIndices3DHost      indices;
+};
+
+//! Flattened all-in-one ETKDG batch. Atom indices are offset into the batch, and each *TermStarts vector (size
+//! n_molecules + 1) gives the range of a molecule's terms.
+struct BatchedAllInOneSystemHost {
+  BatchedMolecularSystemHost     distanceGeometry;
+  DistanceConstraintContribTerms harmonicDistanceTerms;
+  AngleConstraintContribTerms    linearAngleTerms;
+  TorsionAngleContribTerms       experimentalTorsionTerms;
+  PlanarityContribTerms          planarityTerms;
+  std::vector<int>               harmonicDistanceTermStarts    = {0};
+  std::vector<int>               linearAngleTermStarts         = {0};
+  std::vector<int>               experimentalTorsionTermStarts = {0};
+  std::vector<int>               planarityTermStarts           = {0};
 };
 
 template <typename Scalar> struct DistViolationContribTermsDeviceT {
@@ -342,6 +381,29 @@ using BatchedMolecularDeviceBuffers         = BatchedMolecularDeviceBuffersT<dou
 using BatchedMolecularDeviceBuffersSingle   = BatchedMolecularDeviceBuffersT<float>;
 using BatchedMolecular3DDeviceBuffers       = BatchedMolecular3DDeviceBuffersT<double>;
 using BatchedMolecular3DDeviceBuffersSingle = BatchedMolecular3DDeviceBuffersT<float>;
+
+struct PlanarityContribTermsDevice {
+  nvMolKit::AsyncDeviceVector<int> idx1;
+  nvMolKit::AsyncDeviceVector<int> idx2;
+  nvMolKit::AsyncDeviceVector<int> idx3;
+  nvMolKit::AsyncDeviceVector<int> idx4;
+};
+
+//! Device copy of a BatchedAllInOneSystemHost.
+template <typename ParameterScalar> struct BatchedAllInOneDeviceBuffersT {
+  BatchedMolecularDeviceBuffersT<ParameterScalar>        distanceGeometry;
+  DistanceConstraintContribTermsDeviceT<ParameterScalar> harmonicDistanceTerms;
+  AngleConstraintContribTermsDeviceT<ParameterScalar>    linearAngleTerms;
+  TorsionAngleContribTermsDeviceT<ParameterScalar>       experimentalTorsionTerms;
+  PlanarityContribTermsDevice                            planarityTerms;
+  nvMolKit::AsyncDeviceVector<int>                       harmonicDistanceTermStarts;
+  nvMolKit::AsyncDeviceVector<int>                       linearAngleTermStarts;
+  nvMolKit::AsyncDeviceVector<int>                       experimentalTorsionTermStarts;
+  nvMolKit::AsyncDeviceVector<int>                       planarityTermStarts;
+};
+
+using BatchedAllInOneDeviceBuffers       = BatchedAllInOneDeviceBuffersT<double>;
+using BatchedAllInOneDeviceBuffersSingle = BatchedAllInOneDeviceBuffersT<float>;
 
 //! Set all DeviceVector streams for the batched molecular device buffers.
 void setStreams(BatchedMolecularDeviceBuffers& devBuffers, cudaStream_t stream);
@@ -604,6 +666,29 @@ cudaError_t computeGradBlockPerMolETK(BatchedMolecular3DDeviceBuffers&          
                                       const nvMolKit::AsyncDeviceVector<double>& ctxPositionsDevice,
                                       const uint8_t*                             activeThisStage = nullptr,
                                       cudaStream_t                               stream          = nullptr);
+
+//! Add a molecule's all-in-one ETKDG terms to the batch. ctxAtomStarts must already include the molecule.
+void addMoleculeToAllInOneSystem(const AllInOneForceContribsHost& contribs,
+                                 int                              numAtoms,
+                                 const std::vector<int>&          ctxAtomStarts,
+                                 BatchedAllInOneSystemHost&       system,
+                                 BatchedForcefieldMetadata*       metadata     = nullptr,
+                                 int                              moleculeIdx  = -1,
+                                 int                              conformerIdx = -1);
+
+//! Set the buffer streams and upload an all-in-one ETKDG batch.
+void sendAllInOneSystemToDevice(const BatchedAllInOneSystemHost& systemHost,
+                                BatchedAllInOneDeviceBuffers&    systemDevice,
+                                cudaStream_t                     stream);
+void sendAllInOneSystemToDevice(const BatchedAllInOneSystemHost&    systemHost,
+                                BatchedAllInOneDeviceBuffersSingle& systemDevice,
+                                cudaStream_t                        stream);
+
+//! Create the pointer struct used by the all-in-one ETKDG block-per-mol kernels.
+AllInOneContribsDevicePtr       toAllInOneContribsDevicePtr(const BatchedAllInOneDeviceBuffers& systemDevice,
+                                                            const int*                          atomStarts);
+AllInOneContribsDevicePtrSingle toAllInOneContribsDevicePtr(const BatchedAllInOneDeviceBuffersSingle& systemDevice,
+                                                            const int*                                atomStarts);
 }  // namespace DistGeom
 }  // namespace nvMolKit
 

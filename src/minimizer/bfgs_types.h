@@ -20,10 +20,11 @@ namespace nvMolKit {
 
 /// Force field type enum for BFGS minimization
 enum class ForceFieldType {
-  MMFF = 0,
-  ETK  = 1,
-  DG   = 2,
-  UFF  = 3
+  MMFF      = 0,
+  ETK       = 1,
+  DG        = 2,
+  UFF       = 3,
+  AIO_ETKDG = 4
 };
 
 /// Debug level for BFGS minimization
