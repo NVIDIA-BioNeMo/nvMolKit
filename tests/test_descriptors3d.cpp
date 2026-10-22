@@ -10,6 +10,7 @@
 #include <GraphMol/Descriptors/RDF.h>
 #include <GraphMol/Descriptors/USRDescriptor.h>
 #include <GraphMol/Descriptors/WHIM.h>
+#include <GraphMol/PeriodicTable.h>
 #include <GraphMol/RWMol.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
@@ -430,6 +431,11 @@ TEST(Descriptors3DDclv, MatchesRdkitDoubleCubicLatticeVolume) {
   },
                                true);
   const std::vector<const RDKit::ROMol*> mols = {mol.get()};
+  // RDKit 2025.09.1 requires explicit radii; empty-vector defaults were added later.
+  std::vector<double>                    radii;
+  for (const auto atom : mol->atoms()) {
+    radii.push_back(RDKit::PeriodicTable::getTable()->getRvdw(atom->getAtomicNum()));
+  }
   for (const double probeRadius : {1.4, 0.0}) {
     for (const bool includeSandP : {false, true}) {
       for (const bool includeHs : {false, true}) {
@@ -438,12 +444,7 @@ TEST(Descriptors3DDclv, MatchesRdkitDoubleCubicLatticeVolume) {
         auto results =
           nvMolKit::calc3DProperties<double>(mols, {kDclvProperties.begin(), kDclvProperties.end()}, options, nullptr);
         for (int confIdx = 0; confIdx < 2; ++confIdx) {
-          RDKit::Descriptors::DoubleCubicLatticeVolume     dclv(*mol,
-                                                            std::vector<double>{},
-                                                            false,
-                                                            true,
-                                                            probeRadius,
-                                                            confIdx);
+          RDKit::Descriptors::DoubleCubicLatticeVolume     dclv(*mol, radii, false, true, probeRadius, confIdx);
           const std::array<double, kDclvProperties.size()> expected = {
             dclv.getSurfaceArea(),
             dclv.getPolarSurfaceArea(includeSandP, includeHs),
