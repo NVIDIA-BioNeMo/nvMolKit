@@ -27,9 +27,9 @@ class Property3D(Enum):
     ``rdMolDescriptors`` module (``CalcWHIM``, ``GetUSR``, ...). Wherever a
     property is accepted, its string value may be used instead.
 
-    The ``DCLV`` properties are the getters of RDKit's
-    ``DoubleCubicLatticeVolume`` class (``DCLVSurfaceArea`` is
-    ``GetSurfaceArea``, ...), configured by :class:`DclvOptions`. Requesting
+    The ``DCLV`` properties correspond to the getter methods of RDKit's
+    ``DoubleCubicLatticeVolume`` class (for example, ``DCLVSurfaceArea``
+    corresponds to ``GetSurfaceArea``), configured by :class:`DclvOptions`. Requesting
     several costs one pass over the surface dots. Conformers containing an atom
     with a zero van der Waals radius produce NaN.
 
