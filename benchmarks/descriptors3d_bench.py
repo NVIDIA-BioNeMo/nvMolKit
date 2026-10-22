@@ -20,11 +20,15 @@ from pathlib import Path
 import numpy as np
 import torch
 from bench_utils import (
+    Deadline,
     add_backend_selection_args,
+    add_rdkit_max_seconds_arg,
     available_cpu_count,
     embed_and_jitter,
     load_smiles,
     print_csv_rows,
+    process_map_bounded,
+    process_pool,
     slice_conformers,
     throughput_per_s,
     time_it,
@@ -34,7 +38,7 @@ from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
 
 from nvmolkit.descriptors3d import Calc3DProperties, Property3D
-from nvmolkit.types import AsyncGpuResult, Device3DResult, PrecisionMode
+from nvmolkit.types import AsyncGpuResult, Device3DResult, HardwareOptions, PrecisionMode
 
 PRECISIONS = {"single": PrecisionMode.SINGLE, "full": PrecisionMode.FULL}
 # Default (relative, absolute) tolerances against RDKit at each precision's rounding level.
@@ -175,6 +179,76 @@ def _validate(
             np.testing.assert_allclose(actual[:, 1:, :, 2], reference[:, 1:, :, 2], rtol=0, atol=class_skew)
 
 
+_WORKER_MOLS: list[Chem.Mol] = []
+_WORKER_PROPERTIES: tuple[Property3D, ...] = ()
+
+
+def _rdkit_worker_init(mol_binaries: list[bytes], property_values: list[str]) -> None:
+    """Load the batch into a worker once, outside the timed region."""
+    global _WORKER_MOLS, _WORKER_PROPERTIES  # noqa: PLW0603 - process-local worker cache
+    _WORKER_MOLS = [Chem.Mol(binary) for binary in mol_binaries]
+    _WORKER_PROPERTIES = tuple(Property3D(value) for value in property_values)
+
+
+def _rdkit_worker_range(bounds: tuple[int, int]) -> int:
+    """Calculate every property for the worker's molecules in ``[start, stop)``; return conformers done."""
+    start, stop = bounds
+    done = 0
+    for mol in _WORKER_MOLS[start:stop]:
+        for conf in mol.GetConformers():
+            for prop in _WORKER_PROPERTIES:
+                _calc_rdkit_property(mol, conf.GetId(), prop)
+            done += 1
+    return done
+
+
+def _time_rdkit(
+    mols: list[Chem.Mol],
+    properties: tuple[Property3D, ...],
+    threads: int,
+    runs: int,
+    warmups: int,
+    max_seconds: float,
+):
+    """Time RDKit across ``threads`` processes; return ``(timing, conformers_measured)``.
+
+    Molecules are sent to the workers once when the pool starts, so the timed region only dispatches
+    index ranges. With ``max_seconds > 0`` one deadline is shared across the timed runs and a run stops
+    at the next chunk boundary; throughput is then reported on the conformers actually completed.
+    """
+    chunk = max(1, len(mols) // (threads * 8))
+    ranges = [(start, min(start + chunk, len(mols))) for start in range(0, len(mols), chunk)]
+    total = sum(mol.GetNumConformers() for mol in mols)
+    done = [0]
+    initargs = ([mol.ToBinary() for mol in mols], [prop.value for prop in properties])
+    with process_pool(threads, _rdkit_worker_init, initargs) as pool:
+
+        def run(deadline: Deadline | None = None) -> None:
+            mapped = process_map_bounded(
+                _rdkit_worker_range,
+                ranges,
+                max_workers=threads,
+                deadline=deadline if deadline is not None else Deadline(0),
+                pool=pool,
+            )
+            done[0] = sum(mapped.results)
+
+        if max_seconds > 0:
+            timing = time_it(
+                run,
+                runs=runs,
+                warmups=0,
+                max_seconds=max_seconds,
+                progress_getter=lambda: done[0],
+                progress_target=total,
+            )
+            measured = timing.progress if timing.progress is not None else done[0]
+        else:
+            timing = time_it(run, runs=runs, warmups=warmups)
+            measured = total
+    return timing, measured
+
+
 def _timing_fields(prefix: str, result, num_conformers: int) -> dict[str, float]:
     return {
         f"{prefix}_median_ms": result.median_ms,
@@ -192,6 +266,9 @@ def run(
     warmups: int,
     seed: int,
     prep_workers: int,
+    prep_threads: int,
+    rdkit_threads: int,
+    rdkit_max_seconds: float,
     validate_count: int,
     validate_tolerance: float | None,
     device_input: bool,
@@ -220,9 +297,10 @@ def run(
         raise ValueError(f"--exclude removes every property from: {', '.join(emptied)}")
 
     max_mols = max(num_mols_list)
+    hardware_options = HardwareOptions(preprocessingThreads=prep_threads)
     max_conformers = max(conformers_per_mol_list)
     raw_mols = load_smiles(smiles_path, max_count=max_mols, sanitize=True, seed=seed)
-    workers = prep_workers if prep_workers > 0 else max(1, available_cpu_count() // 2)
+    workers = prep_workers if prep_workers > 0 else available_cpu_count()
     prepared = embed_and_jitter(
         raw_mols,
         confs_per_mol=max_conformers,
@@ -262,6 +340,7 @@ def run(
                     "avg_atoms": avg_atoms,
                     "property_set": property_set_name + "".join(f"-{name}" for name in excluded),
                     "precision": str(precision),
+                    "prep_threads": prep_threads,
                     "num_properties": len(properties),
                 }
 
@@ -272,37 +351,43 @@ def run(
                         print(f"RDKit GETAWAY skips {skipped} multi-fragment molecules (it would not finish on them)")
                     row["rdkit_getaway_skipped_mols"] = skipped
                 if not no_rdkit:
-                    rdkit_timing = time_it(
-                        lambda mols=mols, properties=properties: _calc_rdkit(mols, properties),
-                        runs=runs,
-                        warmups=warmups,
+                    rdkit_timing, rdkit_conformers = _time_rdkit(
+                        mols, properties, rdkit_threads, runs, warmups, rdkit_max_seconds
                     )
-                    row.update(_timing_fields("rdkit", rdkit_timing, num_conformers))
+                    row.update(_timing_fields("rdkit", rdkit_timing, rdkit_conformers))
+                    row["rdkit_threads"] = rdkit_threads
+                    row["rdkit_conformers_processed"] = rdkit_conformers
 
                 if not no_nvmolkit:
                     nvmolkit_timing = time_it(
                         lambda mols=mols, properties=properties: Calc3DProperties(
-                            mols, properties, precision=precision
+                            mols, properties, precision=precision, hardwareOptions=hardware_options
                         ),
                         runs=runs,
                         warmups=warmups,
                         gpu_sync=True,
                     )
                     row.update(_timing_fields("nvmolkit", nvmolkit_timing, num_conformers))
-                    if rdkit_timing is not None:
-                        row["speedup"] = rdkit_timing.median_ms / nvmolkit_timing.median_ms
+                    if rdkit_timing is not None and row["rdkit_conformers_per_s"] > 0:
+                        row["speedup"] = row["nvmolkit_conformers_per_s"] / row["rdkit_conformers_per_s"]
                     if coordinates is not None:
                         device_timing = time_it(
                             lambda mols=mols, properties=properties, coordinates=coordinates: Calc3DProperties(
-                                mols, properties, coordinates=coordinates, precision=precision
+                                mols,
+                                properties,
+                                coordinates=coordinates,
+                                precision=precision,
+                                hardwareOptions=hardware_options,
                             ),
                             runs=runs,
                             warmups=warmups,
                             gpu_sync=True,
                         )
                         row.update(_timing_fields("nvmolkit_device_input", device_timing, num_conformers))
-                        if rdkit_timing is not None:
-                            row["device_input_speedup"] = rdkit_timing.median_ms / device_timing.median_ms
+                        if rdkit_timing is not None and row["rdkit_conformers_per_s"] > 0:
+                            row["device_input_speedup"] = (
+                                row["nvmolkit_device_input_conformers_per_s"] / row["rdkit_conformers_per_s"]
+                            )
 
                 rows.append(row)
 
@@ -323,7 +408,22 @@ def main() -> None:
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--prep_workers", type=int, default=0, help="Preparation workers (0 = half of available CPUs)")
+    parser.add_argument(
+        "--prep_workers",
+        type=int,
+        default=0,
+        help="Workers for the untimed embed-and-perturb prep (0 = all available CPUs)",
+    )
+    parser.add_argument(
+        "--prep_threads",
+        type=int,
+        default=-1,
+        help="nvMolKit CPU preprocessing threads inside the timed Calc3DProperties call (-1 = library default)",
+    )
+    parser.add_argument("--rdkit_threads", type=int, default=1, help="Processes for the RDKit comparison (default: 1)")
+    add_rdkit_max_seconds_arg(
+        parser, extra_help="One deadline is shared across timed runs; a run stops at the next chunk boundary."
+    )
     parser.add_argument("--validate_count", type=int, default=8)
     parser.add_argument(
         "--validate_tolerance",
@@ -357,6 +457,9 @@ def main() -> None:
         warmups=args.warmups,
         seed=args.seed,
         prep_workers=args.prep_workers,
+        prep_threads=args.prep_threads,
+        rdkit_threads=args.rdkit_threads,
+        rdkit_max_seconds=args.rdkit_max_seconds,
         validate_count=0 if args.no_validate else args.validate_count,
         validate_tolerance=args.validate_tolerance,
         precision=PRECISIONS[args.precision],

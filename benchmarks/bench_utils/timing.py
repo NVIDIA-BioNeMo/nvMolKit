@@ -76,7 +76,8 @@ def time_it(
               provided, the callable instead receives the shared
               :class:`Deadline` as its sole argument.
         runs: Number of timed iterations.
-        warmups: Number of untimed warmup iterations.
+        warmups: Number of untimed warmup iterations. Skipped when a positive
+            ``max_seconds`` caps the measurement.
         gpu_sync: If True, call torch.cuda.synchronize() before and after each
                   timed iteration to ensure GPU work is included in the measurement.
         setup: Optional preparation called before every warmup and timed
@@ -116,7 +117,7 @@ def time_it(
             pass
 
     warmup_deadline = Deadline(0.0)
-    for _ in range(warmups):
+    for _ in range(0 if bounded and max_seconds > 0 else warmups):
         if setup is not None:
             setup()
         if bounded:

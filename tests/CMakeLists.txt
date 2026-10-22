@@ -344,6 +344,8 @@ target_link_libraries(test_butina PRIVATE butina device)
 add_executable(test_bitbirch test_bitbirch.cu)
 target_link_libraries(test_bitbirch PRIVATE bitbirch device_vector)
 
+add_executable(test_aap_threads test_aap_threads.cpp)
+
 add_executable(test_diversity_pickers test_diversity_pickers.cu)
 target_link_libraries(test_diversity_pickers PRIVATE diversity_pickers device)
 
@@ -515,6 +517,7 @@ set(TEST_LIST
     test_fmcs_engine_validation
     test_fmcs_labeled
     test_fmcs_integration
+    test_aap_threads
     test_work_splitting
     test_fire_minimizer
     test_fire_minimizer_permol)

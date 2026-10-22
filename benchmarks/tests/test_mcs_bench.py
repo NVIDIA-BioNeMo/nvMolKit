@@ -43,7 +43,6 @@ def test_partial_config_row_inherits_cli_defaults_and_parses_booleans():
 
     assert config["num_pairs"] == 17
     assert config["workers"] == 3
-    assert config["block_size"] == 256
     assert config["match_formal_charge"]
 
 
@@ -60,8 +59,6 @@ def test_config_dataframe_supports_multiple_rows(tmp_path):
 
 
 def test_config_validation_rejects_invalid_gpu_settings():
-    with pytest.raises(ValueError, match="block_size"):
-        _normalize_config_row({"block_size": 32}, _args())
     with pytest.raises(ValueError, match="num_gpus"):
         _normalize_config_row({"num_gpus": 0}, _args())
 

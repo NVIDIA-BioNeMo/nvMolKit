@@ -3,13 +3,18 @@
 
 #include <gtest/gtest.h>
 
+#include <climits>
 #include <cmath>
 #include <cstdint>
+#include <future>
 #include <limits>
+#include <stdexcept>
 #include <vector>
 
 #include "src/bitbirch.h"
 #include "src/bitbirch_common.cuh"
+#include "src/bitbirch_internal.h"
+#include "src/utils/device.h"
 #include "src/utils/device_vector.h"
 
 namespace {
@@ -133,26 +138,42 @@ struct Clustering {
   std::vector<std::uint32_t> centroids;
 };
 
-//! Clusters one-word fingerprints and copies the result to the host.
-Clustering clusterRows(const std::vector<std::uint32_t>& fingerprints,
-                       const double                      threshold,
-                       const int                         branchingFactor,
-                       const int                         batchSize) {
-  nvMolKit::AsyncDeviceVector<std::uint32_t> deviceFingerprints(fingerprints.size());
-  deviceFingerprints.copyFromHost(fingerprints);
-  const int  rows   = static_cast<int>(fingerprints.size());
-  auto       result = nvMolKit::bitBirchGpu({deviceFingerprints.data(), deviceFingerprints.size()},
-                                      rows,
-                                      1,
-                                      threshold,
-                                      treeOptions(branchingFactor, batchSize, /*centroids=*/true));
+Clustering clusterPackedRows(const std::vector<std::uint32_t>& fingerprints,
+                             const int                         numWords,
+                             const double                      threshold,
+                             const nvMolKit::BitBirchOptions&  options,
+                             const int                         offset             = 0,
+                             const int                         sharedMemoryBudget = 0,
+                             const cudaStream_t                stream             = nullptr) {
+  std::vector<std::uint32_t> padded(offset, 0);
+  padded.insert(padded.end(), fingerprints.begin(), fingerprints.end());
+  nvMolKit::AsyncDeviceVector<std::uint32_t> deviceFingerprints(padded.size(), stream);
+  deviceFingerprints.copyFromHost(padded);
+  const int                                  rows = static_cast<int>(fingerprints.size() / numWords);
+  const cuda::std::span<const std::uint32_t> packed{deviceFingerprints.data() + offset, fingerprints.size()};
+  auto result = sharedMemoryBudget == 0 ? nvMolKit::bitBirchGpu(packed, rows, numWords, threshold, options, stream) :
+                                          nvMolKit::bitbirch::clusterWithSharedMemoryBudget(packed,
+                                                                                            rows,
+                                                                                            numWords,
+                                                                                            threshold,
+                                                                                            options,
+                                                                                            sharedMemoryBudget,
+                                                                                            stream);
   Clustering clustering{result.numClusters,
                         std::vector<int>(rows),
                         std::vector<std::uint32_t>(result.centroids.size())};
   result.clusterIds.copyToHost(clustering.labels);
   result.centroids.copyToHost(clustering.centroids);
-  EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+  EXPECT_EQ(cudaStreamSynchronize(stream), cudaSuccess);
   return clustering;
+}
+
+//! Clusters one-word fingerprints and copies the result to the host.
+Clustering clusterRows(const std::vector<std::uint32_t>& fingerprints,
+                       const double                      threshold,
+                       const int                         branchingFactor,
+                       const int                         batchSize) {
+  return clusterPackedRows(fingerprints, 1, threshold, treeOptions(branchingFactor, batchSize, true));
 }
 
 // Expected values in the tests below come from nvmolkit/tests/_bitbirch_reference.py.
@@ -224,9 +245,226 @@ TEST(BitBirch, LeafSplitsAcrossTwoPairSearchTilesMatchReference) {
     137, 138, 139, 140, 23,  9,   76,  134, 9,   47,  0,   31,  0,   117, 141, 19,  31,  142, 11,  95,  56,  102, 143,
     144, 85,  145, 146, 0,   147, 148, 4,   147, 52,  88,  149, 57,  150, 13,  143, 144, 151, 13,  120, 27,  96,  97,
     16,  132, 36,  29,  69,  73,  116, 152, 53,  114, 150, 18,  118, 27,  130, 17};
-  const auto clustering = clusterRows(fingerprints, 0.7, 64, 256);
-  EXPECT_EQ(clustering.numClusters, 153);
-  EXPECT_EQ(clustering.labels, expected);
+  std::vector<std::uint32_t> expectedCentroids(153, 0);
+  for (int cluster = 0; cluster < 153; ++cluster) {
+    int              members = 0;
+    std::vector<int> sums(32, 0);
+    for (std::size_t row = 0; row < fingerprints.size(); ++row) {
+      if (expected[row] != cluster) {
+        continue;
+      }
+      ++members;
+      for (int bit = 0; bit < 32; ++bit) {
+        sums[bit] += (fingerprints[row] >> bit) & 1U;
+      }
+    }
+    for (int bit = 0; bit < 32; ++bit) {
+      if (2 * sums[bit] >= members) {
+        expectedCentroids[cluster] |= std::uint32_t{1} << bit;
+      }
+    }
+  }
+  for (const int numWords : {1, 128}) {
+    std::vector<std::uint32_t> packed;
+    for (const auto row : fingerprints) {
+      packed.insert(packed.end(), numWords, row);
+    }
+    for (const int budget : {0, 48 * 1024}) {
+      SCOPED_TRACE(::testing::Message() << "words=" << numWords << ", budget=" << budget);
+      const auto clustering = clusterPackedRows(packed, numWords, 0.7, treeOptions(64, 256, true), 0, budget);
+      ASSERT_EQ(clustering.numClusters, 153);
+      EXPECT_EQ(clustering.labels, expected);
+      ASSERT_EQ(clustering.centroids.size(), 153u * numWords);
+      for (int cluster = 0; cluster < 153; ++cluster) {
+        for (int word = 0; word < numWords; ++word) {
+          EXPECT_EQ(clustering.centroids[cluster * numWords + word], expectedCentroids[cluster]);
+        }
+      }
+    }
+  }
+}
+
+TEST(BitBirch, OffsetSpansMatchAlignedInputsAcrossWidthsAndSplits) {
+  for (const int numWords : {1, 4, 32, 128}) {
+    std::vector<std::uint32_t> fingerprints;
+    for (const std::uint32_t value : {0x3U, 0x1U, 0xCU, 0x4U, 0x30U, 0x10U, 0xC0U, 0x40U}) {
+      fingerprints.insert(fingerprints.end(), numWords, value);
+    }
+    const auto options = treeOptions(3, 3, true);
+    for (const int offset : {0, 1, 2, 3}) {
+      SCOPED_TRACE(::testing::Message() << "words=" << numWords << ", offset=" << offset);
+      nvMolKit::ScopedStream stream;
+      const auto result = clusterPackedRows(fingerprints, numWords, 0.5, options, offset, 0, stream.stream());
+      ASSERT_EQ(result.numClusters, 5);
+      EXPECT_EQ(result.labels, (std::vector<int>{0, 0, 1, 1, 2, 2, 3, 4}));
+      ASSERT_EQ(result.centroids.size(), 5u * numWords);
+      const std::vector<std::uint32_t> expectedCentroids{0x3U, 0xCU, 0x30U, 0xC0U, 0x40U};
+      for (int cluster = 0; cluster < 5; ++cluster) {
+        for (int word = 0; word < numWords; ++word) {
+          EXPECT_EQ(result.centroids[cluster * numWords + word], expectedCentroids[cluster]);
+        }
+      }
+    }
+  }
+}
+
+TEST(BitBirch, SmallSharedMemoryBudgetPreservesCascadingSplitsAtMaximumWidth) {
+  constexpr int numWords = nvMolKit::kBitBirchMaxWords;
+  constexpr int rows     = 132;
+  EXPECT_EQ(nvMolKit::bitbirch::selectSplitTileSize(numWords, 48 * 1024), 32);
+  EXPECT_EQ(nvMolKit::bitbirch::selectSplitTileSize(numWords, 64 * 1024), 32);
+  EXPECT_EQ(nvMolKit::bitbirch::selectSplitTileSize(4, 48 * 1024), 64);
+  std::vector<std::uint32_t> fingerprints(rows * numWords, 0);
+  for (int row = 0; row < rows; ++row) {
+    fingerprints[row * numWords + row / 32] = std::uint32_t{1} << (row % 32);
+  }
+  for (const int branchingFactor : {3, 64, 128}) {
+    for (const int budget : {0, 48 * 1024}) {
+      SCOPED_TRACE(::testing::Message() << "branching=" << branchingFactor << ", budget=" << budget);
+      const auto result =
+        clusterPackedRows(fingerprints, numWords, 1.0, treeOptions(branchingFactor, 37, true), 0, budget);
+      ASSERT_EQ(result.numClusters, rows);
+      ASSERT_EQ(result.labels.size(), rows);
+      EXPECT_EQ(result.centroids, fingerprints);
+      for (int row = 0; row < rows; ++row) {
+        EXPECT_EQ(result.labels[row], row);
+      }
+    }
+  }
+  EXPECT_THROW(clusterPackedRows(fingerprints, numWords, 1.0, treeOptions(3, 37), 0, 1), std::runtime_error);
+}
+
+TEST(BitBirch, EmptySingletonAndThresholdBoundaries) {
+  for (const int numWords : {1, 4, 128}) {
+    const auto empty = nvMolKit::bitBirchGpu({}, 0, numWords, 0.5);
+    EXPECT_EQ(empty.numClusters, 0);
+    EXPECT_EQ(empty.numWords, numWords);
+    EXPECT_EQ(empty.clusterIds.size(), 0u);
+    EXPECT_EQ(empty.centroids.size(), 0u);
+
+    const std::vector<std::uint32_t> singleton(numWords, 0xA5A5A5A5U);
+    const auto single = clusterPackedRows(singleton, numWords, 1.0, treeOptions(65534, INT_MAX, true));
+    EXPECT_EQ(single.numClusters, 1);
+    EXPECT_EQ(single.labels, (std::vector<int>{0}));
+    EXPECT_EQ(single.centroids, singleton);
+
+    std::vector<std::uint32_t> fingerprints(4 * numWords, 0);
+    fingerprints[2 * numWords] = 1;
+    fingerprints[3 * numWords] = 1;
+    for (const bool centroids : {false, true}) {
+      for (const double threshold : {0.0, 1.0}) {
+        SCOPED_TRACE(::testing::Message() << "words=" << numWords << ", threshold=" << threshold);
+        const auto result = clusterPackedRows(fingerprints, numWords, threshold, treeOptions(3, 3, centroids));
+        EXPECT_EQ(result.numClusters, threshold == 0.0 ? 1 : 2);
+        EXPECT_EQ(result.labels, threshold == 0.0 ? std::vector<int>({0, 0, 0, 0}) : std::vector<int>({0, 0, 1, 1}));
+        if (centroids) {
+          std::vector<std::uint32_t> expected(result.numClusters * numWords, 0);
+          expected[threshold == 0.0 ? 0 : numWords] = 1;
+          EXPECT_EQ(result.centroids, expected);
+        } else {
+          EXPECT_TRUE(result.centroids.empty());
+        }
+      }
+    }
+  }
+}
+
+TEST(BitBirchValidation, RejectsMatrixBoundsAndNonfiniteThresholds) {
+  const cuda::std::span<const std::uint32_t> empty;
+  for (const int rows : {-1, 1, INT_MAX}) {
+    EXPECT_THROW(nvMolKit::bitBirchGpu(empty, rows, 1, 0.5), std::invalid_argument);
+  }
+  for (const int words : {0, -1, 129}) {
+    EXPECT_THROW(nvMolKit::bitBirchGpu(empty, 0, words, 0.5), std::invalid_argument);
+  }
+  for (const double threshold : {-0.1,
+                                 1.1,
+                                 std::numeric_limits<double>::infinity(),
+                                 -std::numeric_limits<double>::infinity(),
+                                 std::numeric_limits<double>::quiet_NaN()}) {
+    EXPECT_THROW(nvMolKit::bitBirchGpu(empty, 0, 1, threshold), std::invalid_argument);
+  }
+  EXPECT_THROW(nvMolKit::bitBirchGpu(empty, 0, 1, 0.5, treeOptions(65535, 1)), std::invalid_argument);
+  EXPECT_THROW(nvMolKit::bitBirchGpu(empty, 0, 1, 0.5, treeOptions(3, -1)), std::invalid_argument);
+}
+
+TEST(BitBirch, GroupedMergeAcceptsWholeRunsAndFallsBackInInputOrder) {
+  constexpr int warmup = 16384;
+  for (const int batchSize : {256, 1024}) {
+    for (const bool rejectGroup : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "batch=" << batchSize << ", reject=" << rejectGroup);
+      std::vector<std::uint32_t> fingerprints(warmup, 0xCU);
+      fingerprints[0] = 0x3U;
+      fingerprints.push_back(0x1U);
+      fingerprints.push_back(rejectGroup ? 0x2U : 0x1U);
+      std::vector<int> expected(warmup + 2, 1);
+      expected[0] = expected[warmup] = 0;
+      expected[warmup + 1]           = rejectGroup ? 2 : 0;
+      for (int repeat = 0; repeat < 2; ++repeat) {
+        const auto result = clusterRows(fingerprints, 0.5, 3, batchSize);
+        EXPECT_EQ(result.labels, expected);
+        EXPECT_EQ(result.numClusters, rejectGroup ? 3 : 2);
+        EXPECT_EQ(
+          result.centroids,
+          rejectGroup ? std::vector<std::uint32_t>({0x3U, 0xCU, 0x2U}) : std::vector<std::uint32_t>({0x1U, 0xCU}));
+      }
+    }
+  }
+}
+
+TEST(BitBirch, WarmupBoundariesAndIndependentGroupsPreserveLabels) {
+  constexpr int warmup = 16384;
+  for (const int rows : {warmup - 1, warmup, warmup + 1}) {
+    std::vector<std::uint32_t> fingerprints(rows, 0xCU);
+    fingerprints[0] = 0x3U;
+    if (rows > warmup) {
+      fingerprints[warmup] = 0x1U;
+    }
+    std::vector<int> expected(rows, 1);
+    expected[0] = 0;
+    if (rows > warmup) {
+      expected[warmup] = 0;
+    }
+    const auto result = clusterRows(fingerprints, 0.5, 3, 256);
+    EXPECT_EQ(result.numClusters, 2);
+    EXPECT_EQ(result.labels, expected);
+    EXPECT_EQ(result.centroids, (std::vector<std::uint32_t>{0x3U, 0xCU}));
+  }
+  std::vector<std::uint32_t> fingerprints(warmup, 0xCU);
+  fingerprints[0] = 0x3U;
+  fingerprints.insert(fingerprints.end(), {0x1U, 0xCU, 0x2U, 0xCU});
+  std::vector<int> expected(warmup + 4, 1);
+  expected[0] = expected[warmup] = 0;
+  expected[warmup + 2]           = 2;
+  const auto result              = clusterRows(fingerprints, 0.5, 3, 1024);
+  EXPECT_EQ(result.numClusters, 3);
+  EXPECT_EQ(result.labels, expected);
+  EXPECT_EQ(result.centroids, (std::vector<std::uint32_t>{0x3U, 0xCU, 0x2U}));
+}
+
+TEST(BitBirch, ConcurrentCallsUseIndependentStreamsAndWidths) {
+  const auto cluster = [](const int numWords) {
+    nvMolKit::ScopedStream     stream;
+    std::vector<std::uint32_t> fingerprints;
+    for (const std::uint32_t value : {0x3U, 0x1U, 0xCU, 0x4U}) {
+      fingerprints.insert(fingerprints.end(), numWords, value);
+    }
+    for (int repeat = 0; repeat < 4; ++repeat) {
+      const auto result =
+        clusterPackedRows(fingerprints, numWords, 0.5, treeOptions(3, 4, true), 0, 0, stream.stream());
+      EXPECT_EQ(result.numClusters, 2);
+      EXPECT_EQ(result.labels, (std::vector<int>{0, 0, 1, 1}));
+      ASSERT_EQ(result.centroids.size(), 2u * numWords);
+      for (int word = 0; word < numWords; ++word) {
+        EXPECT_EQ(result.centroids[word], 0x3U);
+        EXPECT_EQ(result.centroids[numWords + word], 0xCU);
+      }
+    }
+  };
+  auto narrow = std::async(std::launch::async, cluster, 4);
+  auto wide   = std::async(std::launch::async, cluster, 128);
+  narrow.get();
+  wide.get();
 }
 
 }  // namespace

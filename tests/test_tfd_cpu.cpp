@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include <GraphMol/DistGeomHelpers/Embedder.h>
+#include <GraphMol/FileParsers/MolSupplier.h>
 #include <GraphMol/MolOps.h>
 #include <GraphMol/ROMol.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
@@ -21,10 +22,12 @@
 
 #include <cmath>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "src/tfd/tfd_common.h"
 #include "src/tfd/tfd_cpu.h"
+#include "tests/test_utils.h"
 #include "versions.h"
 
 namespace {
@@ -39,6 +42,24 @@ void generateConformers(RDKit::ROMol& mol, int numConformers, int seed = 42) {
   params.randomSeed                           = seed;
   params.numThreads                           = 1;
   RDKit::DGeomHelpers::EmbedMultipleConfs(mol, numConformers, params);
+}
+
+//! Attach the stored conformers named \p name to \p mol.
+//! Coordinates come from a file because ETKDG output differs across platforms and RDKit versions. Topology still
+//! comes from SMILES: the mol block writer reorients wedged bonds, which changes TFD torsion weights.
+void loadReferenceConformers(RDKit::ROMol& mol, const std::string& name) {
+  RDKit::SDMolSupplier suppl(getTestDataFolderPath() + "/tfd_rdkit_reference_conformers.sdf",
+                             /*sanitize=*/false,
+                             /*removeHs=*/false);
+  while (!suppl.atEnd()) {
+    std::unique_ptr<RDKit::ROMol> record(suppl.next());
+    ASSERT_NE(record, nullptr);
+    if (record->getProp<std::string>("_Name") != name) {
+      continue;
+    }
+    ASSERT_EQ(record->getNumAtoms(), mol.getNumAtoms());
+    mol.addConformer(new RDKit::Conformer(record->getConformer()), /*assignId=*/true);
+  }
 }
 
 }  // namespace
@@ -644,64 +665,57 @@ TEST_F(TFDCpuTest, CompareWithRDKitReference) {
   // Includes single-quartet, multi-quartet (ring, symmetric), ring+substituent,
   // and triple-bond molecules.
   //
-  // Reference values generated with RDKit Python:
-  //   mol = Chem.MolFromSmiles(smiles)
-  //   params = AllChem.ETKDGv3()
-  //   params.randomSeed = <seed>
-  //   AllChem.EmbedMultipleConfs(mol, <numConfs>, params)
+  // Conformers are stored in tfd_rdkit_reference_conformers.sdf (ETKDGv3, numThreads=1, seed in comment).
+  // Reference values generated with RDKit Python on those coordinates, with the molecule built from SMILES:
   //   tfd = TorsionFingerprints.GetTFDMatrix(mol, useWeights=True, maxDev='equal', symmRadius=2)
 
   struct TestCase {
     const char*         smiles;
     int                 numConfs;
-    int                 seed;
     std::vector<double> reference;
     std::vector<double> referenceBeforeBetaFix{};
   };
 
   // RDKit 2026.03 fixed _calculateBeta() checking the second bond atom twice.
-  // nvMolKit preserves both behaviors across its supported RDKit range, so the
-  // affected asymmetric molecules need references from both sides of the fix.
+  // nvMolKit preserves both behaviors across its supported RDKit range, so
+  // affected molecules need references from both sides of the fix.
   // https://github.com/rdkit/rdkit/pull/9202
   // clang-format off
   std::vector<TestCase> cases = {
-    {"CCCC", 4, 42, {              // n-butane, 1 torsion
-      0.6667389132, 0.0000726610, 0.6666662521,
-      0.6667387931, 0.0000001200, 0.6666661321
+    {"CCCC", 4, {                  // n-butane, 1 torsion (seed 42)
+      0.6667562294, 0.0000584855, 0.6666977439,
+      0.6667440661, 0.0000121633, 0.6666855806
     }},
-    {"CCCCC", 4, 42, {             // n-pentane, 2 torsions
-      0.6060606631, 0.6060573299, 0.6060662252,
-      0.6666872992, 0.6666326206, 0.0606323184
-    }},
-    {"CCCCCC", 4, 42, {            // n-hexane, 3 torsions
-      0.6111276139, 0.0555704226, 0.6666744357,
-      0.5555532106, 0.6111014381, 0.6111123144
-    }},
-    {"CC(C)CC", 4, 42, {           // isopentane, 1 symmetric torsion (2 quartets)
-      0.0000045777, 0.0433253929, 0.0433299706,
-      0.0000027031, 0.0000072808, 0.0433226898
-    }},
-    {"C1CCCCC1", 4, 42, {          // cyclohexane, 1 ring torsion (6 quartets)
-      0.1343662730, 0.3653621455, 0.2309958724,
-      0.1017138867, 0.2360801597, 0.4670760321
-    }},
-    {"c1ccccc1CC", 4, 42, {        // ethylbenzene, 1 symmetric non-ring + 1 ring torsion
-      0.0000114982, 0.0000104863, 0.0000020789,
-      0.0000100311, 0.0000018047, 0.0000013199
-    }},
-    {"CC(=O)[C@H]1CCCC[C@@H]1CN", 5, 44, {  // cyclohexane + ketone/amine substituents
-      0.3538817018, 0.5908750389, 0.2992543709, 0.5450659700, 0.6307899400,
-      0.3315705683, 0.5590067080, 0.3311160076, 0.2999948940, 0.5678678322
+    {"CCCCC", 4, {                 // n-pentane, 2 torsions (seed 42)
+      0.6665760174, 0.6666415239, 0.6665824820,
+      0.6666987737, 0.6666585347, 0.0000760527
     }, {
-      0.3538817018, 0.5924305446, 0.2977012405, 0.5450659700, 0.6307899400,
-      0.3331152938, 0.5590067080, 0.3311160076, 0.3015480245, 0.5678678322
+      0.6060395001, 0.6060998970, 0.6060455126,
+      0.6666894342, 0.6666521450, 0.0606066324
     }},
-    {"C[C@@H](CN(C)C(=O)C#CCN)C1CC1", 5, 45, {  // cyclopropane + triple bond
-      0.6173216954, 0.2578548043, 0.8622476874, 0.4208182281, 0.7014846040,
-      0.1738311915, 0.1683341272, 0.4489912639, 0.4239728997, 0.2524937077
-    }, {
-      0.6173250123, 0.2578501411, 0.8622535690, 0.4331903310, 0.7154140061,
-      0.1978909084, 0.1683354525, 0.4489992971, 0.4239704017, 0.2760081465
+    {"CCCCCC", 4, {                // n-hexane, 3 torsions (seed 42)
+      0.6111192526, 0.0555897658, 0.6666507889,
+      0.5555304446, 0.6111339209, 0.6111051429
+    }},
+    {"CC(C)CC", 4, {               // isopentane, 1 symmetric torsion (2 quartets) (seed 42)
+      0.0000645370, 0.0433293976, 0.0433939346,
+      0.0000173892, 0.0000471478, 0.0433467868
+    }},
+    {"C1CCCCC1", 4, {              // cyclohexane, 1 ring torsion (6 quartets) (seed 42)
+      0.1342992219, 0.3654279355, 0.2311287136,
+      0.1016922522, 0.2359914741, 0.4671201877
+    }},
+    {"c1ccccc1CC", 4, {            // ethylbenzene, 1 symmetric non-ring + 1 ring torsion (seed 42)
+      0.0000274556, 0.0000152150, 0.0000098593,
+      0.0000366185, 0.0000593310, 0.0000278178
+    }},
+    {"CC(=O)[C@H]1CCCC[C@@H]1CN", 5, {  // cyclohexane + ketone/amine substituents (seed 44)
+      0.3538673086, 0.5924071543, 0.2977128450, 0.5450946700, 0.6307844414,
+      0.3331281561, 0.5589792338, 0.3311275544, 0.3015495010, 0.5678442093
+    }},
+    {"C[C@@H](CN(C)C(=O)C#CCN)C1CC1", 5, {  // cyclopropane + triple bond (seed 45)
+      0.6173101078, 0.2578631814, 0.8622461077, 0.4332105670, 0.7154185415,
+      0.1979142435, 0.1683462791, 0.4490069966, 0.4239815145, 0.2760147825
     }},
   };
   // clang-format on
@@ -718,7 +732,8 @@ TEST_F(TFDCpuTest, CompareWithRDKitReference) {
     auto mol = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol(tc.smiles));
     ASSERT_NE(mol, nullptr);
 
-    generateConformers(*mol, tc.numConfs, tc.seed);
+    loadReferenceConformers(*mol, tc.smiles);
+    ASSERT_EQ(mol->getNumConformers(), tc.numConfs);
     auto tfdMatrix = generator_.GetTFDMatrix(*mol, options);
 
     const auto& reference =
@@ -736,35 +751,40 @@ TEST_F(TFDCpuTest, CompareWithRDKitReferenceAddHs) {
   // AddHs produces more quartets per torsion, exercising multi-quartet handling
   // on molecules that would otherwise be single-quartet.
   //
-  // Reference values generated with RDKit Python:
-  //   mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
-  //   params = AllChem.ETKDGv3()
-  //   params.randomSeed = 42
-  //   AllChem.EmbedMultipleConfs(mol, 4, params)
+  // Conformers are stored in tfd_rdkit_reference_conformers.sdf (ETKDGv3, numThreads=1, seed 42).
+  // Reference values generated with RDKit Python on those coordinates, with the molecule built from SMILES + AddHs:
   //   tfd = TorsionFingerprints.GetTFDMatrix(mol, useWeights=True, maxDev='equal', symmRadius=2)
 
   struct TestCase {
     const char*         smiles;
     std::vector<double> reference;
+    std::vector<double> referenceBeforeBetaFix{};
   };
 
   // clang-format off
   std::vector<TestCase> cases = {
     {"CCCCC", {                   // n-pentane with AddHs (symmetric torsions from H)
-      0.6666346588,
-      0.0606342183,
-      0.6666024736,
-      0.6666717502,
-      0.6666935910,
-      0.6061117436
+      0.6666476056,
+      0.0001588202,
+      0.6665554408,
+      0.6666251548,
+      0.6667272396,
+      0.6666506810
+    }, {
+      0.6666514358,
+      0.0606780455,
+      0.6665752485,
+      0.6666244894,
+      0.6667240748,
+      0.6061140483
     }},
     {"CC(C)CC", {                 // isopentane with AddHs
-      0.0155798214,
-      0.0118375755,
-      0.0180868258,
-      0.0000140721,
-      0.0091266798,
-      0.0336807192
+      0.0155570300,
+      0.0118257114,
+      0.0180707374,
+      0.0000260520,
+      0.0091072600,
+      0.0336538194
     }},
   };
   // clang-format on
@@ -783,15 +803,17 @@ TEST_F(TFDCpuTest, CompareWithRDKitReferenceAddHs) {
 
     RDKit::MolOps::addHs(*mol);
 
-    generateConformers(*mol, 4, 42);
+    loadReferenceConformers(*mol, std::string(tc.smiles) + " AddHs");
     ASSERT_EQ(mol->getNumConformers(), 4);
 
     auto tfdMatrix = generator_.GetTFDMatrix(*mol, options);
 
-    ASSERT_EQ(tfdMatrix.size(), tc.reference.size());
+    const auto& reference =
+      !kRdkitHasBetaTypoFix && !tc.referenceBeforeBetaFix.empty() ? tc.referenceBeforeBetaFix : tc.reference;
+    ASSERT_EQ(tfdMatrix.size(), reference.size());
     constexpr double kRDKitTolerance = 5e-4;
     for (size_t i = 0; i < tfdMatrix.size(); ++i) {
-      EXPECT_NEAR(tfdMatrix[i], tc.reference[i], kRDKitTolerance) << "TFD[" << i << "] mismatch with RDKit reference";
+      EXPECT_NEAR(tfdMatrix[i], reference[i], kRDKitTolerance) << "TFD[" << i << "] mismatch with RDKit reference";
     }
   }
 }

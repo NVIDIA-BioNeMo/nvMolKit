@@ -16,6 +16,7 @@
 
 #include "src/bitbirch.h"
 #include "src/bitbirch_common.cuh"
+#include "src/bitbirch_internal.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/host_vector.h"
 #include "src/utils/nvtx.h"
@@ -29,8 +30,6 @@ constexpr int kNumWarps           = kBlockSize / 32;
 constexpr int kBitParts           = kBitBirchMaxWords * 32 / kBlockSize;
 //! Lanes that read one centroid together in the closest-entry search.
 constexpr int kLanesPerEntry      = 4;
-//! Node entries per tile in the split pair search; two tiles share one shared-memory centroid cache.
-constexpr int kTile               = 64;
 //! Rows inserted in batches that never merge groups, so the young tree grows in input order.
 constexpr int kOrderedWarmup      = 16384;
 //! Split pair orders are the low 32 bits of a 64-bit key, so a node holds fewer than 2^16 entries.
@@ -126,15 +125,20 @@ __device__ __forceinline__ float similarity(const int intersection, const int un
   return unionCount == 0 ? 1.0f : __fdiv_rn(static_cast<float>(intersection), static_cast<float>(unionCount));
 }
 
+__device__ __forceinline__ bool isVectorAligned(const std::uint32_t* pointer) {
+  return reinterpret_cast<std::uintptr_t>(pointer) % alignof(uint4) == 0;
+}
+
 //! Intersection and union popcounts of words first, first + step, ... of two rows.
 __device__ __forceinline__ int2 popcounts(const std::uint32_t* lhs,
                                           const std::uint32_t* rhs,
                                           const int            numWords,
                                           const int            first = 0,
                                           const int            step  = 1) {
-  int intersection = 0;
-  int unionCount   = 0;
-  if (numWords % 4 == 0) {
+  int        intersection = 0;
+  int        unionCount   = 0;
+  const auto alignment    = reinterpret_cast<std::uintptr_t>(lhs) | reinterpret_cast<std::uintptr_t>(rhs);
+  if (numWords % 4 == 0 && alignment % alignof(uint4) == 0) {
     const auto* lhsVectors = reinterpret_cast<const uint4*>(lhs);
     const auto* rhsVectors = reinterpret_cast<const uint4*>(rhs);
     for (int vector = first; vector < numWords / 4; vector += step) {
@@ -458,39 +462,40 @@ __host__ __device__ __forceinline__ std::uint32_t pairOrder(const int lhs, const
 }
 
 //! Shared-memory bytes of the split pair-search centroid cache and its row pointers and popcounts.
-std::size_t pairCacheBytes(const int numWords) {
-  return (sizeof(void*) + sizeof(int)) * 2 * kTile +
-         sizeof(std::uint32_t) * static_cast<std::size_t>(2 * kTile + 1) * numWords;
+template <int TileSize> constexpr std::size_t pairCacheBytes(const int numWords) {
+  return (sizeof(void*) + sizeof(int)) * 2 * TileSize +
+         sizeof(std::uint32_t) * static_cast<std::size_t>(2 * TileSize + 1) * numWords;
 }
 
 // This thread's least key (similarity bits << 32 | pair order) over the entry
 // pairs of tiles lhsTile <= rhsTile. Nonnegative FP32 bit patterns order like
 // their values, so the least key is the least-similar pair, first in pair order.
-__device__ unsigned long long tilePairsMin(const Tree&    tree,
-                                           const int*     entries,
-                                           const int      size,
-                                           const int      lhsTile,
-                                           const int      rhsTile,
-                                           unsigned char* shared) {
-  constexpr int cacheStride = 2 * kTile + 1;
+template <int TileSize>
+__device__ __forceinline__ unsigned long long tilePairsMin(const Tree&    tree,
+                                                           const int*     entries,
+                                                           const int      size,
+                                                           const int      lhsTile,
+                                                           const int      rhsTile,
+                                                           unsigned char* shared) {
+  constexpr int cacheStride = 2 * TileSize + 1;
   auto**        rows        = reinterpret_cast<const std::uint32_t**>(shared);
-  int*          bitCounts   = reinterpret_cast<int*>(rows + 2 * kTile);
-  auto*         cache       = reinterpret_cast<std::uint32_t*>(bitCounts + 2 * kTile);
+  int*          bitCounts   = reinterpret_cast<int*>(rows + 2 * TileSize);
+  auto*         cache       = reinterpret_cast<std::uint32_t*>(bitCounts + 2 * TileSize);
   const bool    diagonal    = lhsTile == rhsTile;
-  const int     lhsBegin    = lhsTile * kTile;
-  const int     rhsBegin    = rhsTile * kTile;
-  const int     lhsCount    = min(kTile, size - lhsBegin);
-  const int     rhsCount    = diagonal ? lhsCount : min(kTile, size - rhsBegin);
-  const int     rhsColumn   = diagonal ? 0 : kTile;
+  const int     lhsBegin    = lhsTile * TileSize;
+  const int     rhsBegin    = rhsTile * TileSize;
+  const int     lhsCount    = min(TileSize, size - lhsBegin);
+  const int     rhsCount    = diagonal ? lhsCount : min(TileSize, size - rhsBegin);
+  const int     rhsColumn   = diagonal ? 0 : TileSize;
   __syncthreads();  // The previous tile pair has finished reading the cache.
-  for (int column = threadIdx.x; column < 2 * kTile; column += kBlockSize) {
-    const int  position = column < kTile ? lhsBegin + column : rhsBegin + column - kTile;
-    const bool used     = column < kTile ? column < lhsCount : !diagonal && column - kTile < rhsCount;
+  for (int column = threadIdx.x; column < 2 * TileSize; column += kBlockSize) {
+    const int  position = column < TileSize ? lhsBegin + column : rhsBegin + column - TileSize;
+    const bool used     = column < TileSize ? column < lhsCount : !diagonal && column - TileSize < rhsCount;
     rows[column]        = used ? centroidOf(tree, entries[position]) : nullptr;
   }
   __syncthreads();
   // Word-major with an odd stride, so pair reads of one word spread over banks.
-  for (int item = threadIdx.x; item < 2 * kTile * tree.numWords; item += kBlockSize) {
+  for (int item = threadIdx.x; item < 2 * TileSize * tree.numWords; item += kBlockSize) {
     const int column = item / tree.numWords;
     const int word   = item % tree.numWords;
     if (rows[column] != nullptr) {
@@ -498,7 +503,7 @@ __device__ unsigned long long tilePairsMin(const Tree&    tree,
     }
   }
   __syncthreads();
-  for (int column = threadIdx.x; column < 2 * kTile; column += kBlockSize) {
+  for (int column = threadIdx.x; column < 2 * TileSize; column += kBlockSize) {
     int count = 0;
     for (int word = 0; rows[column] != nullptr && word < tree.numWords; ++word) {
       count += __popc(cache[word * cacheStride + column]);
@@ -853,7 +858,7 @@ __device__ bool insertRows(const Tree&    tree,
         }
       }
     };
-    if (numWords % 4 == 0) {
+    if (numWords % 4 == 0 && isVectorAligned(centroid)) {
       // 16-byte loads, several in flight: only this thread reads the row.
 #pragma unroll 4
       for (int vector = 0; vector < numWords / 4; ++vector) {
@@ -1121,6 +1126,7 @@ __global__ void refreshKernel(const Tree     tree,
 }
 
 // Exact least-similar pair of every overflowing leaf, spread over blocks by tile pair.
+template <int TileSize>
 __global__ void splitPairsKernel(const Tree          tree,
                                  const int*          keys,
                                  const int*          splitQueue,
@@ -1129,18 +1135,18 @@ __global__ void splitPairsKernel(const Tree          tree,
   extern __shared__ uint4 dynamicShared[];
   __shared__ Scratch      scratch;
   const int               size     = tree.branchingFactor + 1;
-  const int               numTiles = (size + kTile - 1) / kTile;
+  const int               numTiles = (size + TileSize - 1) / TileSize;
   const int               perLeaf  = numTiles * (numTiles + 1) / 2;
   const long long         total    = static_cast<long long>(*splitCount) * perLeaf;
   for (long long work = blockIdx.x; work < total; work += gridDim.x) {
     const int  index = splitQueue[work / perLeaf];
     const int2 tiles = tilePair(static_cast<int>(work % perLeaf), numTiles);
-    const auto best  = blockMin(tilePairsMin(tree,
-                                            entriesOf(tree, keys[index]),
-                                            size,
-                                            tiles.x,
-                                            tiles.y,
-                                            reinterpret_cast<unsigned char*>(dynamicShared)),
+    const auto best  = blockMin(tilePairsMin<TileSize>(tree,
+                                                      entriesOf(tree, keys[index]),
+                                                      size,
+                                                      tiles.x,
+                                                      tiles.y,
+                                                      reinterpret_cast<unsigned char*>(dynamicShared)),
                                scratch);
     if (threadIdx.x == 0) {
       atomicMin(pairKeys + index, best);
@@ -1180,18 +1186,19 @@ __global__ void splitPlansKernel(const Tree          tree,
 
 // Applies the split of the overflowing leaf at index of the sorted batch, and
 // any parent splits it cascades into. The leaf halves' summaries are deferred.
-__device__ void splitLeaf(const Tree&    tree,
-                          const int      index,
-                          const int*     keys,
-                          const int*     plans,
-                          const int*     leftSizes,
-                          int*           innerPlan,
-                          std::int8_t*   sides,
-                          int*           deferredNodes,
-                          int*           deferredEntries,
-                          int&           deferred,
-                          unsigned char* shared,
-                          Scratch&       scratch) {
+template <int TileSize>
+__device__ __forceinline__ void splitLeaf(const Tree&    tree,
+                                          const int      index,
+                                          const int*     keys,
+                                          const int*     plans,
+                                          const int*     leftSizes,
+                                          int*           innerPlan,
+                                          std::int8_t*   sides,
+                                          int*           deferredNodes,
+                                          int*           deferredEntries,
+                                          int&           deferred,
+                                          unsigned char* shared,
+                                          Scratch&       scratch) {
   int        node     = keys[index];
   const int* plan     = plans + static_cast<std::size_t>(index) * tree.stride;
   int        leftSize = leftSizes[index];
@@ -1226,12 +1233,12 @@ __device__ void splitLeaf(const Tree&    tree,
     node                        = parent;
     // Seeds of the overflowing parent, searched by this block alone.
     const int          size     = tree.nodeSize[node];
-    const int          numTiles = (size + kTile - 1) / kTile;
+    const int          numTiles = (size + TileSize - 1) / TileSize;
     const int*         entries  = entriesOf(tree, node);
     unsigned long long best     = ULLONG_MAX;
     for (int work = 0; work < numTiles * (numTiles + 1) / 2; ++work) {
       const int2 tiles = tilePair(work, numTiles);
-      best             = min(best, tilePairsMin(tree, entries, size, tiles.x, tiles.y, shared));
+      best             = min(best, tilePairsMin<TileSize>(tree, entries, size, tiles.x, tiles.y, shared));
     }
     const int2 seeds = pairFromOrder(static_cast<std::uint32_t>(blockMin(best, scratch)), size);
     leftSize         = partitionEntries(tree, entries, size, seeds.x, seeds.y, innerPlan, sides, scratch);
@@ -1243,6 +1250,7 @@ __device__ void splitLeaf(const Tree&    tree,
 // so node IDs and parent entry order are deterministic. A parent that overflows
 // splits at once, cascading upward, after the summaries it needs are current.
 // Only the two summaries of each leaf split are left to summarizeKernel.
+template <int TileSize>
 __global__ void repairKernel(const Tree   tree,
                              const int    count,
                              const int*   keys,
@@ -1283,18 +1291,18 @@ __global__ void repairKernel(const Tree   tree,
     }
     __syncthreads();
     for (int queued = 0; queued < warpOffsets[kNumWarps] && *tree.status == kSuccess; ++queued) {
-      splitLeaf(tree,
-                queue[queued],
-                keys,
-                plans,
-                leftSizes,
-                innerPlan,
-                sides,
-                deferredNodes,
-                deferredEntries,
-                deferred,
-                reinterpret_cast<unsigned char*>(dynamicShared),
-                scratch);
+      splitLeaf<TileSize>(tree,
+                          queue[queued],
+                          keys,
+                          plans,
+                          leftSizes,
+                          innerPlan,
+                          sides,
+                          deferredNodes,
+                          deferredEntries,
+                          deferred,
+                          reinterpret_cast<unsigned char*>(dynamicShared),
+                          scratch);
     }
   }
   if (threadIdx.x == 0) {
@@ -1413,6 +1421,37 @@ template <typename T> void reserveScratch(AsyncDeviceVector<T>& vector, const st
   }
 }
 
+template <int TileSize> bool splitCacheFits(const int numWords, const int sharedMemoryBudget) {
+  if (sharedMemoryBudget <= 0) {
+    return false;
+  }
+  cudaFuncAttributes pairAttributes{};
+  cudaFuncAttributes repairAttributes{};
+  cudaCheckError(cudaFuncGetAttributes(&pairAttributes, splitPairsKernel<TileSize>));
+  cudaCheckError(cudaFuncGetAttributes(&repairAttributes, repairKernel<TileSize>));
+  const std::size_t staticBytes = std::max(pairAttributes.sharedSizeBytes, repairAttributes.sharedSizeBytes);
+  return pairCacheBytes<TileSize>(numWords) + staticBytes <= static_cast<std::size_t>(sharedMemoryBudget);
+}
+
+template <int TileSize> std::size_t configureSplitCache(const int numWords, const int deviceSharedMemory) {
+  const auto         bytes = pairCacheBytes<TileSize>(numWords);
+  cudaFuncAttributes pairAttributes{};
+  cudaFuncAttributes repairAttributes{};
+  cudaCheckError(cudaFuncGetAttributes(&pairAttributes, splitPairsKernel<TileSize>));
+  cudaCheckError(cudaFuncGetAttributes(&repairAttributes, repairKernel<TileSize>));
+  // Kernel attributes are shared by concurrent calls, so their limits must not depend on the input width.
+  const auto maxCache    = pairCacheBytes<TileSize>(kBitBirchMaxWords);
+  const auto pairLimit   = std::min(maxCache, deviceSharedMemory - pairAttributes.sharedSizeBytes);
+  const auto repairLimit = std::min(maxCache, deviceSharedMemory - repairAttributes.sharedSizeBytes);
+  cudaCheckError(cudaFuncSetAttribute(splitPairsKernel<TileSize>,
+                                      cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                      static_cast<int>(pairLimit)));
+  cudaCheckError(cudaFuncSetAttribute(repairKernel<TileSize>,
+                                      cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                      static_cast<int>(repairLimit)));
+  return bytes;
+}
+
 class TreeBuilder {
  public:
   TreeBuilder(const std::uint32_t*   fingerprints,
@@ -1420,6 +1459,7 @@ class TreeBuilder {
               const int              numWords,
               const double           threshold,
               const BitBirchOptions& options,
+              const int              sharedMemoryBudget,
               const cudaStream_t     stream)
       : numRows_(numRows),
         numWords_(numWords),
@@ -1489,12 +1529,12 @@ class TreeBuilder {
     int device = 0;
     cudaCheckError(cudaGetDevice(&device));
     cudaCheckError(cudaDeviceGetAttribute(&numSMs_, cudaDevAttrMultiProcessorCount, device));
-    pairShared_ = pairCacheBytes(numWords);
-    cudaCheckError(cudaFuncSetAttribute(splitPairsKernel,
-                                        cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                        static_cast<int>(pairShared_)));
-    cudaCheckError(
-      cudaFuncSetAttribute(repairKernel, cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(pairShared_)));
+    int deviceSharedMemory = 0;
+    cudaCheckError(cudaDeviceGetAttribute(&deviceSharedMemory, cudaDevAttrMaxSharedMemoryPerBlockOptin, device));
+    const int budget = std::min(sharedMemoryBudget, deviceSharedMemory);
+    splitTileSize_   = bitbirch::selectSplitTileSize(numWords, budget);
+    pairShared_      = splitTileSize_ == 64 ? configureSplitCache<64>(numWords, deviceSharedMemory) :
+                                              configureSplitCache<32>(numWords, deviceSharedMemory);
 
     std::size_t sortBytes = 0;
     cudaCheckError(cub::DeviceRadixSort::SortPairs(nullptr,
@@ -1603,6 +1643,35 @@ class TreeBuilder {
                                                    stream_));
   }
 
+  template <int TileSize> void splitOverflowingNodes(const int count) {
+    splitPairsKernel<TileSize><<<2 * numSMs_, kBlockSize, pairShared_, stream_>>>(tree_,
+                                                                                  sortedKeys_.data(),
+                                                                                  splitQueue_.data(),
+                                                                                  splitCount_.data(),
+                                                                                  pairKeys_.data());
+    cudaCheckError(cudaGetLastError());
+    splitPlansKernel<<<count, kBlockSize, 0, stream_>>>(tree_,
+                                                        sortedKeys_.data(),
+                                                        splitQueue_.data(),
+                                                        splitCount_.data(),
+                                                        pairKeys_.data(),
+                                                        plans_.data(),
+                                                        leftSizes_.data(),
+                                                        sides_.data());
+    cudaCheckError(cudaGetLastError());
+    repairKernel<TileSize><<<1, kBlockSize, pairShared_, stream_>>>(tree_,
+                                                                    count,
+                                                                    sortedKeys_.data(),
+                                                                    plans_.data(),
+                                                                    leftSizes_.data(),
+                                                                    innerPlan_.data(),
+                                                                    sides_.data(),
+                                                                    deferredNodes_.data(),
+                                                                    deferredEntries_.data(),
+                                                                    numDeferred_.data());
+    cudaCheckError(cudaGetLastError());
+  }
+
   void insertBatch(const int begin, const int count) {
     const ScopedNvtxRange batchRange("BitBIRCH batch");
     const bool            groups = begin >= kOrderedWarmup;
@@ -1674,32 +1743,11 @@ class TreeBuilder {
           deltaCounts_.data());
         cudaCheckError(cudaGetLastError());
       }
-      splitPairsKernel<<<2 * numSMs_, kBlockSize, pairShared_, stream_>>>(tree_,
-                                                                          sortedKeys_.data(),
-                                                                          splitQueue_.data(),
-                                                                          splitCount_.data(),
-                                                                          pairKeys_.data());
-      cudaCheckError(cudaGetLastError());
-      splitPlansKernel<<<count, kBlockSize, 0, stream_>>>(tree_,
-                                                          sortedKeys_.data(),
-                                                          splitQueue_.data(),
-                                                          splitCount_.data(),
-                                                          pairKeys_.data(),
-                                                          plans_.data(),
-                                                          leftSizes_.data(),
-                                                          sides_.data());
-      cudaCheckError(cudaGetLastError());
-      repairKernel<<<1, kBlockSize, pairShared_, stream_>>>(tree_,
-                                                            count,
-                                                            sortedKeys_.data(),
-                                                            plans_.data(),
-                                                            leftSizes_.data(),
-                                                            innerPlan_.data(),
-                                                            sides_.data(),
-                                                            deferredNodes_.data(),
-                                                            deferredEntries_.data(),
-                                                            numDeferred_.data());
-      cudaCheckError(cudaGetLastError());
+      if (splitTileSize_ == 64) {
+        splitOverflowingNodes<64>(count);
+      } else {
+        splitOverflowingNodes<32>(count);
+      }
       summarizeKernel<<<2 * count, kBlockSize, 0, stream_>>>(tree_,
                                                              deferredNodes_.data(),
                                                              deferredEntries_.data(),
@@ -1795,9 +1843,10 @@ class TreeBuilder {
   const int                        batchCapacity_;
   const int                        stride_;
   const int                        minNodeSize_;
-  int                              numSMs_     = 0;
-  int                              ownerWidth_ = 1;
-  std::size_t                      pairShared_ = 0;
+  int                              numSMs_        = 0;
+  int                              ownerWidth_    = 1;
+  int                              splitTileSize_ = 64;
+  std::size_t                      pairShared_    = 0;
   Tree                             tree_{};
   AsyncDeviceVector<int>           nodeSize_, nodeParent_, nodeParentEntry_, nodeEntries_;
   AsyncDeviceVector<std::uint8_t>  nodeLeaf_;
@@ -1817,6 +1866,31 @@ class TreeBuilder {
 
 }  // namespace
 
+namespace bitbirch {
+
+int selectSplitTileSize(const int numWords, const int sharedMemoryBudget) {
+  if (splitCacheFits<64>(numWords, sharedMemoryBudget)) {
+    return 64;
+  }
+  if (splitCacheFits<32>(numWords, sharedMemoryBudget)) {
+    return 32;
+  }
+  throw std::runtime_error("BitBIRCH split cache exceeds the per-block shared memory budget");
+}
+
+BitBirchResult clusterWithSharedMemoryBudget(const cuda::std::span<const std::uint32_t> fingerprints,
+                                             const int                                  numFingerprints,
+                                             const int                                  numWords,
+                                             const double                               threshold,
+                                             const BitBirchOptions&                     options,
+                                             const int                                  sharedMemoryBudget,
+                                             const cudaStream_t                         stream) {
+  return TreeBuilder(fingerprints.data(), numFingerprints, numWords, threshold, options, sharedMemoryBudget, stream)
+    .run();
+}
+
+}  // namespace bitbirch
+
 BitBirchResult bitBirchGpu(const cuda::std::span<const std::uint32_t> fingerprints,
                            const int                                  numFingerprints,
                            const int                                  numWords,
@@ -1835,7 +1909,13 @@ BitBirchResult bitBirchGpu(const cuda::std::span<const std::uint32_t> fingerprin
   if (numFingerprints == 0) {
     return BitBirchResult{AsyncDeviceVector<int>(0, stream), AsyncDeviceVector<std::uint32_t>(0, stream), 0, numWords};
   }
-  return TreeBuilder(fingerprints.data(), numFingerprints, numWords, threshold, options, stream).run();
+  return bitbirch::clusterWithSharedMemoryBudget(fingerprints,
+                                                 numFingerprints,
+                                                 numWords,
+                                                 threshold,
+                                                 options,
+                                                 std::numeric_limits<int>::max(),
+                                                 stream);
 }
 
 }  // namespace nvMolKit
