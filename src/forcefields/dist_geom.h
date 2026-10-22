@@ -490,8 +490,8 @@ cudaError_t computeEnergy(BatchedMolecularDeviceBuffers& molSystemDevice,
                           const double*                  positions        = nullptr,
                           cudaStream_t                   stream           = nullptr);
 
-//! Compute the energy of the batched molecular system. This will populate the energyOuts buffer on device.
-//! energyOuts and energyBuffer must be zeroed before calling this function.
+//! Compute the energy of the batched molecular system. This writes the energy of each active system to energyOuts on
+//! device, and zero for inactive systems.
 cudaError_t computeEnergy(BatchedMolecularDeviceBuffers&             molSystemDevice,
                           const nvMolKit::AsyncDeviceVector<int>&    ctxAtomStartsDevice,
                           const nvMolKit::AsyncDeviceVector<double>& ctxPositionsDevice,
