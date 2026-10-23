@@ -184,10 +184,7 @@ nvMolKit currently supports the following features:
     * Supports generic dense similarity matrix inputs from Tanimoto or other methods
     * Supports fused in-loop Tanimoto/Cosine similarity for large datasets
 
-* **BitBIRCH clustering**: Native ordered-tree clustering for packed binary fingerprints
-    * Linear device storage without an all-pairs similarity matrix
-    * Batched snapshot routing with ordered leaf owners avoids concurrent topology mutation
-    * Supports bounded host-input and summary caches, host-resident labels, and optional packed majority centroids
+* **BitBIRCH clustering**: GPU-accelerated clustering of binary fingerprints, with optional cluster centroids
 
 * **Substructure Search**: GPU-accelerated substructure matching against batches of molecules
     * Supports SMILES and recursive SMARTS-based query molecules via RDKit

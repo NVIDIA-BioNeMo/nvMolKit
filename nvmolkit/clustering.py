@@ -13,12 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""GPU-accelerated clustering.
+"""GPU-accelerated Butina, directed sphere exclusion (DISE), and BitBIRCH clustering.
 
-Each algorithm has a matrix form that takes a precomputed distance matrix and a
-``fused_`` form that computes distances from fingerprints or molecules as needed.
-``bitbirch()`` builds one BitBIRCH tree incrementally from packed fingerprints
-and needs no distance matrix.
+Butina and DISE accept precomputed distance matrices or compute distances as
+needed through their ``fused_`` functions. BitBIRCH clusters packed binary
+fingerprints directly.
 """
 
 import math
@@ -143,6 +142,9 @@ def dise(
 ) -> ClusterDeviceResult | _RDKitClusters:
     """Cluster a distance matrix by directed sphere exclusion (DISE).
 
+    `Gobbi et al., J. Cheminform. 7, 11 (2015)
+    <https://doi.org/10.1186/s13321-015-0056-8>`_.
+
     Centroids are the leaders selected by :func:`~nvmolkit.pickers.leader`. With
     ``assignment="first"``, each item joins the first centroid that excluded
     it; with ``"nearest"``, each non-centroid joins its nearest centroid, with
@@ -194,6 +196,9 @@ def fused_dise(
 ) -> ClusterDeviceResult | _RDKitClusters:
     """Cluster by directed sphere exclusion (DISE), computing distances as needed.
 
+    `Gobbi et al., J. Cheminform. 7, 11 (2015)
+    <https://doi.org/10.1186/s13321-015-0056-8>`_.
+
     Equivalent to :func:`dise` on the matrix of ``1 - similarity`` values,
     with memory that scales as ``O(N)``. Distances are computed in float32, so
     results can differ slightly from RDKit's double-precision results.
@@ -210,10 +215,6 @@ def fused_dise(
     Returns:
         A :class:`ClusterDeviceResult` for ``OutputMode.DEVICE``, or
         centroid-first tuples of input indices for ``OutputMode.RDKIT``.
-
-    Note:
-        For the method, see `Gobbi et al. (2015)
-        <https://doi.org/10.1186/s13321-015-0056-8>`_.
     """
     _validate_output(output)
     _validate_assignment(assignment)
@@ -274,6 +275,8 @@ def butina(
     output: OutputMode = OutputMode.DEVICE,
 ) -> _RDKitClusters | ClusterDeviceResult:
     """Perform Butina clustering on a distance matrix.
+
+    `Butina, JCICS 39, 747-750 (1999) <https://doi.org/10.1021/ci9803381>`_.
 
     The Butina algorithm is a deterministic clustering method that groups items based
     on distance thresholds. It iteratively:
@@ -359,6 +362,8 @@ def fused_butina(
 ) -> _RDKitClusters | ClusterDeviceResult:
     """Perform Butina clustering on fingerprints, computing distances as needed.
 
+    `Butina, JCICS 39, 747-750 (1999) <https://doi.org/10.1021/ci9803381>`_.
+
     Equivalent to :func:`butina` on the matrix of ``1 - similarity`` values,
     without forming the ``N x N`` matrix.
 
@@ -402,20 +407,17 @@ def bitbirch(
     return_centroids: bool = False,
     stream: torch.cuda.Stream | None = None,
 ) -> AsyncGpuResult | tuple[AsyncGpuResult, AsyncGpuResult]:
-    """Cluster packed binary fingerprints with one BitBIRCH tree.
+    """Cluster packed binary fingerprints on the GPU using BitBIRCH.
 
-    Each insertion batch routes against a stable snapshot of the tree. One ordered
-    owner then updates each leaf, and summaries and splits are repaired at
-    barriers, so the tree is never mutated concurrently and no independent trees
-    are merged.
+    `Pickering et al., BitBIRCH-Lean, bioRxiv (2025)
+    <https://doi.org/10.1101/2025.10.22.684015>`_.
 
     Args:
         x: Shape ``(N, W)`` packed int32 or uint32 fingerprints, ``W <= 128``
            (at most 4096 bits). Host arrays are copied to the GPU.
         threshold: Minimum combined-cluster iSIM Jaccard--Tanimoto similarity.
         branching_factor: Maximum entries per tree node. Must be at least 3.
-        batch_size: Fingerprints routed per insertion batch. Larger batches
-                    expose more parallelism but route against an older snapshot.
+        batch_size: Number of fingerprints processed together. Must be positive.
         return_centroids: Also return packed majority centroids with shape
                           ``(num_clusters, W)``.
         stream: CUDA stream to use. If None, uses the current stream.
