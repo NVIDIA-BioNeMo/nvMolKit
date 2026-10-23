@@ -102,6 +102,7 @@ target_link_libraries(
   PUBLIC ${Boost_LIBRARIES}
          ${PYTHON_LIBRARIES}
          device_vector
+         bitbirch
          butina
          aap
          diversity_pickers

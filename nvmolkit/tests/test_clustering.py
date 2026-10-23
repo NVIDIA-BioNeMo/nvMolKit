@@ -19,7 +19,7 @@ import torch
 from rdkit.ML.Cluster.Butina import ClusterData
 
 import nvmolkit.clustering as clustering
-from nvmolkit.clustering import ClusterDeviceResult, OutputMode, butina, fused_butina
+from nvmolkit.clustering import ClusterDeviceResult, OutputMode, bitbirch, butina, fused_butina
 from nvmolkit.similarity import AAPMetric, CosineMetric, TanimotoMetric
 from nvmolkit.types import AsyncGpuResult
 
@@ -545,3 +545,106 @@ def test_fused_butina_rdkit_and_device_outputs_agree():
     assert rdkit_result == fused_butina_clusters(x, cutoff=0.4)
     assert [cluster[0] for cluster in rdkit_result] == device_result.centroids.numpy().tolist()
     assert device_result.cluster_sizes.torch().tolist() == [len(cluster) for cluster in rdkit_result]
+
+
+# ---------------------------------------------------------------------------
+# BitBIRCH tests
+# ---------------------------------------------------------------------------
+
+
+def test_bitbirch_merges_at_exact_diameter_threshold_and_returns_centroids():
+    x = torch.tensor([[0b0011], [0b0001], [0b1100], [0b0100]], dtype=torch.int32, device="cuda")
+    labels, centroids = bitbirch(x, threshold=0.5, branching_factor=3, return_centroids=True)
+    torch.testing.assert_close(labels.torch().cpu(), torch.tensor([0, 0, 1, 1], dtype=torch.int32))
+    torch.testing.assert_close(
+        centroids.torch().cpu().view(torch.int32),
+        torch.tensor([[0b0011], [0b1100]], dtype=torch.int32),
+    )
+
+
+@pytest.mark.parametrize("branching_factor", [3, 4, 7])
+def test_bitbirch_cascading_splits_are_deterministic(branching_factor):
+    x = (
+        torch.ones(24, dtype=torch.int32, device="cuda") << torch.arange(24, dtype=torch.int32, device="cuda")
+    ).reshape(-1, 1)
+    labels = bitbirch(x, threshold=0.9, branching_factor=branching_factor).torch()
+    torch.testing.assert_close(labels, torch.arange(24, dtype=torch.int32, device="cuda"))
+
+
+@pytest.mark.parametrize("input_kind", ["async", "cpu_tensor", "numpy"])
+def test_bitbirch_accepts_array_input_types(input_kind):
+    x = torch.tensor([[3], [1], [12], [4]], dtype=torch.int32, device="cuda")
+    if input_kind == "async":
+        inp = AsyncGpuResult(x)
+    elif input_kind == "cpu_tensor":
+        inp = x.cpu()
+    else:
+        inp = x.cpu().numpy()
+    labels = bitbirch(inp, threshold=0.5, branching_factor=3).torch().cpu()
+    torch.testing.assert_close(labels, torch.tensor([0, 0, 1, 1], dtype=torch.int32))
+
+
+def test_bitbirch_explicit_stream():
+    x = torch.tensor([[3], [1], [12], [4]], dtype=torch.int32, device="cuda")
+    stream = torch.cuda.Stream()
+    labels = bitbirch(x, threshold=0.5, branching_factor=3, stream=stream).torch()
+    stream.synchronize()
+    torch.testing.assert_close(labels, torch.tensor([0, 0, 1, 1], dtype=torch.int32, device="cuda"))
+
+
+def test_bitbirch_empty_and_all_zero_fingerprints():
+    empty = torch.empty((0, 3), dtype=torch.uint32, device="cuda")
+    empty_labels, empty_centroids = bitbirch(empty, threshold=0.5, return_centroids=True)
+    assert empty_labels.torch().shape == (0,)
+    assert empty_centroids.torch().shape == (0, 3)
+
+    zeros = torch.zeros((12, 3), dtype=torch.uint32, device="cuda")
+    labels, centroids = bitbirch(zeros, threshold=1.0, branching_factor=3, return_centroids=True)
+    torch.testing.assert_close(labels.torch(), torch.zeros(12, dtype=torch.int32, device="cuda"))
+    torch.testing.assert_close(centroids.torch(), torch.zeros((1, 3), dtype=torch.uint32, device="cuda"))
+
+
+def test_bitbirch_threshold_extremes_and_all_one_majority_centroid():
+    x = torch.tensor([[0], [1], [3], [0xFFFFFFFF]], dtype=torch.uint32, device="cuda")
+    labels, centroids = bitbirch(x, threshold=0.0, branching_factor=3, return_centroids=True)
+    torch.testing.assert_close(labels.torch(), torch.zeros(4, dtype=torch.int32, device="cuda"))
+    torch.testing.assert_close(centroids.torch(), torch.tensor([[3]], dtype=torch.uint32, device="cuda"))
+
+    duplicates = torch.full((17, 2), 0xFFFFFFFF, dtype=torch.uint32, device="cuda")
+    labels, centroids = bitbirch(duplicates, threshold=1.0, return_centroids=True)
+    torch.testing.assert_close(labels.torch(), torch.zeros(17, dtype=torch.int32, device="cuda"))
+    torch.testing.assert_close(centroids.torch(), torch.full((1, 2), 0xFFFFFFFF, dtype=torch.uint32, device="cuda"))
+
+
+def test_bitbirch_accepts_noncontiguous_packed_input():
+    storage = torch.tensor(
+        [[3, 99, 1, 99], [1, 99, 1, 99], [12, 99, 4, 99], [4, 99, 4, 99]],
+        dtype=torch.uint32,
+        device="cuda",
+    )
+    x = storage[:, ::2]
+    assert not x.is_contiguous()
+    labels = bitbirch(x, threshold=0.5, branching_factor=3).torch()
+    torch.testing.assert_close(labels, torch.tensor([0, 0, 1, 1], dtype=torch.int32, device="cuda"))
+
+
+@pytest.mark.parametrize(
+    "kwargs,error",
+    [
+        ({"threshold": -0.1}, r"threshold must be finite and in \[0, 1\]"),
+        ({"threshold": np.nan}, r"threshold must be finite and in \[0, 1\]"),
+        ({"threshold": np.inf}, r"threshold must be finite and in \[0, 1\]"),
+        ({"threshold": 0.5, "branching_factor": 2}, "branching_factor must be at least 3"),
+        ({"threshold": 0.5, "batch_size": 0}, "batch_size must be positive"),
+    ],
+)
+def test_bitbirch_validation(kwargs, error):
+    x = torch.zeros((2, 1), dtype=torch.int32)
+    with pytest.raises(ValueError, match=error):
+        bitbirch(x, **kwargs)
+
+
+def test_bitbirch_rejects_zero_word_fingerprints():
+    x = torch.empty((4, 0), dtype=torch.uint32, device="cuda")
+    with pytest.raises(ValueError, match="at least one fingerprint word"):
+        bitbirch(x, threshold=0.5)
