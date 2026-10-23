@@ -5,6 +5,7 @@
 
 #include <GraphMol/Conformer.h>
 #include <GraphMol/Descriptors/MolData3Ddescriptors.h>
+#include <GraphMol/PeriodicTable.h>
 #include <GraphMol/ROMol.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <GraphMol/Substruct/SubstructMatch.h>
@@ -34,6 +35,8 @@ struct DeviceDescriptorInputs {
   AsyncDeviceVector<int32_t> bondNeighbors;
   AsyncDeviceVector<uint8_t> usrcatAtomClasses;
   AsyncDeviceVector<uint8_t> heavyAtomFlags;
+  AsyncDeviceVector<double>  vdwRadii;
+  AsyncDeviceVector<uint8_t> dclvPolarClasses;
   AsyncDeviceVector<int32_t> defaultConformerRows;
   AsyncDeviceVector<int8_t>  conformerIs3D;
   AsyncDeviceVector<int32_t> moleculeAtomStarts;
@@ -48,6 +51,7 @@ struct DescriptorInputNeeds {
   bool bondAdjacency         = false;
   bool usrcatAtomClasses     = false;
   bool heavyAtomFlags        = false;
+  bool dclvAtomInputs        = false;
   bool defaultConformerRows  = false;
   bool conformerFlags        = false;
 };
@@ -71,6 +75,37 @@ void writeBondAdjacency(const RDKit::ROMol& mol,
       neighbors[cursor++] = static_cast<int32_t>(neighbor->getIdx());
     }
   }
+}
+
+//! Property3DDeviceInputs::dclvPolarClasses bits of @p atom, from RDKit's includeAsPolar (DCLV.cpp).
+uint8_t dclvPolarClasses(const RDKit::ROMol& mol, const RDKit::Atom& atom) {
+  auto heavyClass = [](const int atomicNum) -> uint8_t {
+    switch (atomicNum) {
+      case 7:
+      case 8:
+        return kDclvPolarNitrogenOxygen;
+      case 15:
+      case 16:
+        return kDclvPolarSulfurPhosphorus;
+      default:
+        return 0;
+    }
+  };
+  if (atom.getAtomicNum() != 1) {
+    return heavyClass(atom.getAtomicNum());
+  }
+  // A hydrogen is polar when a neighbor is. RDKit recurses into hydrogen neighbors, which never terminates for
+  // bonded hydrogens (H2); such hydrogens are not polar here.
+  uint8_t classes = 0;
+  for (const auto* neighbor : mol.atomNeighbors(&atom)) {
+    const uint8_t neighborClass = heavyClass(neighbor->getAtomicNum());
+    if (neighborClass == kDclvPolarNitrogenOxygen) {
+      classes |= kDclvPolarHydrogenOnNO;
+    } else if (neighborClass == kDclvPolarSulfurPhosphorus) {
+      classes |= kDclvPolarHydrogenOnSulfurPhos;
+    }
+  }
+  return classes;
 }
 
 //! RDKit's USRCAT atom classes (hydrophobic, aromatic, acceptor, donor), from
@@ -141,6 +176,8 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
   }
   std::vector<uint8_t> usrcatAtomClasses(needs.usrcatAtomClasses ? static_cast<size_t>(totalAtoms) : 0);
   std::vector<uint8_t> heavyAtomFlags(needs.heavyAtomFlags ? static_cast<size_t>(totalAtoms) : 0);
+  std::vector<double>  vdwRadii(needs.dclvAtomInputs ? static_cast<size_t>(totalAtoms) : 0);
+  std::vector<uint8_t> polarClasses(needs.dclvAtomInputs ? static_cast<size_t>(totalAtoms) : 0);
   // Coordinate rows follow each molecule's conformers in order, so a molecule's first row is its default
   // conformer (RDKit's getConformer(-1)).
   std::vector<int32_t> defaultConformerRows;
@@ -178,7 +215,7 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
     exceptionRegistry.rethrow();
   }
   if (needs.atomPropertyWeights || needs.iStateDragWeights || needs.covalentRadiusWeights || needs.bondAdjacency ||
-      needs.usrcatAtomClasses || needs.heavyAtomFlags) {
+      needs.usrcatAtomClasses || needs.heavyAtomFlags || needs.dclvAtomInputs) {
 #pragma omp parallel for num_threads(numThreads) schedule(dynamic) default(none) shared(numMols,                 \
                                                                                           mols,                  \
                                                                                           atomStarts,            \
@@ -192,6 +229,8 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
                                                                                           bondNeighbors,         \
                                                                                           usrcatAtomClasses,     \
                                                                                           heavyAtomFlags,        \
+                                                                                          vdwRadii,              \
+                                                                                          polarClasses,          \
                                                                                           exceptionRegistry)
     for (int molIdx = 0; molIdx < numMols; ++molIdx) {
       try {
@@ -226,6 +265,13 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
             heavyAtomFlags[atomStart + atom->getIdx()] = atom->getAtomicNum() > 1 ? 1 : 0;
           }
         }
+        if (needs.dclvAtomInputs) {
+          const RDKit::PeriodicTable* table = RDKit::PeriodicTable::getTable();
+          for (const auto* atom : mol.atoms()) {
+            vdwRadii[atomStart + atom->getIdx()]     = table->getRvdw(atom->getAtomicNum());
+            polarClasses[atomStart + atom->getIdx()] = dclvPolarClasses(mol, *atom);
+          }
+        }
         if (needs.bondAdjacency) {
           writeBondAdjacency(mol, neighborOffsets[molIdx], bondNeighborStarts.data() + atomStart, bondNeighbors.data());
         }
@@ -257,6 +303,8 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
                                 AsyncDeviceVector<int32_t>(bondNeighbors.size(), stream),
                                 AsyncDeviceVector<uint8_t>(usrcatAtomClasses.size(), stream),
                                 AsyncDeviceVector<uint8_t>(heavyAtomFlags.size(), stream),
+                                AsyncDeviceVector<double>(vdwRadii.size(), stream),
+                                AsyncDeviceVector<uint8_t>(polarClasses.size(), stream),
                                 AsyncDeviceVector<int32_t>(defaultConformerRows.size(), stream),
                                 AsyncDeviceVector<int8_t>(conformerIs3D.size(), stream),
                                 AsyncDeviceVector<int32_t>(atomStarts.size(), stream)};
@@ -283,6 +331,10 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
   }
   if (!heavyAtomFlags.empty()) {
     result.heavyAtomFlags.copyFromHost(heavyAtomFlags);
+  }
+  if (!vdwRadii.empty()) {
+    result.vdwRadii.copyFromHost(vdwRadii);
+    result.dclvPolarClasses.copyFromHost(polarClasses);
   }
   if (!defaultConformerRows.empty()) {
     result.defaultConformerRows.copyFromHost(defaultConformerRows);
@@ -334,6 +386,7 @@ Property3DBatchResult<Real> calc3DProperties(const std::vector<const RDKit::ROMo
     needs.covalentRadiusWeights |= property == Property3D::AUTOCORR3D;
     needs.bondAdjacency |= property == Property3D::AUTOCORR3D || property == Property3D::GETAWAY;
     needs.heavyAtomFlags |= property == Property3D::GETAWAY;
+    needs.dclvAtomInputs |= family == Property3DFamily::Dclv;
     // Device coordinate rows are not tied to molecule conformers, so GETAWAY then uses each row's own.
     needs.defaultConformerRows |= property == Property3D::GETAWAY && coordinates == nullptr;
     needs.usrcatAtomClasses |= property == Property3D::USRCAT;
@@ -352,6 +405,8 @@ Property3DBatchResult<Real> calc3DProperties(const std::vector<const RDKit::ROMo
   inputs.bondNeighbors         = uploadedInputs.bondNeighbors.data();
   inputs.usrcatAtomClasses     = uploadedInputs.usrcatAtomClasses.data();
   inputs.heavyAtomFlags        = uploadedInputs.heavyAtomFlags.data();
+  inputs.vdwRadii              = uploadedInputs.vdwRadii.data();
+  inputs.dclvPolarClasses      = uploadedInputs.dclvPolarClasses.data();
   inputs.defaultConformerRows  = uploadedInputs.defaultConformerRows.data();
   inputs.conformerIs3D         = uploadedInputs.conformerIs3D.data();
   for (const RDKit::ROMol* mol : mols) {

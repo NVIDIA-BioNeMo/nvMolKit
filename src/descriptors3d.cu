@@ -7,6 +7,7 @@
 #include <string>
 
 #include "src/descriptors3d.h"
+#include "src/descriptors3d_dclv.cuh"
 #include "src/descriptors3d_getaway.cuh"
 #include "src/descriptors3d_kernel.cuh"
 #include "src/descriptors3d_moments.cuh"
@@ -56,6 +57,20 @@ std::string_view property3DName(const Property3D property) {
       return "USRCAT";
     case Property3D::GETAWAY:
       return "GETAWAY";
+    case Property3D::DCLVSurfaceArea:
+      return "DCLVSurfaceArea";
+    case Property3D::DCLVPolarSurfaceArea:
+      return "DCLVPolarSurfaceArea";
+    case Property3D::DCLVVolume:
+      return "DCLVVolume";
+    case Property3D::DCLVVDWVolume:
+      return "DCLVVDWVolume";
+    case Property3D::DCLVPolarVolume:
+      return "DCLVPolarVolume";
+    case Property3D::DCLVCompactness:
+      return "DCLVCompactness";
+    case Property3D::DCLVPackingDensity:
+      return "DCLVPackingDensity";
   }
   throw std::invalid_argument("Unknown Property3D value " + std::to_string(static_cast<int>(property)));
 }
@@ -75,12 +90,15 @@ using descriptors3d_detail::computeInertiaTensor;
 using descriptors3d_detail::computeMomentProperty;
 using descriptors3d_detail::computePrincipalMoments;
 using descriptors3d_detail::ConformerAtoms;
+using descriptors3d_detail::dclvColumn;
+using descriptors3d_detail::DclvOutputs;
 using descriptors3d_detail::kBlockSize;
 using descriptors3d_detail::kConformersPerBlock;
 using descriptors3d_detail::kGroupSize;
 using descriptors3d_detail::kGroupsPerWarp;
 using descriptors3d_detail::kWarpSize;
 using descriptors3d_detail::kWarpsPerBlock;
+using descriptors3d_detail::launchDclvProperties;
 using descriptors3d_detail::launchGetawayProperties;
 using descriptors3d_detail::launchPairwiseProperties;
 using descriptors3d_detail::launchProjectionProperties;
@@ -135,6 +153,13 @@ constexpr SharedStageSet directStages(const Property3D property) {
     case Property3D::USR:
     case Property3D::USRCAT:
     case Property3D::GETAWAY:
+    case Property3D::DCLVSurfaceArea:
+    case Property3D::DCLVPolarSurfaceArea:
+    case Property3D::DCLVVolume:
+    case Property3D::DCLVVDWVolume:
+    case Property3D::DCLVPolarVolume:
+    case Property3D::DCLVCompactness:
+    case Property3D::DCLVPackingDensity:
       return 0;
   }
   return 0;
@@ -302,6 +327,7 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
   Real*                   usrOutput     = nullptr;
   Real*                   usrcatOutput  = nullptr;
   Real*                   getawayOutput = nullptr;
+  DclvOutputs<Real>       dclvOutputs;
   for (const Property3D property : properties) {
     // Bounds the work arrays, which hold one slot per known property.
     if (std::find(kAllProperty3D.begin(), kAllProperty3D.end(), property) == kAllProperty3D.end()) {
@@ -331,6 +357,9 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
       case Property3DFamily::Getaway:
         getawayOutput = it->second.data();
         break;
+      case Property3DFamily::Dclv:
+        dclvOutputs.values[dclvColumn(property)] = it->second.data();
+        break;
     }
   }
 
@@ -340,6 +369,9 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
   }
   if (getawayOutput != nullptr && (options.getaway.precision < 1 || options.getaway.precision > 6)) {
     throw std::invalid_argument("GETAWAY precision must be between 1 and 6 significant digits");
+  }
+  if (dclvOutputs.any() && (!std::isfinite(options.dclv.probeRadius) || options.dclv.probeRadius < 0)) {
+    throw std::invalid_argument("DCLV probe radius must be finite and non-negative");
   }
 
   if (coordinates.numConformers == 0) {
@@ -370,6 +402,10 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
   if (pairwiseOutputs.rdf != nullptr && inputs.iStateDragWeights == nullptr) {
     throw std::invalid_argument("I-state drag weights must not be null when RDF is requested");
   }
+  if (dclvOutputs.any() && (inputs.vdwRadii == nullptr || inputs.dclvPolarClasses == nullptr)) {
+    throw std::invalid_argument(
+      "Van der Waals radii and polar classes must not be null when a DCLV property is requested");
+  }
 
   const bool    momentWeightsAreUnit    = inputs.momentWeights == nullptr;
   const bool    onlySpherocity          = hasSpherocity && work.numProperties == 1;
@@ -385,6 +421,7 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
   launchPairwiseProperties(coordinates, inputs, pairwiseOutputs, bondTable.table, stream);
   launchUsrProperties(coordinates, inputs, usrOutput, usrcatOutput, stream);
   launchGetawayProperties(coordinates, inputs, options.getaway, bondTable.table, getawayOutput, stream);
+  launchDclvProperties(coordinates, inputs, options.dclv, dclvOutputs, stream);
   return results;
 }
 

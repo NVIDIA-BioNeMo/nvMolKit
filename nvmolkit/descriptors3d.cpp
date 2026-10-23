@@ -90,6 +90,9 @@ bp::object calc3DProperties(const bp::list&                mols,
                             const bool                     useAtomicMasses,
                             const double                   whimThreshold,
                             const unsigned int             getawayPrecision,
+                            const double                   dclvProbeRadius,
+                            const bool                     dclvIncludeSandP,
+                            const bool                     dclvIncludeHs,
                             const bp::object&              coordinates,
                             const nvMolKit::PrecisionMode& precision,
                             const int                      preprocessingThreads,
@@ -102,6 +105,9 @@ bp::object calc3DProperties(const bp::list&                mols,
   options.moments.useAtomicMasses = useAtomicMasses;
   options.whim.threshold          = whimThreshold;
   options.getaway.precision       = getawayPrecision;
+  options.dclv.probeRadius        = dclvProbeRadius;
+  options.dclv.includeSandP       = dclvIncludeSandP;
+  options.dclv.includeHs          = dclvIncludeHs;
 
   std::vector<nvMolKit::Property3D> properties;
   for (int i = 0; i < bp::len(propertyNames); ++i) {
@@ -134,6 +140,9 @@ BOOST_PYTHON_MODULE(_descriptors3d) {
            bp::arg("useAtomicMasses"),
            bp::arg("whimThreshold"),
            bp::arg("getawayPrecision"),
+           bp::arg("dclvProbeRadius"),
+           bp::arg("dclvIncludeSandP"),
+           bp::arg("dclvIncludeHs"),
            bp::arg("coordinates"),
            bp::arg("precision"),
            bp::arg("preprocessingThreads"),

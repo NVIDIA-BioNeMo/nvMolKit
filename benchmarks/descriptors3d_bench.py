@@ -46,6 +46,8 @@ VALIDATION_TOLERANCES = {PrecisionMode.SINGLE: (2e-6, 1e-3), PrecisionMode.FULL:
 # Absolute tolerances for USR skews (whole molecule, USRCAT atom classes): the cube root of a near-zero third
 # moment turns rounding noise into visible values, in RDKit as well (a two-atom class has an exact skew of 0).
 USR_SKEW_TOLERANCES = {PrecisionMode.SINGLE: (5e-3, 0.1), PrecisionMode.FULL: (1e-4, 1e-3)}
+# Relative tolerances for the DCLV properties, which sum float32 dot contributions over every atom.
+DCLV_RELATIVE_TOLERANCES = {PrecisionMode.SINGLE: 1e-5, PrecisionMode.FULL: 1e-9}
 
 PROPERTY_SETS = {
     "single": (Property3D.RADIUS_OF_GYRATION,),
@@ -62,6 +64,16 @@ RDKIT_CALCULATORS = {
     Property3D.INERTIAL_SHAPE_FACTOR: rdMolDescriptors.CalcInertialShapeFactor,
     Property3D.ECCENTRICITY: rdMolDescriptors.CalcEccentricity,
     Property3D.ASPHERICITY: rdMolDescriptors.CalcAsphericity,
+}
+
+DCLV_GETTERS = {
+    Property3D.DCLV_SURFACE_AREA: "GetSurfaceArea",
+    Property3D.DCLV_POLAR_SURFACE_AREA: "GetPolarSurfaceArea",
+    Property3D.DCLV_VOLUME: "GetVolume",
+    Property3D.DCLV_VDW_VOLUME: "GetVDWVolume",
+    Property3D.DCLV_POLAR_VOLUME: "GetPolarVolume",
+    Property3D.DCLV_COMPACTNESS: "GetCompactness",
+    Property3D.DCLV_PACKING_DENSITY: "GetPackingDensity",
 }
 
 
@@ -127,15 +139,34 @@ def _pack_device_coordinates(mols: list[Chem.Mol]) -> Device3DResult:
     )
 
 
-def _calc_rdkit(mols: list[Chem.Mol], properties: tuple[Property3D, ...]) -> dict[Property3D, np.ndarray]:
-    """Calculate reference arrays in molecule/conformer order."""
+def _dclv_radii(mol: Chem.Mol) -> list[float]:
+    """Van der Waals radii per atom; RDKit 2025.09.1 has no default-radii DCLV constructor."""
+    table = Chem.GetPeriodicTable()
+    return [table.GetRvdw(atom.GetAtomicNum()) for atom in mol.GetAtoms()]
+
+
+def _calc_rdkit_conformer(
+    mol: Chem.Mol, conf_id: int, properties: tuple[Property3D, ...]
+) -> dict[Property3D, float | list[float]]:
+    dclv = (
+        rdMolDescriptors.DoubleCubicLatticeVolume(mol, _dclv_radii(mol), confId=conf_id)
+        if any(prop in DCLV_GETTERS for prop in properties)
+        else None
+    )
     return {
-        prop: np.asarray(
-            [_calc_rdkit_property(mol, conf.GetId(), prop) for mol in mols for conf in mol.GetConformers()],
-            dtype=np.float64,
-        )
+        prop: getattr(dclv, DCLV_GETTERS[prop])() if prop in DCLV_GETTERS else _calc_rdkit_property(mol, conf_id, prop)
         for prop in properties
     }
+
+
+def _calc_rdkit(mols: list[Chem.Mol], properties: tuple[Property3D, ...]) -> dict[Property3D, np.ndarray]:
+    """Calculate reference arrays in molecule/conformer order."""
+    values = {prop: [] for prop in properties}
+    for mol in mols:
+        for conf in mol.GetConformers():
+            for prop, value in _calc_rdkit_conformer(mol, conf.GetId(), properties).items():
+                values[prop].append(value)
+    return {prop: np.asarray(rows, dtype=np.float64) for prop, rows in values.items()}
 
 
 def _validate(
@@ -164,6 +195,9 @@ def _validate(
                 # Rows RDKit could not compute (multi-fragment molecules) are NaN and not compared.
                 computed = ~np.isnan(expected[prop]).all(axis=1)
                 np.testing.assert_allclose(actual[computed], expected[prop][computed], rtol=0, atol=max(atol, 1.1e-3))
+                continue
+            if prop in DCLV_GETTERS:
+                np.testing.assert_allclose(actual, expected[prop], rtol=DCLV_RELATIVE_TOLERANCES[precision], atol=atol)
                 continue
             if prop not in (Property3D.USR, Property3D.USRCAT):
                 np.testing.assert_allclose(actual, expected[prop], rtol=rtol, atol=atol)
@@ -196,8 +230,7 @@ def _rdkit_worker_range(bounds: tuple[int, int]) -> int:
     done = 0
     for mol in _WORKER_MOLS[start:stop]:
         for conf in mol.GetConformers():
-            for prop in _WORKER_PROPERTIES:
-                _calc_rdkit_property(mol, conf.GetId(), prop)
+            _calc_rdkit_conformer(mol, conf.GetId(), _WORKER_PROPERTIES)
             done += 1
     return done
 
