@@ -19,15 +19,6 @@
 
 namespace nvMolKit {
 
-namespace {
-void allocateEnergyScratch(const DistGeom::BatchedMolecularSystemHost& molSystemHost,
-                           DistGeom::BatchedMolecularDeviceBuffers&    systemDevice) {
-  systemDevice.energyBuffer.resize(molSystemHost.indices.energyBufferStarts.back());
-  systemDevice.energyBuffer.zero();
-  systemDevice.dimension = molSystemHost.dimension;
-}
-}  // namespace
-
 DGBatchedForcefield::DGBatchedForcefield(const DistGeom::BatchedMolecularSystemHost& molSystemHost,
                                          const std::vector<int>&                     atomStartsHost,
                                          const double                                chiralWeight,
@@ -48,7 +39,7 @@ DGBatchedForcefield::DGBatchedForcefield(const DistGeom::BatchedMolecularSystemH
     auto& buffers = systemDevice_.emplace<DistGeom::BatchedMolecularDeviceBuffers>();
     DistGeom::setStreams(buffers, stream);
     DistGeom::sendContribsAndIndicesToDevice(molSystemHost, buffers);
-    allocateEnergyScratch(molSystemHost, buffers);
+    buffers.dimension = molSystemHost.dimension;
   }
   atomStartsDevice_.setFromVector(atomStartsHost);
   setAtomStartsDevice(atomStartsDevice_.data());
