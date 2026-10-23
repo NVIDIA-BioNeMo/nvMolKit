@@ -15,6 +15,7 @@ Example:
 
 import argparse
 import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -200,7 +201,7 @@ def _calc_rdkit(mols: list[Chem.Mol], properties: tuple[Property3D, ...]) -> dic
 
 # RDKit before 2026.9.2 returns wrong EEM charges for charged molecules (rdkit/rdkit#9688); nvMolKit's are correct,
 # so only neutral molecules are compared against older RDKit.
-RDKIT_EEM_CHARGES_CORRECT = tuple(int(part) for part in rdkit.__version__.split(".")[:3]) >= (2026, 9, 2)
+RDKIT_EEM_CHARGES_CORRECT = tuple(int(part) for part in re.findall(r"\d+", rdkit.__version__)[:3]) >= (2026, 9, 2)
 
 
 def _eem_comparable_rows(mols: list[Chem.Mol]) -> np.ndarray:

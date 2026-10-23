@@ -24,6 +24,17 @@ constexpr int kEemBlockSize   = 128;
 //! the solver's static shared memory below the 48 KiB launch limit.
 constexpr int kEemSharedBytes = 47 * 1024;
 
+//! Global scratch budget across blocks. A single larger workspace is allowed so its conformer can still run.
+constexpr int64_t kEemScratchBudgetBytes = 64 * 1024 * 1024;
+
+inline int eemBlockCount(const int numConformers, const int numSms, const int64_t scratchStride) {
+  const int blockLimit = std::min(numConformers, numSms * 16);
+  if (scratchStride == 0) {
+    return blockLimit;
+  }
+  return static_cast<int>(std::min<int64_t>(blockLimit, std::max<int64_t>(1, kEemScratchBudgetBytes / scratchStride)));
+}
+
 __host__ __device__ constexpr int64_t alignTo8(const int64_t bytes) {
   return (bytes + 7) / 8 * 8;
 }
@@ -369,10 +380,10 @@ void launchEemCharges(const DeviceCoordView&        coordinates,
     return;  // Every row stays NaN.
   }
 
-  const int                        numBlocks        = std::min(coordinates.numConformers, numSms * 16);
   const int64_t                    largestWorkspace = EemWorkspace<Real>::bytes(largestSolved);
   const int64_t                    sharedCapacity   = std::min<int64_t>(largestWorkspace, kEemSharedBytes);
   const int64_t                    scratchStride    = largestWorkspace > sharedCapacity ? largestWorkspace : 0;
+  const int                        numBlocks        = eemBlockCount(coordinates.numConformers, numSms, scratchStride);
   AsyncDeviceVector<unsigned char> scratch(static_cast<size_t>(scratchStride * numBlocks), stream);
   eemChargesKernel<Real><<<numBlocks, kEemBlockSize, sharedCapacity, stream>>>(coordinates,
                                                                                inputs,

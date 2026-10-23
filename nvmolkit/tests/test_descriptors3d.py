@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gc
+import re
 
 import numpy as np
 import pytest
@@ -973,7 +974,7 @@ EEM_SMILES = ("CC(=O)[O-]", "C[NH3+]", "c1ccncc1O", "O=c1cc[nH]cc1", "CS(=O)(=O)
 # RDKit before 2026.9.2 solved the transposed EEM system (rdkit/rdkit#9688), so its charges for charged molecules
 # sum to the negated formal charge. nvMolKit gives the correct values; only neutral molecules are compared against
 # older RDKit, and the golden tests below cover the charged ones.
-RDKIT_EEM_CHARGES_CORRECT = tuple(int(part) for part in rdkit.__version__.split(".")[:3]) >= (2026, 9, 2)
+RDKIT_EEM_CHARGES_CORRECT = tuple(int(part) for part in re.findall(r"\d+", rdkit.__version__)[:3]) >= (2026, 9, 2)
 requires_rdkit_eem_fix = pytest.mark.skipif(
     not RDKIT_EEM_CHARGES_CORRECT, reason="RDKit before 2026.9.2 returns wrong EEM charges for charged molecules"
 )
@@ -1185,6 +1186,33 @@ def test_eem_global_workspace_and_custom_stream(precision):
     stream = torch.cuda.Stream()
     result = Calc3DProperties([molecule], Property3D.EEM_CHARGES, precision=precision, stream=stream)
     _assert_eem_matches_rdkit(result[Property3D.EEM_CHARGES].numpy(), _rdkit_eem_rows([molecule]), precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_budget_limited_grid_preserves_mixed_conformer_order(precision):
+    # 256 atoms need ~262/521 KiB per block in single/full precision. The 64 MiB budget caps
+    # the grid at 250/125 blocks on GPUs with enough SMs; 515 conformers require scratch reuse.
+    large = Chem.MolFromSmiles("O" + "C" * 255)
+    conformer = Chem.Conformer(large.GetNumAtoms())
+    for atom_idx in range(large.GetNumAtoms()):
+        angle = 1.9 * atom_idx
+        conformer.SetAtomPosition(atom_idx, Point3D(1.4 * np.cos(angle), 1.4 * np.sin(angle), 0.55 * atom_idx))
+    large.AddConformer(conformer, assignId=True)
+    small = _embed("CCO", 2, 42)
+    molecules = [large, *([small] * 128), large, *([small] * 128), large]
+    expected = np.concatenate(
+        [
+            rdMolDescriptors.CalcEEMcharges(mol, confId=conf.GetId())
+            for mol in molecules
+            for conf in mol.GetConformers()
+        ]
+    )
+    stream = torch.cuda.Stream()
+    for _ in range(2):
+        result = Calc3DProperties(molecules, Property3D.EEM_CHARGES, precision=precision, stream=stream)
+        _assert_eem_matches_rdkit(
+            result[Property3D.EEM_CHARGES].numpy(), (expected, np.ones(len(expected), dtype=bool)), precision
+        )
 
 
 @pytest.mark.parametrize("precision", PRECISIONS)
