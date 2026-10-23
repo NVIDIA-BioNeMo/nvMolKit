@@ -243,8 +243,8 @@ __global__ void eemMaxSolvedAtomsKernel(const DeviceCoordView coordinates, const
   for (int conformerIdx = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
        conformerIdx < coordinates.numConformers;
        conformerIdx += stride) {
-    const int64_t atomStart = coordinates.atomStarts[conformerIdx];
-    const int64_t atomStop  = coordinates.atomStarts[conformerIdx + 1];
+    const int64_t atomStart  = coordinates.atomStarts[conformerIdx];
+    const int64_t atomStop   = coordinates.atomStarts[conformerIdx + 1];
     const bool    validRange = atomStart >= 0 && atomStop > atomStart && atomStop <= coordinates.numAtoms;
     if (validRange && atomStop - atomStart <= atomLimit) {
       atomicMax(maxAtoms, static_cast<int>(atomStop - atomStart));

@@ -333,7 +333,7 @@ Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coord
   Real*                   usrcatOutput  = nullptr;
   Real*                   getawayOutput = nullptr;
   DclvOutputs<Real>       dclvOutputs;
-  Real*                   eemOutput     = nullptr;
+  Real*                   eemOutput = nullptr;
   for (const Property3D property : properties) {
     // Bounds the work arrays, which hold one slot per known property.
     if (std::find(kAllProperty3D.begin(), kAllProperty3D.end(), property) == kAllProperty3D.end()) {

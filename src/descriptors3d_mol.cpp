@@ -5,8 +5,8 @@
 
 #include <GraphMol/Conformer.h>
 #include <GraphMol/Descriptors/MolData3Ddescriptors.h>
-#include <GraphMol/PeriodicTable.h>
 #include <GraphMol/MolOps.h>
+#include <GraphMol/PeriodicTable.h>
 #include <GraphMol/ROMol.h>
 #include <GraphMol/RWMol.h>
 #include <GraphMol/SanitException.h>

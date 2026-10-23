@@ -11,8 +11,8 @@
 #include <GraphMol/Descriptors/RDF.h>
 #include <GraphMol/Descriptors/USRDescriptor.h>
 #include <GraphMol/Descriptors/WHIM.h>
-#include <GraphMol/PeriodicTable.h>
 #include <GraphMol/MolOps.h>
+#include <GraphMol/PeriodicTable.h>
 #include <GraphMol/RWMol.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <GraphMol/SmilesParse/SmilesWrite.h>
@@ -643,10 +643,10 @@ TEST(Descriptors3DEem, MoleculesWithoutConformersDoNotInflateScratch) {
 
 TEST(Descriptors3DEem, MoleculesAboveTheAtomLimitGiveNan) {
   // The solver's 32-bit indexing bounds the molecule size; larger conformers are NaN, not an out-of-range read.
-  const int numAtoms = nvMolKit::kMaxEemAtoms + 1;
-  auto      huge     = carbonChain(numAtoms, {helixPoints(numAtoms, 0.0)});
-  auto      ethanol  = molWithConformers("CCO", {helixPoints(3, 0.0)});
-  const std::vector<const RDKit::ROMol*> mols = {huge.get(), ethanol.get()};
+  const int                              numAtoms = nvMolKit::kMaxEemAtoms + 1;
+  auto                                   huge     = carbonChain(numAtoms, {helixPoints(numAtoms, 0.0)});
+  auto                                   ethanol  = molWithConformers("CCO", {helixPoints(3, 0.0)});
+  const std::vector<const RDKit::ROMol*> mols     = {huge.get(), ethanol.get()};
   auto       results = nvMolKit::calc3DProperties<double>(mols, {Property3D::EEMcharges}, {}, nullptr);
   const auto values  = toHost(results.properties.at(Property3D::EEMcharges));
   ASSERT_EQ(values.size(), static_cast<size_t>(numAtoms) + 3);

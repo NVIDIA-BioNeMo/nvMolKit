@@ -45,7 +45,7 @@ enum class Property3D : int {
   DCLVPolarVolume      = 22,
   DCLVCompactness      = 23,
   DCLVPackingDensity   = 24,
-  EEMcharges          = 25,
+  EEMcharges           = 25,
 };
 
 inline constexpr std::array<Property3D, 26> kAllProperty3D = {
@@ -79,7 +79,7 @@ inline constexpr std::array<Property3D, 26> kAllProperty3D = {
 
 //! Largest molecule EEMcharges solves. The (n + 1) x (n + 2) system is indexed with 32-bit integers, which bounds
 //! n below 46,339; conformers of larger molecules produce NaN.
-inline constexpr int kMaxEemAtoms = 46000;
+inline constexpr int kMaxEemAtoms             = 46000;
 inline constexpr int kNumWhimProperties       = 114;
 inline constexpr int kNumRdfProperties        = 210;  //!< 7 atom-property channels x 30 radii.
 inline constexpr int kNumMorseProperties      = 224;  //!< 7 atom-property channels x 32 scattering values.
