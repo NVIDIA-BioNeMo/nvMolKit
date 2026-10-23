@@ -77,6 +77,9 @@ inline constexpr std::array<Property3D, 26> kAllProperty3D = {
   Property3D::EEMcharges,
 };
 
+//! Largest molecule EEMcharges solves. The (n + 1) x (n + 2) system is indexed with 32-bit integers, which bounds
+//! n below 46,339; conformers of larger molecules produce NaN.
+inline constexpr int kMaxEemAtoms = 46000;
 inline constexpr int kNumWhimProperties       = 114;
 inline constexpr int kNumRdfProperties        = 210;  //!< 7 atom-property channels x 30 radii.
 inline constexpr int kNumMorseProperties      = 224;  //!< 7 atom-property channels x 32 scattering values.
@@ -271,8 +274,8 @@ struct Property3DDeviceInputs {
   const double*  eemHardness           = nullptr;
   //! EEMcharges: per molecule, the sum of formal charges.
   const double*  moleculeFormalCharges = nullptr;
-  //! WHIM, AUTOCORR3D, GETAWAY, EEMcharges: largest molecule atom count in the batch (host value). Sizes EEM's
-  //! linear-system scratch and WHIM's
+  //! WHIM, AUTOCORR3D, GETAWAY, EEMcharges: largest molecule atom count in the batch (host value). Bounds EEM's
+  //! conformer size and WHIM's
   //! per-conformer symmetry-search scratch (rows with more atoms produce NaN) and, with 0 or above 3072 atoms,
   //! leaves AUTOCORR3D and GETAWAY without the shared bond-distance table.
   int32_t        maxMoleculeAtoms      = 0;

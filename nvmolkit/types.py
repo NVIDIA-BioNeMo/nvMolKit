@@ -522,58 +522,93 @@ class Device3DResult:
         Both masks are ``True`` where the data is real, ``False`` where padded.
         Reading the index tensors synchronizes implicitly.
         """
-        index = _atom_row_index(self.atom_starts, self.mol_indices, self.conf_indices, self.n_mols)
+        values = self.values.torch()
+        index = _atom_row_index(self.atom_starts, self.mol_indices, self.conf_indices, self.n_mols, values.shape[0])
         return Dense3DResult(
-            values=_scatter_atom_rows(self.values.torch(), index, pad_value),
+            values=_scatter_atom_rows(values, index, _atom_row_gather(index), pad_value),
             conf_mask=index.conf_mask,
             atom_mask=index.atom_mask,
         )
 
 
 class _AtomRowIndex(NamedTuple):
-    """Dense ``(molecule, conformer, atom)`` position of every per-atom row of a CSR conformer batch."""
+    """Padded layout of a CSR conformer batch: masks plus each conformer's valid atom-row range."""
+
+    conf_mask: "torch.Tensor"
+    atom_mask: "torch.Tensor"
+    starts: "torch.Tensor"
+    sizes: "torch.Tensor"
+    molecules: "torch.Tensor"
+    conformers: "torch.Tensor"
+
+
+class _AtomRowGather(NamedTuple):
+    """Dense ``(molecule, conformer, atom)`` position of every per-atom row of the valid conformers."""
 
     rows: "torch.Tensor"
     molecule: "torch.Tensor"
     conformer: "torch.Tensor"
     atom: "torch.Tensor"
-    conf_mask: "torch.Tensor"
-    atom_mask: "torch.Tensor"
 
 
 def _atom_row_index(
-    atom_starts: AsyncGpuResult, mol_indices: AsyncGpuResult, conf_indices: AsyncGpuResult, n_mols: int
+    atom_starts: AsyncGpuResult,
+    mol_indices: AsyncGpuResult,
+    conf_indices: AsyncGpuResult,
+    n_mols: int,
+    n_rows: Optional[int] = None,
 ) -> _AtomRowIndex:
     """Map each conformer's ``atom_starts`` range to padded ``(n_mols, max_confs, max_atoms)`` slots.
 
-    Rows outside every conformer's range are not indexed. Reading the index tensors synchronizes implicitly.
+    Conformers whose range is empty, starts below zero or, when ``n_rows`` (the number of per-atom rows) is given,
+    ends past it, have no atom slots. Reading the index tensors synchronizes implicitly.
     """
     starts = atom_starts.torch().to(torch.int64)
     mols = mol_indices.torch().to(torch.int64)
     confs = conf_indices.torch().to(torch.int64)
     device = starts.device
     sizes = starts[1:] - starts[:-1]
+    valid = (starts[:-1] >= 0) & (sizes > 0)
+    if n_rows is not None:
+        valid &= starts[1:] <= n_rows
+    sizes = torch.where(valid, sizes, torch.zeros_like(sizes))
     max_confs = int(torch.bincount(mols, minlength=n_mols).max().item()) if mols.numel() else 0
     max_atoms = int(sizes.max().item()) if sizes.numel() else 0
 
     conf_mask = torch.zeros((n_mols, max_confs), dtype=torch.bool, device=device)
     conf_mask[mols, confs] = True
-    first_slot = (torch.cumsum(sizes, 0) - sizes).repeat_interleave(sizes)
-    atom = torch.arange(int(sizes.sum().item()), device=device, dtype=torch.int64) - first_slot
-    rows = starts[:-1].repeat_interleave(sizes) + atom
-    molecule = mols.repeat_interleave(sizes)
-    conformer = confs.repeat_interleave(sizes)
-    atom_mask = torch.zeros((n_mols, max_confs, max_atoms), dtype=torch.bool, device=device)
-    atom_mask[molecule, conformer, atom] = True
+    conformer_sizes = torch.zeros((n_mols, max_confs), dtype=torch.int64, device=device)
+    conformer_sizes[mols, confs] = sizes
+    atom_mask = torch.arange(max_atoms, device=device) < conformer_sizes.unsqueeze(-1)
     return _AtomRowIndex(
-        rows=rows, molecule=molecule, conformer=conformer, atom=atom, conf_mask=conf_mask, atom_mask=atom_mask
+        conf_mask=conf_mask,
+        atom_mask=atom_mask,
+        starts=starts[:-1],
+        sizes=sizes,
+        molecules=mols,
+        conformers=confs,
     )
 
 
-def _scatter_atom_rows(values: "torch.Tensor", index: _AtomRowIndex, pad_value: float) -> "torch.Tensor":
+def _atom_row_gather(index: _AtomRowIndex) -> _AtomRowGather:
+    """Per-atom-row positions of ``index``'s valid conformers; needed only to move per-atom values."""
+    device = index.sizes.device
+    first_slot = (torch.cumsum(index.sizes, 0) - index.sizes).repeat_interleave(index.sizes)
+    atom = torch.arange(int(index.sizes.sum().item()), device=device, dtype=torch.int64) - first_slot
+    return _AtomRowGather(
+        rows=index.starts.repeat_interleave(index.sizes) + atom,
+        molecule=index.molecules.repeat_interleave(index.sizes),
+        conformer=index.conformers.repeat_interleave(index.sizes),
+        atom=atom,
+    )
+
+
+def _scatter_atom_rows(
+    values: "torch.Tensor", index: _AtomRowIndex, gather: _AtomRowGather, pad_value: float
+) -> "torch.Tensor":
     """Pad per-atom rows ``values`` (any trailing shape) to ``(n_mols, max_confs, max_atoms, *values.shape[1:])``."""
     dense = torch.full(
         (*index.atom_mask.shape, *values.shape[1:]), pad_value, dtype=values.dtype, device=values.device
     )
-    dense[index.molecule, index.conformer, index.atom] = values[index.rows]
+    dense[gather.molecule, gather.conformer, gather.atom] = values[gather.rows]
     return dense

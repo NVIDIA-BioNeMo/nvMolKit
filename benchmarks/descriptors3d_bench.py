@@ -18,6 +18,7 @@ import math
 from pathlib import Path
 
 import numpy as np
+import rdkit
 import torch
 from bench_utils import (
     Deadline,
@@ -197,6 +198,23 @@ def _calc_rdkit(mols: list[Chem.Mol], properties: tuple[Property3D, ...]) -> dic
     }
 
 
+# RDKit before 2026.9.2 returns wrong EEM charges for charged molecules (rdkit/rdkit#9688); nvMolKit's are correct,
+# so only neutral molecules are compared against older RDKit.
+RDKIT_EEM_CHARGES_CORRECT = tuple(int(part) for part in rdkit.__version__.split(".")[:3]) >= (2026, 9, 2)
+
+
+def _eem_comparable_rows(mols: list[Chem.Mol]) -> np.ndarray:
+    """Mask of the per-atom EEM rows, in molecule/conformer order, where the installed RDKit is a valid reference."""
+    return np.concatenate(
+        [
+            np.full(mol.GetNumAtoms(), RDKIT_EEM_CHARGES_CORRECT or Chem.GetFormalCharge(mol) == 0)
+            for mol in mols
+            for _ in mol.GetConformers()
+        ]
+        or [np.zeros(0, dtype=bool)]
+    )
+
+
 def _validate(
     mols: list[Chem.Mol],
     properties: tuple[Property3D, ...],
@@ -229,7 +247,10 @@ def _validate(
                 continue
             if prop == Property3D.EEM_CHARGES:
                 eem_atol = EEM_TOLERANCES[precision] if tolerance is None else tolerance
-                np.testing.assert_allclose(actual, expected[prop], rtol=0, atol=eem_atol, equal_nan=True)
+                comparable = _eem_comparable_rows(check_mols)
+                np.testing.assert_allclose(
+                    actual[comparable], expected[prop][comparable], rtol=0, atol=eem_atol, equal_nan=True
+                )
                 continue
             if prop not in (Property3D.USR, Property3D.USRCAT):
                 np.testing.assert_allclose(actual, expected[prop], rtol=rtol, atol=atol)

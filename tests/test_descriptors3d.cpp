@@ -613,6 +613,53 @@ TEST(Descriptors3DEem, LargeMoleculesUseGlobalScratchAndMatchRdkit) {
   expectEemMatchesRdkit({large.get(), small.get()}, 1e-8);
 }
 
+//! An acyclic carbon chain of @p numAtoms atoms with the given conformers, built without SMILES parsing.
+std::unique_ptr<RDKit::RWMol> carbonChain(const int numAtoms, const std::vector<std::vector<Point>>& confs) {
+  auto mol = std::make_unique<RDKit::RWMol>();
+  for (int atomIdx = 0; atomIdx < numAtoms; ++atomIdx) {
+    mol->addAtom(new RDKit::Atom(6), false, true);
+    if (atomIdx > 0) {
+      mol->addBond(atomIdx - 1, atomIdx, RDKit::Bond::SINGLE);
+    }
+  }
+  RDKit::MolOps::sanitizeMol(*mol);
+  for (const auto& points : confs) {
+    auto conf = std::make_unique<RDKit::Conformer>(numAtoms);
+    for (int atomIdx = 0; atomIdx < numAtoms; ++atomIdx) {
+      conf->setAtomPos(atomIdx, RDGeom::Point3D(points[atomIdx][0], points[atomIdx][1], points[atomIdx][2]));
+    }
+    mol->addConformer(conf.release(), true);
+  }
+  return mol;
+}
+
+TEST(Descriptors3DEem, MoleculesWithoutConformersDoNotInflateScratch) {
+  // A 20,000-atom molecule would need gigabytes of global scratch per block if it sized the workspace; it has no
+  // conformers, so only the small molecules' conformers (which fit in shared memory) matter.
+  auto unused = carbonChain(20000, {});
+  auto small  = molWithConformers("CCO", {helixPoints(3, 0.0), helixPoints(3, 0.4)});
+  expectEemMatchesRdkit({unused.get(), small.get()}, 1e-9);
+}
+
+TEST(Descriptors3DEem, MoleculesAboveTheAtomLimitGiveNan) {
+  // The solver's 32-bit indexing bounds the molecule size; larger conformers are NaN, not an out-of-range read.
+  const int numAtoms = nvMolKit::kMaxEemAtoms + 1;
+  auto      huge     = carbonChain(numAtoms, {helixPoints(numAtoms, 0.0)});
+  auto      ethanol  = molWithConformers("CCO", {helixPoints(3, 0.0)});
+  const std::vector<const RDKit::ROMol*> mols = {huge.get(), ethanol.get()};
+  auto       results = nvMolKit::calc3DProperties<double>(mols, {Property3D::EEMcharges}, {}, nullptr);
+  const auto values  = toHost(results.properties.at(Property3D::EEMcharges));
+  ASSERT_EQ(values.size(), static_cast<size_t>(numAtoms) + 3);
+  for (int atomIdx = 0; atomIdx < numAtoms; ++atomIdx) {
+    ASSERT_TRUE(isNanBits(values[atomIdx])) << "atom " << atomIdx;
+  }
+  std::vector<double> expected;
+  RDKit::Descriptors::EEM(*ethanol, expected, 0);
+  for (int atomIdx = 0; atomIdx < 3; ++atomIdx) {
+    EXPECT_NEAR(values[numAtoms + atomIdx], expected[atomIdx], 1e-9);
+  }
+}
+
 TEST(Descriptors3DEem, UnparameterizedAtomsGiveNanOnlyForTheirMolecule) {
   // RDKit has no iodine parameters (it reads past its tables), and a lone aromatic ring atom cannot be kekulized.
   auto                      iodide  = molWithConformers("CCI", {helixPoints(3, 0.0)});

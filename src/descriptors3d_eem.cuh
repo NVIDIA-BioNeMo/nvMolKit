@@ -229,6 +229,29 @@ __device__ __forceinline__ void refineEemSolution(const EemConformer& conformer,
   backSubstitute(system, size);
 }
 
+//! Largest conformer the EEM kernel solves; larger ones produce NaN. The system's 32-bit indexing bounds it.
+__host__ __device__ inline int eemAtomLimit(const Property3DDeviceInputs& inputs) {
+  return inputs.maxMoleculeAtoms < kMaxEemAtoms ? inputs.maxMoleculeAtoms : kMaxEemAtoms;
+}
+
+/**
+ * @brief Writes the largest atom count among conformers with a valid atom range that eemChargesKernel() will solve
+ *        to @p maxAtoms (zero-initialized), so that global scratch is sized by those and not by unused molecules.
+ */
+__global__ void eemMaxSolvedAtomsKernel(const DeviceCoordView coordinates, const int atomLimit, int* maxAtoms) {
+  const int stride = static_cast<int>(gridDim.x * blockDim.x);
+  for (int conformerIdx = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+       conformerIdx < coordinates.numConformers;
+       conformerIdx += stride) {
+    const int64_t atomStart = coordinates.atomStarts[conformerIdx];
+    const int64_t atomStop  = coordinates.atomStarts[conformerIdx + 1];
+    const bool    validRange = atomStart >= 0 && atomStop > atomStart && atomStop <= coordinates.numAtoms;
+    if (validRange && atomStop - atomStart <= atomLimit) {
+      atomicMax(maxAtoms, static_cast<int>(atomStop - atomStart));
+    }
+  }
+}
+
 /**
  * @brief One block per conformer (grid-stride). Builds the EEM system (see eemSystemEntry()) and writes
  *        one partial charge per atom to @p output, laid out like the coordinate positions.
@@ -249,7 +272,7 @@ __global__ void __launch_bounds__(kEemBlockSize) eemChargesKernel(const DeviceCo
     }
     const int numAtoms    = static_cast<int>(atomStop - atomStart);
     const int moleculeIdx = coordinates.molIndices[conformerIdx];
-    bool      valid       = moleculeIdx >= 0 && moleculeIdx < coordinates.nMols && numAtoms <= inputs.maxMoleculeAtoms;
+    bool      valid       = moleculeIdx >= 0 && moleculeIdx < coordinates.nMols && numAtoms <= eemAtomLimit(inputs);
     int       paramStart  = 0;
     if (valid) {
       paramStart = inputs.moleculeAtomStarts[moleculeIdx];
@@ -331,8 +354,23 @@ void launchEemCharges(const DeviceCoordView&        coordinates,
   int numSms = 0;
   cudaCheckError(cudaGetDevice(&device));
   cudaCheckError(cudaDeviceGetAttribute(&numSms, cudaDevAttrMultiProcessorCount, device));
+  AsyncDeviceVector<int> maxSolvedAtoms(1, stream);
+  cudaCheckError(cudaMemsetAsync(maxSolvedAtoms.data(), 0, sizeof(int), stream));
+  constexpr int kMaxAtomsBlock = 256;
+  eemMaxSolvedAtomsKernel<<<std::min((coordinates.numConformers + kMaxAtomsBlock - 1) / kMaxAtomsBlock, numSms * 4),
+                            kMaxAtomsBlock,
+                            0,
+                            stream>>>(coordinates, eemAtomLimit(inputs), maxSolvedAtoms.data());
+  cudaCheckError(cudaGetLastError());
+  int largestSolved = 0;
+  cudaCheckError(cudaMemcpyAsync(&largestSolved, maxSolvedAtoms.data(), sizeof(int), cudaMemcpyDeviceToHost, stream));
+  cudaCheckError(cudaStreamSynchronize(stream));
+  if (largestSolved == 0) {
+    return;  // Every row stays NaN.
+  }
+
   const int                        numBlocks        = std::min(coordinates.numConformers, numSms * 16);
-  const int64_t                    largestWorkspace = EemWorkspace<Real>::bytes(inputs.maxMoleculeAtoms);
+  const int64_t                    largestWorkspace = EemWorkspace<Real>::bytes(largestSolved);
   const int64_t                    sharedCapacity   = std::min<int64_t>(largestWorkspace, kEemSharedBytes);
   const int64_t                    scratchStride    = largestWorkspace > sharedCapacity ? largestWorkspace : 0;
   AsyncDeviceVector<unsigned char> scratch(static_cast<size_t>(scratchStride * numBlocks), stream);

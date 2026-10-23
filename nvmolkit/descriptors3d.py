@@ -22,6 +22,7 @@ from nvmolkit.types import (
     Device3DResult,
     HardwareOptions,
     PrecisionMode,
+    _atom_row_gather,
     _atom_row_index,
     _resolve_cuda_stream,
     _scatter_atom_rows,
@@ -70,8 +71,9 @@ class Property3D(Enum):
 
       Conformers containing an
       element or bond type without nonzero parameters, conformers with coincident atoms (or non-finite
-      coordinates), for which RDKit returns all-zero charges, and molecules
-      that cannot be kekulized, which RDKit rejects, produce NaN.
+      coordinates), for which RDKit returns all-zero charges, molecules
+      that cannot be kekulized, which RDKit rejects, and conformers of more than
+      46,000 atoms produce NaN.
     """
 
     PMI1 = "PMI1"
@@ -287,14 +289,18 @@ class Device3DPropertyResult(Mapping[str, AsyncGpuResult]):
         Molecules with fewer than ``max_confs`` conformers (including none), and conformers with fewer
         than ``max_atoms`` atoms, receive ``pad_value``. Reading the index tensors synchronizes implicitly.
         """
-        index = _atom_row_index(self.atom_starts, self.mol_indices, self.conf_indices, self.n_mols)
+        per_atom = [name for name in self._properties if Property3D(name) in PER_ATOM_PROPERTIES]
+        # Per-atom values bound the valid atom ranges; the gather positions are only built when they are needed.
+        n_rows = self._properties[per_atom[0]].torch().shape[0] if per_atom else None
+        index = _atom_row_index(self.atom_starts, self.mol_indices, self.conf_indices, self.n_mols, n_rows)
+        gather = _atom_row_gather(index) if per_atom else None
         mol_indices = self.mol_indices.torch().to(torch.int64)
         conf_indices = self.conf_indices.torch().to(torch.int64)
         values = {}
         for name, result in self._properties.items():
             source = result.torch()
             if Property3D(name) in PER_ATOM_PROPERTIES:
-                values[name] = _scatter_atom_rows(source, index, pad_value)
+                values[name] = _scatter_atom_rows(source, index, gather, pad_value)
                 continue
             dense_values = torch.full(
                 (*index.conf_mask.shape, *source.shape[1:]), pad_value, dtype=source.dtype, device=source.device

@@ -12,6 +12,7 @@ from rdkit.Chem import rdDistGeom, rdMolDescriptors
 from rdkit.Chem.rdDistGeom import EmbedParameters
 from rdkit.Geometry import Point3D
 
+import nvmolkit.descriptors3d as descriptors3d_module
 from nvmolkit.descriptors3d import (
     PER_ATOM_PROPERTIES,
     Calc3DProperties,
@@ -1194,3 +1195,54 @@ def test_eem_empty_batches_and_molecules_without_conformers(precision):
         assert result[Property3D.EEM_CHARGES].torch().numel() == 0
         dense = result.dense()
         assert dense.values[Property3D.EEM_CHARGES.value].shape == (len(molecules), 0, 0)
+
+
+def _with_atom_starts(coordinates, atom_starts):
+    starts = torch.tensor(atom_starts, dtype=torch.int32, device="cuda")
+    return Device3DResult(
+        values=coordinates.values,
+        atom_starts=AsyncGpuResult(starts, coordinates.gpu_id),
+        mol_indices=coordinates.mol_indices,
+        conf_indices=coordinates.conf_indices,
+        gpu_id=coordinates.gpu_id,
+        n_mols=coordinates.n_mols,
+    )
+
+
+@pytest.mark.parametrize(
+    ("atom_starts", "valid_conformer", "first_row"),
+    [([4, 8, 12], 0, 4), ([-4, 0, 4], 1, 0)],
+    ids=["past_the_rows", "negative_start"],
+)
+def test_dense_charges_leave_invalid_atom_ranges_nan(atom_starts, valid_conformer, first_row):
+    square = [(0, 0, 0), (1.5, 0, 0), (1.5, 1.5, 0), (0, 1.5, 1.0)]
+    shifted = [(x + 0.3 * idx, y, z) for idx, (x, y, z) in enumerate(square)]
+    mol = _mol_with_conformers("CCCC", [square, shifted])
+    coordinates = _with_atom_starts(_device_result_from_molecules([mol]), atom_starts)
+
+    result = Calc3DProperties([mol], Property3D.EEM_CHARGES, coordinates=coordinates, precision=PrecisionMode.FULL)
+    dense = result.dense()
+
+    charges = result[Property3D.EEM_CHARGES].numpy()
+    invalid_conformer = 1 - valid_conformer
+    assert dense.atom_mask.tolist() == [[[valid_conformer == 0] * 4, [valid_conformer == 1] * 4]]
+    np.testing.assert_array_equal(
+        dense.values[Property3D.EEM_CHARGES.value][0, valid_conformer].cpu().numpy(),
+        charges[first_row : first_row + 4],
+    )
+    assert torch.isnan(dense.values[Property3D.EEM_CHARGES.value][0, invalid_conformer]).all()
+    assert not np.isnan(charges[first_row : first_row + 4]).any()
+
+
+def test_dense_scalar_properties_do_not_build_atom_gather_indexes(monkeypatch):
+    def fail(*args, **kwargs):
+        raise AssertionError("per-atom gather indexes built for scalar properties")
+
+    monkeypatch.setattr(descriptors3d_module, "_atom_row_gather", fail)
+    mols = [_embed("CCO", 2, 1), _embed("CCCO", 1, 2)]
+    result = Calc3DProperties(mols, [Property3D.PMI1, Property3D.PBF], precision=PrecisionMode.FULL)
+    dense = result.dense()
+    assert dense.values[Property3D.PMI1.value].shape == (2, 2)
+    assert dense.conf_mask.tolist() == [[True, True], [True, False]]
+    assert dense.atom_mask.shape == (2, 2, max(mol.GetNumAtoms() for mol in mols))
+    assert int(dense.atom_mask.sum()) == sum(mol.GetNumAtoms() * mol.GetNumConformers() for mol in mols)
