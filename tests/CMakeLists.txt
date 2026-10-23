@@ -432,7 +432,7 @@ target_link_libraries(
 add_executable(test_descriptors3d test_descriptors3d.cpp)
 target_link_libraries(
   test_descriptors3d PRIVATE ${RDKit_LIBS} descriptors3d_mol
-                             conformer_coord_upload device)
+                             conformer_coord_upload device nvmolkit_versions)
 
 add_executable(test_descriptors3d_whim_arithmetic
                test_descriptors3d_whim_arithmetic.cu)
@@ -442,6 +442,11 @@ target_link_libraries(test_descriptors3d_whim_arithmetic
 add_executable(test_descriptors3d_topology test_descriptors3d_topology.cu)
 target_link_libraries(test_descriptors3d_topology PRIVATE descriptors3d
                                                           cuda_error_check)
+
+add_executable(test_descriptors3d_eem test_descriptors3d_eem.cu)
+target_link_libraries(
+  test_descriptors3d_eem PRIVATE conformer_types device_vector cuda_error_check
+                                 CUDA::cudart)
 
 add_executable(test_tfd_cpu test_tfd_cpu.cpp)
 target_link_libraries(test_tfd_cpu PRIVATE ${RDKit_LIBS} tfd_cpu test_utils
@@ -464,6 +469,7 @@ set(TEST_LIST
     test_descriptors3d
     test_descriptors3d_whim_arithmetic
     test_descriptors3d_topology
+    test_descriptors3d_eem
     test_boolean_tree
     test_bitbirch
     test_butina

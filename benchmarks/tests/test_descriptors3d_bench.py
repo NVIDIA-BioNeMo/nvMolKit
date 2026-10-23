@@ -4,6 +4,7 @@
 """Regression tests for capped descriptor benchmark reporting."""
 
 import csv
+import importlib
 from contextlib import nullcontext
 
 import descriptors3d_bench as bench
@@ -11,6 +12,33 @@ import pytest
 from bench_utils import TimingResult
 from bench_utils.concurrent import BoundedProcessMapResult
 from rdkit import Chem
+
+
+@pytest.mark.parametrize(
+    ("version", "correct"),
+    [
+        ("2025.09.6", False),
+        ("2026.09.1", False),
+        ("2026.09.1pre", False),
+        ("2026.09.2", True),
+        ("2026.09.3pre", True),
+        ("2027.03.1", True),
+    ],
+)
+def test_eem_reference_version_accepts_development_suffix(monkeypatch, version, correct):
+    """Development RDKit builds import successfully and select the appropriate reference mask."""
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(bench.rdkit, "__version__", version)
+            importlib.reload(bench)
+            assert bench.RDKIT_EEM_CHARGES_CORRECT is correct
+            charged = Chem.MolFromSmiles("C[NH3+]")
+            charged.AddConformer(Chem.Conformer(charged.GetNumAtoms()), assignId=True)
+            neutral = Chem.MolFromSmiles("CCO")
+            neutral.AddConformer(Chem.Conformer(neutral.GetNumAtoms()), assignId=True)
+            assert bench._eem_comparable_rows([charged, neutral]).tolist() == [correct] * 2 + [True] * 3
+    finally:
+        importlib.reload(bench)
 
 
 @pytest.mark.parametrize("completed", [0, 1, 2])

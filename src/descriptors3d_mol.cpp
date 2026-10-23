@@ -5,8 +5,11 @@
 
 #include <GraphMol/Conformer.h>
 #include <GraphMol/Descriptors/MolData3Ddescriptors.h>
+#include <GraphMol/MolOps.h>
 #include <GraphMol/PeriodicTable.h>
 #include <GraphMol/ROMol.h>
+#include <GraphMol/RWMol.h>
+#include <GraphMol/SanitException.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <GraphMol/Substruct/SubstructMatch.h>
 
@@ -39,6 +42,9 @@ struct DeviceDescriptorInputs {
   AsyncDeviceVector<uint8_t> dclvPolarClasses;
   AsyncDeviceVector<int32_t> defaultConformerRows;
   AsyncDeviceVector<int8_t>  conformerIs3D;
+  AsyncDeviceVector<double>  eemElectronegativity;
+  AsyncDeviceVector<double>  eemHardness;
+  AsyncDeviceVector<double>  moleculeFormalCharges;
   AsyncDeviceVector<int32_t> moleculeAtomStarts;
 };
 
@@ -54,7 +60,74 @@ struct DescriptorInputNeeds {
   bool dclvAtomInputs        = false;
   bool defaultConformerRows  = false;
   bool conformerFlags        = false;
+  bool eemParameters         = false;
 };
+
+//! RDKit's EEM parameters, indexed by atomic number up to bromine, for atoms whose highest Kekulé bond order
+//! is 1, 2 and 3 (Code/GraphMol/Descriptors/EEM.cpp, from the NEEMP B3LYP/6-311G NPA set). A 0 entry marks an
+//! element and type the set has no parameters for.
+constexpr int kNumEemElements = 36;
+// clang-format off
+constexpr std::array<std::array<double, kNumEemElements>, 3> kEemElectronegativity = {{
+  {0.0, 2.5473, 0.0, 0.0, 0.0, 0.0, 2.7221, 2.9750, 3.1503, 2.9976, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+   2.6511, 2.7026, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.6263},
+  {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.7667, 2.8895, 3.0486, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.2933,
+   2.6471, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+  {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.6944, 3.0240, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+   0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+}};
+constexpr std::array<std::array<double, kNumEemElements>, 3> kEemHardness = {{
+  {0.0, 1.1641, 0.0, 0.0, 0.0, 0.0, 0.6403, 0.9083, 1.0577, 0.9983, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+   0.4897, 1.1537, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.1105},
+  {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.6513, 0.6647, 0.8410, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5759,
+   0.4512, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+  {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.6776, 1.4240, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+   0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+}};
+// clang-format on
+
+/**
+ * @brief Writes each atom's EEM electronegativity and hardness, and returns the molecule's formal charge,
+ *        as RDKit's EEM types them: on a Kekulé copy, by element and highest bond order (aromatic counted
+ *        as 2).
+ *
+ * Atoms the parameter set does not cover get a NaN electronegativity so the kernel reports NaN, as do molecules
+ * that fail to kekulize (which RDKit rejects). For elements beyond bromine RDKit reads past its tables, and for
+ * bond orders above 3 it leaves the right-hand side uninitialized. Unlike RDKit, which silently solves with zero
+ * parameters for uncovered atoms within its tables (Si, single-bonded P, B, ...) and returns charges of -10 or
+ * beyond, those atoms are NaN too.
+ */
+double writeEemParameters(const RDKit::ROMol& mol, double* electronegativity, double* hardness) {
+  const double missing = std::numeric_limits<double>::quiet_NaN();
+  RDKit::RWMol kekule(mol);
+  try {
+    RDKit::MolOps::Kekulize(kekule, true);
+  } catch (const RDKit::MolSanitizeException&) {
+    std::fill(electronegativity, electronegativity + mol.getNumAtoms(), missing);
+    std::fill(hardness, hardness + mol.getNumAtoms(), missing);
+    return 0.0;
+  }
+  for (const auto* atom : kekule.atoms()) {
+    unsigned int type = 1;
+    for (const auto* bond : kekule.atomBonds(atom)) {
+      double order = bond->getBondTypeAsDouble();
+      if (order == 1.5) {
+        order = 2.0;
+      }
+      type = std::max(type, static_cast<unsigned int>(order));
+    }
+    const unsigned int element = atom->getAtomicNum();
+    const unsigned int idx     = atom->getIdx();
+    if (element >= kNumEemElements || type > 3 || kEemHardness[type - 1][element] == 0.0) {
+      electronegativity[idx] = missing;
+      hardness[idx]          = missing;
+    } else {
+      electronegativity[idx] = kEemElectronegativity[type - 1][element];
+      hardness[idx]          = kEemHardness[type - 1][element];
+    }
+  }
+  return RDKit::MolOps::getFormalCharge(kekule);
+}
 
 //! Writes molecule @p mol's bond adjacency into the global CSR arrays: atom i's neighbors go to
 //! @p neighbors from `neighborStarts[i]`, as atom indices within the molecule. @p neighborStarts points at the
@@ -190,6 +263,9 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
       row += numConformers;
     }
   }
+  std::vector<double> eemElectronegativity(needs.eemParameters ? static_cast<size_t>(totalAtoms) : 0);
+  std::vector<double> eemHardness(needs.eemParameters ? static_cast<size_t>(totalAtoms) : 0);
+  std::vector<double> moleculeFormalCharges(needs.eemParameters ? numMols : 0);
   std::vector<int8_t> conformerIs3D;
   if (needs.conformerFlags) {
     for (const RDKit::ROMol* mol : mols) {
@@ -215,7 +291,7 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
     exceptionRegistry.rethrow();
   }
   if (needs.atomPropertyWeights || needs.iStateDragWeights || needs.covalentRadiusWeights || needs.bondAdjacency ||
-      needs.usrcatAtomClasses || needs.heavyAtomFlags || needs.dclvAtomInputs) {
+      needs.usrcatAtomClasses || needs.heavyAtomFlags || needs.dclvAtomInputs || needs.eemParameters) {
 #pragma omp parallel for num_threads(numThreads) schedule(dynamic) default(none) shared(numMols,                 \
                                                                                           mols,                  \
                                                                                           atomStarts,            \
@@ -231,6 +307,9 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
                                                                                           heavyAtomFlags,        \
                                                                                           vdwRadii,              \
                                                                                           polarClasses,          \
+                                                                                          eemElectronegativity,  \
+                                                                                          eemHardness,           \
+                                                                                          moleculeFormalCharges, \
                                                                                           exceptionRegistry)
     for (int molIdx = 0; molIdx < numMols; ++molIdx) {
       try {
@@ -275,6 +354,10 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
         if (needs.bondAdjacency) {
           writeBondAdjacency(mol, neighborOffsets[molIdx], bondNeighborStarts.data() + atomStart, bondNeighbors.data());
         }
+        if (needs.eemParameters) {
+          moleculeFormalCharges[molIdx] =
+            writeEemParameters(mol, eemElectronegativity.data() + atomStart, eemHardness.data() + atomStart);
+        }
         if (needs.usrcatAtomClasses) {
           const auto& patterns = threadUsrcatClassPatterns();
           for (size_t classIdx = 0; classIdx < patterns.size(); ++classIdx) {
@@ -307,6 +390,9 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
                                 AsyncDeviceVector<uint8_t>(polarClasses.size(), stream),
                                 AsyncDeviceVector<int32_t>(defaultConformerRows.size(), stream),
                                 AsyncDeviceVector<int8_t>(conformerIs3D.size(), stream),
+                                AsyncDeviceVector<double>(eemElectronegativity.size(), stream),
+                                AsyncDeviceVector<double>(eemHardness.size(), stream),
+                                AsyncDeviceVector<double>(moleculeFormalCharges.size(), stream),
                                 AsyncDeviceVector<int32_t>(atomStarts.size(), stream)};
   if (!weights.empty()) {
     result.momentWeights.copyFromHost(weights);
@@ -341,6 +427,13 @@ DeviceDescriptorInputs uploadDescriptorInputs(const std::vector<const RDKit::ROM
   }
   if (!conformerIs3D.empty()) {
     result.conformerIs3D.copyFromHost(conformerIs3D);
+  }
+  if (!eemElectronegativity.empty()) {
+    result.eemElectronegativity.copyFromHost(eemElectronegativity);
+    result.eemHardness.copyFromHost(eemHardness);
+  }
+  if (!moleculeFormalCharges.empty()) {
+    result.moleculeFormalCharges.copyFromHost(moleculeFormalCharges);
   }
   result.moleculeAtomStarts.copyFromHost(atomStarts);
   return result;
@@ -392,6 +485,7 @@ Property3DBatchResult<Real> calc3DProperties(const std::vector<const RDKit::ROMo
     needs.usrcatAtomClasses |= property == Property3D::USRCAT;
     // Device coordinate rows carry no is3D flag and are treated as three-dimensional.
     needs.conformerFlags |= (property == Property3D::PBF || property == Property3D::GETAWAY) && coordinates == nullptr;
+    needs.eemParameters |= property == Property3D::EEMcharges;
   }
   const DeviceDescriptorInputs uploadedInputs = uploadDescriptorInputs(mols, needs, numThreads, stream);
 
@@ -409,6 +503,9 @@ Property3DBatchResult<Real> calc3DProperties(const std::vector<const RDKit::ROMo
   inputs.dclvPolarClasses      = uploadedInputs.dclvPolarClasses.data();
   inputs.defaultConformerRows  = uploadedInputs.defaultConformerRows.data();
   inputs.conformerIs3D         = uploadedInputs.conformerIs3D.data();
+  inputs.eemElectronegativity  = uploadedInputs.eemElectronegativity.data();
+  inputs.eemHardness           = uploadedInputs.eemHardness.data();
+  inputs.moleculeFormalCharges = uploadedInputs.moleculeFormalCharges.data();
   for (const RDKit::ROMol* mol : mols) {
     const int64_t numAtoms  = mol->getNumAtoms();
     inputs.maxMoleculeAtoms = std::max(inputs.maxMoleculeAtoms, static_cast<int32_t>(numAtoms));
@@ -419,6 +516,7 @@ Property3DBatchResult<Real> calc3DProperties(const std::vector<const RDKit::ROMo
   result.properties  = calc3DPropertiesGpu<Real>(view, inputs, properties, options, stream);
   result.molIndices  = std::move(uploaded.molIndices);
   result.confIndices = std::move(uploaded.confIndices);
+  result.atomStarts  = std::move(uploaded.atomStarts);
   return result;
 }
 
