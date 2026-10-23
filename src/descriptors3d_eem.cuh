@@ -154,13 +154,13 @@ struct EemConformer {
 };
 
 /**
- * @brief Entry (@p row, @p col) of RDKit's EEM system as it solves it, the right-hand side in column
- *        `numAtoms + 1`. Sets @p coincident when an atom pair's squared distance is not positive.
+ * @brief Entry (@p row, @p col) of the EEM system, the right-hand side in column `numAtoms + 1`. Sets
+ *        @p coincident when an atom pair's squared distance is not positive.
  *
- * RDKit fills the system row-major and hands it to Eigen as column-major, so it solves the transpose of the
- * matrix its code describes: row i < n is `sum_j J_ij q_j + chi = -A_i` with `J_ii = B_i` and
- * `J_ij = kappa / r_ij`, and the last row is `-sum_j q_j = Q`. The charges therefore sum to the negated
- * formal charge, which this reproduces.
+ * Row i < n is `sum_j J_ij q_j - chi = -A_i` with `J_ii = B_i` and `J_ij = kappa / r_ij`, and the last row is
+ * `sum_j q_j = Q`, so the charges sum to the formal charge. RDKit before 2026.9.2 solved the transpose of this
+ * system and returned charges summing to the negated formal charge for charged molecules (rdkit/rdkit#9688);
+ * this follows the corrected equations.
  *
  * FP64 required: the coordinate differences, before the conversion to @p T (see centeredPosition()).
  */
@@ -172,10 +172,10 @@ eemSystemEntry(const EemConformer& conformer, const int row, const int col, bool
     return row < numAtoms ? static_cast<T>(-conformer.electronegativity[row]) : static_cast<T>(conformer.formalCharge);
   }
   if (row == numAtoms) {
-    return col < numAtoms ? T(-1) : T(0);
+    return col < numAtoms ? T(1) : T(0);
   }
   if (col == numAtoms) {
-    return T(1);
+    return T(-1);
   }
   if (row == col) {
     return static_cast<T>(conformer.hardness[row]);
@@ -230,7 +230,7 @@ __device__ __forceinline__ void refineEemSolution(const EemConformer& conformer,
 }
 
 /**
- * @brief One block per conformer (grid-stride). Builds RDKit's EEM system (see eemSystemEntry()) and writes
+ * @brief One block per conformer (grid-stride). Builds the EEM system (see eemSystemEntry()) and writes
  *        one partial charge per atom to @p output, laid out like the coordinate positions.
  */
 template <typename Real>

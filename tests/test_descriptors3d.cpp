@@ -12,6 +12,7 @@
 #include <GraphMol/Descriptors/USRDescriptor.h>
 #include <GraphMol/Descriptors/WHIM.h>
 #include <GraphMol/PeriodicTable.h>
+#include <GraphMol/MolOps.h>
 #include <GraphMol/RWMol.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <GraphMol/SmilesParse/SmilesWrite.h>
@@ -32,6 +33,7 @@
 #include "src/conformer/conformer_coord_upload.h"
 #include "src/descriptors3d_mol.h"
 #include "src/utils/device.h"
+#include "versions.h"
 
 using nvMolKit::Property3D;
 
@@ -506,7 +508,19 @@ std::vector<Point> helixPoints(const int numAtoms, const double phase) {
   return points;
 }
 
-//! Per-atom EEM charges of every conformer, compared against RDKit's EEM through the batch's atomStarts.
+//! RDKit before 2026.9.2 solves a transposed EEM system (rdkit/rdkit#9688): its charges for charged molecules sum to
+//! the negated formal charge. nvMolKit gives the correct values, so older RDKit is only a reference for neutral
+//! molecules; the golden-value test covers the charged ones.
+constexpr bool kRdkitEemChargesCorrect =
+  RDKIT_VERSION_MAJOR > 2026 || (RDKIT_VERSION_MAJOR == 2026 &&
+                                 (RDKIT_VERSION_MINOR > 9 || (RDKIT_VERSION_MINOR == 9 && RDKIT_VERSION_PATCH >= 2)));
+
+bool rdkitEemIsCorrectFor(const RDKit::ROMol& mol) {
+  return kRdkitEemChargesCorrect || RDKit::MolOps::getFormalCharge(mol) == 0;
+}
+
+//! Per-atom EEM charges of every conformer, compared against RDKit's EEM through the batch's atomStarts. Molecules
+//! for which the installed RDKit's EEM is wrong are skipped.
 void expectEemMatchesRdkit(const std::vector<RDKit::ROMol*>& mols, const double tolerance) {
   const std::vector<const RDKit::ROMol*> constMols(mols.begin(), mols.end());
   auto       results    = nvMolKit::calc3DProperties<double>(constMols, {Property3D::EEMcharges}, {}, nullptr);
@@ -515,6 +529,9 @@ void expectEemMatchesRdkit(const std::vector<RDKit::ROMol*>& mols, const double 
   int        row        = 0;
   for (RDKit::ROMol* mol : mols) {
     for (int confIdx = 0; confIdx < static_cast<int>(mol->getNumConformers()); ++confIdx, ++row) {
+      if (!rdkitEemIsCorrectFor(*mol)) {
+        continue;
+      }
       std::vector<double> expected;
       RDKit::Descriptors::EEM(*mol, expected, confIdx);
       ASSERT_EQ(atomStarts[row + 1] - atomStarts[row], static_cast<int>(expected.size()));
@@ -528,6 +545,7 @@ void expectEemMatchesRdkit(const std::vector<RDKit::ROMol*>& mols, const double 
 }
 
 TEST(Descriptors3DEem, MatchesRdkitForChargedAndAromaticMolecules) {
+  // Charged molecules are compared only against an RDKit with the corrected EEM; see kRdkitEemChargesCorrect.
   std::vector<std::unique_ptr<RDKit::RWMol>> owned;
   for (const char* smiles : {"CC(=O)[O-]", "C[NH3+]", "c1ccncc1O", "O=c1cc[nH]cc1", "C#N", "CS(=O)(=O)NCl"}) {
     std::unique_ptr<RDKit::RWMol> parsed(RDKit::SmilesToMol(smiles));
@@ -539,6 +557,48 @@ TEST(Descriptors3DEem, MatchesRdkitForChargedAndAromaticMolecules) {
     mols.push_back(mol.get());
   }
   expectEemMatchesRdkit(mols, 1e-9);
+}
+
+TEST(Descriptors3DEem, ChargedMoleculesMatchGoldenValues) {
+  // Charges from the published EEM equations with RDKit's parameters, the reproduction in rdkit/rdkit#9688. They hold
+  // for any installed RDKit and sum to the formal charge.
+  constexpr double          a = 1.01 / 1.7320508075688772;  // Tetrahedral N-H at 1.01 A.
+  RDKit::SmilesParserParams params;
+  params.removeHs = false;
+  std::unique_ptr<RDKit::RWMol> hydroxide(RDKit::SmilesToMol("[O-][H]", params));
+  std::unique_ptr<RDKit::RWMol> ammonium(RDKit::SmilesToMol("[N+]([H])([H])([H])[H]", params));
+  const std::vector<std::vector<Point>> coordinates = {
+    {{0, 0, 0}, {0.97, 0, 0}},
+    {{0, 0, 0}, {a, a, a}, {a, -a, -a}, {-a, a, -a}, {-a, -a, a}},
+  };
+  const std::vector<std::vector<double>> expected = {{-1.0632, 0.0632}, {-0.9845, 0.4961, 0.4961, 0.4961, 0.4961}};
+  std::vector<RDKit::RWMol*>             mols     = {hydroxide.get(), ammonium.get()};
+  for (size_t molIdx = 0; molIdx < mols.size(); ++molIdx) {
+    auto* conf = new RDKit::Conformer(mols[molIdx]->getNumAtoms());
+    for (size_t atomIdx = 0; atomIdx < coordinates[molIdx].size(); ++atomIdx) {
+      const Point& p = coordinates[molIdx][atomIdx];
+      conf->setAtomPos(atomIdx, RDGeom::Point3D(p[0], p[1], p[2]));
+    }
+    mols[molIdx]->addConformer(conf, true);
+  }
+
+  const std::vector<const RDKit::ROMol*> constMols(mols.begin(), mols.end());
+  auto       results = nvMolKit::calc3DProperties<double>(constMols, {Property3D::EEMcharges}, {}, nullptr);
+  const auto values  = toHost(results.properties.at(Property3D::EEMcharges));
+  ASSERT_EQ(values.size(), 7u);
+  size_t row = 0;
+  for (size_t molIdx = 0; molIdx < mols.size(); ++molIdx) {
+    double sum = 0.0;
+    for (const double charge : expected[molIdx]) {
+      // The reference values are rounded to 4 decimals.
+      EXPECT_NEAR(values[row], charge, 1e-4) << RDKit::MolToSmiles(*mols[molIdx]) << " row " << row;
+      sum += values[row++];
+    }
+    EXPECT_NEAR(sum, RDKit::MolOps::getFormalCharge(*mols[molIdx]), 1e-9);
+  }
+  if (kRdkitEemChargesCorrect) {
+    expectEemMatchesRdkit({hydroxide.get(), ammonium.get()}, 1e-9);
+  }
 }
 
 TEST(Descriptors3DEem, LargeMoleculesUseGlobalScratchAndMatchRdkit) {
@@ -589,10 +649,15 @@ TEST(Descriptors3DEem, CoincidentAtomsGiveNan) {
   ASSERT_EQ(values.size(), 10u);
   std::vector<double> expected;
   RDKit::Descriptors::EEM(*salt, expected, 1);
+  double sum = 0.0;
   for (int atomIdx = 0; atomIdx < 5; ++atomIdx) {
     EXPECT_TRUE(isNanBits(values[atomIdx])) << "atom " << atomIdx;
-    EXPECT_NEAR(values[5 + atomIdx], expected[atomIdx], 1e-9);
+    sum += values[5 + atomIdx];
+    if (rdkitEemIsCorrectFor(*salt)) {
+      EXPECT_NEAR(values[5 + atomIdx], expected[atomIdx], 1e-9);
+    }
   }
+  EXPECT_NEAR(sum, RDKit::MolOps::getFormalCharge(*salt), 1e-9);
 }
 
 TEST(Descriptors3DEem, DeviceRowsOutsideConformersAreNan) {

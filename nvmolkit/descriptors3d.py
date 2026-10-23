@@ -60,8 +60,15 @@ class Property3D(Enum):
     :class:`Device3DPropertyResult`):
 
     - ``EEMcharges``: RDKit's ``CalcEEMcharges`` electronegativity-equalization
-      partial charges, one value per atom. As in RDKit, a molecule's charges
-      sum to the negative of its formal charge. Conformers containing an
+      partial charges, one value per atom. A molecule's charges sum to its
+      formal charge.
+
+      .. note::
+         Partial charges on charged molecules will not match RDKit < 2026.9.2
+         due to RDKit bug `#9688 <https://github.com/rdkit/rdkit/issues/9688>`_.
+         nvMolKit gives the corrected values regardless of the RDKit version.
+
+      Conformers containing an
       element or bond type without nonzero parameters, conformers with coincident atoms (or non-finite
       coordinates), for which RDKit returns all-zero charges, and molecules
       that cannot be kekulized, which RDKit rejects, produce NaN.
