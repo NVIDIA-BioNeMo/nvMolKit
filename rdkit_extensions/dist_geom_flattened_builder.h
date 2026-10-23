@@ -8,6 +8,7 @@
 #include <map>
 
 #include "src/forcefields/dist_geom.h"
+#include "versions.h"
 namespace nvMolKit {
 namespace DistGeom {
 
@@ -26,6 +27,24 @@ nvMolKit::DistGeom::Energy3DForceContribsHost construct3DForceFieldContribs(
   const std::vector<double>&                        positions,
   int                                               dim,
   bool                                              useBasicKnowledge = true);
+
+#if RDKIT_AIO_ETKDG_API
+//! Builds one molecule's terms of RDKit's all-in-one ETKDG force field, as DistGeom::constructAllInOneForceField
+//! followed by DistGeom::addTorsionTerms. Force constants come from etkdgDetails.forceConsts, the 1-2/1-3 pairs from
+//! etkdgDetails.distMat, and the experimental torsion constants in etkdgDetails must already carry RDKit's all-in-one
+//! scaling.
+nvMolKit::DistGeom::AllInOneForceContribsHost constructAllInOneForceFieldContribs(
+  int                                               dim,
+  const ::DistGeom::BoundsMatrix&                   mmat,
+  const ::DistGeom::VECT_CHIRALSET&                 csets,
+  const ::ForceFields::CrystalFF::CrystalFFDetails& etkdgDetails,
+  bool                                              useExpTorsionAnglePrefs,
+  bool                                              useBasicKnowledge);
+
+//! The batch-wide force constants that go with constructAllInOneForceFieldContribs for the same etkdgDetails.
+nvMolKit::DistGeom::AllInOneForceWeights allInOneForceWeights(
+  const ::ForceFields::CrystalFF::CrystalFFDetails& etkdgDetails);
+#endif
 
 }  // namespace DistGeom
 }  // namespace nvMolKit

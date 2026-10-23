@@ -1597,5 +1597,188 @@ BatchedIndices3DDevicePtr toBatchedIndices3DDevicePtr(const BatchedMolecular3DDe
   return toPointerStruct(molSystemDevice.indices, atomStarts);
 }
 
+namespace {
+
+void appendOffsetIndices(std::vector<int>& destination, const std::vector<int>& source, const int offset) {
+  for (const int idx : source) {
+    destination.push_back(idx + offset);
+  }
+}
+
+template <typename T> void append(std::vector<T>& destination, const std::vector<T>& source) {
+  destination.insert(destination.end(), source.begin(), source.end());
+}
+
+void appendTermStart(std::vector<int>& termStarts, const std::size_t numTerms) {
+  termStarts.push_back(termStarts.back() + static_cast<int>(numTerms));
+}
+
+void upload(AsyncDeviceVector<int>& destination, const std::vector<int>& source, cudaStream_t stream) {
+  destination.setStream(stream);
+  destination.setFromVector(source);
+}
+
+template <typename ParameterScalar>
+void upload(AsyncDeviceVector<ParameterScalar>& destination, const std::vector<double>& source, cudaStream_t stream) {
+  destination.setStream(stream);
+  uploadWithPrecisionConversion(destination, source);
+}
+
+template <typename ParameterScalar>
+void sendAllInOneSystemToDeviceImpl(const BatchedAllInOneSystemHost&                systemHost,
+                                    BatchedAllInOneDeviceBuffersT<ParameterScalar>& systemDevice,
+                                    cudaStream_t                                    stream) {
+  setStreamsImpl(systemDevice.distanceGeometry, stream);
+  sendContribsAndIndicesToDeviceImpl(systemHost.distanceGeometry, systemDevice.distanceGeometry);
+
+  const auto& harmonicHost   = systemHost.harmonicDistanceTerms;
+  auto&       harmonicDevice = systemDevice.harmonicDistanceTerms;
+  upload(harmonicDevice.idx1, harmonicHost.idx1, stream);
+  upload(harmonicDevice.idx2, harmonicHost.idx2, stream);
+  upload(harmonicDevice.minLen, harmonicHost.minLen, stream);
+  upload(harmonicDevice.maxLen, harmonicHost.maxLen, stream);
+  upload(harmonicDevice.forceConstant, harmonicHost.forceConstant, stream);
+
+  const auto& angleHost   = systemHost.linearAngleTerms;
+  auto&       angleDevice = systemDevice.linearAngleTerms;
+  upload(angleDevice.idx1, angleHost.idx1, stream);
+  upload(angleDevice.idx2, angleHost.idx2, stream);
+  upload(angleDevice.idx3, angleHost.idx3, stream);
+  upload(angleDevice.minAngle, angleHost.minAngle, stream);
+  upload(angleDevice.maxAngle, angleHost.maxAngle, stream);
+
+  const auto& torsionHost   = systemHost.experimentalTorsionTerms;
+  auto&       torsionDevice = systemDevice.experimentalTorsionTerms;
+  upload(torsionDevice.idx1, torsionHost.idx1, stream);
+  upload(torsionDevice.idx2, torsionHost.idx2, stream);
+  upload(torsionDevice.idx3, torsionHost.idx3, stream);
+  upload(torsionDevice.idx4, torsionHost.idx4, stream);
+  upload(torsionDevice.forceConstants, torsionHost.forceConstants, stream);
+  upload(torsionDevice.signs, torsionHost.signs, stream);
+
+  const auto& planarityHost   = systemHost.planarityTerms;
+  auto&       planarityDevice = systemDevice.planarityTerms;
+  upload(planarityDevice.idx1, planarityHost.idx1, stream);
+  upload(planarityDevice.idx2, planarityHost.idx2, stream);
+  upload(planarityDevice.idx3, planarityHost.idx3, stream);
+  upload(planarityDevice.idx4, planarityHost.idx4, stream);
+
+  upload(systemDevice.harmonicDistanceTermStarts, systemHost.harmonicDistanceTermStarts, stream);
+  upload(systemDevice.linearAngleTermStarts, systemHost.linearAngleTermStarts, stream);
+  upload(systemDevice.experimentalTorsionTermStarts, systemHost.experimentalTorsionTermStarts, stream);
+  upload(systemDevice.planarityTermStarts, systemHost.planarityTermStarts, stream);
+}
+
+template <typename ParameterScalar>
+AllInOneContribsDevicePtrT<ParameterScalar> toAllInOneContribsDevicePtrImpl(
+  const BatchedAllInOneDeviceBuffersT<ParameterScalar>& systemDevice,
+  const int*                                            atomStarts) {
+  AllInOneContribsDevicePtrT<ParameterScalar> dst;
+  dst.distanceGeometry                   = toPointerStruct(systemDevice.distanceGeometry.contribs);
+  dst.distanceGeometryIndices            = toPointerStruct(systemDevice.distanceGeometry.indices);
+  dst.distanceGeometryIndices.atomStarts = atomStarts;
+
+  const auto& harmonic         = systemDevice.harmonicDistanceTerms;
+  dst.harmonicDistanceTerms    = {harmonic.idx1.data(),
+                                  harmonic.idx2.data(),
+                                  harmonic.minLen.data(),
+                                  harmonic.maxLen.data(),
+                                  harmonic.forceConstant.data()};
+  const auto& angle            = systemDevice.linearAngleTerms;
+  dst.linearAngleTerms         = {angle.idx1.data(),
+                                  angle.idx2.data(),
+                                  angle.idx3.data(),
+                                  angle.minAngle.data(),
+                                  angle.maxAngle.data()};
+  const auto& torsion          = systemDevice.experimentalTorsionTerms;
+  dst.experimentalTorsionTerms = {torsion.idx1.data(),
+                                  torsion.idx2.data(),
+                                  torsion.idx3.data(),
+                                  torsion.idx4.data(),
+                                  torsion.forceConstants.data(),
+                                  torsion.signs.data()};
+  const auto& planarity        = systemDevice.planarityTerms;
+  dst.planarityTerms = {planarity.idx1.data(), planarity.idx2.data(), planarity.idx3.data(), planarity.idx4.data()};
+
+  dst.harmonicDistanceTermStarts    = systemDevice.harmonicDistanceTermStarts.data();
+  dst.linearAngleTermStarts         = systemDevice.linearAngleTermStarts.data();
+  dst.experimentalTorsionTermStarts = systemDevice.experimentalTorsionTermStarts.data();
+  dst.planarityTermStarts           = systemDevice.planarityTermStarts.data();
+  return dst;
+}
+
+}  // namespace
+
+void addMoleculeToAllInOneSystem(const AllInOneForceContribsHost& contribs,
+                                 const int                        numAtoms,
+                                 const std::vector<int>&          ctxAtomStarts,
+                                 BatchedAllInOneSystemHost&       system,
+                                 BatchedForcefieldMetadata*       metadata,
+                                 const int                        moleculeIdx,
+                                 const int                        conformerIdx) {
+  const int batchIdx   = static_cast<int>(system.harmonicDistanceTermStarts.size()) - 1;
+  const int atomOffset = ctxAtomStarts[batchIdx];
+  addMoleculeToMolecularSystem(contribs.distanceGeometry,
+                               numAtoms,
+                               4,
+                               ctxAtomStarts,
+                               system.distanceGeometry,
+                               metadata,
+                               moleculeIdx,
+                               conformerIdx);
+
+  const auto& harmonic = contribs.harmonicDistanceTerms;
+  appendOffsetIndices(system.harmonicDistanceTerms.idx1, harmonic.idx1, atomOffset);
+  appendOffsetIndices(system.harmonicDistanceTerms.idx2, harmonic.idx2, atomOffset);
+  append(system.harmonicDistanceTerms.minLen, harmonic.minLen);
+  append(system.harmonicDistanceTerms.maxLen, harmonic.maxLen);
+  append(system.harmonicDistanceTerms.forceConstant, harmonic.forceConstant);
+  appendTermStart(system.harmonicDistanceTermStarts, harmonic.idx1.size());
+
+  const auto& angle = contribs.linearAngleTerms;
+  appendOffsetIndices(system.linearAngleTerms.idx1, angle.idx1, atomOffset);
+  appendOffsetIndices(system.linearAngleTerms.idx2, angle.idx2, atomOffset);
+  appendOffsetIndices(system.linearAngleTerms.idx3, angle.idx3, atomOffset);
+  append(system.linearAngleTerms.minAngle, angle.minAngle);
+  append(system.linearAngleTerms.maxAngle, angle.maxAngle);
+  appendTermStart(system.linearAngleTermStarts, angle.idx1.size());
+
+  const auto& torsion = contribs.experimentalTorsionTerms;
+  appendOffsetIndices(system.experimentalTorsionTerms.idx1, torsion.idx1, atomOffset);
+  appendOffsetIndices(system.experimentalTorsionTerms.idx2, torsion.idx2, atomOffset);
+  appendOffsetIndices(system.experimentalTorsionTerms.idx3, torsion.idx3, atomOffset);
+  appendOffsetIndices(system.experimentalTorsionTerms.idx4, torsion.idx4, atomOffset);
+  append(system.experimentalTorsionTerms.forceConstants, torsion.forceConstants);
+  append(system.experimentalTorsionTerms.signs, torsion.signs);
+  appendTermStart(system.experimentalTorsionTermStarts, torsion.idx1.size());
+
+  const auto& planarity = contribs.planarityTerms;
+  appendOffsetIndices(system.planarityTerms.idx1, planarity.idx1, atomOffset);
+  appendOffsetIndices(system.planarityTerms.idx2, planarity.idx2, atomOffset);
+  appendOffsetIndices(system.planarityTerms.idx3, planarity.idx3, atomOffset);
+  appendOffsetIndices(system.planarityTerms.idx4, planarity.idx4, atomOffset);
+  appendTermStart(system.planarityTermStarts, planarity.idx1.size());
+}
+
+void sendAllInOneSystemToDevice(const BatchedAllInOneSystemHost& systemHost,
+                                BatchedAllInOneDeviceBuffers&    systemDevice,
+                                cudaStream_t                     stream) {
+  sendAllInOneSystemToDeviceImpl(systemHost, systemDevice, stream);
+}
+void sendAllInOneSystemToDevice(const BatchedAllInOneSystemHost&    systemHost,
+                                BatchedAllInOneDeviceBuffersSingle& systemDevice,
+                                cudaStream_t                        stream) {
+  sendAllInOneSystemToDeviceImpl(systemHost, systemDevice, stream);
+}
+
+AllInOneContribsDevicePtr toAllInOneContribsDevicePtr(const BatchedAllInOneDeviceBuffers& systemDevice,
+                                                      const int*                          atomStarts) {
+  return toAllInOneContribsDevicePtrImpl(systemDevice, atomStarts);
+}
+AllInOneContribsDevicePtrSingle toAllInOneContribsDevicePtr(const BatchedAllInOneDeviceBuffersSingle& systemDevice,
+                                                            const int*                                atomStarts) {
+  return toAllInOneContribsDevicePtrImpl(systemDevice, atomStarts);
+}
+
 }  // namespace DistGeom
 }  // namespace nvMolKit

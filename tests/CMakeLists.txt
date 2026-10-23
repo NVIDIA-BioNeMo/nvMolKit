@@ -196,6 +196,18 @@ target_link_libraries(
           test_utils
           embedder_utils)
 
+add_executable(test_aio_etkdg_forcefield test_aio_etkdg_forcefield.cu)
+target_link_libraries(
+  test_aio_etkdg_forcefield
+  PRIVATE ${RDKit_LIBS}
+          rdkit_dist_geom_flattened
+          aio_etkdg_batched_forcefield
+          dist_geom
+          device_vector
+          test_utils
+          embedder_utils
+          nvmolkit_versions)
+
 add_executable(test_rdkit_bounds_matrix test_rdkit_bounds_matrix.cpp)
 target_link_libraries(
   test_rdkit_bounds_matrix PRIVATE rdkit_bounds_matrix symmetricEigenSolver
@@ -470,6 +482,7 @@ set(TEST_LIST
     test_device_timings
     test_device_vector
     test_distgeom_kernels
+    test_aio_etkdg_forcefield
     test_etkdg
     test_etkdg_device_output
     test_ff_device_output
