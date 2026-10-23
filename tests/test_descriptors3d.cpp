@@ -511,9 +511,10 @@ std::vector<Point> helixPoints(const int numAtoms, const double phase) {
 //! RDKit before 2026.9.2 solves a transposed EEM system (rdkit/rdkit#9688): its charges for charged molecules sum to
 //! the negated formal charge. nvMolKit gives the correct values, so older RDKit is only a reference for neutral
 //! molecules; the golden-value test covers the charged ones.
-constexpr bool kRdkitEemChargesCorrect =
-  RDKIT_VERSION_MAJOR > 2026 || (RDKIT_VERSION_MAJOR == 2026 &&
-                                 (RDKIT_VERSION_MINOR > 9 || (RDKIT_VERSION_MINOR == 9 && RDKIT_VERSION_PATCH >= 2)));
+constexpr bool kRdkitEemChargesCorrect = RDKIT_VERSION_MAJOR > 2026 ||
+                                         (RDKIT_VERSION_MAJOR == 2026 &&
+                                          (RDKIT_VERSION_MINOR > 9 ||
+                                           (RDKIT_VERSION_MINOR == 9 && RDKIT_VERSION_PATCH >= 2)));
 
 bool rdkitEemIsCorrectFor(const RDKit::ROMol& mol) {
   return kRdkitEemChargesCorrect || RDKit::MolOps::getFormalCharge(mol) == 0;
@@ -565,14 +566,17 @@ TEST(Descriptors3DEem, ChargedMoleculesMatchGoldenValues) {
   constexpr double          a = 1.01 / 1.7320508075688772;  // Tetrahedral N-H at 1.01 A.
   RDKit::SmilesParserParams params;
   params.removeHs = false;
-  std::unique_ptr<RDKit::RWMol> hydroxide(RDKit::SmilesToMol("[O-][H]", params));
-  std::unique_ptr<RDKit::RWMol> ammonium(RDKit::SmilesToMol("[N+]([H])([H])([H])[H]", params));
+  std::unique_ptr<RDKit::RWMol>         hydroxide(RDKit::SmilesToMol("[O-][H]", params));
+  std::unique_ptr<RDKit::RWMol>         ammonium(RDKit::SmilesToMol("[N+]([H])([H])([H])[H]", params));
   const std::vector<std::vector<Point>> coordinates = {
     {{0, 0, 0}, {0.97, 0, 0}},
     {{0, 0, 0}, {a, a, a}, {a, -a, -a}, {-a, a, -a}, {-a, -a, a}},
   };
-  const std::vector<std::vector<double>> expected = {{-1.0632, 0.0632}, {-0.9845, 0.4961, 0.4961, 0.4961, 0.4961}};
-  std::vector<RDKit::RWMol*>             mols     = {hydroxide.get(), ammonium.get()};
+  const std::vector<std::vector<double>> expected = {
+    {-1.0632, 0.0632},
+    {-0.9845, 0.4961, 0.4961, 0.4961, 0.4961}
+  };
+  std::vector<RDKit::RWMol*> mols = {hydroxide.get(), ammonium.get()};
   for (size_t molIdx = 0; molIdx < mols.size(); ++molIdx) {
     auto* conf = new RDKit::Conformer(mols[molIdx]->getNumAtoms());
     for (size_t atomIdx = 0; atomIdx < coordinates[molIdx].size(); ++atomIdx) {
