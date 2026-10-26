@@ -102,11 +102,10 @@ void benchNvMolKitBatch(const std::vector<RDKit::ROMol*>& mols, const int size) 
   // Send data to device
   sendContribsAndIndicesToDevice(systemHost, systemDevice);
   sendContextToDevice(positionsHost, positionsDevice, atomStartsHost, atomStartsDevice);
-  setupDeviceBuffers(systemHost, systemDevice, positionsHost, atomStartsHost.size() - 1);
+  setupDeviceBuffers(systemDevice, positionsHost, atomStartsHost.size() - 1);
 
   // Energy benchmark
   ankerl::nanobench::Bench().run("nvMolKit ETKDG calc energy, nmols = " + std::to_string(size), [&] {
-    systemDevice.energyBuffer.zero();
     systemDevice.energyOuts.zero();
     ankerl::nanobench::doNotOptimizeAway(computeEnergy(systemDevice, atomStartsDevice, positionsDevice, 1.0, 0.1));
     ankerl::nanobench::doNotOptimizeAway(cudaDeviceSynchronize());
