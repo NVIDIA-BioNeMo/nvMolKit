@@ -92,6 +92,7 @@ Clustering
    clustering.fused_butina
    clustering.dise
    clustering.fused_dise
+   clustering.bitbirch
 
 .. autosummary::
    :toctree: generated/
