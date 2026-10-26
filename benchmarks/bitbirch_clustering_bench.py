@@ -47,10 +47,6 @@ def _load_bblean(enabled: bool) -> tuple[ModuleType | None, str, str]:
     return module, "available", version
 
 
-def _cluster_count(labels: torch.Tensor) -> int:
-    return int(labels.max().item()) + 1 if labels.numel() else 0
-
-
 @nvtx.annotate("bench_nvmolkit_bitbirch", color="red")
 def _bench_nvmolkit(
     fingerprints: torch.Tensor,
@@ -60,7 +56,7 @@ def _bench_nvmolkit(
     batch_size: int,
     runs: int,
     warmups: int,
-) -> tuple[object, int]:
+) -> tuple[object, dict[str, float | int]]:
     holder: dict[str, torch.Tensor] = {}
 
     @nvtx.annotate("bitbirch_nvmolkit_run", color="orange")
@@ -73,7 +69,8 @@ def _bench_nvmolkit(
         ).torch()
 
     timing = time_it(run, runs=runs, warmups=warmups, gpu_sync=True)
-    return timing, _cluster_count(holder["labels"])
+    labels = holder["labels"]
+    return timing, _cluster_distribution(torch.bincount(labels).cpu().numpy(), labels.numel())
 
 
 @nvtx.annotate("bench_bblean_bitbirch", color="green")
@@ -110,11 +107,11 @@ def _bench_bblean(
         progress_target=1,
     )
     tree = holder["tree"]
-    return timing, _cluster_distribution(tree.get_cluster_mol_ids(), len(fingerprints))
+    sizes = np.asarray([len(cluster) for cluster in tree.get_cluster_mol_ids()], dtype=np.int64)
+    return timing, _cluster_distribution(sizes, len(fingerprints))
 
 
-def _cluster_distribution(clusters, num_fingerprints: int) -> dict[str, float | int]:
-    sizes = np.asarray([len(cluster) for cluster in clusters], dtype=np.int64)
+def _cluster_distribution(sizes: np.ndarray, num_fingerprints: int) -> dict[str, float | int]:
     if not sizes.size:
         return {
             "num_clusters": 0,
@@ -292,7 +289,7 @@ def main() -> None:
                     )
                     torch.cuda.cudart().cudaProfilerStart()
                     try:
-                        timing, num_clusters = _bench_nvmolkit(
+                        timing, distribution = _bench_nvmolkit(
                             device_fps,
                             threshold=threshold,
                             branching_factor=args.branching_factor,
@@ -304,7 +301,7 @@ def main() -> None:
                         torch.cuda.cudart().cudaProfilerStop()
                     print(
                         f"  Finished nvMolKit GPU: {timing.mean_ms:.3f} +/- {timing.std_ms:.3f} ms "
-                        f"({num_clusters:,} clusters)",
+                        f"({distribution['num_clusters']:,} clusters)",
                         flush=True,
                     )
                     configuration_rows.append(
@@ -314,7 +311,7 @@ def main() -> None:
                             "batch_size": args.batch_size,
                             "device": torch.cuda.get_device_name(device_fps.device),
                             **_timing_fields(timing),
-                            "num_clusters": num_clusters,
+                            **distribution,
                         }
                     )
 

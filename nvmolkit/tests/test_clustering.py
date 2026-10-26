@@ -634,7 +634,8 @@ def test_bitbirch_accepts_noncontiguous_packed_input():
         ({"threshold": -0.1}, r"threshold must be finite and in \[0, 1\]"),
         ({"threshold": np.nan}, r"threshold must be finite and in \[0, 1\]"),
         ({"threshold": np.inf}, r"threshold must be finite and in \[0, 1\]"),
-        ({"threshold": 0.5, "branching_factor": 2}, "branching_factor must be at least 3"),
+        ({"threshold": 0.5, "branching_factor": 2}, r"branching_factor must be in \[3, 65534\]"),
+        ({"threshold": 0.5, "branching_factor": 65535}, r"branching_factor must be in \[3, 65534\]"),
         ({"threshold": 0.5, "batch_size": 0}, "batch_size must be positive"),
     ],
 )

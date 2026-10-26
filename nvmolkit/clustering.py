@@ -35,6 +35,7 @@ from nvmolkit.similarity import AAPMetric, Metric, _resolve_metric
 from nvmolkit.types import ArrayInput, AsyncGpuResult, _as_cuda_tensor, _resolve_cuda_stream
 
 _VALID_NEIGHBORLIST_SIZES = (8, 16, 24, 32, 64, 128)
+_BITBIRCH_MAX_BRANCHING_FACTOR = 65534  # Matches kMaxBranchingFactor in src/bitbirch.cu.
 
 _RDKitClusters = tuple[tuple[int, ...], ...]
 
@@ -416,7 +417,7 @@ def bitbirch(
         x: Shape ``(N, W)`` packed int32 or uint32 fingerprints, ``W <= 128``
            (at most 4096 bits). Host arrays are copied to the GPU.
         threshold: Minimum combined-cluster iSIM Jaccard--Tanimoto similarity.
-        branching_factor: Maximum entries per tree node. Must be at least 3.
+        branching_factor: Maximum entries per tree node. Must be in [3, 65534].
         batch_size: Number of fingerprints processed together. Must be positive.
         return_centroids: Also return packed majority centroids with shape
                           ``(num_clusters, W)``.
@@ -432,8 +433,8 @@ def bitbirch(
     """
     if not math.isfinite(threshold) or not 0 <= threshold <= 1:
         raise ValueError("threshold must be finite and in [0, 1]")
-    if branching_factor < 3:
-        raise ValueError(f"branching_factor must be at least 3, got {branching_factor}")
+    if not 3 <= branching_factor <= _BITBIRCH_MAX_BRANCHING_FACTOR:
+        raise ValueError(f"branching_factor must be in [3, {_BITBIRCH_MAX_BRANCHING_FACTOR}], got {branching_factor}")
     if batch_size < 1:
         raise ValueError(f"batch_size must be positive, got {batch_size}")
     (x,), active_stream = _prepare_packed_fingerprints(("x", x), stream=stream)

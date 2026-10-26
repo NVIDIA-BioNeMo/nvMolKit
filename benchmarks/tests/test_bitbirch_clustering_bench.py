@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import bitbirch_clustering_bench as bench
+import numpy as np
 import pytest
 
 
@@ -97,7 +98,7 @@ def test_missing_bblean_is_reported_as_optional(monkeypatch):
 
 
 def test_cluster_distribution_reports_sizes_and_singletons():
-    distribution = bench._cluster_distribution([[0, 1, 2], [3], [4]], 5)
+    distribution = bench._cluster_distribution(np.array([3, 1, 1]), 5)
 
     assert distribution["num_clusters"] == 3
     assert distribution["mean_cluster_size"] == pytest.approx(5 / 3)
