@@ -17,7 +17,16 @@ from typing import Sequence
 import torch
 
 from nvmolkit import _descriptors3d
-from nvmolkit.types import AsyncGpuResult, Device3DResult, HardwareOptions, PrecisionMode, _resolve_cuda_stream
+from nvmolkit.types import (
+    AsyncGpuResult,
+    Device3DResult,
+    HardwareOptions,
+    PrecisionMode,
+    _atom_row_gather,
+    _atom_row_index,
+    _resolve_cuda_stream,
+    _scatter_atom_rows,
+)
 
 
 class Property3D(Enum):
@@ -26,6 +35,12 @@ class Property3D(Enum):
     Names and values match the corresponding functions in RDKit's
     ``rdMolDescriptors`` module (``CalcWHIM``, ``GetUSR``, ...). Wherever a
     property is accepted, its string value may be used instead.
+
+    The ``DCLV`` properties correspond to the getter methods of RDKit's
+    ``DoubleCubicLatticeVolume`` class (for example, ``DCLVSurfaceArea``
+    corresponds to ``GetSurfaceArea``), configured by :class:`DclvOptions`. Requesting
+    several costs one pass over the surface dots. Conformers containing an atom
+    with a zero van der Waals radius produce NaN.
 
     Vector properties, in RDKit's order; every other property is a scalar:
 
@@ -41,6 +56,24 @@ class Property3D(Enum):
     - ``USRCAT``: 60 values, ``USR`` for all atoms and then for RDKit's
       hydrophobic, aromatic, acceptor and donor atoms. Same atom-count rule.
     - ``GETAWAY``: 273 values in RDKit's ``CalcGETAWAY`` order.
+
+    Per-atom properties have one row per atom rather than per conformer (see
+    :class:`Device3DPropertyResult`):
+
+    - ``EEMcharges``: RDKit's ``CalcEEMcharges`` electronegativity-equalization
+      partial charges, one value per atom. A molecule's charges sum to its
+      formal charge.
+
+      .. note::
+         Partial charges on charged molecules will not match RDKit < 2026.9.2
+         due to RDKit bug `#9688 <https://github.com/rdkit/rdkit/issues/9688>`_.
+         nvMolKit gives the corrected values regardless of the RDKit version.
+
+      Conformers containing an
+      element or bond type without nonzero parameters, conformers with coincident atoms (or non-finite
+      coordinates), for which RDKit returns all-zero charges, molecules
+      that cannot be kekulized, which RDKit rejects, and conformers of more than
+      46,000 atoms produce NaN.
     """
 
     PMI1 = "PMI1"
@@ -61,6 +94,18 @@ class Property3D(Enum):
     USR = "USR"
     USRCAT = "USRCAT"
     GETAWAY = "GETAWAY"
+    DCLV_SURFACE_AREA = "DCLVSurfaceArea"
+    DCLV_POLAR_SURFACE_AREA = "DCLVPolarSurfaceArea"
+    DCLV_VOLUME = "DCLVVolume"
+    DCLV_VDW_VOLUME = "DCLVVDWVolume"
+    DCLV_POLAR_VOLUME = "DCLVPolarVolume"
+    DCLV_COMPACTNESS = "DCLVCompactness"
+    DCLV_PACKING_DENSITY = "DCLVPackingDensity"
+    EEM_CHARGES = "EEMcharges"
+
+
+#: Properties with one output row per atom instead of per conformer.
+PER_ATOM_PROPERTIES = frozenset({Property3D.EEM_CHARGES})
 
 
 @dataclass(frozen=True)
@@ -100,6 +145,27 @@ class GetawayOptions:
 
 
 @dataclass(frozen=True)
+class DclvOptions:
+    """Options for the ``DCLV`` properties (RDKit's ``DoubleCubicLatticeVolume``), with RDKit's defaults.
+
+    Atoms take RDKit's default van der Waals radii. RDKit's ``radii``, ``isProtein`` and
+    ``includeLigand`` arguments are not supported (``isProtein=False``).
+
+    Attributes:
+        probeRadius: Radius of the solvent probe sphere in Angstrom, RDKit's default ``1.4``. Must be
+            finite and non-negative.
+        includeSandP: ``DCLVPolarSurfaceArea`` and ``DCLVPolarVolume`` also count sulfur and phosphorus, as
+            RDKit's ``includeSandP`` argument of ``GetPolarSurfaceArea`` and ``GetPolarVolume``.
+        includeHs: The polar values also count hydrogens bonded to a polar atom, as RDKit's
+            ``includeHs`` argument.
+    """
+
+    probeRadius: float = 1.4
+    includeSandP: bool = False
+    includeHs: bool = False
+
+
+@dataclass(frozen=True)
 class Property3DOptions:
     """Per-family options for :func:`Calc3DProperties`; each family reads only its own member.
 
@@ -121,11 +187,13 @@ class Property3DOptions:
         moments: Options for the moment-based properties.
         whim: Options for ``WHIM``.
         getaway: Options for ``GETAWAY``.
+        dclv: Options for the ``DCLV`` properties.
     """
 
     moments: MomentOptions = MomentOptions()
     whim: WhimOptions = WhimOptions()
     getaway: GetawayOptions = GetawayOptions()
+    dclv: DclvOptions = DclvOptions()
 
 
 @dataclass(frozen=True)
@@ -136,16 +204,19 @@ class Dense3DPropertyResult:
         values: One tensor of shape ``(n_mols, max_confs, *property_shape)`` per property, in request
             order, with the dtype of the source result. Scalar properties have no trailing dimensions;
             vector properties have ``property_shape == (width,)`` (widths listed on :class:`Property3D`).
+            Per-atom properties have shape ``(n_mols, max_confs, max_atoms, *property_shape)``.
             Padded slots hold the ``pad_value`` passed to :meth:`Device3DPropertyResult.dense`.
         conf_mask: bool ``(n_mols, max_confs)``; ``True`` where a real conformer exists.
+        atom_mask: bool ``(n_mols, max_confs, max_atoms)``; ``True`` where a real atom exists.
     """
 
     values: dict[str, torch.Tensor]
     conf_mask: torch.Tensor
+    atom_mask: torch.Tensor
 
 
 class Device3DPropertyResult(Mapping[str, AsyncGpuResult]):
-    """Per-conformer 3D properties on the GPU, labeled by molecule and conformer.
+    """Conformer-dependent 3D properties on the GPU, labeled by molecule and conformer.
 
     Behaves as a read-only mapping from property name to an :class:`~nvmolkit.types.AsyncGpuResult`
     whose first dimension is ``n_conformers``, in request order. Scalar properties have shape
@@ -155,7 +226,12 @@ class Device3DPropertyResult(Mapping[str, AsyncGpuResult]):
     :attr:`~nvmolkit.types.PrecisionMode.FULL`. Keys may be given as names or
     :class:`Property3D` members.
 
-    Row ``i`` of every property belongs to conformer ``conf_indices[i]`` of input molecule
+    Per-atom properties (:data:`PER_ATOM_PROPERTIES`) instead have one row per atom, laid out like
+    the coordinates: rows ``atom_starts[i]:atom_starts[i + 1]`` belong to conformer ``i``, in the
+    molecule's atom order. With ``Device3DResult`` coordinates, rows match its ``values`` rows
+    one-to-one, and rows outside every conformer's range hold NaN.
+
+    Conformer row ``i`` belongs to conformer ``conf_indices[i]`` of input molecule
     ``mol_indices[i]``. ``conf_indices`` is the conformer's position within its molecule, not
     its RDKit conformer ID.
     When the properties were calculated from a ``Device3DResult``, rows follow that result and the
@@ -164,6 +240,8 @@ class Device3DPropertyResult(Mapping[str, AsyncGpuResult]):
     Attributes:
         mol_indices: int32 ``(n_conformers,)`` input-molecule index of each row.
         conf_indices: int32 ``(n_conformers,)`` per-molecule conformer position of each row.
+        atom_starts: int32 ``(n_conformers + 1,)`` offsets of each conformer's per-atom rows; shared
+            with ``coordinates.atom_starts`` when calculated from a ``Device3DResult``.
         gpu_id: GPU holding every buffer.
         n_mols: Number of input molecules, including those without conformers.
     """
@@ -173,6 +251,7 @@ class Device3DPropertyResult(Mapping[str, AsyncGpuResult]):
         properties: dict[str, AsyncGpuResult],
         mol_indices: AsyncGpuResult,
         conf_indices: AsyncGpuResult,
+        atom_starts: AsyncGpuResult,
         gpu_id: int,
         n_mols: int,
     ) -> None:
@@ -180,6 +259,7 @@ class Device3DPropertyResult(Mapping[str, AsyncGpuResult]):
         self._properties = properties
         self.mol_indices = mol_indices
         self.conf_indices = conf_indices
+        self.atom_starts = atom_starts
         self.gpu_id = gpu_id
         self.n_mols = n_mols
 
@@ -200,31 +280,37 @@ class Device3DPropertyResult(Mapping[str, AsyncGpuResult]):
 
     @property
     def n_conformers(self) -> int:
-        """Number of rows (conformers) in every property buffer."""
+        """Number of conformers, the row count of every per-conformer property buffer."""
         return self.mol_indices.torch().numel()
 
     def dense(self, pad_value: float = float("nan")) -> Dense3DPropertyResult:
-        """Materialize padded molecule/conformer tensors for every property.
+        """Materialize padded molecule/conformer (and, for per-atom properties, atom) tensors.
 
-        Molecules with fewer than ``max_confs`` conformers (including none) receive ``pad_value``.
-        Reading the index tensors synchronizes implicitly.
+        Molecules with fewer than ``max_confs`` conformers (including none), and conformers with fewer
+        than ``max_atoms`` atoms, receive ``pad_value``. Reading the index tensors synchronizes implicitly.
         """
+        per_atom = [name for name in self._properties if Property3D(name) in PER_ATOM_PROPERTIES]
+        # Per-atom values bound the valid atom ranges; the gather positions are only built when they are needed.
+        n_rows = self._properties[per_atom[0]].torch().shape[0] if per_atom else None
+        index = _atom_row_index(self.atom_starts, self.mol_indices, self.conf_indices, self.n_mols, n_rows)
+        gather = _atom_row_gather(index) if per_atom else None
         mol_indices = self.mol_indices.torch().to(torch.int64)
         conf_indices = self.conf_indices.torch().to(torch.int64)
-        device = mol_indices.device
-        max_confs = int(torch.bincount(mol_indices, minlength=self.n_mols).max().item()) if mol_indices.numel() else 0
-
-        conf_mask = torch.zeros((self.n_mols, max_confs), dtype=torch.bool, device=device)
-        conf_mask[mol_indices, conf_indices] = True
         values = {}
         for name, result in self._properties.items():
             source = result.torch()
+            if Property3D(name) in PER_ATOM_PROPERTIES:
+                values[name] = _scatter_atom_rows(source, index, gather, pad_value)
+                continue
             dense_values = torch.full(
-                (self.n_mols, max_confs, *source.shape[1:]), pad_value, dtype=source.dtype, device=device
+                (*index.conf_mask.shape, *source.shape[1:]), pad_value, dtype=source.dtype, device=source.device
             )
             dense_values[mol_indices, conf_indices] = source
             values[name] = dense_values
-        return Dense3DPropertyResult(values=values, conf_mask=conf_mask)
+        return Dense3DPropertyResult(values=values, conf_mask=index.conf_mask, atom_mask=index.atom_mask)
+
+
+_DCLV_PROPERTIES = frozenset(prop for prop in Property3D if prop.value.startswith("DCLV"))
 
 
 def _normalize_property(property_name: Property3D | str) -> Property3D:
@@ -336,6 +422,9 @@ def Calc3DProperties(
             MORSE's first scattering value (a large sum of positive terms),
             USR's reference-atom choice (near-equidistant atoms) and GETAWAY's
             leverages (rounded and clustered for ITH and ISH).
+            The ``DCLV`` properties count exposed surface dots, and a dot
+            within rounding of a neighboring sphere can flip between precisions
+            (or against RDKit), which moves the values by one dot's share.
         hardwareOptions: Only ``preprocessingThreads`` applies: the CPU
             threads used to extract coordinates and atom weights from the
             molecules (default ``-1``, all threads).
@@ -344,9 +433,11 @@ def Calc3DProperties(
 
     Returns:
         A :class:`Device3DPropertyResult` mapping each requested property name,
-        in request order, to a device vector with one row per conformer, plus
-        the molecule and conformer labels of every row. Without ``coordinates``,
-        rows follow input-molecule order, then RDKit conformer order.
+        in request order, to a device vector with one row per conformer (one per
+        atom for :data:`PER_ATOM_PROPERTIES`), plus the molecule and conformer
+        labels of every row and each conformer's per-atom row range. Without
+        ``coordinates``, rows follow input-molecule order, then RDKit conformer
+        order.
 
     Any subset of :class:`Property3D` can be requested in one call, mixing
     families and giving members or names. Each requested family runs once for
@@ -406,6 +497,8 @@ def Calc3DProperties(
             raise TypeError(f"GETAWAY precision must be an int, got {type(getaway_precision).__name__}")
         if not 1 <= getaway_precision <= 6:
             raise ValueError(f"GETAWAY precision must be between 1 and 6 significant digits, got {getaway_precision}")
+    # Options of unrequested families are ignored, even when invalid; the native code validates the probe radius.
+    dclv = options.dclv if any(prop in _DCLV_PROPERTIES for prop in normalized_properties) else DclvOptions()
     if hardwareOptions is None:
         hardwareOptions = HardwareOptions()
     elif not isinstance(hardwareOptions, HardwareOptions):
@@ -420,12 +513,15 @@ def Calc3DProperties(
         else _device_coordinate_interfaces(coordinates, len(normalized_mols), active_stream.device)
     )
 
-    raw_results, raw_mol_indices, raw_conf_indices = _descriptors3d.Calc3DProperties(
+    raw_results, raw_mol_indices, raw_conf_indices, raw_atom_starts = _descriptors3d.Calc3DProperties(
         normalized_mols,
         [prop.value for prop in normalized_properties],
         options.moments.useAtomicMasses,
         options.whim.threshold,
         getaway_precision,
+        float(dclv.probeRadius),
+        bool(dclv.includeSandP),
+        bool(dclv.includeHs),
         coordinate_interfaces,
         precision,
         hardwareOptions.preprocessingThreads,
@@ -443,13 +539,16 @@ def Calc3DProperties(
     if coordinates is None:
         mol_indices = AsyncGpuResult(raw_mol_indices, gpu_id=gpu_id)
         conf_indices = AsyncGpuResult(raw_conf_indices, gpu_id=gpu_id)
+        atom_starts = AsyncGpuResult(raw_atom_starts, gpu_id=gpu_id)
     else:
         mol_indices = coordinates.mol_indices
         conf_indices = coordinates.conf_indices
+        atom_starts = coordinates.atom_starts
     return Device3DPropertyResult(
         properties_by_name,
         mol_indices=mol_indices,
         conf_indices=conf_indices,
+        atom_starts=atom_starts,
         gpu_id=gpu_id,
         n_mols=len(normalized_mols),
     )

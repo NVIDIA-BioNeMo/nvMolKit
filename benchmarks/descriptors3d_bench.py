@@ -15,9 +15,11 @@ Example:
 
 import argparse
 import math
+import re
 from pathlib import Path
 
 import numpy as np
+import rdkit
 import torch
 from bench_utils import (
     Deadline,
@@ -37,7 +39,7 @@ from bench_utils import (
 from rdkit import Chem
 from rdkit.Chem import rdMolDescriptors
 
-from nvmolkit.descriptors3d import Calc3DProperties, Property3D
+from nvmolkit.descriptors3d import PER_ATOM_PROPERTIES, Calc3DProperties, Property3D
 from nvmolkit.types import AsyncGpuResult, Device3DResult, HardwareOptions, PrecisionMode
 
 PRECISIONS = {"single": PrecisionMode.SINGLE, "full": PrecisionMode.FULL}
@@ -46,6 +48,10 @@ VALIDATION_TOLERANCES = {PrecisionMode.SINGLE: (2e-6, 1e-3), PrecisionMode.FULL:
 # Absolute tolerances for USR skews (whole molecule, USRCAT atom classes): the cube root of a near-zero third
 # moment turns rounding noise into visible values, in RDKit as well (a two-atom class has an exact skew of 0).
 USR_SKEW_TOLERANCES = {PrecisionMode.SINGLE: (5e-3, 0.1), PrecisionMode.FULL: (1e-4, 1e-3)}
+# Relative tolerances for the DCLV properties, which sum float32 dot contributions over every atom.
+DCLV_RELATIVE_TOLERANCES = {PrecisionMode.SINGLE: 1e-5, PrecisionMode.FULL: 1e-9}
+# Absolute tolerances for EEM charges.
+EEM_TOLERANCES = {PrecisionMode.SINGLE: 2e-6, PrecisionMode.FULL: 1e-9}
 
 PROPERTY_SETS = {
     "single": (Property3D.RADIUS_OF_GYRATION,),
@@ -63,6 +69,35 @@ RDKIT_CALCULATORS = {
     Property3D.ECCENTRICITY: rdMolDescriptors.CalcEccentricity,
     Property3D.ASPHERICITY: rdMolDescriptors.CalcAsphericity,
 }
+
+DCLV_GETTERS = {
+    Property3D.DCLV_SURFACE_AREA: "GetSurfaceArea",
+    Property3D.DCLV_POLAR_SURFACE_AREA: "GetPolarSurfaceArea",
+    Property3D.DCLV_VOLUME: "GetVolume",
+    Property3D.DCLV_VDW_VOLUME: "GetVDWVolume",
+    Property3D.DCLV_POLAR_VOLUME: "GetPolarVolume",
+    Property3D.DCLV_COMPACTNESS: "GetCompactness",
+    Property3D.DCLV_PACKING_DENSITY: "GetPackingDensity",
+}
+
+
+def _calc_rdkit_eem(mol: Chem.Mol, conf_id: int) -> list[float]:
+    """Reference charges, with NaN for unsupported types or invalid coordinates."""
+    missing = [math.nan] * mol.GetNumAtoms()
+    molecule = Chem.Mol(mol)
+    try:
+        Chem.Kekulize(molecule, clearAromaticFlags=True)
+    except Chem.MolSanitizeException:
+        return missing
+    supported_elements = {1: {1, 6, 7, 8, 9, 16, 17, 35}, 2: {6, 7, 8, 15, 16}, 3: {6, 7}}
+    for atom in molecule.GetAtoms():
+        bond_order = max((int(bond.GetBondTypeAsDouble()) for bond in atom.GetBonds()), default=1)
+        if atom.GetAtomicNum() not in supported_elements.get(bond_order, set()):
+            return missing
+    positions = molecule.GetConformer(conf_id).GetPositions()
+    if not np.isfinite(positions).all() or len(np.unique(positions, axis=0)) != len(positions):
+        return missing
+    return rdMolDescriptors.CalcEEMcharges(molecule, confId=conf_id)
 
 
 def _calc_rdkit_property(mol: Chem.Mol, conf_id: int, prop: Property3D) -> float | list[float]:
@@ -88,6 +123,8 @@ def _calc_rdkit_property(mol: Chem.Mol, conf_id: int, prop: Property3D) -> float
         return rdMolDescriptors.GetUSR(mol, confId=conf_id)
     if prop == Property3D.USRCAT:
         return rdMolDescriptors.GetUSRCAT(mol, confId=conf_id)
+    if prop == Property3D.EEM_CHARGES:
+        return _calc_rdkit_eem(mol, conf_id)
     if prop == Property3D.GETAWAY:
         if len(Chem.GetMolFrags(mol)) > 1:
             # RDKit's GETAWAY does not finish in reasonable time on multi-fragment molecules.
@@ -127,15 +164,56 @@ def _pack_device_coordinates(mols: list[Chem.Mol]) -> Device3DResult:
     )
 
 
-def _calc_rdkit(mols: list[Chem.Mol], properties: tuple[Property3D, ...]) -> dict[Property3D, np.ndarray]:
-    """Calculate reference arrays in molecule/conformer order."""
+def _dclv_radii(mol: Chem.Mol) -> list[float]:
+    """Van der Waals radii per atom; RDKit 2025.09.1 has no default-radii DCLV constructor."""
+    table = Chem.GetPeriodicTable()
+    return [table.GetRvdw(atom.GetAtomicNum()) for atom in mol.GetAtoms()]
+
+
+def _calc_rdkit_conformer(
+    mol: Chem.Mol, conf_id: int, properties: tuple[Property3D, ...]
+) -> dict[Property3D, float | list[float]]:
+    dclv = (
+        rdMolDescriptors.DoubleCubicLatticeVolume(mol, _dclv_radii(mol), confId=conf_id)
+        if any(prop in DCLV_GETTERS for prop in properties)
+        else None
+    )
     return {
-        prop: np.asarray(
-            [_calc_rdkit_property(mol, conf.GetId(), prop) for mol in mols for conf in mol.GetConformers()],
-            dtype=np.float64,
-        )
+        prop: getattr(dclv, DCLV_GETTERS[prop])() if prop in DCLV_GETTERS else _calc_rdkit_property(mol, conf_id, prop)
         for prop in properties
     }
+
+
+def _calc_rdkit(mols: list[Chem.Mol], properties: tuple[Property3D, ...]) -> dict[Property3D, np.ndarray]:
+    """Calculate reference arrays in molecule/conformer order."""
+    values = {prop: [] for prop in properties}
+    for mol in mols:
+        for conf in mol.GetConformers():
+            for prop, value in _calc_rdkit_conformer(mol, conf.GetId(), properties).items():
+                values[prop].append(value)
+    return {
+        prop: np.concatenate([np.asarray(row, dtype=np.float64) for row in rows])
+        if prop in PER_ATOM_PROPERTIES
+        else np.asarray(rows, dtype=np.float64)
+        for prop, rows in values.items()
+    }
+
+
+# RDKit before 2026.9.2 returns wrong EEM charges for charged molecules (rdkit/rdkit#9688); nvMolKit's are correct,
+# so only neutral molecules are compared against older RDKit.
+RDKIT_EEM_CHARGES_CORRECT = tuple(int(part) for part in re.findall(r"\d+", rdkit.__version__)[:3]) >= (2026, 9, 2)
+
+
+def _eem_comparable_rows(mols: list[Chem.Mol]) -> np.ndarray:
+    """Mask of the per-atom EEM rows, in molecule/conformer order, where the installed RDKit is a valid reference."""
+    return np.concatenate(
+        [
+            np.full(mol.GetNumAtoms(), RDKIT_EEM_CHARGES_CORRECT or Chem.GetFormalCharge(mol) == 0)
+            for mol in mols
+            for _ in mol.GetConformers()
+        ]
+        or [np.zeros(0, dtype=bool)]
+    )
 
 
 def _validate(
@@ -164,6 +242,16 @@ def _validate(
                 # Rows RDKit could not compute (multi-fragment molecules) are NaN and not compared.
                 computed = ~np.isnan(expected[prop]).all(axis=1)
                 np.testing.assert_allclose(actual[computed], expected[prop][computed], rtol=0, atol=max(atol, 1.1e-3))
+                continue
+            if prop in DCLV_GETTERS:
+                np.testing.assert_allclose(actual, expected[prop], rtol=DCLV_RELATIVE_TOLERANCES[precision], atol=atol)
+                continue
+            if prop == Property3D.EEM_CHARGES:
+                eem_atol = EEM_TOLERANCES[precision] if tolerance is None else tolerance
+                comparable = _eem_comparable_rows(check_mols)
+                np.testing.assert_allclose(
+                    actual[comparable], expected[prop][comparable], rtol=0, atol=eem_atol, equal_nan=True
+                )
                 continue
             if prop not in (Property3D.USR, Property3D.USRCAT):
                 np.testing.assert_allclose(actual, expected[prop], rtol=rtol, atol=atol)
@@ -196,8 +284,7 @@ def _rdkit_worker_range(bounds: tuple[int, int]) -> int:
     done = 0
     for mol in _WORKER_MOLS[start:stop]:
         for conf in mol.GetConformers():
-            for prop in _WORKER_PROPERTIES:
-                _calc_rdkit_property(mol, conf.GetId(), prop)
+            _calc_rdkit_conformer(mol, conf.GetId(), _WORKER_PROPERTIES)
             done += 1
     return done
 

@@ -61,9 +61,25 @@ constexpr int kGetawayRowStride   = kGetawayRowCentered + 3;
 
 //! Exact powers of ten representable in float64.
 __device__ __forceinline__ double exactPowerOfTen(const int exponent) {
-  constexpr double kPowers[] = {1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,  1e10, 1e11,
-                                1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22};
-  return kPowers[exponent];
+  // Built from its binary digits rather than a table (a local array would live in local memory). Every partial
+  // product is itself a power of ten up to 1e22 = 2^22 * 5^22 with 5^22 < 2^53, so each product is exact.
+  double power = 1.0;
+  if (exponent & 1) {
+    power *= 1e1;
+  }
+  if (exponent & 2) {
+    power *= 1e2;
+  }
+  if (exponent & 4) {
+    power *= 1e4;
+  }
+  if (exponent & 8) {
+    power *= 1e8;
+  }
+  if (exponent & 16) {
+    power *= 1e16;
+  }
+  return power;
 }
 
 //! @p value * 10^@p exponent; exact scaling factors within float64's exact powers of ten.
@@ -83,7 +99,7 @@ __device__ __forceinline__ double scaleByPowerOfTen(double value, int exponent) 
  * @brief RDKit's round_to_n_digits_: `atof(sprintf("%.*g", digits, value))` for a non-negative @p value.
  *
  * Also returns the rounded value's significand (@p mantissa, exactly @p digits digits unless the value is 0)
- * and decimal exponent, from which rdkitDecimalText() rebuilds its printed text. Exact ties round to even, as glibc
+ * and decimal exponent, from which clusterKey() derives its printed text. Exact ties round to even, as glibc
  * does for exactly representable halves; values within float64 rounding of a tie may differ from printf.
  */
 __device__ __forceinline__ double roundToSignificantDigits(const double value,
@@ -114,123 +130,9 @@ __device__ __forceinline__ double roundToSignificantDigits(const double value,
   return scaleByPowerOfTen(static_cast<double>(mantissa), exponent - (digits - 1));
 }
 
-//! Decimal text of a printed value, as RDKit's IsClose2 compares it.
-struct DecimalText {
-  char chars[24];
-  int  length;
-};
-
-__device__ __forceinline__ void appendChar(DecimalText& text, const char character) {
-  text.chars[text.length++] = character;
-}
-
-/**
- * @brief The decimal text RDKit's IsClose2 compares for the rounded leverage
- *        v = @p mantissa * 10^(@p exponent - @p digits + 1) from roundToSignificantDigits().
- *
- * IsClose2 prints with default C++ stream formatting: up to 6 significant digits with trailing zeros removed,
- * fixed notation for decimal exponents -4 to 5 (e.g. "0.034", "1") and scientific notation otherwise
- * (e.g. "1.8e-06"). With @p digits <= 6 every significant digit of v is printed.
- */
-__device__ __forceinline__ void rdkitDecimalText(const int64_t mantissa,
-                                                 const int     exponent,
-                                                 const int     digits,
-                                                 DecimalText&  text) {
-  text.length = 0;
-  if (mantissa == 0) {
-    appendChar(text, '0');
-    return;
-  }
-  char    significand[8];
-  int     significandLength = 0;
-  int64_t remainder         = mantissa;
-  for (int position = digits - 1; position >= 0; --position) {
-    significand[position] = static_cast<char>('0' + remainder % 10);
-    remainder /= 10;
-  }
-  significandLength = digits;
-  while (significandLength > 1 && significand[significandLength - 1] == '0') {
-    --significandLength;
-  }
-  if (exponent < -4 || exponent >= 6) {
-    appendChar(text, significand[0]);
-    if (significandLength > 1) {
-      appendChar(text, '.');
-      for (int position = 1; position < significandLength; ++position) {
-        appendChar(text, significand[position]);
-      }
-    }
-    appendChar(text, 'e');
-    appendChar(text, exponent < 0 ? '-' : '+');
-    const int magnitude = exponent < 0 ? -exponent : exponent;
-    if (magnitude >= 100) {
-      appendChar(text, static_cast<char>('0' + magnitude / 100));
-    }
-    appendChar(text, static_cast<char>('0' + (magnitude / 10) % 10));
-    appendChar(text, static_cast<char>('0' + magnitude % 10));
-    return;
-  }
-  if (exponent >= 0) {
-    for (int position = 0; position <= exponent; ++position) {
-      appendChar(text, position < significandLength ? significand[position] : '0');
-    }
-    if (significandLength > exponent + 1) {
-      appendChar(text, '.');
-      for (int position = exponent + 1; position < significandLength; ++position) {
-        appendChar(text, significand[position]);
-      }
-    }
-    return;
-  }
-  appendChar(text, '0');
-  appendChar(text, '.');
-  for (int zero = 0; zero < -exponent - 1; ++zero) {
-    appendChar(text, '0');
-  }
-  for (int position = 0; position < significandLength; ++position) {
-    appendChar(text, significand[position]);
-  }
-}
-
-//! `text.substr(text.find('.') + 1)`: the text after the first '.', or all of it when there is none.
-__device__ __forceinline__ DecimalText textAfterPoint(const DecimalText& text) {
-  int start = 0;
-  for (int position = 0; position < text.length; ++position) {
-    if (text.chars[position] == '.') {
-      start = position + 1;
-      break;
-    }
-  }
-  DecimalText suffix;
-  suffix.length = 0;
-  for (int position = start; position < text.length; ++position) {
-    appendChar(suffix, text.chars[position]);
-  }
-  return suffix;
-}
-
-//! RDKit's countZeros: leading '0' characters.
-__device__ __forceinline__ int countLeadingZeros(const DecimalText& text) {
-  int zeros = 0;
-  while (zeros < text.length && text.chars[zeros] == '0') {
-    ++zeros;
-  }
-  return zeros;
-}
-
-//! C atoi on the text: leading decimal digits, 0 if there are none.
-__device__ __forceinline__ int64_t leadingInteger(const DecimalText& text) {
-  int64_t value = 0;
-  for (int position = 0; position < text.length && text.chars[position] >= '0' && text.chars[position] <= '9';
-       ++position) {
-    value = value * 10 + (text.chars[position] - '0');
-  }
-  return value;
-}
-
-//! What RDKit's IsClose2 reads from a rounded leverage's printed fraction text (textAfterPoint()): its
-//! leading '0' count, its length, its leading integer (C atoi) and whether it is all digits, in which case
-//! appending '0' multiplies that integer by 10.
+//! What RDKit's IsClose2 reads from a rounded leverage's printed fraction text (the text after the first '.', or
+//! all of it when there is none): its leading '0' count, its length, its leading integer (C atoi) and whether it
+//! is all digits, in which case appending '0' multiplies that integer by 10.
 struct ClusterKey {
   int     zeros;
   int     length;
@@ -258,14 +160,76 @@ __device__ __forceinline__ ClusterKey clusterKey(const double leverage, const in
   int64_t mantissa;
   int     exponent;
   rounded = roundToSignificantDigits(leverage, digits, mantissa, exponent);
-  DecimalText printed;
-  rdkitDecimalText(mantissa, exponent, digits, printed);
-  const DecimalText fraction = textAfterPoint(printed);
-  ClusterKey        key{countLeadingZeros(fraction), fraction.length, leadingInteger(fraction), true};
-  for (int position = 0; position < fraction.length; ++position) {
-    key.allDigits = key.allDigits && fraction.chars[position] >= '0' && fraction.chars[position] <= '9';
+  // IsClose2 prints with default C++ stream formatting: up to 6 significant digits with trailing zeros removed,
+  // fixed notation for decimal exponents -4 to 5 (e.g. "0.034", "1") and scientific notation otherwise (e.g.
+  // "1.8e-06"); precision is at most 6, so every significant digit is printed. The key of that text's fraction is
+  // derived from the digits directly rather than by building the
+  // text (character arrays would live in local memory): the significand without trailing zeros, its length, and
+  // where the printed '.' falls.
+  if (mantissa == 0) {
+    return {1, 1, 0, true};  // "0": no point, so the whole text.
   }
-  return key;
+  // Significands of up to 9 digits (every precision below 10) fit 32 bits, whose division is far cheaper than
+  // the 64-bit one; the quotients and remainders are the same.
+  int64_t    significand = mantissa;
+  int        length      = digits;
+  const bool narrow      = significand <= int64_t{0xffffffff};
+  if (narrow) {
+    uint32_t value = static_cast<uint32_t>(significand);
+    while (length > 1 && value % 10u == 0u) {
+      value /= 10u;
+      --length;
+    }
+    significand = value;
+  } else {
+    while (length > 1 && significand % 10 == 0) {
+      significand /= 10;
+      --length;
+    }
+  }
+  // Fraction digits: the trailing @p count digits of the significand, whose last digit is not zero.
+  const auto trailing = [&](const int count, int64_t& value) {
+    int64_t scale = 1;
+    for (int position = 0; position < count; ++position) {
+      scale *= 10;
+    }
+    if (narrow) {
+      value = scale <= int64_t{0xffffffff} ?
+                static_cast<int64_t>(static_cast<uint32_t>(significand) % static_cast<uint32_t>(scale)) :
+                significand;  // Below 2^32 <= scale.
+    } else {
+      value = significand % scale;
+    }
+    int valueDigits = 1;
+    for (int64_t bound = 10; bound <= value; bound *= 10) {
+      ++valueDigits;
+    }
+    return count - valueDigits;  // Leading '0' characters.
+  };
+  if (exponent < -4 || exponent >= 6) {
+    // "d[.ddd]e±XX[X]": the fraction text keeps the exponent suffix, so it is not all digits.
+    const int exponentDigits = (exponent <= -100 || exponent >= 100) ? 3 : 2;
+    if (length > 1) {
+      int64_t   value;
+      const int zeros = trailing(length - 1, value);
+      return {zeros, length - 1 + 2 + exponentDigits, value, false};
+    }
+    return {0, 1 + 2 + exponentDigits, significand, false};
+  }
+  if (exponent >= 0) {
+    if (length > exponent + 1) {
+      int64_t   value;
+      const int zeros = trailing(length - exponent - 1, value);
+      return {zeros, length - exponent - 1, value, true};
+    }
+    int64_t value = significand;
+    for (int position = length; position <= exponent; ++position) {
+      value *= 10;
+    }
+    return {0, exponent + 1, value, true};  // Integer text without a point.
+  }
+  // "0.00ddd": -exponent - 1 zeros, then every significant digit.
+  return {-exponent - 1, -exponent - 1 + length, significand, true};
 }
 
 //! The effect of appending '0' to the text a ClusterKey describes.
@@ -303,7 +267,8 @@ __device__ __forceinline__ bool rdkitIsClose(ClusterKey a, ClusterKey b) {
  *        ITH = n log2 n - sum(c log2 c) over the group sizes c and ISH = ITH / (n log2 n).
  *
  * The lanes round, key and rank the heavy atoms (equal values print identically, so their relative order
- * does not matter); lane 0 then runs the greedy scan on the sorted keys and alone receives @p ith and @p ish.
+ * does not matter); the warp then runs the greedy scan on the sorted keys a cluster at a time, and lane 0 alone
+ * receives @p ith and @p ish.
  * Both are NaN when any heavy-atom leverage is not finite. @p heavyValues and @p unsortedKeys hold one entry and @p
  * sortedKeys one entry per heavy atom.
  */
@@ -344,11 +309,50 @@ __device__ __forceinline__ void computeInformationIndices(const double*  leverag
   for (int slot = lane; slot < numHeavy; slot += kWarpSize) {
     const double value = heavyValues[slot];
     int          rank  = 0;
+#pragma unroll 4
     for (int other = 0; other < numHeavy; ++other) {
       const double otherValue = heavyValues[other];
       rank += otherValue > value || (otherValue == value && other < slot) ? 1 : 0;
     }
     sortedKeys[rank] = unsortedKeys[slot];
+  }
+  warp.sync();
+  // clusterArray2's greedy scan, a cluster per step: the lanes test 32 followers of the cluster's front at once
+  // and the first one that is not close ends it. Cluster sizes go to heavyValues (free after the ranking).
+  int clusters = 0;
+  int head     = 0;
+  while (head < numHeavy) {
+    const ClusterKey front     = unpackClusterKey(sortedKeys[head]);
+    const int        remaining = numHeavy - head - 1;
+    int              stop      = -1;  // offset of the first follower that is not close to the front
+    for (int base = 0; base < remaining && stop < 0; base += kWarpSize) {
+      const int      offset = base + lane;
+      const bool     far  = offset < remaining && !rdkitIsClose(front, unpackClusterKey(sortedKeys[head + 1 + offset]));
+      const unsigned ends = warp.ballot(far);
+      stop                = ends != 0u ? base + __ffs(static_cast<int>(ends)) - 1 : stop;
+    }
+    int size;
+    if (remaining == 0) {
+      size = 1;
+      head = numHeavy;
+    } else if (stop >= 0) {
+      size = 1 + stop;
+      head += 1 + stop;
+    } else {
+      // Every follower is close: RDKit counts them all, then resumes from the second element of the cluster.
+      size = 1 + remaining;
+      head += 2;
+    }
+    if (lane == 0) {
+      heavyValues[clusters] = size;
+    }
+    ++clusters;
+  }
+  warp.sync();
+  // A group of one contributes 1 * log(1) = 0 exactly and is skipped; the others are subtracted in scan order.
+  for (int cluster = lane; cluster < clusters; cluster += kWarpSize) {
+    const double size    = heavyValues[cluster];
+    heavyValues[cluster] = size > 1.0 ? size * log(size) / log(2.0) : 0.0;
   }
   warp.sync();
   if (lane != 0) {
@@ -357,34 +361,10 @@ __device__ __forceinline__ void computeInformationIndices(const double*  leverag
   const double heavyCount = numHeavy;
   const double total0     = heavyCount * log(heavyCount) / log(2.0);
   double       total      = total0;
-  auto         store      = [&](const int count) {
-    const double size = count;
-    total -= size * log(size) / log(2.0);
-  };
-  int head  = 0;
-  int count = 0;
-  while (head < numHeavy) {
-    const ClusterKey front = unpackClusterKey(sortedKeys[head]);
-    ++head;
-    ++count;
-    const int remaining = numHeavy - head;
-    if (remaining == 0) {
-      store(count);
-    }
-    for (int offset = 0; offset < remaining; ++offset) {
-      if (rdkitIsClose(front, unpackClusterKey(sortedKeys[head + offset]))) {
-        ++count;
-      } else {
-        store(count);
-        head += offset;
-        count = 0;
-        break;
-      }
-      if (offset == remaining - 1) {
-        store(count);
-        ++head;
-        count = 0;
-      }
+  for (int cluster = 0; cluster < clusters; ++cluster) {
+    const double term = heavyValues[cluster];
+    if (term != 0.0) {
+      total -= term;
     }
   }
   ith = total;

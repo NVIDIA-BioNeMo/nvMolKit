@@ -196,6 +196,18 @@ target_link_libraries(
           test_utils
           embedder_utils)
 
+add_executable(test_aio_etkdg_forcefield test_aio_etkdg_forcefield.cu)
+target_link_libraries(
+  test_aio_etkdg_forcefield
+  PRIVATE ${RDKit_LIBS}
+          rdkit_dist_geom_flattened
+          aio_etkdg_batched_forcefield
+          dist_geom
+          device_vector
+          test_utils
+          embedder_utils
+          nvmolkit_versions)
+
 add_executable(test_rdkit_bounds_matrix test_rdkit_bounds_matrix.cpp)
 target_link_libraries(
   test_rdkit_bounds_matrix PRIVATE rdkit_bounds_matrix symmetricEigenSolver
@@ -325,6 +337,10 @@ target_link_libraries(
   PRIVATE etkdg_stages device_vector ${RDKit_LIBS} test_utils dist_geom
           rdkit_dist_geom_flattened)
 
+add_executable(test_trig_identities test_trig_identities.cu)
+target_link_libraries(test_trig_identities PRIVATE etkdg_stages device_vector
+                                                   ${RDKit_LIBS})
+
 add_executable(test_conformer_checkers test_conformer_checkers.cpp)
 target_link_libraries(test_conformer_checkers PRIVATE ${RDKit_LIBS}
                                                       conformer_checkers)
@@ -340,6 +356,9 @@ target_link_libraries(test_etkdg_result_tracker PRIVATE etkdg_impl)
 
 add_executable(test_butina test_butina.cpp)
 target_link_libraries(test_butina PRIVATE butina device)
+
+add_executable(test_bitbirch test_bitbirch.cu)
+target_link_libraries(test_bitbirch PRIVATE bitbirch device device_vector)
 
 add_executable(test_aap_threads test_aap_threads.cpp)
 
@@ -417,7 +436,7 @@ target_link_libraries(
 add_executable(test_descriptors3d test_descriptors3d.cpp)
 target_link_libraries(
   test_descriptors3d PRIVATE ${RDKit_LIBS} descriptors3d_mol
-                             conformer_coord_upload device)
+                             conformer_coord_upload device nvmolkit_versions)
 
 add_executable(test_descriptors3d_whim_arithmetic
                test_descriptors3d_whim_arithmetic.cu)
@@ -427,6 +446,11 @@ target_link_libraries(test_descriptors3d_whim_arithmetic
 add_executable(test_descriptors3d_topology test_descriptors3d_topology.cu)
 target_link_libraries(test_descriptors3d_topology PRIVATE descriptors3d
                                                           cuda_error_check)
+
+add_executable(test_descriptors3d_eem test_descriptors3d_eem.cu)
+target_link_libraries(
+  test_descriptors3d_eem PRIVATE conformer_types device_vector cuda_error_check
+                                 CUDA::cudart)
 
 add_executable(test_tfd_cpu test_tfd_cpu.cpp)
 target_link_libraries(test_tfd_cpu PRIVATE ${RDKit_LIBS} tfd_cpu test_utils
@@ -449,7 +473,9 @@ set(TEST_LIST
     test_descriptors3d
     test_descriptors3d_whim_arithmetic
     test_descriptors3d_topology
+    test_descriptors3d_eem
     test_boolean_tree
+    test_bitbirch
     test_butina
     test_diversity_pickers
     test_bfgs_hessian
@@ -466,12 +492,14 @@ set(TEST_LIST
     test_device_timings
     test_device_vector
     test_distgeom_kernels
+    test_aio_etkdg_forcefield
     test_etkdg
     test_etkdg_device_output
     test_ff_device_output
     test_etkdg_coordgen
     test_etkdg_etk_minimize
     test_etkdg_stereochem_checks
+    test_trig_identities
     test_flat_bit_vect
     test_flat_bit_vect_device
     test_flattened_builder

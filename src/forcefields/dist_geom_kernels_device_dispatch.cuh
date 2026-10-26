@@ -20,6 +20,7 @@ namespace DistGeom {
 namespace fp64 {
 using EnergyForceContribsDevicePtr   = DistGeom::EnergyForceContribsDevicePtr;
 using Energy3DForceContribsDevicePtr = DistGeom::Energy3DForceContribsDevicePtr;
+using AllInOneContribsDevicePtr      = DistGeom::AllInOneContribsDevicePtr;
 constexpr double RAD2DEG             = 180.0 / M_PI;
 #define DG_REAL       double
 #define DG_PARAM_REAL double
@@ -28,6 +29,7 @@ constexpr double RAD2DEG             = 180.0 / M_PI;
 #define DG_SQRTF      sqrtf
 #define DG_SQRT       sqrt
 #define DG_ACOS       acos
+#define DG_ASIN       asin
 #define DG_FMAX       fmax
 #define DG_IS_ZERO    isDoubleZero
 #include "src/forcefields/dist_geom_kernels_device.cuh"
@@ -38,6 +40,7 @@ constexpr double RAD2DEG             = 180.0 / M_PI;
 #undef DG_SQRTF
 #undef DG_SQRT
 #undef DG_ACOS
+#undef DG_ASIN
 #undef DG_FMAX
 #undef DG_IS_ZERO
 }  // namespace fp64
@@ -45,6 +48,7 @@ constexpr double RAD2DEG             = 180.0 / M_PI;
 namespace fp32 {
 using EnergyForceContribsDevicePtr   = DistGeom::EnergyForceContribsDevicePtrSingle;
 using Energy3DForceContribsDevicePtr = DistGeom::Energy3DForceContribsDevicePtrSingle;
+using AllInOneContribsDevicePtr      = DistGeom::AllInOneContribsDevicePtrSingle;
 constexpr float RAD2DEG              = 180.0f / static_cast<float>(M_PI);
 #define DG_REAL       float
 #define DG_PARAM_REAL float
@@ -53,6 +57,7 @@ constexpr float RAD2DEG              = 180.0f / static_cast<float>(M_PI);
 #define DG_SQRTF      sqrtf
 #define DG_SQRT       sqrtf
 #define DG_ACOS       acosf
+#define DG_ASIN       asinf
 #define DG_FMAX       fmaxf
 #define DG_IS_ZERO    isFloatZero
 #include "src/forcefields/dist_geom_kernels_device.cuh"
@@ -63,6 +68,7 @@ constexpr float RAD2DEG              = 180.0f / static_cast<float>(M_PI);
 #undef DG_SQRTF
 #undef DG_SQRT
 #undef DG_ACOS
+#undef DG_ASIN
 #undef DG_FMAX
 #undef DG_IS_ZERO
 }  // namespace fp32

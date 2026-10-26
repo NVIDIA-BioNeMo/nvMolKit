@@ -368,22 +368,14 @@ __global__ void doubleBondStereoKernel(const int      numTerms,
   double cross2x, cross2y, cross2z;
   FFKernelUtils::crossProduct(dx3, dy3, dz3, dx1, dy1, dz1, cross2x, cross2y, cross2z);
 
-  // Compute angle between two crosses.
   double       dot       = FFKernelUtils::dotProduct(cross1x, cross1y, cross1z, cross2x, cross2y, cross2z);
   const double l1squared = cross1x * cross1x + cross1y * cross1y + cross1z * cross1z;
   const double l2squared = cross2x * cross2x + cross2y * cross2y + cross2z * cross2z;
   const double denom     = sqrt(l1squared * l2squared);
   dot /= denom;
 
-  double angle = acos(dot);
-  if (dot <= -1.0) {
-    angle = M_PI;
-  } else if (dot >= 1.0) {
-    angle = 0.0;
-  }
-
-  if (((angle - M_PI_2) * sign) < 0.0) {
-    // Stereo is wrong.
+  // acos(dot) - pi/2 has the opposite sign to dot.
+  if (dot * sign > 0.0) {
     failedThisStage[thisTermSysIdx] = 1;
   }
 }

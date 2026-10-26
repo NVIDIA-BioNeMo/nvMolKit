@@ -3,20 +3,27 @@
 
 #include <GraphMol/Conformer.h>
 #include <GraphMol/Descriptors/AUTOCORR3D.h>
+#include <GraphMol/Descriptors/DCLV.h>
+#include <GraphMol/Descriptors/EEM.h>
 #include <GraphMol/Descriptors/GETAWAY.h>
 #include <GraphMol/Descriptors/MORSE.h>
 #include <GraphMol/Descriptors/PBF.h>
 #include <GraphMol/Descriptors/RDF.h>
 #include <GraphMol/Descriptors/USRDescriptor.h>
 #include <GraphMol/Descriptors/WHIM.h>
+#include <GraphMol/MolOps.h>
+#include <GraphMol/PeriodicTable.h>
 #include <GraphMol/RWMol.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
+#include <GraphMol/SmilesParse/SmilesWrite.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <random>
 #include <stdexcept>
@@ -26,6 +33,7 @@
 #include "src/conformer/conformer_coord_upload.h"
 #include "src/descriptors3d_mol.h"
 #include "src/utils/device.h"
+#include "versions.h"
 
 using nvMolKit::Property3D;
 
@@ -46,8 +54,23 @@ constexpr std::array<Property3D, 10> kMomentProperties = {
   Property3D::SpherocityIndex,
 };
 
-std::unique_ptr<RDKit::RWMol> molWithConformers(const char* smiles, const std::vector<std::vector<Point>>& confs) {
-  std::unique_ptr<RDKit::RWMol> mol(RDKit::SmilesToMol(smiles));
+//! Every DCLV property, in RDKit's DoubleCubicLatticeVolume getter order.
+constexpr std::array<Property3D, 7> kDclvProperties = {
+  Property3D::DCLVSurfaceArea,
+  Property3D::DCLVPolarSurfaceArea,
+  Property3D::DCLVVolume,
+  Property3D::DCLVVDWVolume,
+  Property3D::DCLVPolarVolume,
+  Property3D::DCLVCompactness,
+  Property3D::DCLVPackingDensity,
+};
+
+std::unique_ptr<RDKit::RWMol> molWithConformers(const char*                            smiles,
+                                                const std::vector<std::vector<Point>>& confs,
+                                                const bool                             keepHs = false) {
+  RDKit::SmilesParserParams params;
+  params.removeHs = !keepHs;
+  std::unique_ptr<RDKit::RWMol> mol(RDKit::SmilesToMol(smiles, params));
   for (const auto& points : confs) {
     auto conf = std::make_unique<RDKit::Conformer>(mol->getNumAtoms());
     for (size_t atomIdx = 0; atomIdx < points.size(); ++atomIdx) {
@@ -389,6 +412,70 @@ TEST(Descriptors3DGetaway, MatchesRdkitGetaway) {
   }
 }
 
+TEST(Descriptors3DDclv, MatchesRdkitDoubleCubicLatticeVolume) {
+  // Glycine with explicit hydrogens on N and O, so every polar class and option is exercised; two conformers,
+  // the second far from the origin.
+  auto                                   mol  = molWithConformers("[H]OC(=O)CN([H])[H]",
+                                                                  {
+                                 {   {-1.9, 0.9, 0.1},
+                                  {-1.2, 0.2, 0.0},
+                                  {0.1, 0.6, 0.0},
+                                  {0.4, 1.8, 0.1},
+                                  {1.1, -0.5, -0.1},
+                                  {2.5, -0.1, 0.0},
+                                  {2.8, 0.5, 0.8},
+                                  {3.0, -1.0, 0.1}    },
+                                 {{98.1, -50.9, 30.4},
+                                  {98.8, -51.6, 30.2},
+                                  {100.1, -51.1, 30.1},
+                                  {100.5, -50.0, 30.5},
+                                  {101.0, -52.2, 29.6},
+                                  {102.3, -51.6, 29.4},
+                                  {102.9, -52.3, 29.0},
+                                  {102.4, -50.9, 28.6}},
+  },
+                               true);
+  const std::vector<const RDKit::ROMol*> mols = {mol.get()};
+  // RDKit 2025.09.1 requires explicit radii; empty-vector defaults were added later.
+  std::vector<double>                    radii;
+  for (const auto atom : mol->atoms()) {
+    radii.push_back(RDKit::PeriodicTable::getTable()->getRvdw(atom->getAtomicNum()));
+  }
+  for (const double probeRadius : {1.4, 0.0}) {
+    for (const bool includeSandP : {false, true}) {
+      for (const bool includeHs : {false, true}) {
+        nvMolKit::Property3DOptions options;
+        options.dclv = {probeRadius, includeSandP, includeHs};
+        auto results =
+          nvMolKit::calc3DProperties<double>(mols, {kDclvProperties.begin(), kDclvProperties.end()}, options, nullptr);
+        for (int confIdx = 0; confIdx < 2; ++confIdx) {
+          RDKit::Descriptors::DoubleCubicLatticeVolume     dclv(*mol, radii, false, true, probeRadius, confIdx);
+          const std::array<double, kDclvProperties.size()> expected = {
+            dclv.getSurfaceArea(),
+            dclv.getPolarSurfaceArea(includeSandP, includeHs),
+            dclv.getVolume(),
+            dclv.getVDWVolume(),
+            dclv.getPolarVolume(includeSandP, includeHs),
+            dclv.getCompactness(),
+            dclv.getPackingDensity(),
+          };
+          for (size_t propertyIdx = 0; propertyIdx < kDclvProperties.size(); ++propertyIdx) {
+            const auto values = toHost(results.properties.at(kDclvProperties[propertyIdx]));
+            ASSERT_EQ(values.size(), 2u);
+            EXPECT_NEAR(values[confIdx], expected[propertyIdx], 1e-9 * std::max(1.0, std::abs(expected[propertyIdx])))
+              << "probe " << probeRadius << ", S/P " << includeSandP << ", Hs " << includeHs << ", conformer "
+              << confIdx << ", " << nvMolKit::property3DName(kDclvProperties[propertyIdx]);
+          }
+        }
+      }
+    }
+  }
+  nvMolKit::Property3DOptions invalid;
+  invalid.dclv.probeRadius = -0.5;
+  EXPECT_THROW(nvMolKit::calc3DProperties<double>(mols, {Property3D::DCLVVolume}, invalid, nullptr),
+               std::invalid_argument);
+}
+
 TEST(Descriptors3DPairwise, BondSearchFallbackMatchesBondDistanceTable) {
   // A 12-atom chain has bond distances up to 11, past the deepest lag either descriptor uses.
   constexpr int                   kChainAtoms = 12;
@@ -408,6 +495,249 @@ TEST(Descriptors3DPairwise, BondSearchFallbackMatchesBondDistanceTable) {
   for (const Property3D property : properties) {
     EXPECT_EQ(toHost(searched.properties.at(property)), toHost(withTable.properties.at(property)))
       << nvMolKit::property3DName(property);
+  }
+}
+
+//! Deterministic, well-separated coordinates for @p numAtoms atoms along a helix.
+std::vector<Point> helixPoints(const int numAtoms, const double phase) {
+  std::vector<Point> points;
+  for (int atomIdx = 0; atomIdx < numAtoms; ++atomIdx) {
+    const double angle = 1.9 * atomIdx + phase;
+    points.push_back({1.4 * std::cos(angle), 1.4 * std::sin(angle), 0.55 * atomIdx + 0.1 * phase});
+  }
+  return points;
+}
+
+//! RDKit before 2026.9.2 solves a transposed EEM system (rdkit/rdkit#9688): its charges for charged molecules sum to
+//! the negated formal charge. nvMolKit gives the correct values, so older RDKit is only a reference for neutral
+//! molecules; the golden-value test covers the charged ones.
+constexpr bool kRdkitEemChargesCorrect = RDKIT_VERSION_MAJOR > 2026 ||
+                                         (RDKIT_VERSION_MAJOR == 2026 &&
+                                          (RDKIT_VERSION_MINOR > 9 ||
+                                           (RDKIT_VERSION_MINOR == 9 && RDKIT_VERSION_PATCH >= 2)));
+
+bool rdkitEemIsCorrectFor(const RDKit::ROMol& mol) {
+  return kRdkitEemChargesCorrect || RDKit::MolOps::getFormalCharge(mol) == 0;
+}
+
+//! Per-atom EEM charges of every conformer, compared against RDKit's EEM through the batch's atomStarts. Molecules
+//! for which the installed RDKit's EEM is wrong are skipped.
+void expectEemMatchesRdkit(const std::vector<RDKit::ROMol*>& mols, const double tolerance) {
+  const std::vector<const RDKit::ROMol*> constMols(mols.begin(), mols.end());
+  auto       results    = nvMolKit::calc3DProperties<double>(constMols, {Property3D::EEMcharges}, {}, nullptr);
+  const auto values     = toHost(results.properties.at(Property3D::EEMcharges));
+  const auto atomStarts = toHost(results.atomStarts);
+  int        row        = 0;
+  for (RDKit::ROMol* mol : mols) {
+    for (int confIdx = 0; confIdx < static_cast<int>(mol->getNumConformers()); ++confIdx, ++row) {
+      if (!rdkitEemIsCorrectFor(*mol)) {
+        continue;
+      }
+      std::vector<double> expected;
+      RDKit::Descriptors::EEM(*mol, expected, confIdx);
+      ASSERT_EQ(atomStarts[row + 1] - atomStarts[row], static_cast<int>(expected.size()));
+      for (size_t atomIdx = 0; atomIdx < expected.size(); ++atomIdx) {
+        EXPECT_NEAR(values[atomStarts[row] + atomIdx], expected[atomIdx], tolerance)
+          << RDKit::MolToSmiles(*mol) << " conformer " << confIdx << ", atom " << atomIdx;
+      }
+    }
+  }
+  EXPECT_EQ(static_cast<size_t>(atomStarts.back()), values.size());
+}
+
+TEST(Descriptors3DEem, MatchesRdkitForChargedAndAromaticMolecules) {
+  // Charged molecules are compared only against an RDKit with the corrected EEM; see kRdkitEemChargesCorrect.
+  std::vector<std::unique_ptr<RDKit::RWMol>> owned;
+  for (const char* smiles : {"CC(=O)[O-]", "C[NH3+]", "c1ccncc1O", "O=c1cc[nH]cc1", "C#N", "CS(=O)(=O)NCl"}) {
+    std::unique_ptr<RDKit::RWMol> parsed(RDKit::SmilesToMol(smiles));
+    const int                     numAtoms = static_cast<int>(parsed->getNumAtoms());
+    owned.push_back(molWithConformers(smiles, {helixPoints(numAtoms, 0.0), helixPoints(numAtoms, 0.7)}));
+  }
+  std::vector<RDKit::ROMol*> mols;
+  for (const auto& mol : owned) {
+    mols.push_back(mol.get());
+  }
+  expectEemMatchesRdkit(mols, 1e-9);
+}
+
+TEST(Descriptors3DEem, ChargedMoleculesMatchGoldenValues) {
+  // Charges from the published EEM equations with RDKit's parameters, the reproduction in rdkit/rdkit#9688. They hold
+  // for any installed RDKit and sum to the formal charge.
+  constexpr double          a = 1.01 / 1.7320508075688772;  // Tetrahedral N-H at 1.01 A.
+  RDKit::SmilesParserParams params;
+  params.removeHs = false;
+  std::unique_ptr<RDKit::RWMol>         hydroxide(RDKit::SmilesToMol("[O-][H]", params));
+  std::unique_ptr<RDKit::RWMol>         ammonium(RDKit::SmilesToMol("[N+]([H])([H])([H])[H]", params));
+  const std::vector<std::vector<Point>> coordinates = {
+    {{0, 0, 0}, {0.97, 0, 0}},
+    {{0, 0, 0}, {a, a, a}, {a, -a, -a}, {-a, a, -a}, {-a, -a, a}},
+  };
+  const std::vector<std::vector<double>> expected = {
+    {-1.0632, 0.0632},
+    {-0.9845, 0.4961, 0.4961, 0.4961, 0.4961}
+  };
+  std::vector<RDKit::RWMol*> mols = {hydroxide.get(), ammonium.get()};
+  for (size_t molIdx = 0; molIdx < mols.size(); ++molIdx) {
+    auto* conf = new RDKit::Conformer(mols[molIdx]->getNumAtoms());
+    for (size_t atomIdx = 0; atomIdx < coordinates[molIdx].size(); ++atomIdx) {
+      const Point& p = coordinates[molIdx][atomIdx];
+      conf->setAtomPos(atomIdx, RDGeom::Point3D(p[0], p[1], p[2]));
+    }
+    mols[molIdx]->addConformer(conf, true);
+  }
+
+  const std::vector<const RDKit::ROMol*> constMols(mols.begin(), mols.end());
+  auto       results = nvMolKit::calc3DProperties<double>(constMols, {Property3D::EEMcharges}, {}, nullptr);
+  const auto values  = toHost(results.properties.at(Property3D::EEMcharges));
+  ASSERT_EQ(values.size(), 7u);
+  size_t row = 0;
+  for (size_t molIdx = 0; molIdx < mols.size(); ++molIdx) {
+    double sum = 0.0;
+    for (const double charge : expected[molIdx]) {
+      // The reference values are rounded to 4 decimals.
+      EXPECT_NEAR(values[row], charge, 1e-4) << RDKit::MolToSmiles(*mols[molIdx]) << " row " << row;
+      sum += values[row++];
+    }
+    EXPECT_NEAR(sum, RDKit::MolOps::getFormalCharge(*mols[molIdx]), 1e-9);
+  }
+  if (kRdkitEemChargesCorrect) {
+    expectEemMatchesRdkit({hydroxide.get(), ammonium.get()}, 1e-9);
+  }
+}
+
+TEST(Descriptors3DEem, LargeMoleculesUseGlobalScratchAndMatchRdkit) {
+  // 120 atoms exceed the shared-memory system in both precisions; the small molecule stays in shared memory.
+  auto large =
+    molWithConformers(("OC" + std::string(118, 'C')).c_str(), {helixPoints(120, 0.0), helixPoints(120, 0.3)});
+  auto small = molWithConformers("CCO", {helixPoints(3, 0.0)});
+  expectEemMatchesRdkit({large.get(), small.get()}, 1e-8);
+}
+
+//! An acyclic carbon chain of @p numAtoms atoms with the given conformers, built without SMILES parsing.
+std::unique_ptr<RDKit::RWMol> carbonChain(const int numAtoms, const std::vector<std::vector<Point>>& confs) {
+  auto mol = std::make_unique<RDKit::RWMol>();
+  for (int atomIdx = 0; atomIdx < numAtoms; ++atomIdx) {
+    mol->addAtom(new RDKit::Atom(6), false, true);
+    if (atomIdx > 0) {
+      mol->addBond(atomIdx - 1, atomIdx, RDKit::Bond::SINGLE);
+    }
+  }
+  RDKit::MolOps::sanitizeMol(*mol);
+  for (const auto& points : confs) {
+    auto conf = std::make_unique<RDKit::Conformer>(numAtoms);
+    for (int atomIdx = 0; atomIdx < numAtoms; ++atomIdx) {
+      conf->setAtomPos(atomIdx, RDGeom::Point3D(points[atomIdx][0], points[atomIdx][1], points[atomIdx][2]));
+    }
+    mol->addConformer(conf.release(), true);
+  }
+  return mol;
+}
+
+TEST(Descriptors3DEem, MoleculesWithoutConformersDoNotInflateScratch) {
+  // A 20,000-atom molecule would need gigabytes of global scratch per block if it sized the workspace; it has no
+  // conformers, so only the small molecules' conformers (which fit in shared memory) matter.
+  auto unused = carbonChain(20000, {});
+  auto small  = molWithConformers("CCO", {helixPoints(3, 0.0), helixPoints(3, 0.4)});
+  expectEemMatchesRdkit({unused.get(), small.get()}, 1e-9);
+}
+
+TEST(Descriptors3DEem, MoleculesAboveTheAtomLimitGiveNan) {
+  // The solver's 32-bit indexing bounds the molecule size; larger conformers are NaN, not an out-of-range read.
+  const int                              numAtoms = nvMolKit::kMaxEemAtoms + 1;
+  auto                                   huge     = carbonChain(numAtoms, {helixPoints(numAtoms, 0.0)});
+  auto                                   ethanol  = molWithConformers("CCO", {helixPoints(3, 0.0)});
+  const std::vector<const RDKit::ROMol*> mols     = {huge.get(), ethanol.get()};
+  auto       results = nvMolKit::calc3DProperties<double>(mols, {Property3D::EEMcharges}, {}, nullptr);
+  const auto values  = toHost(results.properties.at(Property3D::EEMcharges));
+  ASSERT_EQ(values.size(), static_cast<size_t>(numAtoms) + 3);
+  for (int atomIdx = 0; atomIdx < numAtoms; ++atomIdx) {
+    ASSERT_TRUE(isNanBits(values[atomIdx])) << "atom " << atomIdx;
+  }
+  std::vector<double> expected;
+  RDKit::Descriptors::EEM(*ethanol, expected, 0);
+  for (int atomIdx = 0; atomIdx < 3; ++atomIdx) {
+    EXPECT_NEAR(values[numAtoms + atomIdx], expected[atomIdx], 1e-9);
+  }
+}
+
+TEST(Descriptors3DEem, UnparameterizedAtomsGiveNanOnlyForTheirMolecule) {
+  // RDKit has no iodine parameters (it reads past its tables), and a lone aromatic ring atom cannot be kekulized.
+  auto                      iodide  = molWithConformers("CCI", {helixPoints(3, 0.0)});
+  auto                      ethanol = molWithConformers("CCO", {helixPoints(3, 0.0)});
+  RDKit::SmilesParserParams params;
+  params.sanitize = false;
+  std::unique_ptr<RDKit::RWMol> aromatic(RDKit::SmilesToMol("c1cccc1", params));
+  auto                          conformer = std::make_unique<RDKit::Conformer>(aromatic->getNumAtoms());
+  const auto                    points    = helixPoints(5, 0.0);
+  for (int atomIdx = 0; atomIdx < 5; ++atomIdx) {
+    conformer->setAtomPos(atomIdx, RDGeom::Point3D(points[atomIdx][0], points[atomIdx][1], points[atomIdx][2]));
+  }
+  aromatic->addConformer(conformer.release(), true);
+
+  const std::vector<const RDKit::ROMol*> mols = {iodide.get(), ethanol.get(), aromatic.get()};
+  auto       results = nvMolKit::calc3DProperties<double>(mols, {Property3D::EEMcharges}, {}, nullptr);
+  const auto values  = toHost(results.properties.at(Property3D::EEMcharges));
+  ASSERT_EQ(values.size(), 11u);
+  std::vector<double> expected;
+  RDKit::Descriptors::EEM(*ethanol, expected, 0);
+  for (int atomIdx = 0; atomIdx < 11; ++atomIdx) {
+    if (atomIdx >= 3 && atomIdx < 6) {
+      EXPECT_NEAR(values[atomIdx], expected[atomIdx - 3], 1e-9);
+    } else {
+      EXPECT_TRUE(isNanBits(values[atomIdx])) << "atom row " << atomIdx;
+    }
+  }
+}
+
+TEST(Descriptors3DEem, CoincidentAtomsGiveNan) {
+  // Two counter-ions at the same position make kappa / r infinite; RDKit returns all-zero charges for it.
+  auto points = helixPoints(5, 0.0);
+  points[4]   = points[3];
+  auto salt   = molWithConformers("CC[NH3+].[Br-].[Br-]", {points, helixPoints(5, 0.4)});
+  const std::vector<const RDKit::ROMol*> mols = {salt.get()};
+  auto       results = nvMolKit::calc3DProperties<double>(mols, {Property3D::EEMcharges}, {}, nullptr);
+  const auto values  = toHost(results.properties.at(Property3D::EEMcharges));
+  ASSERT_EQ(values.size(), 10u);
+  std::vector<double> expected;
+  RDKit::Descriptors::EEM(*salt, expected, 1);
+  double sum = 0.0;
+  for (int atomIdx = 0; atomIdx < 5; ++atomIdx) {
+    EXPECT_TRUE(isNanBits(values[atomIdx])) << "atom " << atomIdx;
+    sum += values[5 + atomIdx];
+    if (rdkitEemIsCorrectFor(*salt)) {
+      EXPECT_NEAR(values[5 + atomIdx], expected[atomIdx], 1e-9);
+    }
+  }
+  EXPECT_NEAR(sum, RDKit::MolOps::getFormalCharge(*salt), 1e-9);
+}
+
+TEST(Descriptors3DEem, DeviceRowsOutsideConformersAreNan) {
+  auto                                   mol  = molWithConformers("CCO", {helixPoints(3, 0.0), helixPoints(3, 0.5)});
+  const std::vector<const RDKit::ROMol*> mols = {mol.get()};
+  auto                                   uploaded = nvMolKit::uploadConformerCoordinates(mols, nullptr, 1);
+  // Six coordinate rows: conformer 0 reads rows 0-2, conformer 1's 2-atom range (rows 3-4) disagrees with the
+  // 3-atom molecule so its rows are NaN, and row 5 belongs to no conformer.
+  nvMolKit::AsyncDeviceVector<double>    positions(18, nullptr);
+  nvMolKit::AsyncDeviceVector<int32_t>   atomStarts(3, nullptr);
+  std::vector<double>                    hostPositions = toHost(uploaded.positions);
+  hostPositions.resize(18, 0.0);
+  positions.copyFromHost(hostPositions);
+  atomStarts.copyFromHost(std::vector<int32_t>{0, 3, 5});
+  nvMolKit::DeviceCoordView view = nvMolKit::makeDeviceCoordView(uploaded);
+  view.positions                 = positions.data();
+  view.atomStarts                = atomStarts.data();
+  view.numAtoms                  = 6;
+
+  auto       results = nvMolKit::calc3DProperties<double>(mols, {Property3D::EEMcharges}, {}, nullptr, &view);
+  const auto values  = toHost(results.properties.at(Property3D::EEMcharges));
+  ASSERT_EQ(values.size(), 6u);
+  std::vector<double> expected;
+  RDKit::Descriptors::EEM(*mol, expected, 0);
+  for (int atomIdx = 0; atomIdx < 3; ++atomIdx) {
+    EXPECT_NEAR(values[atomIdx], expected[atomIdx], 1e-9);
+  }
+  for (int row = 3; row < 6; ++row) {
+    EXPECT_TRUE(isNanBits(values[row])) << "row " << row;
   }
 }
 
@@ -545,7 +875,7 @@ TEST_F(Descriptors3DTest, RejectsUnknownPropertyValue) {
                                               Property3D::PMI2,
                                               Property3D::PMI3,
                                               Property3D::RadiusOfGyration,
-                                              static_cast<Property3D>(nvMolKit::kAllProperty3D.size())};
+                                              static_cast<Property3D>(std::numeric_limits<int>::max())};
   EXPECT_THROW(nvMolKit::calc3DProperties<double>(mols_, properties, nvMolKit::Property3DOptions{}, nullptr),
                std::invalid_argument);
   EXPECT_THROW(

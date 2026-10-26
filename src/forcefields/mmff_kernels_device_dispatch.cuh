@@ -14,6 +14,7 @@ using real = double;
 #define NVMOLKIT_SQRT    sqrt
 #define NVMOLKIT_ACOS    acos
 #define NVMOLKIT_ASIN    asin
+#define NVMOLKIT_COS     cos
 #define NVMOLKIT_ATAN2   atan2
 #define NVMOLKIT_EXP     exp
 #define NVMOLKIT_IS_ZERO isDoubleZero
@@ -25,6 +26,7 @@ using real = double;
 #undef NVMOLKIT_SQRT
 #undef NVMOLKIT_ACOS
 #undef NVMOLKIT_ASIN
+#undef NVMOLKIT_COS
 #undef NVMOLKIT_ATAN2
 #undef NVMOLKIT_EXP
 #undef NVMOLKIT_IS_ZERO
@@ -40,6 +42,7 @@ using real = float;
 #define NVMOLKIT_SQRT    sqrtf
 #define NVMOLKIT_ACOS    acosf
 #define NVMOLKIT_ASIN    asinf
+#define NVMOLKIT_COS     cosf
 #define NVMOLKIT_ATAN2   atan2f
 #define NVMOLKIT_EXP     expf
 #define NVMOLKIT_IS_ZERO isFloatZero
@@ -51,6 +54,7 @@ using real = float;
 #undef NVMOLKIT_SQRT
 #undef NVMOLKIT_ACOS
 #undef NVMOLKIT_ASIN
+#undef NVMOLKIT_COS
 #undef NVMOLKIT_ATAN2
 #undef NVMOLKIT_EXP
 #undef NVMOLKIT_IS_ZERO

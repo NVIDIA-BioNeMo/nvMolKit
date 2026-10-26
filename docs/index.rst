@@ -184,6 +184,8 @@ nvMolKit currently supports the following features:
     * Supports generic dense similarity matrix inputs from Tanimoto or other methods
     * Supports fused in-loop Tanimoto/Cosine similarity for large datasets
 
+* **BitBIRCH clustering**: GPU-accelerated clustering of binary fingerprints, with optional cluster centroids
+
 * **Substructure Search**: GPU-accelerated substructure matching against batches of molecules
     * Supports SMILES and recursive SMARTS-based query molecules via RDKit
     * ``SubstructLibrary`` keeps target molecules on one or more GPUs for repeated queries, as a GPU counterpart to RDKit's ``SubstructLibrary``

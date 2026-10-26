@@ -129,13 +129,34 @@ struct Energy3DForceContribsHost {
   DistanceConstraintContribTerms longRangeDistTerms;
 };
 
+// ------------------------------
+// All-in-one ETKDG (AIO) terms
+// ------------------------------
+
+//! RDKit's all-in-one out-of-plane terms, 0.5 * k * chi^2, where chi is the angle in degrees between the idx2-idx4
+//! bond and the plane of idx1, idx2 and idx3. The force constant is AllInOneForceWeights::planarity.
+struct PlanarityContribTerms {
+  std::vector<int> idx1;
+  std::vector<int> idx2;  // Central atom
+  std::vector<int> idx3;
+  std::vector<int> idx4;
+};
+
+//! Terms of RDKit's all-in-one ETKDG force field for one molecule. The distance-geometry, harmonic distance and linear
+//! angle terms are active in both minimization phases; the experimental torsion and planarity terms only in the second.
+struct AllInOneForceContribsHost {
+  EnergyForceContribsHost        distanceGeometry;
+  //! Flat-bottom 1-2 and 1-3 distance terms, evaluated on 4D distances.
+  DistanceConstraintContribTerms harmonicDistanceTerms;
+  //! Flat-bottom terms holding sp centers linear. The force constant is AllInOneForceWeights::linearAngle.
+  AngleConstraintContribTerms    linearAngleTerms;
+  TorsionAngleContribTerms       experimentalTorsionTerms;
+  PlanarityContribTerms          planarityTerms;
+};
+
 struct BatchedIndicesHost {
-  //! Defines the start of each molecule's energy buffer region that will be added to then reduced.
-  std::vector<int> energyBufferStarts = {0};
   //! Size total atoms, maps atom index to batch index (i.e. molecule index in the batch).
   std::vector<int> atomIdxToBatchIdx;
-  //! Size total energy buffer blocks, maps energy buffer block index to batch index.
-  std::vector<int> energyBufferBlockIdxToBatchIdx;
   //! Size n_molecules + 1, defines the start and end of each molecule's distance violation term count
   std::vector<int> distTermStarts   = {0};
   //! Size n_molecules + 1, defines the start and end of each molecule's chirality violation term count
@@ -171,6 +192,20 @@ struct BatchedMolecularSystemHost {
 struct BatchedMolecularSystem3DHost {
   Energy3DForceContribsHost contribs;
   BatchedIndices3DHost      indices;
+};
+
+//! Flattened all-in-one ETKDG batch. Atom indices are offset into the batch, and each *TermStarts vector (size
+//! n_molecules + 1) gives the range of a molecule's terms.
+struct BatchedAllInOneSystemHost {
+  BatchedMolecularSystemHost     distanceGeometry;
+  DistanceConstraintContribTerms harmonicDistanceTerms;
+  AngleConstraintContribTerms    linearAngleTerms;
+  TorsionAngleContribTerms       experimentalTorsionTerms;
+  PlanarityContribTerms          planarityTerms;
+  std::vector<int>               harmonicDistanceTermStarts    = {0};
+  std::vector<int>               linearAngleTermStarts         = {0};
+  std::vector<int>               experimentalTorsionTermStarts = {0};
+  std::vector<int>               planarityTermStarts           = {0};
 };
 
 template <typename Scalar> struct DistViolationContribTermsDeviceT {
@@ -269,9 +304,7 @@ using Energy3DForceContribsDeviceSingle = Energy3DForceContribsDeviceT<float>;
 
 //! See BatchedIndices for more information on each field.
 struct BatchedIndicesDevice {
-  nvMolKit::AsyncDeviceVector<int> energyBufferStarts;
   nvMolKit::AsyncDeviceVector<int> atomIdxToBatchIdx;
-  nvMolKit::AsyncDeviceVector<int> energyBufferBlockIdxToBatchIdx;
 
   nvMolKit::AsyncDeviceVector<int> distTermStarts;
   nvMolKit::AsyncDeviceVector<int> chiralTermStarts;
@@ -296,6 +329,21 @@ struct BatchedIndices3DDevice {
 //! Device buffers for the batched molecular system.
 //! Most of the terms are either 1 per molecule or CSR-like format with the BatchedIndicesDevice terms used for
 //! indexing.
+template <typename ParameterScalar> struct BatchedMolecularDeviceBuffersT {
+  EnergyForceContribsDeviceT<ParameterScalar>  contribs;
+  //! Size n_molecules
+  BatchedIndicesDevice                         indices;
+  //! Size total num positions of all molecules
+  nvMolKit::AsyncDeviceVector<ParameterScalar> grad;
+  //! Size n_molecules
+  nvMolKit::AsyncDeviceVector<ParameterScalar> energyOuts;
+  //! Dimension of all molecules in the batch (3 or 4)
+  int                                          dimension = 3;
+};
+
+//! Device buffers for the batched 3D ETK system.
+//! Most of the terms are either 1 per molecule or CSR-like format with the BatchedIndices3DDevice terms used for
+//! indexing.
 //!
 //! The only nonstandard term is the energyBuffer and associated indices, which is allocated and used the following way.
 //! - First, the maximum energy term size for each molecule is calculated. For example, a molecule with 10 bond terms,
@@ -303,29 +351,14 @@ struct BatchedIndices3DDevice {
 //! - Next, the energy buffer per molecule is rounded up to the energy reduction block size. See
 //!   blockSizeEnergyReduction in kernel_utils.cuh. So, a molecule with a max term of 150 will be allocated
 //!   256 energy buffer positions.
-//! - Indices are built off of this data. The energyBufferStarts field in BatchedIndicesDevice defines the start of each
-//!   buffer region. It is guaranteed to be an offset of blockSizeEnergyReduction but this is not critical to the
-//!   algorithm. The energyBufferBlockIdxToBatchIdx maps each block to the molecule it belongs to.
+//! - Indices are built off of this data. The energyBufferStarts field in BatchedIndices3DDevice defines the start
+//!   of each buffer region. It is guaranteed to be an offset of blockSizeEnergyReduction but this is not critical to
+//!   the algorithm. The energyBufferBlockIdxToBatchIdx maps each block to the molecule it belongs to.
 //! - When computing energies, each term adds into term index + energyBufferStarts[moleculeIdx] in the energy buffer.
 //!   This means that for smaller terms, the energy buffer will have some unused space, and unless the largest term is
 //!   a multiple of the block size, there will be some zero elements. This is fine and expected.
 //!   Finally, on reduction, each block does a local summation, then atomically adds to the output energy for the
 //!   molecule, using the energyBufferBlockIdxToBatchIdx to map the block to the molecule output index.
-template <typename ParameterScalar> struct BatchedMolecularDeviceBuffersT {
-  EnergyForceContribsDeviceT<ParameterScalar>  contribs;
-  //! Size n_molecules
-  BatchedIndicesDevice                         indices;
-  //! Size total num positions of all molecules
-  nvMolKit::AsyncDeviceVector<ParameterScalar> grad;
-  //! Variable size - max terms in each molecule concatenated.
-  //! Each molecule has an energy buffer to add to and reduce to energyOuts.
-  nvMolKit::AsyncDeviceVector<ParameterScalar> energyBuffer;
-  //! Size n_molecules
-  nvMolKit::AsyncDeviceVector<ParameterScalar> energyOuts;
-  //! Dimension of all molecules in the batch (3 or 4)
-  int                                          dimension = 3;
-};
-
 template <typename ParameterScalar> struct BatchedMolecular3DDeviceBuffersT {
   Energy3DForceContribsDeviceT<ParameterScalar> contribs;
   BatchedIndices3DDevice                        indices;
@@ -342,6 +375,29 @@ using BatchedMolecularDeviceBuffers         = BatchedMolecularDeviceBuffersT<dou
 using BatchedMolecularDeviceBuffersSingle   = BatchedMolecularDeviceBuffersT<float>;
 using BatchedMolecular3DDeviceBuffers       = BatchedMolecular3DDeviceBuffersT<double>;
 using BatchedMolecular3DDeviceBuffersSingle = BatchedMolecular3DDeviceBuffersT<float>;
+
+struct PlanarityContribTermsDevice {
+  nvMolKit::AsyncDeviceVector<int> idx1;
+  nvMolKit::AsyncDeviceVector<int> idx2;
+  nvMolKit::AsyncDeviceVector<int> idx3;
+  nvMolKit::AsyncDeviceVector<int> idx4;
+};
+
+//! Device copy of a BatchedAllInOneSystemHost.
+template <typename ParameterScalar> struct BatchedAllInOneDeviceBuffersT {
+  BatchedMolecularDeviceBuffersT<ParameterScalar>        distanceGeometry;
+  DistanceConstraintContribTermsDeviceT<ParameterScalar> harmonicDistanceTerms;
+  AngleConstraintContribTermsDeviceT<ParameterScalar>    linearAngleTerms;
+  TorsionAngleContribTermsDeviceT<ParameterScalar>       experimentalTorsionTerms;
+  PlanarityContribTermsDevice                            planarityTerms;
+  nvMolKit::AsyncDeviceVector<int>                       harmonicDistanceTermStarts;
+  nvMolKit::AsyncDeviceVector<int>                       linearAngleTermStarts;
+  nvMolKit::AsyncDeviceVector<int>                       experimentalTorsionTermStarts;
+  nvMolKit::AsyncDeviceVector<int>                       planarityTermStarts;
+};
+
+using BatchedAllInOneDeviceBuffers       = BatchedAllInOneDeviceBuffersT<double>;
+using BatchedAllInOneDeviceBuffersSingle = BatchedAllInOneDeviceBuffersT<float>;
 
 //! Set all DeviceVector streams for the batched molecular device buffers.
 void setStreams(BatchedMolecularDeviceBuffers& devBuffers, cudaStream_t stream);
@@ -437,8 +493,7 @@ void sendContextToDevice(const std::vector<double>&           ctxPositionsHost,
                          nvMolKit::AsyncDeviceVector<int>&    ctxAtomStartsDevice);
 
 //! Setup the device buffers for the batched molecular system.
-void setupDeviceBuffers(BatchedMolecularSystemHost&    molSystemHost,
-                        BatchedMolecularDeviceBuffers& molSystemDevice,
+void setupDeviceBuffers(BatchedMolecularDeviceBuffers& molSystemDevice,
                         const std::vector<double>&     ctxPositionsHost,
                         const int                      numMols);
 
@@ -472,11 +527,6 @@ BatchedIndices3DDevicePtr toBatchedIndices3DDevicePtr(const BatchedMolecular3DDe
 
 //! Allocate intermediate buffers on the device for the batched molecular system.
 //! These include the gradients, energy buffer, and energy outs.
-void allocateIntermediateBuffers(const BatchedMolecularSystemHost& molSystemHost,
-                                 BatchedMolecularDeviceBuffers&    molSystemDevice);
-
-//! Allocate intermediate buffers on the device for the batched molecular system.
-//! These include the gradients, energy buffer, and energy outs.
 void allocateIntermediateBuffers3D(const BatchedMolecularSystem3DHost& molSystemHost,
                                    BatchedMolecular3DDeviceBuffers&    molSystemDevice);
 
@@ -490,8 +540,8 @@ cudaError_t computeEnergy(BatchedMolecularDeviceBuffers& molSystemDevice,
                           const double*                  positions        = nullptr,
                           cudaStream_t                   stream           = nullptr);
 
-//! Compute the energy of the batched molecular system. This will populate the energyOuts buffer on device.
-//! energyOuts and energyBuffer must be zeroed before calling this function.
+//! Compute the energy of the batched molecular system. This writes the energy of each active system to energyOuts on
+//! device, and zero for inactive systems.
 cudaError_t computeEnergy(BatchedMolecularDeviceBuffers&             molSystemDevice,
                           const nvMolKit::AsyncDeviceVector<int>&    ctxAtomStartsDevice,
                           const nvMolKit::AsyncDeviceVector<double>& ctxPositionsDevice,
@@ -510,8 +560,9 @@ cudaError_t computeEnergyETK(BatchedMolecular3DDeviceBuffers& molSystemDevice,
                              ETKTerm                          term             = ETKTerm::ALL,
                              cudaStream_t                     stream           = nullptr);
 
-//! Compute the energy of the batched molecular system. This will populate the energyOuts buffer on device.
-//! energyOuts and energyBuffer must be zeroed before calling this function.
+//! Compute the energy of the batched molecular system into energyOuts on device. For ETKTerm::ALL (and PLAIN when no
+//! improper torsions are present), energyOuts is overwritten, with zero for inactive systems. Other terms accumulate
+//! into energyOuts, which must be zeroed before calling; energyBuffer is managed internally.
 cudaError_t computeEnergyETK(BatchedMolecular3DDeviceBuffers&           molSystemDevice,
                              const nvMolKit::AsyncDeviceVector<int>&    ctxAtomStartsDevice,
                              const nvMolKit::AsyncDeviceVector<double>& ctxPositionsDevice,
@@ -571,16 +622,6 @@ cudaError_t computePlanarEnergy(BatchedMolecular3DDeviceBuffers& molSystemDevice
                                 const double*                    positions        = nullptr,
                                 cudaStream_t                     stream           = nullptr);
 
-//! Compute the energy of DG terms using block-per-mol kernels.
-cudaError_t computeEnergyBlockPerMol(BatchedMolecularDeviceBuffers&             molSystemDevice,
-                                     const nvMolKit::AsyncDeviceVector<int>&    ctxAtomStartsDevice,
-                                     const nvMolKit::AsyncDeviceVector<double>& ctxPositionsDevice,
-                                     double                                     chiralWeight,
-                                     double                                     fourthDimWeight,
-                                     const uint8_t*                             activeThisStage = nullptr,
-                                     const double*                              positions       = nullptr,
-                                     cudaStream_t                               stream          = nullptr);
-
 //! Compute the gradient of DG terms using block-per-mol kernels.
 cudaError_t computeGradBlockPerMol(BatchedMolecularDeviceBuffers&             molSystemDevice,
                                    const nvMolKit::AsyncDeviceVector<int>&    ctxAtomStartsDevice,
@@ -604,6 +645,29 @@ cudaError_t computeGradBlockPerMolETK(BatchedMolecular3DDeviceBuffers&          
                                       const nvMolKit::AsyncDeviceVector<double>& ctxPositionsDevice,
                                       const uint8_t*                             activeThisStage = nullptr,
                                       cudaStream_t                               stream          = nullptr);
+
+//! Add a molecule's all-in-one ETKDG terms to the batch. ctxAtomStarts must already include the molecule.
+void addMoleculeToAllInOneSystem(const AllInOneForceContribsHost& contribs,
+                                 int                              numAtoms,
+                                 const std::vector<int>&          ctxAtomStarts,
+                                 BatchedAllInOneSystemHost&       system,
+                                 BatchedForcefieldMetadata*       metadata     = nullptr,
+                                 int                              moleculeIdx  = -1,
+                                 int                              conformerIdx = -1);
+
+//! Set the buffer streams and upload an all-in-one ETKDG batch.
+void sendAllInOneSystemToDevice(const BatchedAllInOneSystemHost& systemHost,
+                                BatchedAllInOneDeviceBuffers&    systemDevice,
+                                cudaStream_t                     stream);
+void sendAllInOneSystemToDevice(const BatchedAllInOneSystemHost&    systemHost,
+                                BatchedAllInOneDeviceBuffersSingle& systemDevice,
+                                cudaStream_t                        stream);
+
+//! Create the pointer struct used by the all-in-one ETKDG block-per-mol kernels.
+AllInOneContribsDevicePtr       toAllInOneContribsDevicePtr(const BatchedAllInOneDeviceBuffers& systemDevice,
+                                                            const int*                          atomStarts);
+AllInOneContribsDevicePtrSingle toAllInOneContribsDevicePtr(const BatchedAllInOneDeviceBuffersSingle& systemDevice,
+                                                            const int*                                atomStarts);
 }  // namespace DistGeom
 }  // namespace nvMolKit
 

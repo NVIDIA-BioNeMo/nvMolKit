@@ -2,17 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gc
+import re
 
 import numpy as np
 import pytest
+import rdkit
 import torch
 from rdkit import Chem
 from rdkit.Chem import rdDistGeom, rdMolDescriptors
 from rdkit.Chem.rdDistGeom import EmbedParameters
 from rdkit.Geometry import Point3D
 
+import nvmolkit.descriptors3d as descriptors3d_module
 from nvmolkit.descriptors3d import (
+    PER_ATOM_PROPERTIES,
     Calc3DProperties,
+    DclvOptions,
     Device3DPropertyResult,
     GetawayOptions,
     MomentOptions,
@@ -33,7 +38,19 @@ VECTOR_PROPERTIES = (
     Property3D.USRCAT,
     Property3D.GETAWAY,
 )
-SCALAR_PROPERTIES = tuple(prop for prop in Property3D if prop not in VECTOR_PROPERTIES)
+DCLV_PROPERTIES = (
+    Property3D.DCLV_SURFACE_AREA,
+    Property3D.DCLV_POLAR_SURFACE_AREA,
+    Property3D.DCLV_VOLUME,
+    Property3D.DCLV_VDW_VOLUME,
+    Property3D.DCLV_POLAR_VOLUME,
+    Property3D.DCLV_COMPACTNESS,
+    Property3D.DCLV_PACKING_DENSITY,
+)
+# Shape and moment scalars, compared against RDKit by _rdkit_property; the DCLV scalars have their own tests.
+SCALAR_PROPERTIES = tuple(
+    prop for prop in Property3D if prop not in VECTOR_PROPERTIES + DCLV_PROPERTIES and prop not in PER_ATOM_PROPERTIES
+)
 PAIRWISE_PROPERTIES = (Property3D.RDF, Property3D.MORSE, Property3D.AUTOCORR3D)
 RDKIT_PAIRWISE = {
     Property3D.RDF: rdMolDescriptors.CalcRDF,
@@ -662,6 +679,160 @@ def test_getaway_precision_ignored_when_not_requested(precision_digits):
     assert result[Property3D.PMI1].torch().shape == (1,)
 
 
+def _rdkit_dclv_rows(mols, options=None):
+    """RDKit's DoubleCubicLatticeVolume getters, one column per DCLV_PROPERTIES entry."""
+    options = DclvOptions() if options is None else options
+    table = Chem.GetPeriodicTable()
+    rows = []
+    for mol in mols:
+        # RDKit 2025.09.1 has no default-radii constructor, so pass the van der Waals radii it would use.
+        radii = [table.GetRvdw(atom.GetAtomicNum()) for atom in mol.GetAtoms()]
+        for conf in mol.GetConformers():
+            dclv = rdMolDescriptors.DoubleCubicLatticeVolume(
+                mol, radii, probeRadius=options.probeRadius, confId=conf.GetId()
+            )
+            polar = {"includeSandP": options.includeSandP, "includeHs": options.includeHs}
+            rows.append(
+                [
+                    dclv.GetSurfaceArea(),
+                    dclv.GetPolarSurfaceArea(**polar),
+                    dclv.GetVolume(),
+                    dclv.GetVDWVolume(),
+                    dclv.GetPolarVolume(**polar),
+                    dclv.GetCompactness(),
+                    dclv.GetPackingDensity(),
+                ]
+            )
+    return np.asarray(rows)
+
+
+def _dclv_columns(mols, precision=PrecisionMode.FULL, **kwargs):
+    """Calculate every DCLV property and stack them in DCLV_PROPERTIES order."""
+    result = Calc3DProperties(mols, DCLV_PROPERTIES, precision=precision, **kwargs)
+    return np.column_stack([result[prop].numpy() for prop in DCLV_PROPERTIES])
+
+
+def _assert_dclv_matches(actual, expected, precision):
+    """Compare DCLV rows.
+
+    The values count exposed surface dots, so a dot within rounding of a neighboring sphere could flip and move a
+    value by one dot's share (~1e-3 relative); none does for these geometries, and float32 stays within 1e-5.
+    """
+    rtol = 1e-9 if precision == PrecisionMode.FULL else 1e-5
+    np.testing.assert_allclose(actual, expected, rtol=rtol, atol=1e-9, equal_nan=True)
+
+
+def _cubic_cluster(points_per_side, spacing):
+    grid = np.arange(points_per_side) * spacing
+    return np.asarray([(x, y, z) for x in grid for y in grid for z in grid])
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_dclv_matches_rdkit(precision):
+    mols = [
+        _embed("CC(=O)Nc1ccc(O)cc1", 3, 107),
+        _embed("CS(=O)(=O)Nc1ccc(P(=O)(O)O)cc1", 2, 109),
+        _embed("CC(=O)Nc1ccc(Br)cc1.Cl", 1, 113),
+        # 216 atoms 1.1 A apart: each atom has more neighbors than the per-warp neighbor cache holds.
+        _mol_with_conformers(".".join(["C"] * 216), [_cubic_cluster(6, 1.1)]),
+        _mol_with_conformers("[He]", [[(4.0, -3.0, 2.0)]]),
+        _mol_with_conformers("CC", [[(1.0, 1.0, 1.0), (1.0, 1.0, 1.0)]]),
+    ]
+    result = Calc3DProperties(mols, DCLV_PROPERTIES, precision=precision)
+    assert tuple(result) == tuple(prop.value for prop in DCLV_PROPERTIES)
+    assert all(result[prop].torch().shape == (9,) for prop in DCLV_PROPERTIES)
+    actual = np.column_stack([result[prop].numpy() for prop in DCLV_PROPERTIES])
+    _assert_dclv_matches(actual, _rdkit_dclv_rows(mols), precision)
+    # The probe-expanded and bare-sphere dot passes run only for the properties that need them; a property's value
+    # must not depend on what else is requested.
+    for prop in DCLV_PROPERTIES:
+        alone = Calc3DProperties(mols, prop, precision=precision)
+        np.testing.assert_array_equal(alone[prop].numpy(), result[prop].numpy(), err_msg=prop.value)
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        DclvOptions(probeRadius=0.0),
+        DclvOptions(probeRadius=2.0, includeSandP=True),
+        DclvOptions(includeHs=True),
+        DclvOptions(includeSandP=True, includeHs=True),
+    ],
+)
+def test_dclv_options_match_rdkit(options):
+    mols = [_embed("CS(=O)(=O)Nc1ccc(P(=O)(O)O)cc1", 2, 127)]
+    actual = _dclv_columns(mols, options=Property3DOptions(dclv=options))
+    _assert_dclv_matches(actual, _rdkit_dclv_rows(mols, options), PrecisionMode.FULL)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_dclv_zero_radius_atoms_give_nan(precision):
+    # RDKit crashes on dummy atoms (radius 0), so such conformers have no reference value.
+    coordinates = [(0.0, 0.0, 0.0), (1.5, 0.1, 0.0), (2.1, 1.4, 0.2)]
+    mols = [
+        _mol_with_conformers("CCO.*", [[*coordinates, (0.8, 0.9, 0.1)]]),
+        _mol_with_conformers("CCO", [coordinates]),
+    ]
+    values = _dclv_columns(mols, precision)
+    assert np.isnan(values[0]).all()
+    _assert_dclv_matches(values[1:], _rdkit_dclv_rows(mols[1:]), precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_dclv_non_finite_coordinates_give_nan(precision):
+    mols = [
+        _mol_with_conformers("CCO", [[(0.0, 0.0, 0.0), (1.5, float("nan"), 0.0), (2.1, 1.4, 0.2)]]),
+        _mol_with_conformers("CCO", [[(0.0, 0.0, 0.0), (1.5, 0.1, 0.0), (2.1, 1.4, float("inf"))]]),
+        _embed("CCCO", 1, 47),
+    ]
+    values = _dclv_columns(mols, precision)
+    assert np.isnan(values[:2]).all()
+    _assert_dclv_matches(values[2:], _rdkit_dclv_rows(mols[2:]), precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_dclv_device_coordinates_far_from_origin(precision):
+    mols = [_embed("CC(=O)Nc1ccc(O)cc1", 2, 131)]
+    coordinates = _device_result_from_molecules(mols)
+    near = _dclv_columns(mols, precision, coordinates=coordinates)
+    _assert_dclv_matches(near, _rdkit_dclv_rows(mols), precision)
+    coordinates.values.torch().add_(torch.tensor([1e4, -4e3, 6e3], dtype=torch.float64, device="cuda"))
+    far = _dclv_columns(mols, precision, coordinates=coordinates)
+    _assert_dclv_matches(far, near, precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_dclv_stream_ordering_empty_inputs_and_mixed_selection(precision):
+    mols = [_embed("CCO", 3, 137), Chem.MolFromSmiles("CC"), _embed("CCN", 2, 139)]
+    stream = torch.cuda.Stream()
+    with torch.cuda.stream(stream):
+        coordinates = _device_result_from_molecules(mols)
+        result = Calc3DProperties(
+            mols, (*DCLV_PROPERTIES, Property3D.PMI1), coordinates=coordinates, precision=precision, stream=stream
+        )
+        values = [result[prop] for prop in DCLV_PROPERTIES]
+        moments = result[Property3D.PMI1]
+        labels = (result.mol_indices, result.conf_indices)
+    del result, coordinates
+    gc.collect()
+    _assert_dclv_matches(np.column_stack([value.numpy() for value in values]), _rdkit_dclv_rows(mols), precision)
+    _assert_matches_rdkit(moments.numpy(), _reference_rows(mols, (Property3D.PMI1,), True)[:, 0], precision)
+    np.testing.assert_array_equal(labels[0].numpy(), [0, 0, 0, 2, 2])
+    np.testing.assert_array_equal(labels[1].numpy(), [0, 1, 2, 0, 1])
+    for empty_mols in ([], [Chem.MolFromSmiles("CC")], [Chem.MolFromSmiles("")]):
+        empty = Calc3DProperties(empty_mols, DCLV_PROPERTIES, precision=precision, stream=stream)
+        assert all(empty[prop].torch().shape == (0,) for prop in DCLV_PROPERTIES)
+
+
+def test_dclv_rejects_invalid_probe_radius_only_when_requested():
+    mol = _embed("CCO", 1, 5)
+    for probe_radius in (-0.1, float("nan"), float("inf")):
+        options = Property3DOptions(dclv=DclvOptions(probeRadius=probe_radius))
+        with pytest.raises(ValueError, match="probe radius"):
+            Calc3DProperties(mol, Property3D.DCLV_VDW_VOLUME, options=options)
+        assert Calc3DProperties(mol, "PMI1", options=options)["PMI1"].torch().shape == (1,)
+
+
 @pytest.mark.parametrize("precision", PRECISIONS)
 def test_autocorr3d_accepts_batches_without_bonds(precision):
     mols = [
@@ -793,3 +964,313 @@ def test_property_and_coordinate_contract_errors_are_clear():
     coordinates = _device_result_from_molecules([mol])
     with pytest.raises(ValueError, match=r"coordinates\.n_mols"):
         Calc3DProperties([mol, mol], ["PMI1"], coordinates=coordinates)
+
+
+# float32 output rounding of charges up to ~20; the float32 solve is refined against a float64 residual.
+EEM_SINGLE_ATOL = 2e-6
+EEM_SMILES = ("CC(=O)[O-]", "C[NH3+]", "c1ccncc1O", "O=c1cc[nH]cc1", "CS(=O)(=O)NCl", "FC(F)(F)c1ccc(Br)cc1")
+
+
+# RDKit before 2026.9.2 solved the transposed EEM system (rdkit/rdkit#9688), so its charges for charged molecules
+# sum to the negated formal charge. nvMolKit gives the correct values; only neutral molecules are compared against
+# older RDKit, and the golden tests below cover the charged ones.
+RDKIT_EEM_CHARGES_CORRECT = tuple(int(part) for part in re.findall(r"\d+", rdkit.__version__)[:3]) >= (2026, 9, 2)
+requires_rdkit_eem_fix = pytest.mark.skipif(
+    not RDKIT_EEM_CHARGES_CORRECT, reason="RDKit before 2026.9.2 returns wrong EEM charges for charged molecules"
+)
+
+
+def _rdkit_eem_reference_is_correct(mol):
+    return RDKIT_EEM_CHARGES_CORRECT or Chem.GetFormalCharge(mol) == 0
+
+
+def _rdkit_eem_rows(mols):
+    """RDKit EEM charges of every conformer, concatenated in molecule, then conformer order.
+
+    Returns the charges and a mask of the rows where RDKit's value is correct for the installed version.
+    """
+    rows, comparable = [], []
+    for mol in mols:
+        for conf in mol.GetConformers():
+            charges = np.asarray(rdMolDescriptors.CalcEEMcharges(mol, confId=conf.GetId()), dtype=np.float64)
+            rows.append(charges)
+            comparable.append(np.full(len(charges), _rdkit_eem_reference_is_correct(mol)))
+    return np.concatenate(rows), np.concatenate(comparable)
+
+
+def _assert_eem_matches_rdkit(actual, reference, precision):
+    expected, comparable = reference
+    actual = actual[comparable]
+    expected = expected[comparable]
+    if precision == PrecisionMode.FULL:
+        assert actual.dtype == np.float64
+        np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10, equal_nan=True)
+    else:
+        assert actual.dtype == np.float32
+        np.testing.assert_allclose(actual, expected, rtol=0, atol=EEM_SINGLE_ATOL, equal_nan=True)
+
+
+def _atom_sums(result, n_mols):
+    starts = result.atom_starts.torch().tolist()
+    charges = result[Property3D.EEM_CHARGES].numpy()
+    return [charges[starts[row] : starts[row + 1]].sum() for row in range(n_mols)]
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_charges_are_per_atom_and_match_rdkit(precision):
+    mols = [_embed(smiles, 2, 7 + idx) for idx, smiles in enumerate(EEM_SMILES)]
+    result = Calc3DProperties(mols, [Property3D.NPR1, Property3D.EEM_CHARGES], precision=precision)
+
+    total_atoms = sum(mol.GetNumAtoms() * mol.GetNumConformers() for mol in mols)
+    expected_starts = np.cumsum([0] + [mol.GetNumAtoms() for mol in mols for _ in mol.GetConformers()])
+    assert result[Property3D.NPR1].torch().shape == (result.n_conformers,)
+    assert result[Property3D.EEM_CHARGES].torch().shape == (total_atoms,)
+    np.testing.assert_array_equal(result.atom_starts.numpy(), expected_starts)
+    _assert_eem_matches_rdkit(result[Property3D.EEM_CHARGES].numpy(), _rdkit_eem_rows(mols), precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_charges_sum_to_formal_charge(precision):
+    smiles = ("CC(=O)[O-]", "C[NH3+]", "CCO", "[NH4+]", "[O-]C(=O)CC[NH3+]")
+    mols = [_embed(smi, 1, 3) for smi in smiles]
+    result = Calc3DProperties(mols, Property3D.EEM_CHARGES, precision=precision)
+    expected = [Chem.GetFormalCharge(mol) for mol in mols]
+    assert expected == [-1, 1, 0, 1, 0]
+    np.testing.assert_allclose(
+        _atom_sums(result, len(mols)), expected, atol=1e-5 if precision == PrecisionMode.SINGLE else 1e-9
+    )
+
+
+def _eem_golden_molecule(smiles, coordinates):
+    mol = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    conf = Chem.Conformer(mol.GetNumAtoms())
+    for idx, xyz in enumerate(coordinates):
+        conf.SetAtomPosition(idx, Point3D(*xyz))
+    mol.AddConformer(conf)
+    return mol
+
+
+_TETRAHEDRAL_NH = 1.01 / 3**0.5
+# Charges from solving the published EEM equations (Mortier 1986) with RDKit's parameters, as rdkit/rdkit#9688 does:
+# the geometries and values of its reproduction. Independent of the installed RDKit, so these hold for any version.
+EEM_GOLDEN = (
+    ("[OH-]", [(0, 0, 0), (0.97, 0, 0)], [-1.0632, 0.0632]),
+    (
+        "[NH4+]",
+        [
+            (0, 0, 0),
+            (_TETRAHEDRAL_NH, _TETRAHEDRAL_NH, _TETRAHEDRAL_NH),
+            (_TETRAHEDRAL_NH, -_TETRAHEDRAL_NH, -_TETRAHEDRAL_NH),
+            (-_TETRAHEDRAL_NH, _TETRAHEDRAL_NH, -_TETRAHEDRAL_NH),
+            (-_TETRAHEDRAL_NH, -_TETRAHEDRAL_NH, _TETRAHEDRAL_NH),
+        ],
+        [-0.9845, 0.4961, 0.4961, 0.4961, 0.4961],
+    ),
+)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_charged_molecules_match_golden_values(precision):
+    mols = [_eem_golden_molecule(smiles, coordinates) for smiles, coordinates, _ in EEM_GOLDEN]
+    result = Calc3DProperties(mols, Property3D.EEM_CHARGES, precision=precision)
+    expected = np.concatenate([charges for _, _, charges in EEM_GOLDEN])
+    # The reference values are rounded to four decimals.
+    np.testing.assert_allclose(result[Property3D.EEM_CHARGES].numpy(), expected, rtol=0, atol=1e-4)
+
+
+@requires_rdkit_eem_fix
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_golden_molecules_match_fixed_rdkit(precision):
+    mols = [_eem_golden_molecule(smiles, coordinates) for smiles, coordinates, _ in EEM_GOLDEN]
+    result = Calc3DProperties(mols, Property3D.EEM_CHARGES, precision=precision)
+    _assert_eem_matches_rdkit(result[Property3D.EEM_CHARGES].numpy(), _rdkit_eem_rows(mols), precision)
+
+
+def test_eem_dense_pads_conformers_and_atoms():
+    mols = [_embed("CCO", 3, 1), Chem.AddHs(Chem.MolFromSmiles("CC")), _embed("c1ccncc1O", 1, 2)]
+    result = Calc3DProperties(mols, [Property3D.PBF, Property3D.EEM_CHARGES], precision=PrecisionMode.FULL)
+    dense = result.dense()
+
+    max_atoms = max(mol.GetNumAtoms() for mol in mols)
+    charges = dense.values[Property3D.EEM_CHARGES.value]
+    assert charges.shape == (3, 3, max_atoms)
+    assert dense.values[Property3D.PBF.value].shape == (3, 3)
+    assert dense.atom_mask.shape == (3, 3, max_atoms)
+    assert int(dense.atom_mask.sum()) == result[Property3D.EEM_CHARGES].torch().numel()
+    torch.testing.assert_close(charges[dense.atom_mask], result[Property3D.EEM_CHARGES].torch())
+    assert torch.isnan(charges[~dense.atom_mask]).all()
+    assert dense.conf_mask.tolist() == [[True, True, True], [False, False, False], [True, False, False]]
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_device_coordinates_share_atom_starts(precision):
+    mols = [Chem.AddHs(Chem.MolFromSmiles(smiles)) for smiles in ("CC(=O)[O-]", "c1ccncc1O")]
+    params = EmbedParameters()
+    params.randomSeed = 0xC0FFEE
+    coordinates = EmbedMolecules(mols, params, confsPerMolecule=2, output=CoordinateOutput.DEVICE)
+
+    result = Calc3DProperties(mols, Property3D.EEM_CHARGES, coordinates=coordinates, precision=precision)
+
+    assert result.atom_starts is coordinates.atom_starts
+    values = coordinates.values.numpy()
+    atom_starts = coordinates.atom_starts.torch().tolist()
+    expected = np.full(len(values), np.nan)
+    comparable = np.zeros(len(values), dtype=bool)
+    for row, mol_idx in enumerate(coordinates.mol_indices.torch().tolist()):
+        mol = Chem.Mol(mols[mol_idx])
+        conf = Chem.Conformer(mol.GetNumAtoms())
+        for atom_idx, (x, y, z) in enumerate(values[atom_starts[row] : atom_starts[row + 1]]):
+            conf.SetAtomPosition(atom_idx, Point3D(float(x), float(y), float(z)))
+        conf_id = mol.AddConformer(conf, assignId=True)
+        expected[atom_starts[row] : atom_starts[row + 1]] = rdMolDescriptors.CalcEEMcharges(mol, confId=conf_id)
+        comparable[atom_starts[row] : atom_starts[row + 1]] = _rdkit_eem_reference_is_correct(mol)
+    _assert_eem_matches_rdkit(result[Property3D.EEM_CHARGES].numpy(), (expected, comparable), precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_atoms_without_parameters_give_nan_for_their_conformers(precision):
+    # RDKit has no EEM parameters past bromine and reads beyond its tables for iodine.
+    iodide = _embed("CCI", 2, 4)
+    ethanol = _embed("CCO", 1, 4)
+    result = Calc3DProperties([iodide, ethanol], Property3D.EEM_CHARGES, precision=precision)
+    charges = result[Property3D.EEM_CHARGES].numpy()
+    iodide_rows = 2 * iodide.GetNumAtoms()
+    assert np.isnan(charges[:iodide_rows]).all()
+    _assert_eem_matches_rdkit(charges[iodide_rows:], _rdkit_eem_rows([ethanol]), precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_atoms_with_zero_parameters_give_nan_unlike_rdkit(precision):
+    # Deliberately differs from RDKit: its parameter tables hold zeros for elements and bond orders they do not
+    # cover (here Si and single-bonded P), which RDKit silently solves with, returning charges of -10 or beyond.
+    # nvMolKit reports NaN for those conformers instead.
+    uncovered = [_embed(smiles, 1, 5) for smiles in ("C[Si](C)(C)C", "CP(C)C")]
+    ethanol = _embed("CCO", 1, 5)
+    result = Calc3DProperties([*uncovered, ethanol], Property3D.EEM_CHARGES, precision=precision)
+    charges = result[Property3D.EEM_CHARGES].numpy()
+    uncovered_rows = sum(mol.GetNumAtoms() for mol in uncovered)
+    assert np.isnan(charges[:uncovered_rows]).all()
+    assert np.abs(_rdkit_eem_rows(uncovered)[0]).max() > 5  # RDKit's zero-parameter charges
+    _assert_eem_matches_rdkit(charges[uncovered_rows:], _rdkit_eem_rows([ethanol]), precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -float("inf")])
+@pytest.mark.parametrize("smiles", ["[Br-]", "CCO"])
+def test_eem_nonfinite_coordinates_invalidate_only_their_conformer(precision, invalid, smiles):
+    molecule = Chem.MolFromSmiles(smiles)
+    for _ in range(2):
+        conformer = Chem.Conformer(molecule.GetNumAtoms())
+        for atom_idx in range(molecule.GetNumAtoms()):
+            conformer.SetAtomPosition(atom_idx, Point3D(1.5 * atom_idx, 0, 0))
+        molecule.AddConformer(conformer, assignId=True)
+    molecule.GetConformer(0).SetAtomPosition(0, Point3D(invalid, 0, 0))
+    result = Calc3DProperties([molecule], Property3D.EEM_CHARGES, precision=precision)
+    charges = result[Property3D.EEM_CHARGES].numpy()
+    assert np.isnan(charges[: molecule.GetNumAtoms()]).all()
+    valid = charges[molecule.GetNumAtoms() :]
+    np.testing.assert_allclose(valid.sum(), Chem.GetFormalCharge(molecule), atol=1e-5)
+    expected = np.asarray(rdMolDescriptors.CalcEEMcharges(molecule, confId=1))
+    comparable = np.full(len(expected), _rdkit_eem_reference_is_correct(molecule))
+    _assert_eem_matches_rdkit(valid, (expected, comparable), precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_global_workspace_and_custom_stream(precision):
+    molecule = Chem.MolFromSmiles("O" + "C" * 119)
+    conformer = Chem.Conformer(molecule.GetNumAtoms())
+    for atom_idx in range(molecule.GetNumAtoms()):
+        angle = 1.9 * atom_idx
+        conformer.SetAtomPosition(atom_idx, Point3D(1.4 * np.cos(angle), 1.4 * np.sin(angle), 0.55 * atom_idx))
+    molecule.AddConformer(conformer, assignId=True)
+    stream = torch.cuda.Stream()
+    result = Calc3DProperties([molecule], Property3D.EEM_CHARGES, precision=precision, stream=stream)
+    _assert_eem_matches_rdkit(result[Property3D.EEM_CHARGES].numpy(), _rdkit_eem_rows([molecule]), precision)
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_budget_limited_grid_preserves_mixed_conformer_order(precision):
+    # 256 atoms need ~262/521 KiB per block in single/full precision. The 64 MiB budget caps
+    # the grid at 250/125 blocks on GPUs with enough SMs; 515 conformers require scratch reuse.
+    large = Chem.MolFromSmiles("O" + "C" * 255)
+    conformer = Chem.Conformer(large.GetNumAtoms())
+    for atom_idx in range(large.GetNumAtoms()):
+        angle = 1.9 * atom_idx
+        conformer.SetAtomPosition(atom_idx, Point3D(1.4 * np.cos(angle), 1.4 * np.sin(angle), 0.55 * atom_idx))
+    large.AddConformer(conformer, assignId=True)
+    small = _embed("CCO", 2, 42)
+    molecules = [large, *([small] * 128), large, *([small] * 128), large]
+    expected = np.concatenate(
+        [
+            rdMolDescriptors.CalcEEMcharges(mol, confId=conf.GetId())
+            for mol in molecules
+            for conf in mol.GetConformers()
+        ]
+    )
+    stream = torch.cuda.Stream()
+    for _ in range(2):
+        result = Calc3DProperties(molecules, Property3D.EEM_CHARGES, precision=precision, stream=stream)
+        _assert_eem_matches_rdkit(
+            result[Property3D.EEM_CHARGES].numpy(), (expected, np.ones(len(expected), dtype=bool)), precision
+        )
+
+
+@pytest.mark.parametrize("precision", PRECISIONS)
+def test_eem_empty_batches_and_molecules_without_conformers(precision):
+    for molecules in ([], [Chem.MolFromSmiles("CCO")]):
+        result = Calc3DProperties(molecules, Property3D.EEM_CHARGES, precision=precision)
+        assert result.n_conformers == 0
+        assert result[Property3D.EEM_CHARGES].torch().numel() == 0
+        dense = result.dense()
+        assert dense.values[Property3D.EEM_CHARGES.value].shape == (len(molecules), 0, 0)
+
+
+def _with_atom_starts(coordinates, atom_starts):
+    starts = torch.tensor(atom_starts, dtype=torch.int32, device="cuda")
+    return Device3DResult(
+        values=coordinates.values,
+        atom_starts=AsyncGpuResult(starts, coordinates.gpu_id),
+        mol_indices=coordinates.mol_indices,
+        conf_indices=coordinates.conf_indices,
+        gpu_id=coordinates.gpu_id,
+        n_mols=coordinates.n_mols,
+    )
+
+
+@pytest.mark.parametrize(
+    ("atom_starts", "valid_conformer", "first_row"),
+    [([4, 8, 12], 0, 4), ([-4, 0, 4], 1, 0)],
+    ids=["past_the_rows", "negative_start"],
+)
+def test_dense_charges_leave_invalid_atom_ranges_nan(atom_starts, valid_conformer, first_row):
+    square = [(0, 0, 0), (1.5, 0, 0), (1.5, 1.5, 0), (0, 1.5, 1.0)]
+    shifted = [(x + 0.3 * idx, y, z) for idx, (x, y, z) in enumerate(square)]
+    mol = _mol_with_conformers("CCCC", [square, shifted])
+    coordinates = _with_atom_starts(_device_result_from_molecules([mol]), atom_starts)
+
+    result = Calc3DProperties([mol], Property3D.EEM_CHARGES, coordinates=coordinates, precision=PrecisionMode.FULL)
+    dense = result.dense()
+
+    charges = result[Property3D.EEM_CHARGES].numpy()
+    invalid_conformer = 1 - valid_conformer
+    assert dense.atom_mask.tolist() == [[[valid_conformer == 0] * 4, [valid_conformer == 1] * 4]]
+    np.testing.assert_array_equal(
+        dense.values[Property3D.EEM_CHARGES.value][0, valid_conformer].cpu().numpy(),
+        charges[first_row : first_row + 4],
+    )
+    assert torch.isnan(dense.values[Property3D.EEM_CHARGES.value][0, invalid_conformer]).all()
+    assert not np.isnan(charges[first_row : first_row + 4]).any()
+
+
+def test_dense_scalar_properties_do_not_build_atom_gather_indexes(monkeypatch):
+    def fail(*args, **kwargs):
+        raise AssertionError("per-atom gather indexes built for scalar properties")
+
+    monkeypatch.setattr(descriptors3d_module, "_atom_row_gather", fail)
+    mols = [_embed("CCO", 2, 1), _embed("CCCO", 1, 2)]
+    result = Calc3DProperties(mols, [Property3D.PMI1, Property3D.PBF], precision=PrecisionMode.FULL)
+    dense = result.dense()
+    assert dense.values[Property3D.PMI1.value].shape == (2, 2)
+    assert dense.conf_mask.tolist() == [[True, True], [True, False]]
+    assert dense.atom_mask.shape == (2, 2, max(mol.GetNumAtoms() for mol in mols))
+    assert int(dense.atom_mask.sum()) == sum(mol.GetNumAtoms() * mol.GetNumConformers() for mol in mols)

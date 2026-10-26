@@ -25,41 +25,6 @@ namespace nvMolKit {
 namespace DistGeom {
 
 template <int dimension>
-__global__ void DistViolationEnergyKernel(const int      numDist,
-                                          const int*     idx1s,
-                                          const int*     idx2s,
-                                          const double*  lb2s,
-                                          const double*  ub2s,
-                                          const double*  weights,
-                                          const double*  pos,
-                                          double*        energyBuffer,
-                                          const int*     energyBufferStarts,
-                                          const int*     atomIdxToBatchIdx,
-                                          const int*     distTermStarts,
-                                          const int*     atomStarts,
-                                          const uint8_t* activeThisStage) {
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < numDist) {
-    const int idx1     = idx1s[idx];
-    const int batchIdx = atomIdxToBatchIdx[idx1];
-
-    // Check if activeThisStage is nullptr or if this molecule/conformer is active in this stage
-    if (activeThisStage == nullptr || activeThisStage[batchIdx] == 1) {
-      const int    idx2   = idx2s[idx];
-      const double lb2    = lb2s[idx];
-      const double ub2    = ub2s[idx];
-      const double weight = weights[idx];
-
-      const double energy = distViolationEnergy<dimension>(pos, idx1, idx2, lb2, ub2, weight);
-      if (energy > 0.0) {
-        const int outputIdx = getEnergyAccumulatorIndex(idx, batchIdx, energyBufferStarts, distTermStarts);
-        energyBuffer[outputIdx] += energy;
-      }
-    }
-  }
-}
-
-template <int dimension>
 __global__ void DistViolationGradientKernel(const int      numDist,
                                             const int*     idx1s,
                                             const int*     idx2s,
@@ -84,41 +49,6 @@ __global__ void DistViolationGradientKernel(const int      numDist,
       const double weight = weights[idx];
 
       distViolationGrad<dimension>(pos, idx1, idx2, lb2, ub2, weight, grad);
-    }
-  }
-}
-
-template <int dimension>
-__global__ void ChiralViolationEnergyKernel(const int      numChiral,
-                                            const int*     idx1s,
-                                            const int*     idx2s,
-                                            const int*     idx3s,
-                                            const int*     idx4s,
-                                            const double*  volLower,
-                                            const double*  volUpper,
-                                            const double   weight,
-                                            const double*  pos,
-                                            double*        energyBuffer,
-                                            const int*     energyBufferStarts,
-                                            const int*     atomIdxToBatchIdx,
-                                            const int*     chiralTermStarts,
-                                            const int*     atomStarts,
-                                            const uint8_t* activeThisStage) {
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < numChiral) {
-    const int idx1     = idx1s[idx];
-    const int batchIdx = atomIdxToBatchIdx[idx1];
-
-    // Check if activeThisStage is nullptr or if this molecule/conformer is active in this stage
-    if (activeThisStage == nullptr || activeThisStage[batchIdx] == 1) {
-      const int    idx2      = idx2s[idx];
-      const int    idx3      = idx3s[idx];
-      const int    idx4      = idx4s[idx];
-      const double lb        = volLower[idx];
-      const double ub        = volUpper[idx];
-      const double energy    = chiralViolationEnergy<dimension>(pos, idx1, idx2, idx3, idx4, lb, ub, weight);
-      const int    outputIdx = getEnergyAccumulatorIndex(idx, batchIdx, energyBufferStarts, chiralTermStarts);
-      energyBuffer[outputIdx] += energy;
     }
   }
 }
@@ -150,31 +80,6 @@ __global__ void ChiralViolationGradientKernel(const int      numChiral,
       const double lb   = volLower[idx];
       const double ub   = volUpper[idx];
       chiralViolationGrad<dimension>(pos, idx1, idx2, idx3, idx4, lb, ub, weight, grad);
-    }
-  }
-}
-
-template <int dimension>
-__global__ void fourthDimEnergyKernel(const int      numFD,
-                                      const int*     idxs,
-                                      const double   weight,
-                                      const double*  pos,
-                                      double*        energyBuffer,
-                                      const int*     energyBufferStarts,
-                                      const int*     atomIdxToBatchIdx,
-                                      const int*     fourthTermStarts,
-                                      const int*     atomStarts,
-                                      const uint8_t* activeThisStage) {
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < numFD) {
-    const int idx1     = idxs[idx];
-    const int batchIdx = atomIdxToBatchIdx[idx1];
-
-    // Check if activeThisStage is nullptr or if this molecule/conformer is active in this stage
-    if (activeThisStage == nullptr || activeThisStage[batchIdx] == 1) {
-      unsigned  pid       = idx1 * dimension + 3;
-      const int outputIdx = getEnergyAccumulatorIndex(idx, batchIdx, energyBufferStarts, fourthTermStarts);
-      energyBuffer[outputIdx] += weight * pos[pid] * pos[pid];
     }
   }
 }
@@ -452,58 +357,6 @@ __global__ void AngleConstraintGradientKernel(const int      numAngle,
   }
 }
 
-cudaError_t launchDistViolationEnergyKernel(const int      numDist,
-                                            const int*     idx1,
-                                            const int*     idx2,
-                                            const double*  lb2,
-                                            const double*  ub2,
-                                            const double*  weight,
-                                            const double*  pos,
-                                            double*        energyBuffer,
-                                            const int*     energyBufferStarts,
-                                            const int*     atomIdxToBatchIdx,
-                                            const int*     distTermStarts,
-                                            const int*     atomStarts,
-                                            const int      dimension,
-                                            const uint8_t* activeThisStage,
-                                            cudaStream_t   stream) {
-  if (numDist == 0) {
-    return cudaSuccess;
-  }
-  constexpr int blockSize = 256;
-  const int     numBlocks = (numDist + blockSize - 1) / blockSize;
-  if (dimension == 3) {
-    DistViolationEnergyKernel<3><<<numBlocks, blockSize, 0, stream>>>(numDist,
-                                                                      idx1,
-                                                                      idx2,
-                                                                      lb2,
-                                                                      ub2,
-                                                                      weight,
-                                                                      pos,
-                                                                      energyBuffer,
-                                                                      energyBufferStarts,
-                                                                      atomIdxToBatchIdx,
-                                                                      distTermStarts,
-                                                                      atomStarts,
-                                                                      activeThisStage);
-  } else if (dimension == 4) {
-    DistViolationEnergyKernel<4><<<numBlocks, blockSize, 0, stream>>>(numDist,
-                                                                      idx1,
-                                                                      idx2,
-                                                                      lb2,
-                                                                      ub2,
-                                                                      weight,
-                                                                      pos,
-                                                                      energyBuffer,
-                                                                      energyBufferStarts,
-                                                                      atomIdxToBatchIdx,
-                                                                      distTermStarts,
-                                                                      atomStarts,
-                                                                      activeThisStage);
-  }
-  return cudaGetLastError();
-}
-
 cudaError_t launchDistViolationGradientKernel(const int      numDist,
                                               const int*     idx1,
                                               const int*     idx2,
@@ -544,64 +397,6 @@ cudaError_t launchDistViolationGradientKernel(const int      numDist,
                                                                         pos,
                                                                         grad,
                                                                         atomIdxToBatchIdx,
-                                                                        atomStarts,
-                                                                        activeThisStage);
-  }
-  return cudaGetLastError();
-}
-
-cudaError_t launchChiralViolationEnergyKernel(const int      numChiral,
-                                              const int*     idx1,
-                                              const int*     idx2,
-                                              const int*     idx3,
-                                              const int*     idx4,
-                                              const double*  volLower,
-                                              const double*  volUpper,
-                                              double         weight,
-                                              const double*  pos,
-                                              double*        energyBuffer,
-                                              const int*     energyBufferStarts,
-                                              const int*     atomIdxToBatchIdx,
-                                              const int*     chiralTermStarts,
-                                              const int*     atomStarts,
-                                              const int      dimension,
-                                              const uint8_t* activeThisStage,
-                                              cudaStream_t   stream) {
-  if (numChiral == 0) {
-    return cudaSuccess;
-  }
-  constexpr int blockSize = 256;
-  const int     numBlocks = (numChiral + blockSize - 1) / blockSize;
-  if (dimension == 3) {
-    ChiralViolationEnergyKernel<3><<<numBlocks, blockSize, 0, stream>>>(numChiral,
-                                                                        idx1,
-                                                                        idx2,
-                                                                        idx3,
-                                                                        idx4,
-                                                                        volLower,
-                                                                        volUpper,
-                                                                        weight,
-                                                                        pos,
-                                                                        energyBuffer,
-                                                                        energyBufferStarts,
-                                                                        atomIdxToBatchIdx,
-                                                                        chiralTermStarts,
-                                                                        atomStarts,
-                                                                        activeThisStage);
-  } else if (dimension == 4) {
-    ChiralViolationEnergyKernel<4><<<numBlocks, blockSize, 0, stream>>>(numChiral,
-                                                                        idx1,
-                                                                        idx2,
-                                                                        idx3,
-                                                                        idx4,
-                                                                        volLower,
-                                                                        volUpper,
-                                                                        weight,
-                                                                        pos,
-                                                                        energyBuffer,
-                                                                        energyBufferStarts,
-                                                                        atomIdxToBatchIdx,
-                                                                        chiralTermStarts,
                                                                         atomStarts,
                                                                         activeThisStage);
   }
@@ -656,49 +451,6 @@ cudaError_t launchChiralViolationGradientKernel(const int      numChiral,
                                                                           atomIdxToBatchIdx,
                                                                           atomStarts,
                                                                           activeThisStage);
-  }
-  return cudaGetLastError();
-}
-
-cudaError_t launchFourthDimEnergyKernel(const int      numFD,
-                                        const int*     idx,
-                                        double         weight,
-                                        const double*  pos,
-                                        double*        energyBuffer,
-                                        const int*     energyBufferStarts,
-                                        const int*     atomIdxToBatchIdx,
-                                        const int*     fourthTermStarts,
-                                        const int*     atomStarts,
-                                        const int      dimension,
-                                        const uint8_t* activeThisStage,
-                                        cudaStream_t   stream) {
-  if (numFD == 0) {
-    return cudaSuccess;
-  }
-  constexpr int blockSize = 256;
-  const int     numBlocks = (numFD + blockSize - 1) / blockSize;
-  if (dimension == 3) {
-    fourthDimEnergyKernel<3><<<numBlocks, blockSize, 0, stream>>>(numFD,
-                                                                  idx,
-                                                                  weight,
-                                                                  pos,
-                                                                  energyBuffer,
-                                                                  energyBufferStarts,
-                                                                  atomIdxToBatchIdx,
-                                                                  fourthTermStarts,
-                                                                  atomStarts,
-                                                                  activeThisStage);
-  } else if (dimension == 4) {
-    fourthDimEnergyKernel<4><<<numBlocks, blockSize, 0, stream>>>(numFD,
-                                                                  idx,
-                                                                  weight,
-                                                                  pos,
-                                                                  energyBuffer,
-                                                                  energyBufferStarts,
-                                                                  atomIdxToBatchIdx,
-                                                                  fourthTermStarts,
-                                                                  atomStarts,
-                                                                  activeThisStage);
   }
   return cudaGetLastError();
 }
@@ -1123,6 +875,33 @@ __global__ void combinedEnergiesKernel(const Terms*                   terms,
   }
 }
 
+//! Zeroes a molecule's gradient, accumulates it with accumulate(molGrad), then stores it in grad. Accumulation runs in
+//! shared memory when the molecule fits and directly in global memory otherwise.
+template <int dimension, typename real, typename Accumulate>
+__device__ void accumulateMolGrad(real* grad, const int atomStart, const int numAtoms, Accumulate&& accumulate) {
+  constexpr int   maxAtomSize = 256;
+  __shared__ real accumGrad[maxAtomSize * 4];  // Support up to 4D
+
+  const int  tid          = threadIdx.x;
+  const bool useSharedMem = numAtoms * dimension <= maxAtomSize * 4;
+  real*      molGradBase  = useSharedMem ? accumGrad : grad + atomStart * dimension;
+
+  for (int i = tid; i < numAtoms * dimension; i += blockSizePerMol) {
+    molGradBase[i] = real{0};
+  }
+  __syncthreads();
+
+  accumulate(molGradBase);
+  __syncthreads();
+
+  if (useSharedMem) {
+    real* globalGrad = grad + (atomStart * dimension);
+    for (int i = tid; i < numAtoms * dimension; i += blockSizePerMol) {
+      globalGrad[i] = molGradBase[i];
+    }
+  }
+}
+
 template <int dimension, typename real, typename Terms>
 __global__ void combinedGradKernel(const Terms*                   terms,
                                    const BatchedIndicesDevicePtr* systemIndices,
@@ -1138,38 +917,19 @@ __global__ void combinedGradKernel(const Terms*                   terms,
     return;
   }
 
-  const int atomStart = systemIndices->atomStarts[molIdx];
-  const int atomEnd   = systemIndices->atomStarts[molIdx + 1];
-  const int numAtoms  = atomEnd - atomStart;
-
-  constexpr int   maxAtomSize = 256;
-  __shared__ real accumGrad[maxAtomSize * 4];  // Support up to 4D
-
-  const bool useSharedMem = numAtoms * dimension <= maxAtomSize * 4;
-  real*      molGradBase  = useSharedMem ? accumGrad : grad + atomStart * dimension;
-
-  for (int i = tid; i < numAtoms * dimension; i += blockSizePerMol) {
-    molGradBase[i] = real{0};
-  }
-  __syncthreads();
-
+  const int   atomStart = systemIndices->atomStarts[molIdx];
+  const int   numAtoms  = systemIndices->atomStarts[molIdx + 1] - atomStart;
   const real* molCoords = coords + atomStart * dimension;
-  molGradDGDispatch<dimension>(*terms,
-                               *systemIndices,
-                               molCoords,
-                               molGradBase,
-                               molIdx,
-                               chiralWeight,
-                               fourthDimWeight,
-                               tid);
-  __syncthreads();
-
-  if (useSharedMem) {
-    real* globalGrad = grad + (atomStart * dimension);
-    for (int i = tid; i < numAtoms * dimension; i += blockSizePerMol) {
-      globalGrad[i] = molGradBase[i];
-    }
-  }
+  accumulateMolGrad<dimension>(grad, atomStart, numAtoms, [&](real* molGrad) {
+    molGradDGDispatch<dimension>(*terms,
+                                 *systemIndices,
+                                 molCoords,
+                                 molGrad,
+                                 molIdx,
+                                 chiralWeight,
+                                 fourthDimWeight,
+                                 tid);
+  });
 }
 
 template <typename real, typename reduceT, typename Terms>
@@ -1489,6 +1249,201 @@ cudaError_t launchBlockPerMolGradKernelETK(int                                  
                                            const uint8_t*                              activeThisStage,
                                            cudaStream_t                                stream) {
   return launchBlockPerMolGradKernelETKImpl(numMols, terms, systemIndices, coords, grad, activeThisStage, stream);
+}
+
+// All-in-one ETKDG (AIO) combined kernels
+__device__ double molEnergyAIODispatch(const AllInOneContribsDevicePtr& terms,
+                                       const double*                    coords,
+                                       int                              molIdx,
+                                       const AllInOneForceWeights&      weights,
+                                       bool                             includeTorsionTerms,
+                                       int                              tid) {
+  return fp64::molEnergyAIO(terms, coords, molIdx, weights, includeTorsionTerms, tid);
+}
+__device__ float molEnergyAIODispatch(const AllInOneContribsDevicePtrSingle& terms,
+                                      const float*                           coords,
+                                      int                                    molIdx,
+                                      const AllInOneForceWeights&            weights,
+                                      bool                                   includeTorsionTerms,
+                                      int                                    tid) {
+  return fp32::molEnergyAIO(terms, coords, molIdx, weights, includeTorsionTerms, tid);
+}
+
+__device__ void molGradAIODispatch(const AllInOneContribsDevicePtr& terms,
+                                   const double*                    coords,
+                                   double*                          grad,
+                                   int                              molIdx,
+                                   const AllInOneForceWeights&      weights,
+                                   bool                             includeTorsionTerms,
+                                   int                              tid) {
+  fp64::molGradAIO(terms, coords, grad, molIdx, weights, includeTorsionTerms, tid);
+}
+__device__ void molGradAIODispatch(const AllInOneContribsDevicePtrSingle& terms,
+                                   const float*                           coords,
+                                   float*                                 grad,
+                                   int                                    molIdx,
+                                   const AllInOneForceWeights&            weights,
+                                   bool                                   includeTorsionTerms,
+                                   int                                    tid) {
+  fp32::molGradAIO(terms, coords, grad, molIdx, weights, includeTorsionTerms, tid);
+}
+
+template <typename real, typename reduceT, typename Terms>
+__global__ void combinedEnergiesKernelAIO(const Terms                terms,
+                                          const real*                coords,
+                                          real*                      energies,
+                                          const AllInOneForceWeights weights,
+                                          const bool                 includeTorsionTerms,
+                                          const uint8_t*             activeThisStage) {
+  const int molIdx = blockIdx.x;
+  const int tid    = threadIdx.x;
+
+  if (activeThisStage != nullptr && activeThisStage[molIdx] == 0) {
+    if (tid == 0) {
+      energies[molIdx] = 0.0;
+    }
+    return;
+  }
+
+  using BlockReduce = cub::BlockReduce<reduceT, blockSizePerMol>;
+  __shared__ typename BlockReduce::TempStorage tempStorage;
+
+  const int  atomStart = terms.distanceGeometryIndices.atomStarts[molIdx];
+  const real threadEnergy =
+    molEnergyAIODispatch(terms, coords + atomStart * 4, molIdx, weights, includeTorsionTerms, tid);
+  const reduceT blockEnergy = BlockReduce(tempStorage).Sum(static_cast<reduceT>(threadEnergy));
+
+  if (tid == 0) {
+    energies[molIdx] = static_cast<real>(blockEnergy);
+  }
+}
+
+template <typename real, typename Terms>
+__global__ void combinedGradKernelAIO(const Terms                terms,
+                                      const real*                coords,
+                                      real*                      grad,
+                                      const AllInOneForceWeights weights,
+                                      const bool                 includeTorsionTerms,
+                                      const uint8_t*             activeThisStage) {
+  const int molIdx = blockIdx.x;
+  const int tid    = threadIdx.x;
+
+  if (activeThisStage != nullptr && activeThisStage[molIdx] == 0) {
+    return;
+  }
+
+  const int   atomStart = terms.distanceGeometryIndices.atomStarts[molIdx];
+  const int   numAtoms  = terms.distanceGeometryIndices.atomStarts[molIdx + 1] - atomStart;
+  const real* molCoords = coords + atomStart * 4;
+  accumulateMolGrad<4>(grad, atomStart, numAtoms, [&](real* molGrad) {
+    molGradAIODispatch(terms, molCoords, molGrad, molIdx, weights, includeTorsionTerms, tid);
+  });
+}
+
+template <typename real, typename reduceT, typename Terms>
+cudaError_t launchBlockPerMolEnergyKernelAIOImpl(const int                   numMols,
+                                                 const Terms&                terms,
+                                                 const real*                 coords,
+                                                 real*                       energies,
+                                                 const AllInOneForceWeights& weights,
+                                                 const bool                  includeTorsionTerms,
+                                                 const uint8_t*              activeThisStage,
+                                                 cudaStream_t                stream) {
+  if (numMols == 0) {
+    return cudaSuccess;
+  }
+  combinedEnergiesKernelAIO<real, reduceT>
+    <<<numMols, blockSizePerMol, 0, stream>>>(terms, coords, energies, weights, includeTorsionTerms, activeThisStage);
+  return cudaGetLastError();
+}
+
+template <typename real, typename Terms>
+cudaError_t launchBlockPerMolGradKernelAIOImpl(const int                   numMols,
+                                               const Terms&                terms,
+                                               const real*                 coords,
+                                               real*                       grad,
+                                               const AllInOneForceWeights& weights,
+                                               const bool                  includeTorsionTerms,
+                                               const uint8_t*              activeThisStage,
+                                               cudaStream_t                stream) {
+  if (numMols == 0) {
+    return cudaSuccess;
+  }
+  combinedGradKernelAIO<real>
+    <<<numMols, blockSizePerMol, 0, stream>>>(terms, coords, grad, weights, includeTorsionTerms, activeThisStage);
+  return cudaGetLastError();
+}
+
+cudaError_t launchBlockPerMolEnergyKernelAIO(const int                        numMols,
+                                             const AllInOneContribsDevicePtr& terms,
+                                             const double*                    coords,
+                                             double*                          energies,
+                                             const AllInOneForceWeights&      weights,
+                                             const bool                       includeTorsionTerms,
+                                             const uint8_t*                   activeThisStage,
+                                             cudaStream_t                     stream) {
+  return launchBlockPerMolEnergyKernelAIOImpl<double, double>(numMols,
+                                                              terms,
+                                                              coords,
+                                                              energies,
+                                                              weights,
+                                                              includeTorsionTerms,
+                                                              activeThisStage,
+                                                              stream);
+}
+
+cudaError_t launchBlockPerMolEnergyKernelAIO(const int                              numMols,
+                                             const AllInOneContribsDevicePtrSingle& terms,
+                                             const float*                           coords,
+                                             float*                                 energies,
+                                             const AllInOneForceWeights&            weights,
+                                             const bool                             includeTorsionTerms,
+                                             const uint8_t*                         activeThisStage,
+                                             cudaStream_t                           stream) {
+  return launchBlockPerMolEnergyKernelAIOImpl<float, float>(numMols,
+                                                            terms,
+                                                            coords,
+                                                            energies,
+                                                            weights,
+                                                            includeTorsionTerms,
+                                                            activeThisStage,
+                                                            stream);
+}
+
+cudaError_t launchBlockPerMolGradKernelAIO(const int                        numMols,
+                                           const AllInOneContribsDevicePtr& terms,
+                                           const double*                    coords,
+                                           double*                          grad,
+                                           const AllInOneForceWeights&      weights,
+                                           const bool                       includeTorsionTerms,
+                                           const uint8_t*                   activeThisStage,
+                                           cudaStream_t                     stream) {
+  return launchBlockPerMolGradKernelAIOImpl(numMols,
+                                            terms,
+                                            coords,
+                                            grad,
+                                            weights,
+                                            includeTorsionTerms,
+                                            activeThisStage,
+                                            stream);
+}
+
+cudaError_t launchBlockPerMolGradKernelAIO(const int                              numMols,
+                                           const AllInOneContribsDevicePtrSingle& terms,
+                                           const float*                           coords,
+                                           float*                                 grad,
+                                           const AllInOneForceWeights&            weights,
+                                           const bool                             includeTorsionTerms,
+                                           const uint8_t*                         activeThisStage,
+                                           cudaStream_t                           stream) {
+  return launchBlockPerMolGradKernelAIOImpl(numMols,
+                                            terms,
+                                            coords,
+                                            grad,
+                                            weights,
+                                            includeTorsionTerms,
+                                            activeThisStage,
+                                            stream);
 }
 
 template <typename reduceT, typename Terms>

@@ -407,6 +407,11 @@ struct AapDeviceView {
   const int*          groups;
 };
 
+// Picker loops call accumulateDistances inside a conditional graph body, where a memset node faults on sm_100.
+__global__ void resetCountKernel(int* count) {
+  *count = 0;
+}
+
 template <typename Op>
 __global__ void compactCandidatesKernel(const int numItems, const Op op, int* candidates, int* count) {
   const int candidate = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
@@ -595,7 +600,8 @@ class AapDistanceProvider {
     if (numItems_ == 0 || numSources == 0) {
       return;
     }
-    cudaCheckError(cudaMemsetAsync(candidateCount_.data(), 0, sizeof(int), stream));
+    resetCountKernel<<<1, 1, 0, stream>>>(candidateCount_.data());
+    cudaCheckError(cudaGetLastError());
     compactCandidatesKernel<<<(numItems_ + kThreads - 1) / kThreads, kThreads, 0, stream>>>(numItems_,
                                                                                             op,
                                                                                             candidates_.data(),

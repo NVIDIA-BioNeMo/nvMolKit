@@ -27,6 +27,7 @@
 #include "nvmolkit/array_helpers.h"
 #include "nvmolkit/boost_python_utils.h"
 #include "src/aap.h"
+#include "src/bitbirch.h"
 #include "src/butina.h"
 #include "src/diversity_pickers.h"
 #include "src/utils/device.h"
@@ -164,9 +165,41 @@ nvMolKit::FingerprintSimilarityMetric parseFingerprintMetric(const std::string& 
   throw std::invalid_argument("metric must be one of ['tanimoto', 'cosine']");
 }
 
+//! Returns (labels, centroids); centroids is None unless requested.
+boost::python::object bitBirch(const boost::python::dict& fingerprints,
+                               const double               threshold,
+                               const int                  branchingFactor,
+                               const int                  batchSize,
+                               const bool                 returnCentroids,
+                               const std::uintptr_t       streamPtr) {
+  const auto                stream = requireStream(streamPtr);
+  const auto                input  = parseFingerprints(fingerprints);
+  nvMolKit::BitBirchOptions options;
+  options.branchingFactor = branchingFactor;
+  options.batchSize       = batchSize;
+  options.returnCentroids = returnCentroids;
+  auto result = nvMolKit::bitBirchGpu(input.fingerprints, input.numItems, input.numWords, threshold, options, stream);
+  auto labels = toOwnedPyArray(nvMolKit::makePyArray(result.clusterIds, boost::python::make_tuple(input.numItems)));
+  boost::python::object centroids;
+  if (returnCentroids) {
+    centroids = toOwnedPyArray(
+      nvMolKit::makePyArray(result.centroids, boost::python::make_tuple(result.numClusters, result.numWords)));
+  }
+  return boost::python::make_tuple(labels, centroids);
+}
+
 }  // namespace
 
 BOOST_PYTHON_MODULE(_clustering) {
+  boost::python::def("bitbirch",
+                     bitBirch,
+                     (boost::python::arg("fingerprints"),
+                      boost::python::arg("threshold"),
+                      boost::python::arg("branching_factor") = 1024,
+                      boost::python::arg("batch_size")       = 1024,
+                      boost::python::arg("return_centroids") = false,
+                      boost::python::arg("stream")           = 0));
+
   boost::python::register_exception_translator<nvMolKit::AapInvalidMoleculesError>(translateAapInvalidMolecules);
 
   boost::python::def(

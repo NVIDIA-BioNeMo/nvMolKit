@@ -31,17 +31,21 @@ __device__ __forceinline__ void symmetricEigenvalues3x3(const double a00,
   const double q       = a00_a11 + a00_a22 + a11_a22 - a01 * a01 - a02 * a02 - a12 * a12;
   const double r       = a00_a11 * a22 + 2.0 * a01 * a02 * a12 - a00 * a12 * a12 - a11 * a02 * a02 - a22 * a01 * a01;
 
-  const double     p3               = p / 3.0;
-  const double     pp               = (p * p - 3.0 * q) / 9.0;
-  const double     qq               = (2.0 * p * p * p - 9.0 * p * q + 27.0 * r) / 54.0;
-  const double     sqrtPP           = sqrt(fmax(pp, 0.0));
-  const double     theta            = acos(fmin(fmax(qq / fmax(sqrtPP * sqrtPP * sqrtPP, 1.0e-30), -1.0), 1.0)) / 3.0;
-  const double     twoSqrtPP        = 2.0 * sqrtPP;
-  constexpr double kTwoPiOverThree  = 2.0943951023931954923;
-  constexpr double kFourPiOverThree = 4.1887902047863909846;
-  largest                           = twoSqrtPP * cos(theta) + p3;
-  middle                            = twoSqrtPP * cos(theta - kTwoPiOverThree) + p3;
-  smallest                          = twoSqrtPP * cos(theta - kFourPiOverThree) + p3;
+  const double     p3                = p / 3.0;
+  const double     pp                = (p * p - 3.0 * q) / 9.0;
+  const double     qq                = (2.0 * p * p * p - 9.0 * p * q + 27.0 * r) / 54.0;
+  const double     sqrtPP            = sqrt(fmax(pp, 0.0));
+  const double     theta             = acos(fmin(fmax(qq / fmax(sqrtPP * sqrtPP * sqrtPP, 1.0e-30), -1.0), 1.0)) / 3.0;
+  const double     twoSqrtPP         = 2.0 * sqrtPP;
+  constexpr double kSqrtThreeOverTwo = 0.86602540378443864676;
+  double           sine, cosine;
+  sincos(theta, &sine, &cosine);
+  // cos(theta +/- 2 pi/3) = -cos(theta)/2 -/+ sqrt(3) sin(theta)/2.
+  const double shiftedCenter = p3 - sqrtPP * cosine;
+  const double shiftedOffset = twoSqrtPP * kSqrtThreeOverTwo * sine;
+  largest                    = twoSqrtPP * cosine + p3;
+  middle                     = shiftedCenter + shiftedOffset;
+  smallest                   = shiftedCenter - shiftedOffset;
 
   if (middle > largest) {
     const double tmp = largest;
