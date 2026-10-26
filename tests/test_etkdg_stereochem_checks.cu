@@ -29,6 +29,7 @@
 #include "src/etkdg_impl.h"
 #include "src/etkdg_stage_stereochem_checks.h"
 #include "src/forcefields/dist_geom.h"
+#include "src/utils/device.h"
 #include "tests/test_utils.h"
 
 using namespace ::nvMolKit::detail;
@@ -730,3 +731,88 @@ INSTANTIATE_TEST_SUITE_P(ETKDGUnifiedCheckTests,
                            }
                            return "Dim" + std::to_string(std::get<0>(info.param)) + "_" + checkTypeName;
                          });
+
+TEST(ETKDGDoubleBondStereo, SignsBoundariesAndInactiveSystems) {
+  using namespace nvMolKit::detail;
+  for (const int dimensions : {3, 4}) {
+    nvMolKit::ScopedStream stream;
+    ETKDGContext           context;
+    std::vector<EmbedArgs> arguments;
+    std::vector<uint8_t>   active, expected;
+    std::vector<double>    positions;
+    for (const double cosine : {-1.0, -0.5, -1e-8, 0.0, 1e-8, 0.5, 1.0}) {
+      for (const int sign : {-1, 1}) {
+        for (const uint8_t enabled : {0, 1}) {
+          const int index = arguments.size();
+          arguments.emplace_back();
+          arguments.back().stereoDoubleBonds.push_back({
+            {0, 1, 2, 3},
+            sign
+          });
+          context.systemHost.atomStarts.push_back(4 * index);
+          const double coordinates[4][3] = {
+            {0,      1,                              0},
+            {0,      0,                              0},
+            {1,      0,                              0},
+            {1, cosine, std::sqrt(1 - cosine * cosine)}
+          };
+          for (const auto& coordinate : coordinates) {
+            positions.insert(positions.end(), coordinate, coordinate + 3);
+            if (dimensions == 4) {
+              positions.push_back(123.0);
+            }
+          }
+          active.push_back(enabled);
+          expected.push_back(enabled && cosine * sign > 0);
+        }
+      }
+    }
+    context.nTotalSystems = arguments.size();
+    context.systemHost.atomStarts.push_back(4 * context.nTotalSystems);
+    context.systemDevice.positions.setStream(stream.stream());
+    context.activeThisStage.setStream(stream.stream());
+    context.failedThisStage.setStream(stream.stream());
+    context.systemDevice.positions.setFromVector(positions);
+    context.activeThisStage.setFromVector(active);
+    context.failedThisStage.resize(active.size());
+    context.failedThisStage.zero();
+    ETKDGDoubleBondStereoCheckStage stage(context, arguments, dimensions, stream.stream());
+    stage.execute(context);
+    std::vector<uint8_t> failures(expected.size());
+    context.failedThisStage.copyToHost(failures);
+    ASSERT_EQ(cudaStreamSynchronize(stream.stream()), cudaSuccess);
+    EXPECT_EQ(failures, expected) << dimensions;
+  }
+}
+
+TEST(ETKDGDoubleBondStereo, DegenerateEmptyAndMalformedTerms) {
+  using namespace nvMolKit::detail;
+  ETKDGContext context;
+  context.nTotalSystems         = 2;
+  context.systemHost.atomStarts = {0, 4, 8};
+  context.systemDevice.positions.setFromVector(std::vector<double>(24, 0.0));
+  context.activeThisStage.setFromVector({1, 1});
+  context.failedThisStage.setFromVector({0, 0});
+  std::vector<EmbedArgs> arguments(2);
+  arguments[0].stereoDoubleBonds = {
+    {{0, 1, 2, 3},  1},
+    {{0, 1, 2, 3}, -1}
+  };
+  ETKDGDoubleBondStereoCheckStage stage(context, arguments, 3);
+  stage.execute(context);
+  std::vector<uint8_t> failures(2);
+  context.failedThisStage.copyToHost(failures);
+  ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+  EXPECT_EQ(failures, (std::vector<uint8_t>{0, 0}));
+
+  arguments[0].stereoDoubleBonds = {
+    {{0, 1, 2}, 1}
+  };
+  EXPECT_THROW(ETKDGDoubleBondStereoCheckStage(context, arguments, 3), std::runtime_error);
+
+  ETKDGContext empty;
+  empty.nTotalSystems = 0;
+  ETKDGDoubleBondStereoCheckStage emptyStage(empty, {}, 3);
+  emptyStage.execute(empty);
+  EXPECT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+}

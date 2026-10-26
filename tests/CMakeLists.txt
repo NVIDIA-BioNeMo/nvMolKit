@@ -337,10 +337,6 @@ target_link_libraries(
   PRIVATE etkdg_stages device_vector ${RDKit_LIBS} test_utils dist_geom
           rdkit_dist_geom_flattened)
 
-add_executable(test_trig_identities test_trig_identities.cu)
-target_link_libraries(test_trig_identities PRIVATE etkdg_stages device_vector
-                                                   ${RDKit_LIBS})
-
 add_executable(test_conformer_checkers test_conformer_checkers.cpp)
 target_link_libraries(test_conformer_checkers PRIVATE ${RDKit_LIBS}
                                                       conformer_checkers)
@@ -499,7 +495,6 @@ set(TEST_LIST
     test_etkdg_coordgen
     test_etkdg_etk_minimize
     test_etkdg_stereochem_checks
-    test_trig_identities
     test_flat_bit_vect
     test_flat_bit_vect_device
     test_flattened_builder
