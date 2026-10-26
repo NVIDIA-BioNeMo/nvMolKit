@@ -25,41 +25,6 @@ namespace nvMolKit {
 namespace DistGeom {
 
 template <int dimension>
-__global__ void DistViolationEnergyKernel(const int      numDist,
-                                          const int*     idx1s,
-                                          const int*     idx2s,
-                                          const double*  lb2s,
-                                          const double*  ub2s,
-                                          const double*  weights,
-                                          const double*  pos,
-                                          double*        energyBuffer,
-                                          const int*     energyBufferStarts,
-                                          const int*     atomIdxToBatchIdx,
-                                          const int*     distTermStarts,
-                                          const int*     atomStarts,
-                                          const uint8_t* activeThisStage) {
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < numDist) {
-    const int idx1     = idx1s[idx];
-    const int batchIdx = atomIdxToBatchIdx[idx1];
-
-    // Check if activeThisStage is nullptr or if this molecule/conformer is active in this stage
-    if (activeThisStage == nullptr || activeThisStage[batchIdx] == 1) {
-      const int    idx2   = idx2s[idx];
-      const double lb2    = lb2s[idx];
-      const double ub2    = ub2s[idx];
-      const double weight = weights[idx];
-
-      const double energy = distViolationEnergy<dimension>(pos, idx1, idx2, lb2, ub2, weight);
-      if (energy > 0.0) {
-        const int outputIdx = getEnergyAccumulatorIndex(idx, batchIdx, energyBufferStarts, distTermStarts);
-        energyBuffer[outputIdx] += energy;
-      }
-    }
-  }
-}
-
-template <int dimension>
 __global__ void DistViolationGradientKernel(const int      numDist,
                                             const int*     idx1s,
                                             const int*     idx2s,
@@ -84,41 +49,6 @@ __global__ void DistViolationGradientKernel(const int      numDist,
       const double weight = weights[idx];
 
       distViolationGrad<dimension>(pos, idx1, idx2, lb2, ub2, weight, grad);
-    }
-  }
-}
-
-template <int dimension>
-__global__ void ChiralViolationEnergyKernel(const int      numChiral,
-                                            const int*     idx1s,
-                                            const int*     idx2s,
-                                            const int*     idx3s,
-                                            const int*     idx4s,
-                                            const double*  volLower,
-                                            const double*  volUpper,
-                                            const double   weight,
-                                            const double*  pos,
-                                            double*        energyBuffer,
-                                            const int*     energyBufferStarts,
-                                            const int*     atomIdxToBatchIdx,
-                                            const int*     chiralTermStarts,
-                                            const int*     atomStarts,
-                                            const uint8_t* activeThisStage) {
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < numChiral) {
-    const int idx1     = idx1s[idx];
-    const int batchIdx = atomIdxToBatchIdx[idx1];
-
-    // Check if activeThisStage is nullptr or if this molecule/conformer is active in this stage
-    if (activeThisStage == nullptr || activeThisStage[batchIdx] == 1) {
-      const int    idx2      = idx2s[idx];
-      const int    idx3      = idx3s[idx];
-      const int    idx4      = idx4s[idx];
-      const double lb        = volLower[idx];
-      const double ub        = volUpper[idx];
-      const double energy    = chiralViolationEnergy<dimension>(pos, idx1, idx2, idx3, idx4, lb, ub, weight);
-      const int    outputIdx = getEnergyAccumulatorIndex(idx, batchIdx, energyBufferStarts, chiralTermStarts);
-      energyBuffer[outputIdx] += energy;
     }
   }
 }
@@ -150,31 +80,6 @@ __global__ void ChiralViolationGradientKernel(const int      numChiral,
       const double lb   = volLower[idx];
       const double ub   = volUpper[idx];
       chiralViolationGrad<dimension>(pos, idx1, idx2, idx3, idx4, lb, ub, weight, grad);
-    }
-  }
-}
-
-template <int dimension>
-__global__ void fourthDimEnergyKernel(const int      numFD,
-                                      const int*     idxs,
-                                      const double   weight,
-                                      const double*  pos,
-                                      double*        energyBuffer,
-                                      const int*     energyBufferStarts,
-                                      const int*     atomIdxToBatchIdx,
-                                      const int*     fourthTermStarts,
-                                      const int*     atomStarts,
-                                      const uint8_t* activeThisStage) {
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < numFD) {
-    const int idx1     = idxs[idx];
-    const int batchIdx = atomIdxToBatchIdx[idx1];
-
-    // Check if activeThisStage is nullptr or if this molecule/conformer is active in this stage
-    if (activeThisStage == nullptr || activeThisStage[batchIdx] == 1) {
-      unsigned  pid       = idx1 * dimension + 3;
-      const int outputIdx = getEnergyAccumulatorIndex(idx, batchIdx, energyBufferStarts, fourthTermStarts);
-      energyBuffer[outputIdx] += weight * pos[pid] * pos[pid];
     }
   }
 }
@@ -452,58 +357,6 @@ __global__ void AngleConstraintGradientKernel(const int      numAngle,
   }
 }
 
-cudaError_t launchDistViolationEnergyKernel(const int      numDist,
-                                            const int*     idx1,
-                                            const int*     idx2,
-                                            const double*  lb2,
-                                            const double*  ub2,
-                                            const double*  weight,
-                                            const double*  pos,
-                                            double*        energyBuffer,
-                                            const int*     energyBufferStarts,
-                                            const int*     atomIdxToBatchIdx,
-                                            const int*     distTermStarts,
-                                            const int*     atomStarts,
-                                            const int      dimension,
-                                            const uint8_t* activeThisStage,
-                                            cudaStream_t   stream) {
-  if (numDist == 0) {
-    return cudaSuccess;
-  }
-  constexpr int blockSize = 256;
-  const int     numBlocks = (numDist + blockSize - 1) / blockSize;
-  if (dimension == 3) {
-    DistViolationEnergyKernel<3><<<numBlocks, blockSize, 0, stream>>>(numDist,
-                                                                      idx1,
-                                                                      idx2,
-                                                                      lb2,
-                                                                      ub2,
-                                                                      weight,
-                                                                      pos,
-                                                                      energyBuffer,
-                                                                      energyBufferStarts,
-                                                                      atomIdxToBatchIdx,
-                                                                      distTermStarts,
-                                                                      atomStarts,
-                                                                      activeThisStage);
-  } else if (dimension == 4) {
-    DistViolationEnergyKernel<4><<<numBlocks, blockSize, 0, stream>>>(numDist,
-                                                                      idx1,
-                                                                      idx2,
-                                                                      lb2,
-                                                                      ub2,
-                                                                      weight,
-                                                                      pos,
-                                                                      energyBuffer,
-                                                                      energyBufferStarts,
-                                                                      atomIdxToBatchIdx,
-                                                                      distTermStarts,
-                                                                      atomStarts,
-                                                                      activeThisStage);
-  }
-  return cudaGetLastError();
-}
-
 cudaError_t launchDistViolationGradientKernel(const int      numDist,
                                               const int*     idx1,
                                               const int*     idx2,
@@ -544,64 +397,6 @@ cudaError_t launchDistViolationGradientKernel(const int      numDist,
                                                                         pos,
                                                                         grad,
                                                                         atomIdxToBatchIdx,
-                                                                        atomStarts,
-                                                                        activeThisStage);
-  }
-  return cudaGetLastError();
-}
-
-cudaError_t launchChiralViolationEnergyKernel(const int      numChiral,
-                                              const int*     idx1,
-                                              const int*     idx2,
-                                              const int*     idx3,
-                                              const int*     idx4,
-                                              const double*  volLower,
-                                              const double*  volUpper,
-                                              double         weight,
-                                              const double*  pos,
-                                              double*        energyBuffer,
-                                              const int*     energyBufferStarts,
-                                              const int*     atomIdxToBatchIdx,
-                                              const int*     chiralTermStarts,
-                                              const int*     atomStarts,
-                                              const int      dimension,
-                                              const uint8_t* activeThisStage,
-                                              cudaStream_t   stream) {
-  if (numChiral == 0) {
-    return cudaSuccess;
-  }
-  constexpr int blockSize = 256;
-  const int     numBlocks = (numChiral + blockSize - 1) / blockSize;
-  if (dimension == 3) {
-    ChiralViolationEnergyKernel<3><<<numBlocks, blockSize, 0, stream>>>(numChiral,
-                                                                        idx1,
-                                                                        idx2,
-                                                                        idx3,
-                                                                        idx4,
-                                                                        volLower,
-                                                                        volUpper,
-                                                                        weight,
-                                                                        pos,
-                                                                        energyBuffer,
-                                                                        energyBufferStarts,
-                                                                        atomIdxToBatchIdx,
-                                                                        chiralTermStarts,
-                                                                        atomStarts,
-                                                                        activeThisStage);
-  } else if (dimension == 4) {
-    ChiralViolationEnergyKernel<4><<<numBlocks, blockSize, 0, stream>>>(numChiral,
-                                                                        idx1,
-                                                                        idx2,
-                                                                        idx3,
-                                                                        idx4,
-                                                                        volLower,
-                                                                        volUpper,
-                                                                        weight,
-                                                                        pos,
-                                                                        energyBuffer,
-                                                                        energyBufferStarts,
-                                                                        atomIdxToBatchIdx,
-                                                                        chiralTermStarts,
                                                                         atomStarts,
                                                                         activeThisStage);
   }
@@ -656,49 +451,6 @@ cudaError_t launchChiralViolationGradientKernel(const int      numChiral,
                                                                           atomIdxToBatchIdx,
                                                                           atomStarts,
                                                                           activeThisStage);
-  }
-  return cudaGetLastError();
-}
-
-cudaError_t launchFourthDimEnergyKernel(const int      numFD,
-                                        const int*     idx,
-                                        double         weight,
-                                        const double*  pos,
-                                        double*        energyBuffer,
-                                        const int*     energyBufferStarts,
-                                        const int*     atomIdxToBatchIdx,
-                                        const int*     fourthTermStarts,
-                                        const int*     atomStarts,
-                                        const int      dimension,
-                                        const uint8_t* activeThisStage,
-                                        cudaStream_t   stream) {
-  if (numFD == 0) {
-    return cudaSuccess;
-  }
-  constexpr int blockSize = 256;
-  const int     numBlocks = (numFD + blockSize - 1) / blockSize;
-  if (dimension == 3) {
-    fourthDimEnergyKernel<3><<<numBlocks, blockSize, 0, stream>>>(numFD,
-                                                                  idx,
-                                                                  weight,
-                                                                  pos,
-                                                                  energyBuffer,
-                                                                  energyBufferStarts,
-                                                                  atomIdxToBatchIdx,
-                                                                  fourthTermStarts,
-                                                                  atomStarts,
-                                                                  activeThisStage);
-  } else if (dimension == 4) {
-    fourthDimEnergyKernel<4><<<numBlocks, blockSize, 0, stream>>>(numFD,
-                                                                  idx,
-                                                                  weight,
-                                                                  pos,
-                                                                  energyBuffer,
-                                                                  energyBufferStarts,
-                                                                  atomIdxToBatchIdx,
-                                                                  fourthTermStarts,
-                                                                  atomStarts,
-                                                                  activeThisStage);
   }
   return cudaGetLastError();
 }

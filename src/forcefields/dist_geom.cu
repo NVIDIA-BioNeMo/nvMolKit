@@ -91,7 +91,6 @@ void preallocateEstimatedBatch(const EnergyForceContribsHost& templateContribs,
   indexHolder.distTermStarts.reserve(estimatedBatchSize + 1);
   indexHolder.chiralTermStarts.reserve(estimatedBatchSize + 1);
   indexHolder.fourthTermStarts.reserve(estimatedBatchSize + 1);
-  indexHolder.energyBufferStarts.reserve(estimatedBatchSize + 1);
 }
 
 void preallocateEstimatedBatch3D(const Energy3DForceContribsHost& templateContribs,
@@ -204,20 +203,6 @@ void addMoleculeToMolecularSystem(const EnergyForceContribsHost& contribs,
   indexHolder.distTermStarts.push_back(indexHolder.distTermStarts.back() + contribs.distTerms.idx1.size());
   indexHolder.chiralTermStarts.push_back(indexHolder.chiralTermStarts.back() + contribs.chiralTerms.idx1.size());
   indexHolder.fourthTermStarts.push_back(indexHolder.fourthTermStarts.back() + contribs.fourthTerms.idx.size());
-
-  // Calculate number of blocks needed
-  int maxNumContribs = 0;
-  maxNumContribs     = std::max<int>(maxNumContribs, contribs.distTerms.idx1.size());
-  maxNumContribs     = std::max<int>(maxNumContribs, contribs.chiralTerms.idx1.size());
-  maxNumContribs     = std::max<int>(maxNumContribs, contribs.fourthTerms.idx.size());
-
-  const int numBlocksNeeded  = std::max(1, (maxNumContribs + 127) / nvMolKit::FFKernelUtils::blockSizeEnergyReduction);
-  const int numThreadsNeeded = numBlocksNeeded * nvMolKit::FFKernelUtils::blockSizeEnergyReduction;
-
-  indexHolder.energyBufferStarts.push_back(indexHolder.energyBufferStarts.back() + numThreadsNeeded);
-  for (int i = 0; i < numBlocksNeeded; i++) {
-    indexHolder.energyBufferBlockIdxToBatchIdx.push_back(batchIdx);
-  }
 
   // Update contributions
   // DistViolation term
@@ -564,9 +549,7 @@ void sendContribsAndIndicesToDeviceImpl(const BatchedMolecularSystemHost&       
   // Indices
   auto&       deviceIndices = molSystemDevice.indices;
   const auto& hostIndices   = molSystemHost.indices;
-  deviceIndices.energyBufferStarts.setFromVector(hostIndices.energyBufferStarts);
   deviceIndices.atomIdxToBatchIdx.setFromVector(hostIndices.atomIdxToBatchIdx);
-  deviceIndices.energyBufferBlockIdxToBatchIdx.setFromVector(hostIndices.energyBufferBlockIdxToBatchIdx);
   deviceIndices.distTermStarts.setFromVector(hostIndices.distTermStarts);
   deviceIndices.chiralTermStarts.setFromVector(hostIndices.chiralTermStarts);
   deviceIndices.fourthTermStarts.setFromVector(hostIndices.fourthTermStarts);
@@ -657,14 +640,11 @@ void sendContribsAndIndicesToDevice3DImpl(const BatchedMolecularSystem3DHost&   
 template <typename ParameterScalar>
 void setStreamsImpl(BatchedMolecularDeviceBuffersT<ParameterScalar>& devBuffers, cudaStream_t stream) {
   // First the isolated buffers.
-  devBuffers.energyBuffer.setStream(stream);
   devBuffers.grad.setStream(stream);
   devBuffers.energyOuts.setStream(stream);
 
   // Indices
   devBuffers.indices.atomIdxToBatchIdx.setStream(stream);
-  devBuffers.indices.energyBufferStarts.setStream(stream);
-  devBuffers.indices.energyBufferBlockIdxToBatchIdx.setStream(stream);
   devBuffers.indices.distTermStarts.setStream(stream);
   devBuffers.indices.chiralTermStarts.setStream(stream);
   devBuffers.indices.fourthTermStarts.setStream(stream);
@@ -776,13 +756,6 @@ void sendContribsAndIndicesToDevice3D(const BatchedMolecularSystem3DHost&    hos
   sendContribsAndIndicesToDevice3DImpl(host, buffers);
 }
 
-void allocateIntermediateBuffers(const BatchedMolecularSystemHost& molSystemHost,
-                                 BatchedMolecularDeviceBuffers&    molSystemDevice) {
-  nvMolKit::FFKernelUtils::allocateIntermediateBuffers(molSystemHost,
-                                                       molSystemDevice,
-                                                       molSystemHost.indices.distTermStarts.size() - 1);
-}
-
 void allocateIntermediateBuffers3D(const BatchedMolecularSystem3DHost& molSystemHost,
                                    BatchedMolecular3DDeviceBuffers&    molSystemDevice) {
   nvMolKit::FFKernelUtils::allocateIntermediateBuffers(molSystemHost,
@@ -798,11 +771,11 @@ void sendContextToDevice(const std::vector<double>&           ctxPositionsHost,
   ctxAtomStartsDevice.setFromVector(ctxAtomStartsHost);
 }
 
-void setupDeviceBuffers(BatchedMolecularSystemHost&    molSystemHost,
-                        BatchedMolecularDeviceBuffers& molSystemDevice,
+void setupDeviceBuffers(BatchedMolecularDeviceBuffers& molSystemDevice,
                         const std::vector<double>&     ctxPositionsHost,
                         const int                      numMols) {
-  nvMolKit::FFKernelUtils::allocateIntermediateBuffers(molSystemHost, molSystemDevice, numMols);
+  molSystemDevice.energyOuts.resize(numMols);
+  molSystemDevice.energyOuts.zero();
   molSystemDevice.grad.resize(ctxPositionsHost.size());
   molSystemDevice.grad.zero();
 }
@@ -825,73 +798,17 @@ cudaError_t computeEnergy(BatchedMolecularDeviceBuffers& molSystemDevice,
                           const uint8_t*                 activeSystemMask,
                           const double*                  positions,
                           cudaStream_t                   stream) {
-  assert(molSystemDevice.energyBuffer.size() > 0);
   assert(energyOuts != nullptr);
-  molSystemDevice.energyBuffer.zero();
-
-  const double* posData  = positions ? positions : ctxPositions;
-  const auto&   contribs = molSystemDevice.contribs;
-
-  cudaError_t err = cudaSuccess;
-  if (contribs.distTerms.idx1.size() > 0) {
-    err = launchDistViolationEnergyKernel(contribs.distTerms.idx1.size(),
-                                          contribs.distTerms.idx1.data(),
-                                          contribs.distTerms.idx2.data(),
-                                          contribs.distTerms.lb2.data(),
-                                          contribs.distTerms.ub2.data(),
-                                          contribs.distTerms.weight.data(),
-                                          posData,
-                                          molSystemDevice.energyBuffer.data(),
-                                          molSystemDevice.indices.energyBufferStarts.data(),
-                                          molSystemDevice.indices.atomIdxToBatchIdx.data(),
-                                          molSystemDevice.indices.distTermStarts.data(),
-                                          ctxAtomStarts,
-                                          molSystemDevice.dimension,
-                                          activeSystemMask,
-                                          stream);
-  }
-  if (err == cudaSuccess && contribs.chiralTerms.idx1.size() > 0) {
-    err = launchChiralViolationEnergyKernel(contribs.chiralTerms.idx1.size(),
-                                            contribs.chiralTerms.idx1.data(),
-                                            contribs.chiralTerms.idx2.data(),
-                                            contribs.chiralTerms.idx3.data(),
-                                            contribs.chiralTerms.idx4.data(),
-                                            contribs.chiralTerms.volLower.data(),
-                                            contribs.chiralTerms.volUpper.data(),
-                                            chiralWeight,
-                                            posData,
-                                            molSystemDevice.energyBuffer.data(),
-                                            molSystemDevice.indices.energyBufferStarts.data(),
-                                            molSystemDevice.indices.atomIdxToBatchIdx.data(),
-                                            molSystemDevice.indices.chiralTermStarts.data(),
-                                            ctxAtomStarts,
-                                            molSystemDevice.dimension,
-                                            activeSystemMask,
-                                            stream);
-  }
-  if (err == cudaSuccess && contribs.fourthTerms.idx.size() > 0) {
-    err = launchFourthDimEnergyKernel(contribs.fourthTerms.idx.size(),
-                                      contribs.fourthTerms.idx.data(),
-                                      fourthDimWeight,
-                                      posData,
-                                      molSystemDevice.energyBuffer.data(),
-                                      molSystemDevice.indices.energyBufferStarts.data(),
-                                      molSystemDevice.indices.atomIdxToBatchIdx.data(),
-                                      molSystemDevice.indices.fourthTermStarts.data(),
-                                      ctxAtomStarts,
-                                      molSystemDevice.dimension,
-                                      activeSystemMask,
-                                      stream);
-  }
-  if (err == cudaSuccess) {
-    return launchReduceEnergiesKernel(molSystemDevice.indices.energyBufferBlockIdxToBatchIdx.size(),
-                                      molSystemDevice.energyBuffer.data(),
-                                      molSystemDevice.indices.energyBufferBlockIdxToBatchIdx.data(),
-                                      energyOuts,
-                                      activeSystemMask,
-                                      stream);
-  }
-  return err;
+  return launchBlockPerMolEnergyKernel(static_cast<int>(molSystemDevice.indices.distTermStarts.size()) - 1,
+                                       toEnergyForceContribsDevicePtr(molSystemDevice),
+                                       toBatchedIndicesDevicePtr(molSystemDevice, ctxAtomStarts),
+                                       positions ? positions : ctxPositions,
+                                       energyOuts,
+                                       molSystemDevice.dimension,
+                                       chiralWeight,
+                                       fourthDimWeight,
+                                       activeSystemMask,
+                                       stream);
 }
 
 // TODO: More sophisticated error handling for energy and gradient.
@@ -997,6 +914,18 @@ cudaError_t computeEnergyETK(BatchedMolecular3DDeviceBuffers& molSystemDevice,
                              const double*                    positions,
                              const ETKTerm                    term,
                              cudaStream_t                     stream) {
+  // The block-per-molecule kernel evaluates every term family. PLAIN differs from ALL only by the improper torsions,
+  // which are not generated without basic knowledge.
+  if (term == ETKTerm::ALL ||
+      (term == ETKTerm::PLAIN && molSystemDevice.contribs.improperTorsionTerms.idx1.size() == 0)) {
+    return launchBlockPerMolEnergyKernelETK(static_cast<int>(molSystemDevice.indices.dist12TermStarts.size()) - 1,
+                                            toEnergy3DForceContribsDevicePtr(molSystemDevice),
+                                            toBatchedIndices3DDevicePtr(molSystemDevice, ctxAtomStarts),
+                                            positions ? positions : ctxPositions,
+                                            energyOuts,
+                                            activeSystemMask,
+                                            stream);
+  }
   assert(molSystemDevice.energyBuffer.size() > 0);
   assert(energyOuts != nullptr);
   molSystemDevice.energyBuffer.zero();
@@ -1406,33 +1335,6 @@ inline BatchedIndicesDevicePtr toPointerStruct(const BatchedIndicesDevice& src) 
   dst.fourthTermStarts = src.fourthTermStarts.data();
 
   return dst;
-}
-
-cudaError_t computeEnergyBlockPerMol(BatchedMolecularDeviceBuffers&             molSystemDevice,
-                                     const nvMolKit::AsyncDeviceVector<int>&    ctxAtomStartsDevice,
-                                     const nvMolKit::AsyncDeviceVector<double>& ctxPositionsDevice,
-                                     const double                               chiralWeight,
-                                     const double                               fourthDimWeight,
-                                     const uint8_t*                             activeThisStage,
-                                     const double*                              positions,
-                                     cudaStream_t                               stream) {
-  const auto              pointers = toPointerStruct(molSystemDevice.contribs);
-  BatchedIndicesDevicePtr indices;
-  indices.atomStarts       = ctxAtomStartsDevice.data();
-  indices.distTermStarts   = molSystemDevice.indices.distTermStarts.data();
-  indices.chiralTermStarts = molSystemDevice.indices.chiralTermStarts.data();
-  indices.fourthTermStarts = molSystemDevice.indices.fourthTermStarts.data();
-
-  return launchBlockPerMolEnergyKernel(ctxAtomStartsDevice.size() - 1,
-                                       pointers,
-                                       indices,
-                                       positions != nullptr ? positions : ctxPositionsDevice.data(),
-                                       molSystemDevice.energyOuts.data(),
-                                       molSystemDevice.dimension,
-                                       chiralWeight,
-                                       fourthDimWeight,
-                                       activeThisStage,
-                                       stream);
 }
 
 cudaError_t computeGradBlockPerMol(BatchedMolecularDeviceBuffers&             molSystemDevice,

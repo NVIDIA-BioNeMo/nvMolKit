@@ -98,7 +98,7 @@ class ETKDGFFGpuTestFixture : public ::testing::TestWithParam<ETKDGTestParams> {
     addMoleculeToBatch(ffParams, posVec, systemHost_, eargs.dim, atomStartsHost_, positionsHost_);
     sendContribsAndIndicesToDevice(systemHost_, systemDevice_);
     sendContextToDevice(positionsHost_, positionsDevice_, atomStartsHost_, atomStartsDevice_);
-    setupDeviceBuffers(systemHost_, systemDevice_, positionsHost_, atomStartsHost_.size() - 1);
+    setupDeviceBuffers(systemDevice_, positionsHost_, atomStartsHost_.size() - 1);
   }
 
  protected:
@@ -210,7 +210,7 @@ class ETKDGFFGpuEdgeCases : public ::testing::TestWithParam<std::string> {
     addMoleculeToBatch(ffParams, posVec, systemHost_, eargs.dim, atomStartsHost_, positionsHost_);
     sendContribsAndIndicesToDevice(systemHost_, systemDevice_);
     sendContextToDevice(positionsHost_, positionsDevice_, atomStartsHost_, atomStartsDevice_);
-    setupDeviceBuffers(systemHost_, systemDevice_, positionsHost_, atomStartsHost_.size() - 1);
+    setupDeviceBuffers(systemDevice_, positionsHost_, atomStartsHost_.size() - 1);
   }
 
  protected:
