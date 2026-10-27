@@ -138,13 +138,7 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
   constexpr int dim                    = 4;  // ETKDG always uses 4D coordinates
 #if RDKIT_AIO_ETKDG_API
   const bool useAllInOneETKDG = !paramsCopy.useLegacyImplementation;
-#else
-  constexpr bool useAllInOneETKDG = false;
 #endif
-  if (useAllInOneETKDG && backend == BfgsBackend::PER_MOLECULE) {
-    throw std::invalid_argument("All-in-one ETKDG supports BATCHED and HYBRID backends");
-  }
-  const auto minimizerBackend = useAllInOneETKDG ? BfgsBackend::BATCHED : backend;
 
   ScopedNvtxRange coordsRange("Init ETKDG");
 
@@ -291,13 +285,13 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
                                                                DebugLevel::NONE,
                                                                true,  // scaleGrads
                                                                streamPtr,
-                                                               minimizerBackend);
+                                                               backend);
       } else {
         minimizer = std::make_unique<BfgsBatchMinimizer>(4,  // dataDim for ETKDG (4D distance geometry)
                                                          DebugLevel::NONE,
                                                          true,  // scaleGrads
                                                          streamPtr,
-                                                         minimizerBackend);
+                                                         backend);
       }
       std::unordered_map<const RDKit::ROMol*, nvMolKit::DistGeom::EnergyForceContribsHost>   dgCache;
       std::unordered_map<const RDKit::ROMol*, nvMolKit::DistGeom::Energy3DForceContribsHost> etkCache;

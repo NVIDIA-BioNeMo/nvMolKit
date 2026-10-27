@@ -38,6 +38,8 @@ using BatchedMolecularDeviceBuffers = BatchedMolecularDeviceBuffersT<double, dou
 namespace DistGeom {
 template <typename ParameterScalar> struct BatchedMolecularDeviceBuffersT;
 template <typename ParameterScalar> struct BatchedMolecular3DDeviceBuffersT;
+template <typename ParameterScalar> struct BatchedAllInOneDeviceBuffersT;
+struct AllInOneForceWeights;
 using BatchedMolecularDeviceBuffers         = BatchedMolecularDeviceBuffersT<double>;
 using BatchedMolecularDeviceBuffersSingle   = BatchedMolecularDeviceBuffersT<float>;
 using BatchedMolecular3DDeviceBuffers       = BatchedMolecular3DDeviceBuffersT<double>;
@@ -69,6 +71,8 @@ template <typename real> struct BfgsBatchMinimizerT {
   using DGDeviceBuffers                     = DistGeom::BatchedMolecularDeviceBuffersT<real>;
   //! ETK device buffers consumed by the per-molecule kernels at this precision.
   using ETKDeviceBuffers                    = DistGeom::BatchedMolecular3DDeviceBuffersT<real>;
+  //! All-in-one ETKDG device buffers consumed by the per-molecule kernels at this precision.
+  using AIODeviceBuffers                    = DistGeom::BatchedAllInOneDeviceBuffersT<real>;
 
   explicit BfgsBatchMinimizerT(int          dataDim    = 3,
                                DebugLevel   debugLevel = DebugLevel::NONE,
@@ -148,6 +152,32 @@ template <typename real> struct BfgsBatchMinimizerT {
                       double                        chiralWeight,
                       double                        fourthDimWeight,
                       const uint8_t*                activeThisStage = nullptr);
+
+  //! \brief Runs all-in-one ETKDG minimization through the per-molecule CUDA kernels.
+  //! \param numIters Maximum number of BFGS iterations to perform.
+  //! \param gradTol Convergence tolerance applied to the scaled gradients.
+  //! \param atomStartsHost Host-side atom offsets for the flattened systems.
+  //! \param atomStarts Device-side atom offsets for the flattened systems.
+  //! \param positions Flattened coordinate buffer for the batch.
+  //! \param systemDevice All-in-one device buffers; the gradient and energy outputs of its distance-geometry buffers
+  //! are
+  //!        used as working storage.
+  //! \param weights Force constants shared by every system in the batch.
+  //! \param includeTorsionTerms Whether to include the experimental torsion and planarity terms.
+  //! \param activeThisStage Optional per-system activity mask for staged minimization.
+  //! \param maxItersPerSystem Optional device array of per-system iteration limits below `numIters`. A system that
+  //!        reaches its limit counts as finished.
+  //! \return `false` when all systems converged and `true` when at least one system needs another cycle.
+  bool minimizeWithAIO(int                                   numIters,
+                       double                                gradTol,
+                       const std::vector<int>&               atomStartsHost,
+                       const AsyncDeviceVector<int>&         atomStarts,
+                       AsyncDeviceVector<real>&              positions,
+                       AIODeviceBuffers&                     systemDevice,
+                       const DistGeom::AllInOneForceWeights& weights,
+                       bool                                  includeTorsionTerms,
+                       const uint8_t*                        activeThisStage   = nullptr,
+                       const int*                            maxItersPerSystem = nullptr);
 
   //! \brief Resolves the effective backend for the provided batch.
   //! \param atomStartsHost Host-side atom offsets for the systems under consideration.

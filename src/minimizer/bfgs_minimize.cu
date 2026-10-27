@@ -1422,6 +1422,74 @@ bool BfgsBatchMinimizerT<real>::minimizeWithDG(const int                     num
   return checkConvergence(activeMolIds_, statuses_, convergenceHost_, numSystems, stream_);
 }
 
+template <typename real>
+bool BfgsBatchMinimizerT<real>::minimizeWithAIO(const int                             numIters,
+                                                const double                          gradTol,
+                                                const std::vector<int>&               atomStartsHost,
+                                                const AsyncDeviceVector<int>&         atomStarts,
+                                                AsyncDeviceVector<real>&              positions,
+                                                AIODeviceBuffers&                     systemDevice,
+                                                const DistGeom::AllInOneForceWeights& weights,
+                                                const bool                            includeTorsionTerms,
+                                                const uint8_t*                        activeThisStage,
+                                                const int*                            maxItersPerSystem) {
+  const int numSystems = atomStartsHost.size() - 1;
+
+  if (dataDim_ != 4) {
+    throw std::runtime_error("minimizeWithAIO requires BfgsBatchMinimizer to be constructed with dataDim=4");
+  }
+
+  const BfgsBackend effectiveBackend = resolveBackend(atomStartsHost);
+
+  if (effectiveBackend == BfgsBackend::BATCHED) {
+    throw std::runtime_error("Use minimize(..., BatchedForcefield&) for batched all-in-one ETKDG minimization");
+  }
+
+  initialize(atomStartsHost, atomStarts.data(), nullptr, nullptr, nullptr, effectiveBackend, activeThisStage);
+
+  const ScopedNvtxRange bfgsPerMoleculeAIO("BfgsBatchMinimizer::perMoleculeMinimizeAIO");
+
+  auto& grad       = systemDevice.distanceGeometry.grad;
+  auto& energyOuts = systemDevice.distanceGeometry.energyOuts;
+  prepareScratchBuffers(grad,
+                        lineSearchDir_,
+                        scratchPositions_,
+                        hessDGrad_,
+                        scratchGrad_,
+                        hessianPassScratch_,
+                        scratchBuffersDevice_,
+                        scratchBufferPointersHost_,
+                        stream_);
+
+  const auto terms = DistGeom::toAllInOneContribsDevicePtr(systemDevice, atomStarts.data());
+
+  const cudaError_t err = launchBfgsMinimizePerMolKernelAIO(static_cast<int>(activeMolIds_.size()),
+                                                            activeMolIdsDevice_.data(),
+                                                            maxAtomsInBatch_,
+                                                            atomStarts.data(),
+                                                            hessianStarts_.data(),
+                                                            numIters,
+                                                            gradTol,
+                                                            scaleGrads_,
+                                                            terms,
+                                                            positions.data(),
+                                                            grad.data(),
+                                                            inverseHessian_.data(),
+                                                            scratchBuffersDevice_.data(),
+                                                            energyOuts.data(),
+                                                            weights,
+                                                            includeTorsionTerms,
+                                                            maxItersPerSystem,
+                                                            statuses_.data(),
+                                                            stream_);
+
+  if (err != cudaSuccess) {
+    throw std::runtime_error(std::string("Per-molecule BFGS all-in-one kernel failed: ") + cudaGetErrorString(err));
+  }
+
+  return checkConvergence(activeMolIds_, statuses_, convergenceHost_, numSystems, stream_);
+}
+
 template <typename sourceT, typename storageT>
 void copyAndInvertImpl(const AsyncDeviceVector<sourceT>& src, AsyncDeviceVector<storageT>& dst) {
   const size_t numElements = src.size();

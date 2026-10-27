@@ -651,26 +651,50 @@ TEST(AllInOneForcefield, SinglePrecisionInterfaceEvaluatesNativelyAndRejectsFull
 // Minimizer: per-system iteration limits
 // ---------------------------------------------
 
-//! Minimizes the batch with the first-phase terms. Systems outside active are left alone.
+//! Minimizes the batch with the first-phase terms on the given backend. Systems outside active are left alone.
 std::vector<double> minimizeFirstPhase(const Batch&                    batch,
                                        const DG::AllInOneForceWeights& weights,
                                        const int                       numIters,
                                        const std::vector<uint8_t>&     active,
-                                       const std::vector<int>*         limits) {
-  nvMolKit::AllInOneETKDGBatchedForcefield forcefield(batch.system, batch.atomStarts, weights);
-  forcefield.setTorsionTermsEnabled(false);
-  nvMolKit::BfgsBatchMinimizer minimizer(4, nvMolKit::DebugLevel::NONE, true, nullptr, nvMolKit::BfgsBackend::BATCHED);
-  const int                    numMols = static_cast<int>(batch.atomStarts.size()) - 1;
-  AsyncDeviceVector<double>    positions;
-  AsyncDeviceVector<double>    gradient(batch.positions.size());
-  AsyncDeviceVector<double>    energies(numMols);
+                                       const std::vector<int>*         limits,
+                                       const nvMolKit::BfgsBackend     backend) {
+  nvMolKit::BfgsBatchMinimizer minimizer(4, nvMolKit::DebugLevel::NONE, true, nullptr, backend);
   AsyncDeviceVector<uint8_t>   activeDevice;
   AsyncDeviceVector<int>       limitsDevice;
-  positions.setFromVector(batch.positions);
+  AsyncDeviceVector<double>    positions;
   activeDevice.setFromVector(active);
   if (limits != nullptr) {
     limitsDevice.setFromVector(*limits);
   }
+  positions.setFromVector(batch.positions);
+  if (backend == nvMolKit::BfgsBackend::PER_MOLECULE) {
+    DG::BatchedAllInOneDeviceBuffers device;
+    DG::sendAllInOneSystemToDevice(batch.system, device, nullptr);
+    device.distanceGeometry.grad.resize(batch.positions.size());
+    device.distanceGeometry.grad.zero();
+    device.distanceGeometry.energyOuts.resize(batch.atomStarts.size() - 1);
+    AsyncDeviceVector<int> atomStarts;
+    atomStarts.setFromVector(batch.atomStarts);
+    minimizer.minimizeWithAIO(numIters,
+                              1e-4,
+                              batch.atomStarts,
+                              atomStarts,
+                              positions,
+                              device,
+                              weights,
+                              false,
+                              activeDevice.data(),
+                              limits != nullptr ? limitsDevice.data() : nullptr);
+    std::vector<double> result(batch.positions.size());
+    positions.copyToHost(result);
+    CHECK_CUDA_RETURN(cudaDeviceSynchronize());
+    return result;
+  }
+  nvMolKit::AllInOneETKDGBatchedForcefield forcefield(batch.system, batch.atomStarts, weights);
+  forcefield.setTorsionTermsEnabled(false);
+  const int                 numMols = static_cast<int>(batch.atomStarts.size()) - 1;
+  AsyncDeviceVector<double> gradient(batch.positions.size());
+  AsyncDeviceVector<double> energies(numMols);
   minimizer.minimize(numIters,
                      1e-4,
                      forcefield,
@@ -688,7 +712,9 @@ std::vector<double> minimizeFirstPhase(const Batch&                    batch,
 //! A system that reaches its own iteration limit stops there, exactly as a run limited to that many iterations does,
 //! while the others continue. RDKit's first all-in-one phase relies on this to stop each molecule at its heavy-atom
 //! count.
-TEST(AllInOneMinimizer, PerSystemIterationLimitsMatchSeparatelyLimitedRuns) {
+class AllInOneMinimizerTest : public ::testing::TestWithParam<nvMolKit::BfgsBackend> {};
+
+TEST_P(AllInOneMinimizerTest, PerSystemIterationLimitsMatchSeparatelyLimitedRuns) {
   const auto                                 params    = RDKit::DGeomHelpers::ETKDGv3;
   const auto                                 mols      = sdfMolecules("MMFF94_dative.sdf", 4);
   auto                                       molecules = prepareMolecules(mols, params);
@@ -699,12 +725,13 @@ TEST(AllInOneMinimizer, PerSystemIterationLimitsMatchSeparatelyLimitedRuns) {
   const auto             batch   = buildBatch(molecules, contribs);
   const auto             weights = DG::allInOneForceWeights(molecules.front().eargs.etkdgDetails);
   const std::vector<int> limits{2, 5, 9, 40};
-  const auto together = minimizeFirstPhase(batch, weights, 40, std::vector<uint8_t>(molecules.size(), 1), &limits);
+  const auto             together =
+    minimizeFirstPhase(batch, weights, 40, std::vector<uint8_t>(molecules.size(), 1), &limits, GetParam());
   for (std::size_t molIdx = 0; molIdx < molecules.size(); ++molIdx) {
     SCOPED_TRACE("molecule " + std::to_string(molIdx));
     std::vector<uint8_t> onlyThis(molecules.size(), 0);
     onlyThis[molIdx]     = 1;
-    const auto separate  = minimizeFirstPhase(batch, weights, limits[molIdx], onlyThis, nullptr);
+    const auto separate  = minimizeFirstPhase(batch, weights, limits[molIdx], onlyThis, nullptr, GetParam());
     const int  begin     = 4 * batch.atomStarts[molIdx];
     const int  end       = 4 * batch.atomStarts[molIdx + 1];
     double     maxChange = 0.0;
@@ -715,6 +742,13 @@ TEST(AllInOneMinimizer, PerSystemIterationLimitsMatchSeparatelyLimitedRuns) {
     EXPECT_GT(maxChange, 1e-3) << "the molecule should have moved";
   }
 }
+
+INSTANTIATE_TEST_SUITE_P(Backends,
+                         AllInOneMinimizerTest,
+                         ::testing::Values(nvMolKit::BfgsBackend::BATCHED, nvMolKit::BfgsBackend::PER_MOLECULE),
+                         [](const ::testing::TestParamInfo<nvMolKit::BfgsBackend>& info) {
+                           return info.param == nvMolKit::BfgsBackend::BATCHED ? "Batched" : "PerMolecule";
+                         });
 
 }  // namespace
 

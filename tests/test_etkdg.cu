@@ -1050,21 +1050,47 @@ TEST(ETKDGParameters, RandomCoordinateModeEmbedsLikeUseRandomCoords) {
 #endif
 
 #if RDKIT_AIO_ETKDG_API
-TEST(AllInOneETKDG, RejectsExplicitPerMoleculeBackend) {
-  std::unique_ptr<RDKit::RWMol> molecule(RDKit::SmilesToMol("CCO"));
-  ASSERT_NE(molecule, nullptr);
+class AllInOneETKDGBackendTest : public ::testing::TestWithParam<nvMolKit::BfgsBackend> {};
+
+//! Small molecules and one too large for the per-molecule kernel's shared memory all embed on every backend. Batches of
+//! two conformers keep each molecule in its own batch, so HYBRID sends the small molecules to the per-molecule kernels.
+TEST_P(AllInOneETKDGBackendTest, EmbedsSmallAndLargeMolecules) {
+  std::vector<std::unique_ptr<RDKit::RWMol>> owners;
+  std::vector<RDKit::ROMol*>                 mols;
+  for (const auto& smiles :
+       {std::string("CCO"), std::string("CC#N"), std::string("C[C@H](O)F"), std::string(45, 'C')}) {
+    auto& mol = owners.emplace_back(RDKit::SmilesToMol(smiles));
+    ASSERT_NE(mol, nullptr);
+    RDKit::MolOps::addHs(*mol);
+    mols.push_back(mol.get());
+  }
+  ASSERT_GT(mols.back()->getNumAtoms(), 128u);
   auto parameters                    = RDKit::DGeomHelpers::ETKDGv3;
   parameters.useLegacyImplementation = false;
-  EXPECT_THROW(nvMolKit::embedMolecules({molecule.get()},
-                                        parameters,
-                                        1,
-                                        20,
-                                        false,
-                                        nullptr,
-                                        nvMolKit::BatchHardwareOptions{},
-                                        nvMolKit::BfgsBackend::PER_MOLECULE),
-               std::invalid_argument);
+  parameters.randomSeed              = 42;
+  nvMolKit::BatchHardwareOptions options;
+  options.batchSize = 2;
+  nvMolKit::embedMolecules(mols, parameters, 2, -1, false, nullptr, options, GetParam());
+  for (std::size_t molIdx = 0; molIdx < mols.size(); ++molIdx) {
+    EXPECT_EQ(mols[molIdx]->getNumConformers(), 2u) << "molecule " << molIdx;
+  }
 }
+
+INSTANTIATE_TEST_SUITE_P(Backends,
+                         AllInOneETKDGBackendTest,
+                         ::testing::Values(nvMolKit::BfgsBackend::BATCHED,
+                                           nvMolKit::BfgsBackend::PER_MOLECULE,
+                                           nvMolKit::BfgsBackend::HYBRID),
+                         [](const ::testing::TestParamInfo<nvMolKit::BfgsBackend>& info) {
+                           switch (info.param) {
+                             case nvMolKit::BfgsBackend::BATCHED:
+                               return std::string("Batched");
+                             case nvMolKit::BfgsBackend::PER_MOLECULE:
+                               return std::string("PerMolecule");
+                             default:
+                               return std::string("Hybrid");
+                           }
+                         });
 #endif
 
 TEST(ETKDGParameters, SupportedModesAndUnsupportedOptions) {

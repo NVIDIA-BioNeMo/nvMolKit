@@ -6,8 +6,10 @@
 #include "rdkit_extensions/dist_geom_flattened_builder.h"
 #include "src/etkdg_stage_aio_minimization.h"
 #include "src/forcefields/aio_etkdg_batched_forcefield.h"
+#include "src/forcefields/dist_geom_kernels.h"
 #include "src/forcefields/dist_geom_kernels_device_dispatch.cuh"
 #include "src/utils/cuda_error_check.h"
+#include "src/utils/device_convert.cuh"
 
 namespace nvMolKit::detail {
 namespace {
@@ -194,43 +196,110 @@ template <typename Real> void ETKDGAllInOneMinimizationStageT<Real>::execute(ETK
   if (ctx.nTotalSystems == 0) {
     return;
   }
-  AllInOneETKDGBatchedForcefield forcefield(systemHost_,
-                                            ctx.systemHost.atomStarts,
-                                            weights_,
-                                            metadata_,
-                                            stream_,
-                                            BfgsBatchMinimizerT<Real>::kPrecision);
-  gradients_.resize(ctx.systemDevice.positions.size());
-  energies_.resize(ctx.systemHost.atomStarts.size() - 1);
+  const int numSystems         = static_cast<int>(ctx.systemHost.atomStarts.size()) - 1;
+  const int firstPhaseMaxIters = *std::max_element(firstPhaseIterationsHost_.begin(), firstPhaseIterationsHost_.end());
+  energies_.resize(numSystems);
 
-  forcefield.setTorsionTermsEnabled(false);
-  minimizer_.minimize(*std::max_element(firstPhaseIterationsHost_.begin(), firstPhaseIterationsHost_.end()),
-                      optimizerForceTol_,
-                      forcefield,
-                      ctx.systemDevice.positions,
-                      gradients_,
-                      energies_,
-                      ctx.activeThisStage.data(),
-                      firstPhaseIterations_.data());
+  if (minimizer_.resolveBackend(ctx.systemHost.atomStarts) == BfgsBackend::BATCHED) {
+    AllInOneETKDGBatchedForcefield forcefield(systemHost_,
+                                              ctx.systemHost.atomStarts,
+                                              weights_,
+                                              metadata_,
+                                              stream_,
+                                              BfgsBatchMinimizerT<Real>::kPrecision);
+    gradients_.resize(ctx.systemDevice.positions.size());
 
-  forcefield.setTorsionTermsEnabled(true);
-  for (int cycle = 0; cycle < kMaxSecondPhaseCycles; ++cycle) {
-    const bool needsMore = minimizer_.minimize(100,
-                                               optimizerForceTol_,
-                                               forcefield,
-                                               ctx.systemDevice.positions,
-                                               gradients_,
-                                               energies_,
-                                               ctx.activeThisStage.data());
-    if (!needsMore) {
-      break;
+    forcefield.setTorsionTermsEnabled(false);
+    minimizer_.minimize(firstPhaseMaxIters,
+                        optimizerForceTol_,
+                        forcefield,
+                        ctx.systemDevice.positions,
+                        gradients_,
+                        energies_,
+                        ctx.activeThisStage.data(),
+                        firstPhaseIterations_.data());
+
+    forcefield.setTorsionTermsEnabled(true);
+    for (int cycle = 0; cycle < kMaxSecondPhaseCycles; ++cycle) {
+      const bool needsMore = minimizer_.minimize(100,
+                                                 optimizerForceTol_,
+                                                 forcefield,
+                                                 ctx.systemDevice.positions,
+                                                 gradients_,
+                                                 energies_,
+                                                 ctx.activeThisStage.data());
+      if (!needsMore) {
+        break;
+      }
+    }
+
+    energies_.zero();
+    cudaCheckError(forcefield.computeEnergy(energies_.data(),
+                                            ctx.systemDevice.positions.data(),
+                                            ctx.activeThisStage.data(),
+                                            stream_));
+  } else {
+    auto minimizePerMolecule = [&](AsyncDeviceVector<Real>& positions) {
+      typename BfgsBatchMinimizerT<Real>::AIODeviceBuffers device;
+      DistGeom::sendAllInOneSystemToDevice(systemHost_, device, stream_);
+      auto& energyOuts = device.distanceGeometry.energyOuts;
+      device.distanceGeometry.grad.resize(positions.size());
+      device.distanceGeometry.grad.zero();
+      energyOuts.resize(numSystems);
+      energyOuts.zero();
+
+      minimizer_.minimizeWithAIO(firstPhaseMaxIters,
+                                 optimizerForceTol_,
+                                 ctx.systemHost.atomStarts,
+                                 ctx.systemDevice.atomStarts,
+                                 positions,
+                                 device,
+                                 weights_,
+                                 false,
+                                 ctx.activeThisStage.data(),
+                                 firstPhaseIterations_.data());
+      for (int cycle = 0; cycle < kMaxSecondPhaseCycles; ++cycle) {
+        const bool needsMore = minimizer_.minimizeWithAIO(100,
+                                                          optimizerForceTol_,
+                                                          ctx.systemHost.atomStarts,
+                                                          ctx.systemDevice.atomStarts,
+                                                          positions,
+                                                          device,
+                                                          weights_,
+                                                          true,
+                                                          ctx.activeThisStage.data());
+        if (!needsMore) {
+          break;
+        }
+      }
+
+      energyOuts.zero();
+      cudaCheckError(DistGeom::launchBlockPerMolEnergyKernelAIO(
+        numSystems,
+        DistGeom::toAllInOneContribsDevicePtr(device, ctx.systemDevice.atomStarts.data()),
+        positions.data(),
+        energyOuts.data(),
+        weights_,
+        true,
+        ctx.activeThisStage.data(),
+        stream_));
+      cudaCheckError(detail::convertDeviceArray(energies_.data(), energyOuts.data(), numSystems, stream_));
+    };
+
+    if constexpr (std::is_same_v<Real, double>) {
+      minimizePerMolecule(ctx.systemDevice.positions);
+    } else {
+      AsyncDeviceVector<Real> positions;
+      positions.setStream(stream_);
+      positions.resize(ctx.systemDevice.positions.size());
+      cudaCheckError(
+        detail::convertDeviceArray(positions.data(), ctx.systemDevice.positions.data(), positions.size(), stream_));
+      minimizePerMolecule(positions);
+      cudaCheckError(
+        detail::convertDeviceArray(ctx.systemDevice.positions.data(), positions.data(), positions.size(), stream_));
     }
   }
 
-  energies_.zero();
-  cudaCheckError(
-    forcefield.computeEnergy(energies_.data(), ctx.systemDevice.positions.data(), ctx.activeThisStage.data(), stream_));
-  const int numSystems = energies_.size();
   checkAllInOneEnergyKernel<<<numBlocks(numSystems), kBlockSize, 0, stream_>>>(numSystems,
                                                                                energies_.data(),
                                                                                ctx.systemDevice.atomStarts.data(),

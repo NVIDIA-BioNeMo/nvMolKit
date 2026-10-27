@@ -755,12 +755,12 @@ double minimizeAllInOneWithRdkit(EmbedArgs&                                  ear
   return field->calcEnergy();
 }
 
-using AllInOneStageParams = std::tuple<ETKDGOption, nvMolKit::PrecisionMode>;
+using AllInOneStageParams = std::tuple<ETKDGOption, nvMolKit::PrecisionMode, nvMolKit::BfgsBackend>;
 
 class ETKDGAllInOneStageTest : public ::testing::TestWithParam<AllInOneStageParams> {};
 
 TEST_P(ETKDGAllInOneStageTest, MinimizedEnergiesMatchRdkitFromIdenticalCoordinates) {
-  const auto [option, precision] = GetParam();
+  const auto [option, precision, backend] = GetParam();
   std::vector<std::unique_ptr<RDKit::ROMol>> loaded;
   getMols(getTestDataFolderPath() + "/MMFF94_dative.sdf", loaded, 40);
   std::vector<std::unique_ptr<RDKit::RWMol>> molOwners;
@@ -788,11 +788,11 @@ TEST_P(ETKDGAllInOneStageTest, MinimizedEnergiesMatchRdkitFromIdenticalCoordinat
 
   std::vector<double> nvMolKitPositions(startPositions.size());
   if (precision == nvMolKit::PrecisionMode::FULL) {
-    nvMolKit::BfgsBatchMinimizer            minimizer(4, nvMolKit::DebugLevel::NONE, true, nullptr);
+    nvMolKit::BfgsBatchMinimizer            minimizer(4, nvMolKit::DebugLevel::NONE, true, nullptr, backend);
     ETKDGAllInOneMinimizationStageT<double> stage(mols, eargs, params, context, minimizer);
     stage.execute(context);
   } else {
-    nvMolKit::BfgsBatchMinimizerSingle     minimizer(4, nvMolKit::DebugLevel::NONE, true, nullptr);
+    nvMolKit::BfgsBatchMinimizerSingle     minimizer(4, nvMolKit::DebugLevel::NONE, true, nullptr, backend);
     ETKDGAllInOneMinimizationStageT<float> stage(mols, eargs, params, context, minimizer);
     stage.execute(context);
   }
@@ -832,10 +832,12 @@ INSTANTIATE_TEST_SUITE_P(
   ETKDGOptions,
   ETKDGAllInOneStageTest,
   ::testing::Combine(::testing::Values(ETKDGOption::ETKDGv3, ETKDGOption::ETKDGv2, ETKDGOption::ETDG, ETKDGOption::KDG),
-                     ::testing::Values(nvMolKit::PrecisionMode::FULL, nvMolKit::PrecisionMode::SINGLE)),
+                     ::testing::Values(nvMolKit::PrecisionMode::FULL, nvMolKit::PrecisionMode::SINGLE),
+                     ::testing::Values(nvMolKit::BfgsBackend::BATCHED, nvMolKit::BfgsBackend::PER_MOLECULE)),
   [](const ::testing::TestParamInfo<AllInOneStageParams>& info) {
     return getETKDGOptionName(std::get<0>(info.param)) +
-           (std::get<1>(info.param) == nvMolKit::PrecisionMode::FULL ? "_Double" : "_Float");
+           (std::get<1>(info.param) == nvMolKit::PrecisionMode::FULL ? "_Double" : "_Float") +
+           (std::get<2>(info.param) == nvMolKit::BfgsBackend::BATCHED ? "_Batched" : "_PerMolecule");
   });
 
 }  // namespace
