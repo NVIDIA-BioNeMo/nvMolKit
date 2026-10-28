@@ -836,17 +836,27 @@ TEST_P(ETKDGAllInOneStageTest, MinimizedEnergiesMatchRdkitFromIdenticalCoordinat
   expectEnergyMatch(gotEnergies, wantEnergies, startEnergies, {0.05, maxOutliers, 0.01, true});
 }
 
+std::string allInOneStageTestName(const ::testing::TestParamInfo<AllInOneStageParams>& info) {
+  return getETKDGOptionName(std::get<0>(info.param)) +
+         (std::get<1>(info.param) == nvMolKit::PrecisionMode::FULL ? "_Double" : "_Float") +
+         (std::get<2>(info.param) == nvMolKit::BfgsBackend::BATCHED ? "_Batched" : "_PerMolecule");
+}
+
 INSTANTIATE_TEST_SUITE_P(
   ETKDGOptions,
   ETKDGAllInOneStageTest,
-  ::testing::Combine(::testing::Values(ETKDGOption::ETKDGv3, ETKDGOption::ETKDGv2, ETKDGOption::ETDG, ETKDGOption::KDG),
+  ::testing::Combine(::testing::Values(ETKDGOption::ETKDGv3,
+                                       ETKDGOption::ETKDGv2,
+                                       ETKDGOption::ETDG,
+                                       ETKDGOption::KDG
+#if RDKIT_ETKDG_2026_09_API
+                                       ,
+                                       ETKDGOption::ETKDGv4
+#endif
+                                       ),
                      ::testing::Values(nvMolKit::PrecisionMode::FULL, nvMolKit::PrecisionMode::SINGLE),
                      ::testing::Values(nvMolKit::BfgsBackend::BATCHED, nvMolKit::BfgsBackend::PER_MOLECULE)),
-  [](const ::testing::TestParamInfo<AllInOneStageParams>& info) {
-    return getETKDGOptionName(std::get<0>(info.param)) +
-           (std::get<1>(info.param) == nvMolKit::PrecisionMode::FULL ? "_Double" : "_Float") +
-           (std::get<2>(info.param) == nvMolKit::BfgsBackend::BATCHED ? "_Batched" : "_PerMolecule");
-  });
+  allInOneStageTestName);
 
 using AllInOneIndependenceParams = std::tuple<nvMolKit::PrecisionMode, nvMolKit::BfgsBackend>;
 

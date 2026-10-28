@@ -596,13 +596,39 @@ def test_embed_molecules_device_output_empty_input_raises():
 @pytest.mark.parametrize("device_output", [False, True])
 @pytest.mark.parametrize("random_coordinates", [False, True])
 def test_all_in_one_embedding_geometry_and_stereochemistry(precision, device_output, random_coordinates):
-    parameters = rdDistGeom.ETKDGv3()
+    _check_embedding_geometry_and_stereochemistry(precision, device_output, random_coordinates, 3, False)
+
+
+@pytest.mark.parametrize("device_output", [False, True])
+@pytest.mark.parametrize("random_coordinates", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_gaussian_embedding_geometry_and_stereochemistry(precision, device_output, random_coordinates, legacy):
+    _check_embedding_geometry_and_stereochemistry(precision, device_output, random_coordinates, 4, legacy)
+
+
+def test_gaussian_torsions_require_rdkit_2026_09():
+    """ETversion 4 raises ValueError on RDKit releases without Gaussian torsions."""
+    if hasattr(rdDistGeom, "ETKDGv4"):
+        pytest.skip("RDKit supports ETKDGv4")
+    params = rdDistGeom.ETKDGv3()
+    params.ETversion = 4
+    with pytest.raises(ValueError):
+        embed.EmbedMolecules([Chem.AddHs(Chem.MolFromSmiles("CCO"))], params)
+
+
+def _check_embedding_geometry_and_stereochemistry(precision, device_output, random_coordinates, version, legacy):
+    if version == 4 and not hasattr(rdDistGeom, "ETKDGv4"):
+        pytest.skip("ETKDGv4 requires RDKit 2026.09 or later")
+    parameters = rdDistGeom.ETKDGv4() if version == 4 else rdDistGeom.ETKDGv3()
     if not hasattr(parameters, "useLegacyImplementation"):
         pytest.skip("All-in-one ETKDG requires RDKit 2026.03.4 or later")
-    parameters.useLegacyImplementation = False
+    parameters.useLegacyImplementation = legacy
     parameters.randomSeed = 42
     parameters.useRandomCoords = random_coordinates
-    molecules = [Chem.AddHs(Chem.MolFromSmiles(smiles)) for smiles in ["CCO", "CC#N", "C[C@H](O)F", "F/C=C/F"]]
+    molecules = [
+        Chem.AddHs(Chem.MolFromSmiles(smiles))
+        for smiles in ["CCO", "CC#N", "C[C@H](O)F", "F/C=C/F", "CCCC", "NC(=O)c1ccccc1", "C1CCCCCCCCCCC1"]
+    ]
     expected_stereochemistry = [Chem.MolToSmiles(molecule) for molecule in molecules]
     options = HardwareOptions(preprocessingThreads=2, batchesPerGpu=2, batchSize=4, gpuIds=[0])
     result = embed.EmbedMolecules(

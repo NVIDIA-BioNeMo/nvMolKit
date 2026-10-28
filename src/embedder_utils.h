@@ -98,8 +98,9 @@ enum class Dimensionality {
 /**
  * @brief Throws ValueErrorException for embedding parameters that nvMolKit does not implement yet
  *
- * Unsupported: ETversion other than 1 or 2, and on
- * RDKit >= 2026.09, embedForceField other than UFF, onlyInitialEmbedding and internal-coordinate initial embedding.
+ * Supports ETversion 1 and 2, and ETversion 4 on RDKit >= 2026.09.
+ * On RDKit >= 2026.09, unsupported options are embedForceField other than UFF, onlyInitialEmbedding and
+ * internal-coordinate initial embedding.
  */
 void validateSupportedEmbedParameters(const RDKit::DGeomHelpers::EmbedParameters& params);
 
@@ -176,8 +177,8 @@ void findDoubleBonds(const ROMol&                                               
                      const std::map<int, RDGeom::Point3D>*                              coordMap);
 
 //! \brief Fills the ETKDG experimental torsion, improper and force-constant details as nvMolKit's embedding does:
-//! the refinement's force constants first, which RDKit's torsion setup scales by, then the torsions. On RDKit 2026.09
-//! it must run after the topology bounds are set.
+//! the refinement's force constants first, which RDKit's torsion setup scales by, then the torsions and, for
+//! ETversion 4, the Gaussian lookup tables. On RDKit 2026.09 it must run after the topology bounds are set.
 void initETKDG(const ROMol*                                mol,
                const RDKit::DGeomHelpers::EmbedParameters& params,
                ForceFields::CrystalFF::CrystalFFDetails&   etkdgDetails);
