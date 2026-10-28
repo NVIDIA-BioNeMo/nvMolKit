@@ -2369,28 +2369,23 @@ __global__ void torsionEnergyCases(const TorsionCase* cases, int count, double* 
 
 }  // namespace
 
-TEST(MMFFTorsionEnergy, MatchesTrigonometricReference) {
+class MMFFTorsionEnergy : public ::testing::TestWithParam<std::array<double, 3>> {};
+
+TEST_P(MMFFTorsionEnergy, MatchesTrigonometricReference) {
+  const auto   coefficients = GetParam();
+  const double scale = std::max(1.0, std::abs(coefficients[0]) + std::abs(coefficients[1]) + std::abs(coefficients[2]));
   std::vector<TorsionCase> cases;
   std::vector<double>      expected;
-  for (const std::array<double, 3> coefficients : {
-         std::array{  0.0,   0.0,   0.0},
-         std::array{  1.0,   0.0,   0.0},
-         std::array{  0.0,   1.0,   0.0},
-         std::array{  0.0,   0.0,   1.0},
-         std::array{  0.3,  -2.7,   1.2},
-         std::array{-10.0, 100.0, -0.01}
-  }) {
-    for (int degrees = -180; degrees <= 180; ++degrees) {
-      const double angle  = degrees * std::numbers::pi / 180.0;
-      const double cosine = std::cos(angle);
-      const double sine   = std::sin(angle);
-      cases.push_back({
-        {0, 1, 0, 0, 0, 0, 1, 0, 0, 1, cosine, sine},
-        {coefficients[0], coefficients[1], coefficients[2]}
-      });
-      expected.push_back(0.5 * (coefficients[0] * (1 + cosine) + coefficients[1] * (1 - std::cos(2 * angle)) +
-                                coefficients[2] * (1 + std::cos(3 * angle))));
-    }
+  for (int degrees = -180; degrees <= 180; ++degrees) {
+    const double angle  = degrees * std::numbers::pi / 180.0;
+    const double cosine = std::cos(angle);
+    const double sine   = std::sin(angle);
+    cases.push_back({
+      {0, 1, 0, 0, 0, 0, 1, 0, 0, 1, cosine, sine},
+      {coefficients[0], coefficients[1], coefficients[2]}
+    });
+    expected.push_back(0.5 * (coefficients[0] * (1 + cosine) + coefficients[1] * (1 - std::cos(2 * angle)) +
+                              coefficients[2] * (1 + std::cos(3 * angle))));
   }
   nvMolKit::AsyncDeviceVector<TorsionCase> inputs;
   nvMolKit::AsyncDeviceVector<double>      full(cases.size());
@@ -2403,11 +2398,15 @@ TEST(MMFFTorsionEnergy, MatchesTrigonometricReference) {
   full.copyToHost(fullValues);
   single.copyToHost(singleValues);
   ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
-  for (size_t index = 0; index < cases.size(); ++index) {
-    const auto&  coefficients = cases[index].coefficients;
-    const double scale =
-      std::max(1.0, std::abs(coefficients[0]) + std::abs(coefficients[1]) + std::abs(coefficients[2]));
-    EXPECT_NEAR(fullValues[index], expected[index], 2e-12 * scale) << index;
-    EXPECT_NEAR(singleValues[index], expected[index], 2e-6 * scale) << index;
-  }
+  EXPECT_THAT(fullValues, ::testing::Pointwise(::testing::DoubleNear(2e-12 * scale), expected));
+  EXPECT_THAT(singleValues, ::testing::Pointwise(::testing::DoubleNear(2e-6 * scale), expected));
 }
+
+INSTANTIATE_TEST_SUITE_P(Coefficients,
+                         MMFFTorsionEnergy,
+                         ::testing::Values(std::array{0.0, 0.0, 0.0},
+                                           std::array{1.0, 0.0, 0.0},
+                                           std::array{0.0, 1.0, 0.0},
+                                           std::array{0.0, 0.0, 1.0},
+                                           std::array{0.3, -2.7, 1.2},
+                                           std::array{-10.0, 100.0, -0.01}));

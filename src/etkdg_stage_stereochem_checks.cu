@@ -374,7 +374,8 @@ __global__ void doubleBondStereoKernel(const int      numTerms,
   const double denom     = sqrt(l1squared * l2squared);
   dot /= denom;
 
-  // acos(dot) - pi/2 has the opposite sign to dot.
+  // The plane normals' dot product is positive for dihedrals below 90 degrees and negative above.
+  // sign = +1 rejects angles below 90 degrees; sign = -1 rejects angles above 90 degrees.
   if (dot * sign > 0.0) {
     failedThisStage[thisTermSysIdx] = 1;
   }

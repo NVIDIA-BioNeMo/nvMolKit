@@ -559,7 +559,7 @@ static __device__ __forceinline__ real torsionEnergy(const auto* pos,
 
   const real dotProduct = crossIJKJx * crossJKLKx + crossIJKJy * crossJKLKy + crossIJKJz * crossJKLKz;
   const real cosPhi     = dotProduct * invCross1Norm * invCross2Norm;
-  // cos(2 phi) and cos(3 phi) from cos(phi) by the multiple-angle (Chebyshev) identities, without acos and cos.
+  // cos(2 phi) = 2c^2 - 1; cos(3 phi) = 4c^3 - 3c, where c = cos(phi).
   const real clampedCos = clamp(cosPhi, real{-1.0}, real{1.0});
   const real cos2Phi    = real{2.0} * clampedCos * clampedCos - real{1.0};
   const real cos3Phi    = (real{4.0} * clampedCos * clampedCos - real{3.0}) * clampedCos;
