@@ -18,7 +18,7 @@ set(CMAKE_SHARED_MODULE_PREFIX "")
 add_library(_DataStructs MODULE DataStructs.cpp)
 target_link_libraries(
   _DataStructs PUBLIC ${Boost_LIBRARIES} ${PYTHON_LIBRARIES} ${RDKit_LIBS}
-                      Similarity device)
+                      Similarity fingerprint_search device)
 target_include_directories(_DataStructs PRIVATE ${Python_INCLUDE_DIRS})
 installpythontarget(_DataStructs ./)
 
