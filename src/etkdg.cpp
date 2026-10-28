@@ -138,6 +138,8 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
   constexpr int dim                    = 4;  // ETKDG always uses 4D coordinates
 #if RDKIT_AIO_ETKDG_API
   const bool useAllInOneETKDG = !paramsCopy.useLegacyImplementation;
+#else
+  constexpr bool useAllInOneETKDG = false;
 #endif
 
   ScopedNvtxRange coordsRange("Init ETKDG");
@@ -296,6 +298,7 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
       std::unordered_map<const RDKit::ROMol*, nvMolKit::DistGeom::EnergyForceContribsHost>   dgCache;
       std::unordered_map<const RDKit::ROMol*, nvMolKit::DistGeom::Energy3DForceContribsHost> etkCache;
       std::unordered_map<const RDKit::ROMol*, nvMolKit::DistGeom::AllInOneForceContribsHost> aioCache;
+      std::unordered_map<const RDKit::ROMol*, detail::KTermCheckTerms>                       kTermCache;
       // Pinned reusable buffers for common copies.
       PinnedHostVector<double>                                                               positionsScratch;
       PinnedHostVector<uint8_t>                                                              activeScratch;
@@ -379,7 +382,11 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
             },
             minimizer);
           if (paramsCopy.useBasicKnowledge) {
-            stages.push_back(std::make_unique<detail::ETKDGKTermCheckStage>(batchEargs, *context, streamPtr));
+            stages.push_back(std::make_unique<detail::ETKDGKTermCheckStage>(constMolPtrs,
+                                                                            batchEargs,
+                                                                            *context,
+                                                                            streamPtr,
+                                                                            &kTermCache));
           }
           stages.push_back(std::make_unique<detail::ETKDGTetrahedralCheckStage>(*context, batchEargs, dim, streamPtr));
           if (paramsCopy.enforceChirality) {
@@ -451,8 +458,12 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
         }
 
         if (paramsCopy.enforceChirality) {
-          // This is a pass-through, don't need to set the stream
-          stages.push_back(std::make_unique<detail::ETKDGFinalChiralCenterCheckStage>(*chiralStagePtr));
+          // The legacy path repeats the chiral center check after its later minimizations. The all-in-one path checks
+          // it once, right after the tetrahedral check, as RDKit does. This is a pass-through, don't need to set the
+          // stream.
+          if (!useAllInOneETKDG) {
+            stages.push_back(std::make_unique<detail::ETKDGFinalChiralCenterCheckStage>(*chiralStagePtr));
+          }
           stages.push_back(
             std::make_unique<detail::ETKDGChiralDistMatrixCheckStage>(*context, batchEargs, dim, streamPtr));
           stages.push_back(
@@ -463,7 +474,7 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
 
 #if RDKIT_AIO_ETKDG_API
         if (useAllInOneETKDG) {
-          stages.push_back(std::make_unique<detail::ETKDGClashCheckStage>(*context, batchEargs, streamPtr));
+          stages.push_back(std::make_unique<detail::ETKDGClashCheckStage>(batchEargs, streamPtr));
           stages.push_back(std::make_unique<detail::ETKDGDoubleBondGeometryCheckStage>(*context,
                                                                                        batchEargs,
                                                                                        dim,

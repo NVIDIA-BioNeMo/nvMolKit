@@ -212,13 +212,14 @@ target_link_libraries(
 
 add_executable(test_rdkit_bounds_matrix test_rdkit_bounds_matrix.cpp)
 target_link_libraries(
-  test_rdkit_bounds_matrix PRIVATE rdkit_bounds_matrix symmetricEigenSolver
-                                   ${RDKit_LIBS} nvmolkit_versions)
+  test_rdkit_bounds_matrix
+  PRIVATE rdkit_bounds_matrix symmetricEigenSolver embedder_utils ${RDKit_LIBS}
+          nvmolkit_versions)
 
 add_executable(test_triangle_smooth test_triangle_smooth.cu)
 target_link_libraries(
-  test_triangle_smooth PRIVATE triangle_smooth device_vector ${RDKit_LIBS}
-                               test_utils)
+  test_triangle_smooth PRIVATE triangle_smooth device_vector embedder_utils
+                               ${RDKit_LIBS} test_utils)
 
 add_executable(test_coordgen test_coordgen.cu)
 target_link_libraries(

@@ -107,6 +107,29 @@ namespace {
 constexpr double kMaxMinimizedEnergyPerAtom = 0.1;
 //! RDKit repeats 100-iteration minimizations of the second phase at most this many times.
 constexpr int    kMaxSecondPhaseCycles      = 8;
+//! RDKit's ERROR_TOL: each phase minimizes only molecules whose energy is above it.
+constexpr double kErrorTolerance            = 1e-5;
+
+//! Selects the active systems whose energy is above ERROR_TOL, which RDKit minimizes in a phase.
+template <typename EnergyT>
+__global__ void selectSystemsAboveErrorTolKernel(const int      numSystems,
+                                                 const EnergyT* energies,
+                                                 const uint8_t* activeSystems,
+                                                 uint8_t*       selectedSystems) {
+  const int systemIdx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (systemIdx < numSystems) {
+    selectedSystems[systemIdx] = activeSystems[systemIdx] && energies[systemIdx] > kErrorTolerance;
+  }
+}
+
+//! Drops the systems the last minimization converged, so each molecule's second phase ends after its own last cycle
+//! as in RDKit's per-molecule loop.
+__global__ void keepUnconvergedSystemsKernel(const int numSystems, const int16_t* statuses, uint8_t* selectedSystems) {
+  const int systemIdx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (systemIdx < numSystems) {
+    selectedSystems[systemIdx] = selectedSystems[systemIdx] && statuses[systemIdx] != 0;
+  }
+}
 
 //! Fails systems whose energy per atom is not below the all-in-one limit, including non-finite energies.
 __global__ void checkAllInOneEnergyKernel(const int      numSystems,
@@ -143,6 +166,7 @@ ETKDGAllInOneMinimizationStageT<Real>::ETKDGAllInOneMinimizationStageT(
   }
   gradients_.setStream(stream);
   energies_.setStream(stream);
+  phaseSystems_.setStream(stream);
   firstPhaseIterations_.setStream(stream);
   if (eargs.empty()) {
     return;
@@ -199,6 +223,20 @@ template <typename Real> void ETKDGAllInOneMinimizationStageT<Real>::execute(ETK
   const int numSystems         = static_cast<int>(ctx.systemHost.atomStarts.size()) - 1;
   const int firstPhaseMaxIters = *std::max_element(firstPhaseIterationsHost_.begin(), firstPhaseIterationsHost_.end());
   energies_.resize(numSystems);
+  phaseSystems_.resize(numSystems);
+  const auto selectAboveErrorTol = [&](const auto* energies) {
+    selectSystemsAboveErrorTolKernel<<<numBlocks(numSystems), kBlockSize, 0, stream_>>>(numSystems,
+                                                                                        energies,
+                                                                                        ctx.activeThisStage.data(),
+                                                                                        phaseSystems_.data());
+    cudaCheckError(cudaGetLastError());
+  };
+  const auto keepUnconverged = [&]() {
+    keepUnconvergedSystemsKernel<<<numBlocks(numSystems), kBlockSize, 0, stream_>>>(numSystems,
+                                                                                    minimizer_.statuses(),
+                                                                                    phaseSystems_.data());
+    cudaCheckError(cudaGetLastError());
+  };
 
   if (minimizer_.resolveBackend(ctx.systemHost.atomStarts) == BfgsBackend::BATCHED) {
     AllInOneETKDGBatchedForcefield forcefield(systemHost_,
@@ -209,17 +247,28 @@ template <typename Real> void ETKDGAllInOneMinimizationStageT<Real>::execute(ETK
                                               BfgsBatchMinimizerT<Real>::kPrecision);
     gradients_.resize(ctx.systemDevice.positions.size());
 
+    const auto selectByEnergy = [&]() {
+      energies_.zero();
+      cudaCheckError(forcefield.computeEnergy(energies_.data(),
+                                              ctx.systemDevice.positions.data(),
+                                              ctx.activeThisStage.data(),
+                                              stream_));
+      selectAboveErrorTol(energies_.data());
+    };
+
     forcefield.setTorsionTermsEnabled(false);
+    selectByEnergy();
     minimizer_.minimize(firstPhaseMaxIters,
                         optimizerForceTol_,
                         forcefield,
                         ctx.systemDevice.positions,
                         gradients_,
                         energies_,
-                        ctx.activeThisStage.data(),
+                        phaseSystems_.data(),
                         firstPhaseIterations_.data());
 
     forcefield.setTorsionTermsEnabled(true);
+    selectByEnergy();
     for (int cycle = 0; cycle < kMaxSecondPhaseCycles; ++cycle) {
       const bool needsMore = minimizer_.minimize(100,
                                                  optimizerForceTol_,
@@ -227,10 +276,11 @@ template <typename Real> void ETKDGAllInOneMinimizationStageT<Real>::execute(ETK
                                                  ctx.systemDevice.positions,
                                                  gradients_,
                                                  energies_,
-                                                 ctx.activeThisStage.data());
+                                                 phaseSystems_.data());
       if (!needsMore) {
         break;
       }
+      keepUnconverged();
     }
 
     energies_.zero();
@@ -248,6 +298,21 @@ template <typename Real> void ETKDGAllInOneMinimizationStageT<Real>::execute(ETK
       energyOuts.resize(numSystems);
       energyOuts.zero();
 
+      const auto terms         = DistGeom::toAllInOneContribsDevicePtr(device, ctx.systemDevice.atomStarts.data());
+      const auto computeEnergy = [&](const bool includeTorsionTerms) {
+        energyOuts.zero();
+        cudaCheckError(DistGeom::launchBlockPerMolEnergyKernelAIO(numSystems,
+                                                                  terms,
+                                                                  positions.data(),
+                                                                  energyOuts.data(),
+                                                                  weights_,
+                                                                  includeTorsionTerms,
+                                                                  ctx.activeThisStage.data(),
+                                                                  stream_));
+      };
+
+      computeEnergy(false);
+      selectAboveErrorTol(energyOuts.data());
       minimizer_.minimizeWithAIO(firstPhaseMaxIters,
                                  optimizerForceTol_,
                                  ctx.systemHost.atomStarts,
@@ -256,8 +321,11 @@ template <typename Real> void ETKDGAllInOneMinimizationStageT<Real>::execute(ETK
                                  device,
                                  weights_,
                                  false,
-                                 ctx.activeThisStage.data(),
+                                 phaseSystems_.data(),
                                  firstPhaseIterations_.data());
+
+      computeEnergy(true);
+      selectAboveErrorTol(energyOuts.data());
       for (int cycle = 0; cycle < kMaxSecondPhaseCycles; ++cycle) {
         const bool needsMore = minimizer_.minimizeWithAIO(100,
                                                           optimizerForceTol_,
@@ -267,22 +335,14 @@ template <typename Real> void ETKDGAllInOneMinimizationStageT<Real>::execute(ETK
                                                           device,
                                                           weights_,
                                                           true,
-                                                          ctx.activeThisStage.data());
+                                                          phaseSystems_.data());
         if (!needsMore) {
           break;
         }
+        keepUnconverged();
       }
 
-      energyOuts.zero();
-      cudaCheckError(DistGeom::launchBlockPerMolEnergyKernelAIO(
-        numSystems,
-        DistGeom::toAllInOneContribsDevicePtr(device, ctx.systemDevice.atomStarts.data()),
-        positions.data(),
-        energyOuts.data(),
-        weights_,
-        true,
-        ctx.activeThisStage.data(),
-        stream_));
+      computeEnergy(true);
       cudaCheckError(detail::convertDeviceArray(energies_.data(), energyOuts.data(), numSystems, stream_));
     };
 
@@ -312,20 +372,43 @@ template class ETKDGAllInOneMinimizationStageT<double>;
 template class ETKDGAllInOneMinimizationStageT<float>;
 #endif
 
-ETKDGKTermCheckStage::ETKDGKTermCheckStage(const std::vector<EmbedArgs>& eargs,
-                                           const ETKDGContext&           ctx,
-                                           const cudaStream_t            stream)
+namespace {
+
+KTermCheckTerms buildKTermCheckTerms(const EmbedArgs& earg) {
+  const auto& details = earg.etkdgDetails;
+  const auto  numLinearCenters =
+    std::count_if(details.angles.begin(), details.angles.end(), [](const auto& angle) { return angle[3] != 0; });
+  return {DistGeom::constructImproperCheckContribs(details, earg.mmat->numRows()),
+          static_cast<int>(numLinearCenters + details.improperAtoms.size())};
+}
+
+}  // namespace
+
+ETKDGKTermCheckStage::ETKDGKTermCheckStage(const std::vector<const RDKit::ROMol*>&                   mols,
+                                           const std::vector<EmbedArgs>&                             eargs,
+                                           const ETKDGContext&                                       ctx,
+                                           const cudaStream_t                                        stream,
+                                           std::unordered_map<const RDKit::ROMol*, KTermCheckTerms>* cache)
     : stream_(stream) {
+  if (mols.size() != eargs.size()) {
+    throw std::invalid_argument("Number of molecules and embed args must be the same");
+  }
   DistGeom::BatchedMolecularSystem3DHost systemHost;
   std::vector<int>                       numCenters;
-  for (const auto& earg : eargs) {
-    const auto& details = earg.etkdgDetails;
-    DistGeom::addMoleculeToMolecularSystem3D(DistGeom::constructImproperCheckContribs(details, earg.mmat->numRows()),
-                                             ctx.systemHost.atomStarts,
-                                             systemHost);
-    const auto numLinearCenters =
-      std::count_if(details.angles.begin(), details.angles.end(), [](const auto& angle) { return angle[3] != 0; });
-    numCenters.push_back(static_cast<int>(numLinearCenters + details.improperAtoms.size()));
+  for (std::size_t systemIdx = 0; systemIdx < eargs.size(); ++systemIdx) {
+    KTermCheckTerms        uncached;
+    const KTermCheckTerms* terms = &uncached;
+    if (cache != nullptr) {
+      auto it = cache->find(mols[systemIdx]);
+      if (it == cache->end()) {
+        it = cache->emplace(mols[systemIdx], buildKTermCheckTerms(eargs[systemIdx])).first;
+      }
+      terms = &it->second;
+    } else {
+      uncached = buildKTermCheckTerms(eargs[systemIdx]);
+    }
+    DistGeom::addMoleculeToMolecularSystem3D(terms->contribs, ctx.systemHost.atomStarts, systemHost);
+    numCenters.push_back(terms->numCenters);
   }
   DistGeom::setStreams(systemDevice_, stream);
   DistGeom::sendContribsAndIndicesToDevice3D(systemHost, systemDevice_);

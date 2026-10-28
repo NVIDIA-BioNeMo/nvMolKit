@@ -205,17 +205,19 @@ class ETKDGDoubleBondGeometryCheckStage final : public ETKDGStage {
 //! their lower distance bound.
 class ETKDGClashCheckStage final : public ETKDGStage {
  public:
-  ETKDGClashCheckStage(const ETKDGContext& ctx, const std::vector<EmbedArgs>& eargs, cudaStream_t stream = nullptr);
+  explicit ETKDGClashCheckStage(const std::vector<EmbedArgs>& eargs, cudaStream_t stream = nullptr);
 
   void        execute(ETKDGContext& ctx) override;
   std::string name() const override { return "Clash check"; }
 
  private:
-  AsyncDeviceVector<int>    idx0;
-  AsyncDeviceVector<int>    idx1;
-  AsyncDeviceVector<int>    sysIdx;
+  //! Squared lower bounds of each distinct bounds matrix, lower triangle (i > j) in row order. Conformers of a molecule
+  //! share their matrix, so it is stored once.
   AsyncDeviceVector<double> lowerBoundSquared;
-  cudaStream_t              stream_ = nullptr;
+  //! Per system, the start of its matrix in lowerBoundSquared.
+  AsyncDeviceVector<int>    boundsStarts;
+  int                       numSystems_ = 0;
+  cudaStream_t              stream_     = nullptr;
 };
 
 }  // namespace detail

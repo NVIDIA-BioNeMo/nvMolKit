@@ -13,6 +13,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <unordered_map>
+
 #include "src/etkdg_stage_stereochem_checks.h"
 #include "src/forcefields/kernel_utils.cuh"
 #include "versions.h"
@@ -435,26 +437,39 @@ __global__ void doubleBondGeometryKernel(const int      numTerms,
   }
 }
 
-__global__ void clashCheckKernel(const int      numPairs,
-                                 const double*  positions,
-                                 const int*     idx0s,
-                                 const int*     idx1s,
-                                 const int*     sysIdxs,
+//! One block per system. Each thread walks pairs i > j by their row-major index k = i (i - 1) / 2 + j.
+__global__ void clashCheckKernel(const double*  positions,
+                                 const int*     atomStarts,
+                                 const int*     boundsStarts,
                                  const double*  lowerBoundsSquared,
                                  const uint8_t* activeThisStage,
                                  uint8_t*       failedThisStage) {
-  const int pairIdx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (pairIdx >= numPairs || !activeThisStage[sysIdxs[pairIdx]]) {
+  const int systemIdx = blockIdx.x;
+  if (!activeThisStage[systemIdx]) {
     return;
   }
-  const int    p0              = idx0s[pairIdx] * 4;
-  const int    p1              = idx1s[pairIdx] * 4;
-  const double dx              = positions[p0] - positions[p1];
-  const double dy              = positions[p0 + 1] - positions[p1 + 1];
-  const double dz              = positions[p0 + 2] - positions[p1 + 2];
-  const double distanceSquared = dx * dx + dy * dy + dz * dz;
-  if (distanceSquared < 0.8 && distanceSquared < lowerBoundsSquared[pairIdx]) {
-    failedThisStage[sysIdxs[pairIdx]] = 1;
+  const int     atomStart = atomStarts[systemIdx];
+  const int     numAtoms  = atomStarts[systemIdx + 1] - atomStart;
+  const int64_t numPairs  = static_cast<int64_t>(numAtoms) * (numAtoms - 1) / 2;
+  const double* bounds    = lowerBoundsSquared + boundsStarts[systemIdx];
+  for (int64_t pair = threadIdx.x; pair < numPairs; pair += blockDim.x) {
+    int i = static_cast<int>((1.0 + sqrt(1.0 + 8.0 * static_cast<double>(pair))) / 2.0);
+    while (static_cast<int64_t>(i) * (i - 1) / 2 > pair) {
+      --i;
+    }
+    while (static_cast<int64_t>(i + 1) * i / 2 <= pair) {
+      ++i;
+    }
+    const int    j               = static_cast<int>(pair - static_cast<int64_t>(i) * (i - 1) / 2);
+    const int    p0              = (atomStart + i) * 4;
+    const int    p1              = (atomStart + j) * 4;
+    const double dx              = positions[p0] - positions[p1];
+    const double dy              = positions[p0 + 1] - positions[p1 + 1];
+    const double dz              = positions[p0 + 2] - positions[p1 + 2];
+    const double distanceSquared = dx * dx + dy * dy + dz * dz;
+    if (distanceSquared < 0.8 && distanceSquared < bounds[pair]) {
+      failedThisStage[systemIdx] = 1;
+    }
   }
 }
 }  // namespace
@@ -858,52 +873,43 @@ void ETKDGDoubleBondGeometryCheckStage::loadDataset(const ETKDGContext& ctx, con
   cudaStreamSynchronize(idx0.stream());  // Sync before local vectors go out of scope
 }
 
-ETKDGClashCheckStage::ETKDGClashCheckStage(const ETKDGContext&           ctx,
-                                           const std::vector<EmbedArgs>& eargs,
-                                           const cudaStream_t            stream)
-    : stream_(stream) {
-  std::vector<int>    idx0Host;
-  std::vector<int>    idx1Host;
-  std::vector<int>    sysIdxHost;
-  std::vector<double> lowerBoundSquaredHost;
-  for (std::size_t systemIdx = 0; systemIdx < eargs.size(); ++systemIdx) {
-    const auto& bounds     = *eargs[systemIdx].mmat;
-    const int   atomOffset = ctx.systemHost.atomStarts[systemIdx];
-    for (unsigned int i = 1; i < bounds.numRows(); ++i) {
-      for (unsigned int j = 0; j < i; ++j) {
-        idx0Host.push_back(atomOffset + i);
-        idx1Host.push_back(atomOffset + j);
-        sysIdxHost.push_back(systemIdx);
-        const double lowerBound = bounds.getLowerBound(i, j);
-        lowerBoundSquaredHost.push_back(lowerBound * lowerBound);
+ETKDGClashCheckStage::ETKDGClashCheckStage(const std::vector<EmbedArgs>& eargs, const cudaStream_t stream)
+    : numSystems_(static_cast<int>(eargs.size())),
+      stream_(stream) {
+  std::vector<double>                                      lowerBoundSquaredHost;
+  std::vector<int>                                         boundsStartsHost;
+  std::unordered_map<const ::DistGeom::BoundsMatrix*, int> starts;
+  for (const auto& earg : eargs) {
+    const auto& bounds          = *earg.mmat;
+    const auto [entry, created] = starts.try_emplace(&bounds, static_cast<int>(lowerBoundSquaredHost.size()));
+    boundsStartsHost.push_back(entry->second);
+    if (created) {
+      for (unsigned int i = 1; i < bounds.numRows(); ++i) {
+        for (unsigned int j = 0; j < i; ++j) {
+          const double lowerBound = bounds.getLowerBound(i, j);
+          lowerBoundSquaredHost.push_back(lowerBound * lowerBound);
+        }
       }
     }
   }
-  idx0.setStream(stream);
-  idx1.setStream(stream);
-  sysIdx.setStream(stream);
   lowerBoundSquared.setStream(stream);
-  idx0.setFromVector(idx0Host);
-  idx1.setFromVector(idx1Host);
-  sysIdx.setFromVector(sysIdxHost);
+  boundsStarts.setStream(stream);
   lowerBoundSquared.setFromVector(lowerBoundSquaredHost);
+  boundsStarts.setFromVector(boundsStartsHost);
   cudaCheckError(cudaStreamSynchronize(stream));
 }
 
 void ETKDGClashCheckStage::execute(ETKDGContext& ctx) {
-  if (idx0.size() == 0) {
+  if (numSystems_ == 0 || lowerBoundSquared.size() == 0) {
     return;
   }
   constexpr int blockSize = 128;
-  clashCheckKernel<<<(idx0.size() + blockSize - 1) / blockSize, blockSize, 0, stream_>>>(
-    idx0.size(),
-    ctx.systemDevice.positions.data(),
-    idx0.data(),
-    idx1.data(),
-    sysIdx.data(),
-    lowerBoundSquared.data(),
-    ctx.activeThisStage.data(),
-    ctx.failedThisStage.data());
+  clashCheckKernel<<<numSystems_, blockSize, 0, stream_>>>(ctx.systemDevice.positions.data(),
+                                                           ctx.systemDevice.atomStarts.data(),
+                                                           boundsStarts.data(),
+                                                           lowerBoundSquared.data(),
+                                                           ctx.activeThisStage.data(),
+                                                           ctx.failedThisStage.data());
   cudaCheckError(cudaGetLastError());
 }
 

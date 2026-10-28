@@ -21,6 +21,7 @@
 #include <GraphMol/DistGeomHelpers/Embedder.h>
 #include <GraphMol/FileParsers/FileParsers.h>
 #include <GraphMol/ForceFieldHelpers/CrystalFF/TorsionAngleContribs.h>
+#include <GraphMol/MolOps.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <GraphMol/SmilesParse/SmilesWrite.h>
 #include <gtest/gtest.h>
@@ -28,6 +29,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <optional>
 
 #include "rdkit_extensions/dist_geom_flattened_builder.h"
 #include "rdkit_extensions/torsion_compat.h"
@@ -747,10 +749,16 @@ double minimizeAllInOneWithRdkit(EmbedArgs&                                  ear
                                  std::vector<RDGeom::PointND>                points,
                                  const RDKit::DGeomHelpers::EmbedParameters& params,
                                  const unsigned int                          numHeavyAtoms) {
-  auto field = allInOneReferenceForcefield(earg, points, params, false);
-  field->minimize(numHeavyAtoms, params.optimizerForceTol);
+  // As RDKit's minimizeAllInOne, each phase runs only when the energy is above ERROR_TOL.
+  constexpr double errorTolerance = 1e-5;
+  auto             field          = allInOneReferenceForcefield(earg, points, params, false);
+  if (field->calcEnergy() > errorTolerance) {
+    field->minimize(numHeavyAtoms, params.optimizerForceTol);
+  }
   addTorsionTermsWithFiniteDifferenceGradient(*field, earg, params);
-  for (int cycle = 0; cycle < 8 && field->minimize(100, params.optimizerForceTol); ++cycle) {
+  if (field->calcEnergy() > errorTolerance) {
+    for (int cycle = 0; cycle < 8 && field->minimize(100, params.optimizerForceTol); ++cycle) {
+    }
   }
   return field->calcEnergy();
 }
@@ -838,6 +846,82 @@ INSTANTIATE_TEST_SUITE_P(
     return getETKDGOptionName(std::get<0>(info.param)) +
            (std::get<1>(info.param) == nvMolKit::PrecisionMode::FULL ? "_Double" : "_Float") +
            (std::get<2>(info.param) == nvMolKit::BfgsBackend::BATCHED ? "_Batched" : "_PerMolecule");
+  });
+
+using AllInOneIndependenceParams = std::tuple<nvMolKit::PrecisionMode, nvMolKit::BfgsBackend>;
+
+class ETKDGAllInOneIndependenceTest : public ::testing::TestWithParam<AllInOneIndependenceParams> {};
+
+//! Runs the all-in-one stage on mols from coordinates drawn with a fixed RDKit seed. When lastFourthDim is set, the
+//! last atom's fourth coordinate is replaced by it. Returns the starting and final coordinates.
+std::pair<std::vector<double>, std::vector<double>> runAllInOneStage(const std::vector<std::string>& smiles,
+                                                                     const nvMolKit::PrecisionMode   precision,
+                                                                     const nvMolKit::BfgsBackend     backend,
+                                                                     const std::optional<double> lastFourthDim = {}) {
+  std::vector<std::unique_ptr<RDKit::RWMol>> molOwners;
+  std::vector<const RDKit::ROMol*>           mols;
+  for (const auto& entry : smiles) {
+    std::unique_ptr<RDKit::RWMol> mol(RDKit::SmilesToMol(entry));
+    RDKit::MolOps::addHs(*mol);
+    mols.push_back(molOwners.emplace_back(std::move(mol)).get());
+  }
+  auto params                    = RDKit::DGeomHelpers::ETKDGv3;
+  params.useRandomCoords         = true;
+  params.useLegacyImplementation = false;
+  ETKDGContext           context;
+  std::vector<EmbedArgs> eargs;
+  const auto             randomState = RDKit::getRandomGenerator();
+  RDKit::getRandomGenerator(7);
+  initTestComponentsCommon(mols, molOwners, context, eargs, params);
+  RDKit::getRandomGenerator() = randomState;
+  if (lastFourthDim.has_value()) {
+    context.systemHost.positions.back() = *lastFourthDim;
+    context.systemDevice.positions.setFromVector(context.systemHost.positions);
+  }
+  const auto start = context.systemHost.positions;
+  context.activeThisStage.setFromVector(std::vector<uint8_t>(mols.size(), 1));
+  context.failedThisStage.setFromVector(std::vector<uint8_t>(mols.size(), 0));
+  if (precision == nvMolKit::PrecisionMode::FULL) {
+    nvMolKit::BfgsBatchMinimizer            minimizer(4, nvMolKit::DebugLevel::NONE, true, nullptr, backend);
+    ETKDGAllInOneMinimizationStageT<double> stage(mols, eargs, params, context, minimizer);
+    stage.execute(context);
+  } else {
+    nvMolKit::BfgsBatchMinimizerSingle     minimizer(4, nvMolKit::DebugLevel::NONE, true, nullptr, backend);
+    ETKDGAllInOneMinimizationStageT<float> stage(mols, eargs, params, context, minimizer);
+    stage.execute(context);
+  }
+  std::vector<double> positions(context.systemDevice.positions.size());
+  context.systemDevice.positions.copyToHost(positions);
+  CHECK_CUDA_RETURN(cudaDeviceSynchronize());
+  return {start, positions};
+}
+
+//! As in RDKit's per-molecule minimizeAllInOne, a molecule's result does not depend on its batchmates: a molecule that
+//! converges early is not minimized again while a slower one finishes. A system whose energy is already below
+//! ERROR_TOL is not minimized at all: a single atom whose only term, the fourth dimension, holds about 2e-8.
+TEST_P(ETKDGAllInOneIndependenceTest, MoleculeResultDoesNotDependOnBatchmates) {
+  const auto [precision, backend] = GetParam();
+  const auto [aloneStart, alone]  = runAllInOneStage({"CCO"}, precision, backend);
+  const auto [start, withOthers] = runAllInOneStage({"CCO", "CCCCCCCCCCCCCCCCCCCC", "[Na+]"}, precision, backend, 1e-4);
+  ASSERT_TRUE(std::equal(aloneStart.begin(), aloneStart.end(), start.begin())) << "the runs must start alike";
+  for (std::size_t coord = 0; coord < alone.size(); ++coord) {
+    EXPECT_NEAR(withOthers[coord], alone[coord], 1e-6) << "coordinate " << coord;
+  }
+  // Single precision rounds the coordinates through float even when nothing is minimized.
+  for (auto coord = start.size() - 4; coord < start.size(); ++coord) {
+    const double unmoved = precision == nvMolKit::PrecisionMode::FULL ? start[coord] : static_cast<float>(start[coord]);
+    EXPECT_EQ(withOthers[coord], unmoved) << "the single atom moved";
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  Backends,
+  ETKDGAllInOneIndependenceTest,
+  ::testing::Combine(::testing::Values(nvMolKit::PrecisionMode::FULL, nvMolKit::PrecisionMode::SINGLE),
+                     ::testing::Values(nvMolKit::BfgsBackend::BATCHED, nvMolKit::BfgsBackend::PER_MOLECULE)),
+  [](const ::testing::TestParamInfo<AllInOneIndependenceParams>& info) {
+    return std::string(std::get<0>(info.param) == nvMolKit::PrecisionMode::FULL ? "Double" : "Float") +
+           (std::get<1>(info.param) == nvMolKit::BfgsBackend::BATCHED ? "_Batched" : "_PerMolecule");
   });
 
 }  // namespace

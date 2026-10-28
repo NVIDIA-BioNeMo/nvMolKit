@@ -184,6 +184,10 @@ template <typename real> struct BfgsBatchMinimizerT {
   //! \return The effective backend after applying the HYBRID size heuristic.
   BfgsBackend resolveBackend(const std::vector<int>& atomStartsHost) const;
 
+  //! \brief Device per-system statuses from the last minimization: nonzero for systems that still need iterations.
+  //! Only systems active in that minimization are meaningful.
+  const int16_t* statuses() const { return statuses_.data(); }
+
   //! \brief Initializes persistent buffers for a new batch of systems.
   //! \param atomStartsHost Host-side atom offsets for the batch.
   //! \param atomStarts Device-side atom offsets for the batch.

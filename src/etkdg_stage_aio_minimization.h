@@ -39,6 +39,8 @@ template <typename Real> class ETKDGAllInOneMinimizationStageT final : public ET
   BfgsBatchMinimizerT<Real>&          minimizer_;
   AsyncDeviceVector<double>           gradients_;
   AsyncDeviceVector<double>           energies_;
+  //! Systems the current minimization phase or cycle runs on.
+  AsyncDeviceVector<uint8_t>          phaseSystems_;
   double                              optimizerForceTol_;
   //! RDKit runs the first phase for each molecule's heavy atom count.
   std::vector<int>                    firstPhaseIterationsHost_;
@@ -51,11 +53,22 @@ extern template class ETKDGAllInOneMinimizationStageT<double>;
 extern template class ETKDGAllInOneMinimizationStageT<float>;
 #endif
 
+//! One molecule's K-term check terms and its number of linear and improper centers.
+struct KTermCheckTerms {
+  DistGeom::Energy3DForceContribsHost contribs;
+  int                                 numCenters = 0;
+};
+
 //! RDKit's all-in-one K-term check: each linear angle and improper term of DistGeom::construct3DImproperForceField
 //! must stay under its own limit, and their sum under 0.7 per linear or improper center.
 class ETKDGKTermCheckStage final : public ETKDGStage {
  public:
-  ETKDGKTermCheckStage(const std::vector<EmbedArgs>& eargs, const ETKDGContext& ctx, cudaStream_t stream = nullptr);
+  //! \param cache Optional per-molecule cache of the check terms, shared across batches.
+  ETKDGKTermCheckStage(const std::vector<const RDKit::ROMol*>&                   mols,
+                       const std::vector<EmbedArgs>&                             eargs,
+                       const ETKDGContext&                                       ctx,
+                       cudaStream_t                                              stream = nullptr,
+                       std::unordered_map<const RDKit::ROMol*, KTermCheckTerms>* cache  = nullptr);
   void        execute(ETKDGContext& ctx) override;
   std::string name() const override { return "K-term check"; }
 
