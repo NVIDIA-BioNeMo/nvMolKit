@@ -32,6 +32,7 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <numbers>
 #include <random>
 #include <stdexcept>
 
@@ -43,6 +44,7 @@
 #include "src/forcefields/mmff.h"
 #include "src/forcefields/mmff_batched_forcefield.h"
 #include "src/forcefields/mmff_kernels.h"
+#include "src/forcefields/mmff_kernels_device_dispatch.cuh"
 #include "src/minimizer/mmff_minimize.h"
 #include "src/utils/device.h"
 #include "tests/test_utils.h"
@@ -2333,3 +2335,78 @@ TEST(MMFFPrecisionTest, SinglePrecisionPerMoleculePublicApiOptimizes) {
     EXPECT_LT(energies[moleculeIdx][0], initialEnergies[moleculeIdx]);
   }
 }
+
+namespace {
+
+struct TorsionCase {
+  double positions[12];
+  double coefficients[3];
+};
+
+__global__ void torsionEnergyCases(const TorsionCase* cases, int count, double* full, float* single) {
+  const int index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= count) {
+    return;
+  }
+  const auto& sample = cases[index];
+  full[index]        = nvMolKit::MMFF::fp64::torsionEnergy(sample.positions,
+                                                    0,
+                                                    1,
+                                                    2,
+                                                    3,
+                                                    sample.coefficients[0],
+                                                    sample.coefficients[1],
+                                                    sample.coefficients[2]);
+  single[index]      = nvMolKit::MMFF::fp32::torsionEnergy(sample.positions,
+                                                      0,
+                                                      1,
+                                                      2,
+                                                      3,
+                                                      static_cast<float>(sample.coefficients[0]),
+                                                      static_cast<float>(sample.coefficients[1]),
+                                                      static_cast<float>(sample.coefficients[2]));
+}
+
+}  // namespace
+
+class MMFFTorsionEnergy : public ::testing::TestWithParam<std::array<double, 3>> {};
+
+TEST_P(MMFFTorsionEnergy, MatchesTrigonometricReference) {
+  const auto   coefficients = GetParam();
+  const double scale = std::max(1.0, std::abs(coefficients[0]) + std::abs(coefficients[1]) + std::abs(coefficients[2]));
+  std::vector<TorsionCase> cases;
+  std::vector<double>      expected;
+  for (int degrees = -180; degrees <= 180; ++degrees) {
+    const double angle  = degrees * std::numbers::pi / 180.0;
+    const double cosine = std::cos(angle);
+    const double sine   = std::sin(angle);
+    cases.push_back({
+      {0, 1, 0, 0, 0, 0, 1, 0, 0, 1, cosine, sine},
+      {coefficients[0], coefficients[1], coefficients[2]}
+    });
+    expected.push_back(0.5 * (coefficients[0] * (1 + cosine) + coefficients[1] * (1 - std::cos(2 * angle)) +
+                              coefficients[2] * (1 + std::cos(3 * angle))));
+  }
+  nvMolKit::AsyncDeviceVector<TorsionCase> inputs;
+  nvMolKit::AsyncDeviceVector<double>      full(cases.size());
+  nvMolKit::AsyncDeviceVector<float>       single(cases.size());
+  inputs.setFromVector(cases);
+  torsionEnergyCases<<<(cases.size() + 127) / 128, 128>>>(inputs.data(), cases.size(), full.data(), single.data());
+  ASSERT_EQ(cudaGetLastError(), cudaSuccess);
+  std::vector<double> fullValues(cases.size());
+  std::vector<float>  singleValues(cases.size());
+  full.copyToHost(fullValues);
+  single.copyToHost(singleValues);
+  ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+  EXPECT_THAT(fullValues, ::testing::Pointwise(::testing::DoubleNear(2e-12 * scale), expected));
+  EXPECT_THAT(singleValues, ::testing::Pointwise(::testing::DoubleNear(2e-6 * scale), expected));
+}
+
+INSTANTIATE_TEST_SUITE_P(Coefficients,
+                         MMFFTorsionEnergy,
+                         ::testing::Values(std::array{0.0, 0.0, 0.0},
+                                           std::array{1.0, 0.0, 0.0},
+                                           std::array{0.0, 1.0, 0.0},
+                                           std::array{0.0, 0.0, 1.0},
+                                           std::array{0.3, -2.7, 1.2},
+                                           std::array{-10.0, 100.0, -0.01}));

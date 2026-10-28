@@ -559,10 +559,12 @@ static __device__ __forceinline__ real torsionEnergy(const auto* pos,
 
   const real dotProduct = crossIJKJx * crossJKLKx + crossIJKJy * crossJKLKy + crossIJKJz * crossJKLKz;
   const real cosPhi     = dotProduct * invCross1Norm * invCross2Norm;
-  const real phi        = NVMOLKIT_ACOS(clamp(cosPhi, real{-1.0}, real{1.0}));
+  // cos(2 phi) = 2c^2 - 1; cos(3 phi) = 4c^3 - 3c, where c = cos(phi).
+  const real clampedCos = clamp(cosPhi, real{-1.0}, real{1.0});
+  const real cos2Phi    = real{2.0} * clampedCos * clampedCos - real{1.0};
+  const real cos3Phi    = (real{4.0} * clampedCos * clampedCos - real{3.0}) * clampedCos;
 
-  return real{0.5} * (V1 * (real{1.0} + cosPhi) + V2 * (real{1.0} - NVMOLKIT_COS(real{2.0} * phi)) +
-                      V3 * (real{1.0} + NVMOLKIT_COS(real{3.0} * phi)));
+  return real{0.5} * (V1 * (real{1.0} + cosPhi) + V2 * (real{1.0} - cos2Phi) + V3 * (real{1.0} + cos3Phi));
 }
 
 static __device__ __forceinline__ real
