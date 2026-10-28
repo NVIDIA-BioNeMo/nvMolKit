@@ -94,6 +94,39 @@ cudaError_t launchTorsionAngleGradientKernel(int            numTorsion,
                                              const uint8_t* activeThisStage = nullptr,
                                              cudaStream_t   stream          = 0);
 
+// Gaussian experimental torsion (ETKDGv4) contribution kernels
+cudaError_t launchGaussianTorsionEnergyKernel(int            numTorsion,
+                                              const int*     idx1,
+                                              const int*     idx2,
+                                              const int*     idx3,
+                                              const int*     idx4,
+                                              const int*     tableStarts,
+                                              const int*     tableSizes,
+                                              const double*  scaling,
+                                              const double*  energies,
+                                              const double*  pos,
+                                              double*        energyBuffer,
+                                              const int*     energyBufferStarts,
+                                              const int*     atomIdxToBatchIdx,
+                                              const int*     torsionTermStarts,
+                                              const uint8_t* activeThisStage = nullptr,
+                                              cudaStream_t   stream          = 0);
+
+cudaError_t launchGaussianTorsionGradientKernel(int            numTorsion,
+                                                const int*     idx1,
+                                                const int*     idx2,
+                                                const int*     idx3,
+                                                const int*     idx4,
+                                                const int*     tableStarts,
+                                                const int*     tableSizes,
+                                                const double*  scaling,
+                                                const double*  derivatives,
+                                                const double*  pos,
+                                                double*        grad,
+                                                const int*     atomIdxToBatchIdx,
+                                                const uint8_t* activeThisStage = nullptr,
+                                                cudaStream_t   stream          = 0);
+
 // Improper torsion (inversion) contribution kernels
 cudaError_t launchInversionEnergyKernel(int            numInversion,
                                         const int*     idx1,
@@ -244,6 +277,18 @@ template <typename Scalar> struct TorsionAngleContribTermsDevicePtrT {
   const int*    signs;
 };
 
+template <typename Scalar> struct GaussianTorsionContribTermsDevicePtrT {
+  const int*    idx1;
+  const int*    idx2;
+  const int*    idx3;
+  const int*    idx4;
+  const int*    tableStarts;
+  const int*    tableSizes;
+  const Scalar* scaling;
+  const Scalar* energies;
+  const Scalar* derivatives;
+};
+
 template <typename Scalar> struct InversionContribTermsDevicePtrT {
   const int*     idx1;
   const int*     idx2;
@@ -275,6 +320,7 @@ template <typename Scalar> struct AngleConstraintContribTermsDevicePtrT {
 
 template <typename Scalar> struct Energy3DForceContribsDevicePtrT {
   TorsionAngleContribTermsDevicePtrT<Scalar>       experimentalTorsionTerms;
+  GaussianTorsionContribTermsDevicePtrT<Scalar>    gaussianTorsionTerms;
   InversionContribTermsDevicePtrT<Scalar>          improperTorsionTerms;
   DistanceConstraintContribTermsDevicePtrT<Scalar> dist12Terms;
   DistanceConstraintContribTermsDevicePtrT<Scalar> dist13Terms;
@@ -297,6 +343,7 @@ using Energy3DForceContribsDevicePtrSingle = Energy3DForceContribsDevicePtrT<flo
 struct BatchedIndices3DDevicePtr {
   const int* atomStarts;
   const int* experimentalTorsionTermStarts;
+  const int* gaussianTorsionTermStarts;
   const int* improperTorsionTermStarts;
   const int* dist12TermStarts;
   const int* dist13TermStarts;
@@ -399,10 +446,12 @@ template <typename Scalar> struct AllInOneContribsDevicePtrT {
   DistanceConstraintContribTermsDevicePtrT<Scalar> harmonicDistanceTerms;
   AngleConstraintContribTermsDevicePtrT<Scalar>    linearAngleTerms;
   TorsionAngleContribTermsDevicePtrT<Scalar>       experimentalTorsionTerms;
+  GaussianTorsionContribTermsDevicePtrT<Scalar>    gaussianTorsionTerms;
   PlanarityContribTermsDevicePtr                   planarityTerms;
   const int*                                       harmonicDistanceTermStarts;
   const int*                                       linearAngleTermStarts;
   const int*                                       experimentalTorsionTermStarts;
+  const int*                                       gaussianTorsionTermStarts;
   const int*                                       planarityTermStarts;
 };
 

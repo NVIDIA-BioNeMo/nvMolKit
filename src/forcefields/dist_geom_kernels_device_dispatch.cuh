@@ -30,6 +30,7 @@ constexpr double RAD2DEG             = 180.0 / M_PI;
 #define DG_SQRT       sqrt
 #define DG_ACOS       acos
 #define DG_ASIN       asin
+#define DG_ATAN2      atan2
 #define DG_FMAX       fmax
 #define DG_IS_ZERO    isDoubleZero
 #include "src/forcefields/dist_geom_kernels_device.cuh"
@@ -41,6 +42,7 @@ constexpr double RAD2DEG             = 180.0 / M_PI;
 #undef DG_SQRT
 #undef DG_ACOS
 #undef DG_ASIN
+#undef DG_ATAN2
 #undef DG_FMAX
 #undef DG_IS_ZERO
 }  // namespace fp64
@@ -58,6 +60,7 @@ constexpr float RAD2DEG              = 180.0f / static_cast<float>(M_PI);
 #define DG_SQRT       sqrtf
 #define DG_ACOS       acosf
 #define DG_ASIN       asinf
+#define DG_ATAN2      atan2f
 #define DG_FMAX       fmaxf
 #define DG_IS_ZERO    isFloatZero
 #include "src/forcefields/dist_geom_kernels_device.cuh"
@@ -69,6 +72,7 @@ constexpr float RAD2DEG              = 180.0f / static_cast<float>(M_PI);
 #undef DG_SQRT
 #undef DG_ACOS
 #undef DG_ASIN
+#undef DG_ATAN2
 #undef DG_FMAX
 #undef DG_IS_ZERO
 }  // namespace fp32

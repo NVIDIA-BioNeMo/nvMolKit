@@ -46,14 +46,30 @@ void          initTestComponentsCommon(const std::vector<RDKit::ROMol*>&        
     std::vector<std::unique_ptr<RDGeom::Point>> positions;
     std::unique_ptr<ForceFields::ForceField>    field;
 
-    // Setup force field and get parameters
+    // Setup force field and get parameters. prepareEmbedderArgs does not accept ETversion 4 yet, so ETKDGv4
+    // molecules are set up with ETversion 2 and their torsions rebuilt in RDKit's Gaussian form.
+    auto setupParams = embedParam;
+#if RDKIT_ETKDG_2026_09_API
+    if (embedParam.ETversion == 4) {
+      setupParams.ETversion               = 2;
+      setupParams.useLegacyImplementation = true;
+    }
+#endif
     nvMolKit::DGeomHelpers::setupRDKitFFWithPos(mols[i],
-                                                embedParam,
+                                                setupParams,
                                                 field,
                                                 eargs,
                                                 positions,
                                                 -1,  // Use default conformer
                                                 nvMolKit::DGeomHelpers::Dimensionality::DIM_4D);
+#if RDKIT_ETKDG_2026_09_API
+    if (embedParam.ETversion == 4) {
+      setGaussianTorsions(*mols[i],
+                          embedParam,
+                          ForceFields::CrystalFF::ETKDGForceConsts::SEQ::Gaussian,
+                          eargs.etkdgDetails);
+    }
+#endif
 
     // Add molecule to context with positions
     nvMolKit::DistGeom::addMoleculeToContextWithPositions(eargs.posVec,
@@ -411,6 +427,16 @@ INSTANTIATE_TEST_SUITE_P(ETKDGVariants,
                            return makeETKStageName(info.param);
                          });
 
+#if RDKIT_ETKDG_2026_09_API
+// ETKDGv4 with the legacy refinement minimizes its Gaussian experimental torsions in this ETK stage.
+INSTANTIATE_TEST_SUITE_P(GaussianTorsions,
+                         ETKStageSingleMolTestFixture,
+                         ::testing::ValuesIn(makeETKStageParams({ETKDGOption::ETKDGv4})),
+                         [](const ::testing::TestParamInfo<ETKStageTestParam>& info) {
+                           return makeETKStageName(info.param);
+                         });
+#endif
+
 class ETKStageMultiMolTestFixture : public ::testing::TestWithParam<ETKStageTestParam> {
  public:
   ETKStageMultiMolTestFixture() { testDataFolderPath_ = getTestDataFolderPath(); }
@@ -535,3 +561,12 @@ INSTANTIATE_TEST_SUITE_P(ETKDGVariants,
                          [](const ::testing::TestParamInfo<ETKStageTestParam>& info) {
                            return makeETKStageName(info.param);
                          });
+
+#if RDKIT_ETKDG_2026_09_API
+INSTANTIATE_TEST_SUITE_P(GaussianTorsions,
+                         ETKStageMultiMolTestFixture,
+                         ::testing::ValuesIn(makeETKStageParams({ETKDGOption::ETKDGv4})),
+                         [](const ::testing::TestParamInfo<ETKStageTestParam>& info) {
+                           return makeETKStageName(info.param);
+                         });
+#endif

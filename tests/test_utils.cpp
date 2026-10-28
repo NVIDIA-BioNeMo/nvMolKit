@@ -46,6 +46,12 @@ RDKit::DGeomHelpers::EmbedParameters getETKDGOption(ETKDGOption opt) {
       params.useBasicKnowledge = false;
       return params;
     }
+    case ETKDGOption::ETKDGv4:
+#if RDKIT_ETKDG_2026_09_API
+      return RDKit::DGeomHelpers::ETKDGv4;
+#else
+      throw std::runtime_error("ETKDGv4 requires RDKit 2026.09 or later");
+#endif
     default:
       throw std::runtime_error("Unknown ETKDG option");
   }
@@ -67,10 +73,30 @@ std::string getETKDGOptionName(ETKDGOption opt) {
       return "KDG";
     case ETKDGOption::DG:
       return "DG";
+    case ETKDGOption::ETKDGv4:
+      return "ETKDGv4";
     default:
       return "Unknown";
   }
 }
+
+#if RDKIT_ETKDG_2026_09_API
+void setGaussianTorsions(const RDKit::ROMol&                                     mol,
+                         const RDKit::DGeomHelpers::EmbedParameters&             params,
+                         const ForceFields::CrystalFF::ETKDGForceConsts::Params& forceConsts,
+                         ForceFields::CrystalFF::CrystalFFDetails&               details) {
+  details.forceConsts = forceConsts;
+  ForceFields::CrystalFF::getExperimentalTorsions(mol,
+                                                  details,
+                                                  params.useExpTorsionAnglePrefs,
+                                                  params.useSmallRingTorsions,
+                                                  params.useMacrocycleTorsions,
+                                                  params.useBasicKnowledge,
+                                                  4,
+                                                  params.verbose);
+  ForceFields::CrystalFF::populateRefTable(details);
+}
+#endif
 
 std::string getTestDataFolderPath() {
   // Check for the NVMOLKIT_TESTDATA env variable
