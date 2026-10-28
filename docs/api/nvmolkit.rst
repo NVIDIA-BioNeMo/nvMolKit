@@ -93,6 +93,7 @@ Clustering
    clustering.dise
    clustering.fused_dise
    clustering.bitbirch
+   clustering.kmeans
 
 .. autosummary::
    :toctree: generated/
@@ -100,6 +101,7 @@ Clustering
 
    clustering.OutputMode
    clustering.ClusterDeviceResult
+   clustering.KMeansResult
 
 Diversity Selection
 -------------------
