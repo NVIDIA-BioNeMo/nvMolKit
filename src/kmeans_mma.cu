@@ -337,7 +337,19 @@ std::size_t mmaSharedBytes(const int paddedBits, const int stages) {
   return static_cast<std::size_t>(stages) * kStageBytes + sizeof(std::uint32_t) * kMmaRows * (paddedBits / 32 + 1);
 }
 
-//! Most pipeline stages whose shared memory fits the current device, or 0 when not even two fit or it is pre-sm_80.
+/**
+ * True when the kernel image loaded for the current device was compiled for sm_80 or newer. A build that targets only
+ * older GPUs contains just the pre-sm_80 stub, and a newer device JIT-compiles that stub from its PTX, so the device's
+ * compute capability alone does not show that the kernel works.
+ */
+bool mmaKernelCompiled() {
+  cudaFuncAttributes attributes{};
+  cudaCheckError(cudaFuncGetAttributes(&attributes, mmaAssignKernel<KMeansMetric::Tanimoto, 2>));
+  return attributes.ptxVersion >= 80;
+}
+
+//! Most pipeline stages whose shared memory fits the current device, or 0 when not even two fit, the device is
+//! pre-sm_80, or the build has no sm_80+ code for it.
 int mmaStages(const int paddedBits) {
   int device = 0;
   int major  = 0;
@@ -345,7 +357,7 @@ int mmaStages(const int paddedBits) {
   cudaCheckError(cudaGetDevice(&device));
   cudaCheckError(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
   cudaCheckError(cudaDeviceGetAttribute(&limit, cudaDevAttrMaxSharedMemoryPerBlockOptin, device));
-  if (major < 8) {
+  if (major < 8 || !mmaKernelCompiled()) {
     return 0;
   }
   // Leave room for the kernel's static shared memory.
@@ -371,7 +383,8 @@ template <KMeansMetric Metric> void launchMmaAssign(const AssignArgs& args, cons
   const int stages = mmaStages(paddedBits);
   if (stages == 0) {
     throw std::invalid_argument(
-      "k-means needs a GPU of compute capability 8.0 or newer with enough shared memory for the fingerprint width");
+      "k-means needs a GPU of compute capability 8.0 or newer, a build that includes sm_80 or newer code, and enough "
+      "shared memory for the fingerprint width");
   }
   const std::size_t sharedBytes = mmaSharedBytes(paddedBits, stages);
   auto              kernel      = stages == 4 ? mmaAssignKernel<Metric, 4> :

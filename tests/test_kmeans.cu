@@ -6,9 +6,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <random>
 #include <tuple>
+#include <utility>
 #include <vector>
 
 #include "src/kmeans.h"
@@ -81,6 +83,83 @@ double referenceScore(const std::vector<std::uint32_t>& packed,
   return 0.0;
 }
 
+//! Reference distance for a reference score: squared Euclidean distance between normalized vectors for cosine (an
+//! empty row is the zero vector), 1 - Tanimoto otherwise.
+double referenceDistance(const double score, const int count, const KMeansMetric metric) {
+  if (metric == KMeansMetric::Cosine) {
+    return std::max((count > 0 ? 1.0 : 0.0) - score, 0.0);
+  }
+  return 1.0 - score;
+}
+
+int rowBitCount(const std::vector<std::uint32_t>& packed, const int words, const int row) {
+  int count = 0;
+  for (int word = 0; word < words; ++word) {
+    count += __builtin_popcount(packed[static_cast<std::size_t>(row) * words + word]);
+  }
+  return count;
+}
+
+/**
+ * Runs one assignment pass and checks every row against the double-precision reference: the chosen center's score is
+ * within float rounding of the best score, and the returned distance matches the chosen center's reference distance.
+ * Returns the labels.
+ */
+std::vector<int> assignAndCheck(const std::vector<std::uint32_t>& packed,
+                                const std::vector<float>&         centers,
+                                const int                         rows,
+                                const int                         words,
+                                const int                         clusters,
+                                const KMeansMetric                metric,
+                                cudaStream_t                      stream) {
+  auto                     devicePacked  = upload(packed, stream);
+  auto                     deviceCenters = upload(centers, stream);
+  AsyncDeviceVector<int>   labels(rows, stream);
+  AsyncDeviceVector<float> distances(rows, stream);
+  nvMolKit::kmeansAssignGpu({devicePacked.data(), devicePacked.size()},
+                            rows,
+                            words,
+                            deviceCenters.data(),
+                            clusters,
+                            metric,
+                            labels.data(),
+                            distances.data(),
+                            stream);
+  const auto hostLabels    = download(labels, stream);
+  const auto hostDistances = download(distances, stream);
+  for (int row = 0; row < rows; ++row) {
+    double best = -INFINITY;
+    for (int center = 0; center < clusters; ++center) {
+      best = std::max(best, referenceScore(packed, centers, words, row, center, metric));
+    }
+    EXPECT_GE(hostLabels[row], 0) << "row " << row;
+    EXPECT_LT(hostLabels[row], clusters) << "row " << row;
+    if (hostLabels[row] < 0 || hostLabels[row] >= clusters) {
+      continue;
+    }
+    const double chosen = referenceScore(packed, centers, words, row, hostLabels[row], metric);
+    EXPECT_LE(best - chosen, 1e-5 * std::max(1.0, std::abs(best))) << "row " << row;
+    const double distance = referenceDistance(chosen, rowBitCount(packed, words, row), metric);
+    EXPECT_NEAR(hostDistances[row], distance, 1e-5 * std::max(1.0, std::abs(distance)) + 1e-4) << "row " << row;
+  }
+  return hostLabels;
+}
+
+//! Sets center to row's bits, L2-normalized for cosine: the row's unique best center under either metric.
+void plantRow(std::vector<float>&               centers,
+              const std::vector<std::uint32_t>& packed,
+              const int                         words,
+              const int                         center,
+              const int                         row,
+              const KMeansMetric                metric) {
+  const int   bits = words * 32;
+  const float value =
+    metric == KMeansMetric::Cosine ? 1.0F / std::sqrt(static_cast<float>(rowBitCount(packed, words, row))) : 1.0F;
+  for (int bit = 0; bit < bits; ++bit) {
+    centers[static_cast<std::size_t>(center) * bits + bit] = testBit(packed, words, row, bit) ? value : 0.0F;
+  }
+}
+
 class KMeansAssignTest : public ::testing::TestWithParam<std::tuple<KMeansMetric, int, int, int>> {};
 
 TEST_P(KMeansAssignTest, MatchesReference) {
@@ -99,29 +178,38 @@ TEST_P(KMeansAssignTest, MatchesReference) {
     value = std::pow(uniform(generator), 3.0F);
   }
 
-  auto                     devicePacked  = upload(packed, stream);
-  auto                     deviceCenters = upload(centers, stream);
-  AsyncDeviceVector<int>   labels(rows, stream);
-  AsyncDeviceVector<float> distances(rows, stream);
-  nvMolKit::kmeansAssignGpu({devicePacked.data(), devicePacked.size()},
-                            rows,
-                            words,
-                            deviceCenters.data(),
-                            clusters,
-                            metric,
-                            labels.data(),
-                            distances.data(),
-                            stream);
-  const auto hostLabels = download(labels, stream);
-  for (int row = 0; row < rows; ++row) {
-    double best = -INFINITY;
-    for (int center = 0; center < clusters; ++center) {
-      best = std::max(best, referenceScore(packed, centers, words, row, center, metric));
+  // Beyond one 256-center tile, plant row copies in later tiles so those rows have a known winner there. Planted
+  // rows are non-empty and pairwise distinct, so each planted center is the unique best for its row.
+  std::vector<std::pair<int, int>> planted;  // (row, center)
+  if (clusters > 256) {
+    // Distinct centers in later tiles: the first center of the second tile, the last center, and one in between.
+    std::vector<int> targets = {256};
+    if (clusters - 1 > 256) {
+      targets.push_back(clusters - 1);
     }
-    ASSERT_GE(hostLabels[row], 0);
-    ASSERT_LT(hostLabels[row], clusters);
-    const double chosen = referenceScore(packed, centers, words, row, hostLabels[row], metric);
-    EXPECT_LE(best - chosen, 1e-5 * std::max(1.0, std::abs(best))) << "row " << row;
+    if (clusters - 1 > 300) {
+      targets.push_back(300);
+    }
+    std::vector<int> rowsUsed;
+    for (int row = 0; row < rows && rowsUsed.size() < targets.size(); ++row) {
+      const auto begin    = packed.begin() + static_cast<std::ptrdiff_t>(row) * words;
+      const bool distinct = std::none_of(rowsUsed.begin(), rowsUsed.end(), [&](const int other) {
+        return std::equal(begin, begin + words, packed.begin() + static_cast<std::ptrdiff_t>(other) * words);
+      });
+      if (rowBitCount(packed, words, row) > 0 && distinct) {
+        rowsUsed.push_back(row);
+      }
+    }
+    for (std::size_t index = 0; index < rowsUsed.size(); ++index) {
+      planted.emplace_back(rowsUsed[index], targets[index]);
+    }
+  }
+  for (const auto& [row, center] : planted) {
+    plantRow(centers, packed, words, center, row, metric);
+  }
+  const auto labels = assignAndCheck(packed, centers, rows, words, clusters, metric, stream);
+  for (const auto& [row, center] : planted) {
+    EXPECT_EQ(labels[row], center) << "row " << row;
   }
 }
 
@@ -130,7 +218,77 @@ INSTANTIATE_TEST_SUITE_P(KMeans,
                          ::testing::Combine(::testing::Values(KMeansMetric::Cosine, KMeansMetric::Tanimoto),
                                             ::testing::Values(130),
                                             ::testing::Values(1, 9, 32, 67),
-                                            ::testing::Values(1, 5, 130)));
+                                            ::testing::Values(1, 5, 130, 257, 513)));
+
+class KMeansAssignTieTest : public ::testing::TestWithParam<KMeansMetric> {};
+
+// Center i is a copy of distinct center (i % 64) / 4, and distinct center 0 is all zeros. Each distinct center so
+// appears at offsets that are resolved by every stage of the kernel's argmax: +1 (same thread), +2 (another lane of the
+// quad), +64 (another warp) and +256 (the next center tile, same thread). Identical centers score identically, so every
+// row must take the lowest copy, an index below 64 that is a multiple of 4; the two empty rows score best against the
+// zero center (Tanimoto 1 by convention, cosine 0 against negative scores) and must take center 0.
+TEST_P(KMeansAssignTieTest, LowestIndexWinsTies) {
+  const KMeansMetric metric = GetParam();
+  if (!nvMolKit::detail::mmaSupported(64)) {
+    GTEST_SKIP() << "k-means needs an sm_80 or newer GPU";
+  }
+  const nvMolKit::ScopedStream streamOwner;
+  const auto                   stream   = streamOwner.stream();
+  constexpr int                rows     = 130;
+  constexpr int                words    = 9;
+  constexpr int                distinct = 16;
+  constexpr int                clusters = 512;
+  constexpr int                bits     = words * 32;
+  const auto                   packed   = randomFingerprints(rows, words, 0.06, 11);
+
+  std::mt19937                          generator(3);
+  std::uniform_real_distribution<float> uniform(0.0F, 1.0F);
+  std::vector<float>                    unique(static_cast<std::size_t>(distinct) * bits, 0.0F);
+  for (std::size_t index = bits; index < unique.size(); ++index) {
+    unique[index] = std::pow(uniform(generator), 3.0F);
+  }
+  std::vector<float> centers(static_cast<std::size_t>(clusters) * bits);
+  for (int center = 0; center < clusters; ++center) {
+    const int source = (center % 64) / 4;
+    std::copy(unique.begin() + static_cast<std::ptrdiff_t>(source) * bits,
+              unique.begin() + static_cast<std::ptrdiff_t>(source + 1) * bits,
+              centers.begin() + static_cast<std::ptrdiff_t>(center) * bits);
+  }
+
+  const auto labels = assignAndCheck(packed, centers, rows, words, clusters, metric, stream);
+  EXPECT_EQ(labels[0], 0);
+  EXPECT_EQ(labels[1], 0);
+  for (int row = 0; row < rows; ++row) {
+    EXPECT_TRUE(labels[row] < 64 && labels[row] % 4 == 0)
+      << "row " << row << " took center " << labels[row] << " instead of the lowest copy";
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(KMeans, KMeansAssignTieTest, ::testing::Values(KMeansMetric::Cosine, KMeansMetric::Tanimoto));
+
+// A build without sm_80+ code for this device (for example CMAKE_CUDA_ARCHITECTURES=75 on an sm_80+ GPU) has only the
+// kernel stub; assignment must report that instead of launching it.
+TEST(KMeansAssign, ThrowsWithoutUsableKernel) {
+  if (nvMolKit::detail::mmaSupported(64)) {
+    GTEST_SKIP() << "this build has a usable k-means kernel for this GPU";
+  }
+  const nvMolKit::ScopedStream streamOwner;
+  const auto                   stream  = streamOwner.stream();
+  auto                         device  = upload(randomFingerprints(10, 2, 0.2, 1), stream);
+  auto                         centers = upload(std::vector<float>(2 * 64, 0.5F), stream);
+  AsyncDeviceVector<int>       labels(10, stream);
+  AsyncDeviceVector<float>     distances(10, stream);
+  EXPECT_THROW(nvMolKit::kmeansAssignGpu({device.data(), device.size()},
+                                         10,
+                                         2,
+                                         centers.data(),
+                                         2,
+                                         KMeansMetric::Tanimoto,
+                                         labels.data(),
+                                         distances.data(),
+                                         stream),
+               std::invalid_argument);
+}
 
 TEST(KMeansAssign, RejectsInvalidArguments) {
   const nvMolKit::ScopedStream streamOwner;
