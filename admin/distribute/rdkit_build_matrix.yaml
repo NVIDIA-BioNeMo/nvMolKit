@@ -18,31 +18,10 @@
 # Sources of truth: kuelumbus/rdkit-pypi tag list and that tag's conanfile.py.
 #
 # Python coverage policy: target the latest four CPython minors (3.11-3.14).
-
-"2025.9.1":
-  rdkit_pypi_tag: "2025.09.1"
-  boost_version: "1.85.0"
-  python_versions: ["3.11", "3.12", "3.13", "3.14"]
-
-"2025.9.2":
-  rdkit_pypi_tag: "2025.09.2"
-  boost_version: "1.85.0"
-  python_versions: ["3.11", "3.12", "3.13", "3.14"]
-
-"2025.9.3":
-  rdkit_pypi_tag: "2025.09.3"
-  boost_version: "1.85.0"
-  python_versions: ["3.11", "3.12", "3.13", "3.14"]
-
-"2025.9.4":
-  rdkit_pypi_tag: "2025.09.4"
-  boost_version: "1.85.0"
-  python_versions: ["3.11", "3.12", "3.13", "3.14"]
-
-"2025.9.5":
-  rdkit_pypi_tag: "2025.09.5"
-  boost_version: "1.85.0"
-  python_versions: ["3.11", "3.12", "3.13", "3.14"]
+# RDKit coverage policy: all patch releases in the latest two release series,
+# plus the latest patch release of the preceding series.
+# v0.7.0 excludes 2026.09 because RDKit omits BoundsMatrixBuilderDetails.h
+# from its installed development headers.
 
 "2025.9.6":
   rdkit_pypi_tag: "2025.09.6"
@@ -71,5 +50,10 @@
 
 "2026.3.5":
   rdkit_pypi_tag: "2026.03.5"
+  boost_version: "1.85.0"
+  python_versions: ["3.11", "3.12", "3.13", "3.14"]
+
+"2026.3.6":
+  rdkit_pypi_tag: "2026.03.6"
   boost_version: "1.85.0"
   python_versions: ["3.11", "3.12", "3.13", "3.14"]

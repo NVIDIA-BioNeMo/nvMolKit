@@ -25,7 +25,7 @@ import argparse
 import gc
 import random
 import sys
-from multiprocessing import Pool
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Callable
 
@@ -38,6 +38,7 @@ from bench_utils import (
     load_pickle,
     load_smiles,
     print_csv_rows,
+    process_pool,
     throughput_per_s,
     write_csv_rows,
 )
@@ -178,10 +179,11 @@ def _rdkit_params(config_row: dict) -> rdFMCS.MCSParameters:
     return params
 
 
-def _rdkit_worker_init(mol_binaries: list[bytes], params: rdFMCS.MCSParameters) -> None:
-    global _worker_mols, _worker_params
+def _rdkit_worker_init(mol_binaries: list[bytes], config_row: dict) -> None:
+    # Workers are spawned, so build MCSParameters here: it cannot be pickled.
+    global _worker_mols, _worker_params  # noqa: PLW0603 - process-local worker cache
     _worker_mols = [Chem.Mol(binary) for binary in mol_binaries]
-    _worker_params = params
+    _worker_params = _rdkit_params(config_row)
 
 
 def _rdkit_worker_pair(pair: tuple[int, int]) -> tuple[int, int]:
@@ -206,48 +208,50 @@ def bench_rdkit_mcs(
     complete_results_data: list[tuple[int, int]] | None = None
     pairs_done = 0
 
-    if threads > 1:
-        mol_binaries = [mol.ToBinary() for mol in mols]
-        chunksize = 1 if max_seconds > 0 else max(1, len(pairs) // (threads * 8))
+    with ExitStack() as workers:
+        if threads > 1:
+            mol_binaries = [mol.ToBinary() for mol in mols]
+            chunksize = 1 if max_seconds > 0 else max(1, len(pairs) // (threads * 8))
 
-        @nvtx.annotate("mcs_rdkit_run_mp", color="yellow")
-        def run(deadline: Deadline) -> None:
-            nonlocal complete_results_data, pairs_done, results_data
-            results_data = []
-            pairs_done = 0
-            with Pool(threads, initializer=_rdkit_worker_init, initargs=(mol_binaries, params)) as pool:
+            pool = workers.enter_context(process_pool(threads, _rdkit_worker_init, (mol_binaries, config_row)))
+
+            @nvtx.annotate("mcs_rdkit_run_mp", color="yellow")
+            def run(deadline: Deadline) -> None:
+                nonlocal complete_results_data, pairs_done, results_data
+                results_data = []
+                pairs_done = 0
                 for result in pool.imap(_rdkit_worker_pair, pairs, chunksize=chunksize):
                     results_data.append(result)
                     pairs_done += 1
                     if deadline.expired():
                         break
-            if pairs_done == len(pairs):
-                complete_results_data = results_data
+                if pairs_done == len(pairs):
+                    complete_results_data = results_data
 
-    else:
+        else:
 
-        @nvtx.annotate("mcs_rdkit_run", color="yellow")
-        def run(deadline: Deadline) -> None:
-            nonlocal complete_results_data, pairs_done, results_data
-            results_data = []
-            pairs_done = 0
-            for idx_a, idx_b in pairs:
-                result = rdFMCS.FindMCS([mols[idx_a], mols[idx_b]], params)
-                results_data.append((int(result.numAtoms), int(result.numBonds)))
-                pairs_done += 1
-                if deadline.expired():
-                    break
-            if pairs_done == len(pairs):
-                complete_results_data = results_data
+            @nvtx.annotate("mcs_rdkit_run", color="yellow")
+            def run(deadline: Deadline) -> None:
+                nonlocal complete_results_data, pairs_done, results_data
+                results_data = []
+                pairs_done = 0
+                for idx_a, idx_b in pairs:
+                    result = rdFMCS.FindMCS([mols[idx_a], mols[idx_b]], params)
+                    results_data.append((int(result.numAtoms), int(result.numBonds)))
+                    pairs_done += 1
+                    if deadline.expired():
+                        break
+                if pairs_done == len(pairs):
+                    complete_results_data = results_data
 
-    timing = _time_it(
-        run,
-        runs=runs,
-        warmups=0,
-        max_seconds=max_seconds,
-        progress_getter=lambda: pairs_done,
-        progress_target=len(pairs),
-    )
+        timing = _time_it(
+            run,
+            runs=runs,
+            warmups=0,
+            max_seconds=max_seconds,
+            progress_getter=lambda: pairs_done,
+            progress_target=len(pairs),
+        )
     if timing.progress is None:
         raise RuntimeError("bounded timing did not report progress")
     measured_pairs = timing.progress
@@ -376,6 +380,12 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=10.0,
         help="Target wall-clock seconds per Optuna trial",
+    )
+    parser.add_argument(
+        "--autotune_cpu_budget",
+        type=int,
+        default=None,
+        help="CPU-core budget used to bound the autotune search space (default: detected physical cores)",
     )
     parser.add_argument(
         "--autotune_calibration_size",
@@ -531,6 +541,7 @@ def main() -> None:
                         calibration_set=explicit_calibration,
                         n_trials=args.autotune_trials,
                         target_seconds_per_trial=args.autotune_time_budget,
+                        cpu_budget=args.autotune_cpu_budget,
                         seed=args.autotune_seed,
                         verbose=True,
                     )

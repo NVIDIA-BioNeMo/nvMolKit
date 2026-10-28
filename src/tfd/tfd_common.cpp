@@ -84,12 +84,12 @@ const RDKit::Atom* doMatchExcept1(const std::vector<std::uint32_t>& inv, const s
 std::vector<std::uint32_t> getAtomInvariantsWithRadius(const RDKit::ROMol& mol, int radius) {
   std::vector<std::uint32_t> inv(mol.getNumAtoms(), 0);
 
-  auto fpGen = RDKit::MorganFingerprint::getMorganGenerator<std::uint32_t>(radius,
-                                                                           false /* countSimulation */,
-                                                                           false /* includeChirality */,
-                                                                           true /* useBondTypes */,
-                                                                           false /* onlyNonzeroInvariants */,
-                                                                           true /* includeRedundantEnvironments */);
+  auto* fpGen = RDKit::MorganFingerprint::getMorganGenerator<std::uint32_t>(radius,
+                                                                            false /* countSimulation */,
+                                                                            false /* includeChirality */,
+                                                                            true /* useBondTypes */,
+                                                                            false /* onlyNonzeroInvariants */,
+                                                                            true /* includeRedundantEnvironments */);
 
   RDKit::AdditionalOutput ao;
   ao.allocateBitInfoMap();
@@ -154,8 +154,9 @@ std::vector<BondInfo> getBondsForTorsions(const RDKit::ROMol& mol, bool ignoreCo
 
   // Flag allene centers: carbon atoms with exactly two double bonds
   for (const auto* atom : mol.atoms()) {
-    if (atom->getAtomicNum() != 6)
+    if (atom->getAtomicNum() != 6) {
       continue;
+    }
     int doubleBondCount = 0;
     for (const auto* bond : mol.atomBonds(atom)) {
       if (bond->getBondTypeAsDouble() == 2.0) {
@@ -190,9 +191,9 @@ std::vector<BondInfo> getBondsForTorsions(const RDKit::ROMol& mol, bool ignoreCo
         if (!ignoreColinearBonds) {
           // Search for alternative atoms (following the Python logic)
           while (nb1.size() == 1 && atomFlags[a1]) {
-            int a1old = a1;
-            a1        = nb1[0]->getIdx();
-            auto* b   = mol.getBondBetweenAtoms(a1old, a1);
+            int a1old     = a1;
+            a1            = nb1[0]->getIdx();
+            const auto* b = mol.getBondBetweenAtoms(a1old, a1);
             if (b) {
               if (b->getEndAtomIdx() == static_cast<unsigned int>(a1old)) {
                 nb1 = getHeavyAtomNeighbors(b->getBeginAtom(), a1old);
@@ -205,9 +206,9 @@ std::vector<BondInfo> getBondsForTorsions(const RDKit::ROMol& mol, bool ignoreCo
             }
           }
           while (nb2.size() == 1 && atomFlags[a2]) {
-            int a2old = a2;
-            a2        = nb2[0]->getIdx();
-            auto* b   = mol.getBondBetweenAtoms(a2old, a2);
+            int a2old     = a2;
+            a2            = nb2[0]->getIdx();
+            const auto* b = mol.getBondBetweenAtoms(a2old, a2);
             if (b) {
               if (b->getBeginAtomIdx() == static_cast<unsigned int>(a2old)) {
                 nb2 = getHeavyAtomNeighbors(b->getEndAtom(), a2old);
@@ -482,8 +483,8 @@ static std::vector<float> computeTorsionWeightsImpl(const RDKit::ROMol&         
   }
 
   // Calculate weights for ring torsions
-  auto ringInfo  = mol.getRingInfo();
-  auto bondRings = ringInfo->bondRings();
+  auto* ringInfo  = mol.getRingInfo();
+  auto  bondRings = ringInfo->bondRings();
 
   for (const auto& bondRing : bondRings) {
     int    num  = static_cast<int>(bondRing.size());
@@ -561,8 +562,9 @@ static TFDSystemHost buildTFDSystemImpl(const RDKit::ROMol& mol, const TFDComput
       torsionIdx++;
       continue;
     }
-    for (const auto& q : torsion.atomQuartets)
+    for (const auto& q : torsion.atomQuartets) {
       system.torsionAtoms.push_back(q);
+    }
     system.quartetStarts.push_back(static_cast<int>(system.torsionAtoms.size()));
     system.torsionTypes.push_back(torsion.atomQuartets.size() > 1 ? TorsionType::Symmetric : TorsionType::Single);
     system.torsionMaxDevs.push_back(torsion.maxDev);
@@ -576,8 +578,9 @@ static TFDSystemHost buildTFDSystemImpl(const RDKit::ROMol& mol, const TFDComput
       torsionIdx++;
       continue;
     }
-    for (const auto& q : torsion.atomQuartets)
+    for (const auto& q : torsion.atomQuartets) {
       system.torsionAtoms.push_back(q);
+    }
     system.quartetStarts.push_back(static_cast<int>(system.torsionAtoms.size()));
     system.torsionTypes.push_back(torsion.atomQuartets.size() > 1 ? TorsionType::Ring : TorsionType::Single);
     system.torsionMaxDevs.push_back(torsion.maxDev);
@@ -674,8 +677,9 @@ static MolExtraction extractMolData(const RDKit::ROMol& mol, const TFDComputeOpt
       torsionIdx++;
       return;
     }
-    for (const auto& q : torsion.atomQuartets)
+    for (const auto& q : torsion.atomQuartets) {
       ext.atoms.push_back(q);
+    }
     ext.qStarts.push_back(static_cast<int>(ext.atoms.size()));
     if (isRing) {
       ext.types.push_back(torsion.atomQuartets.size() > 1 ? TorsionType::Ring : TorsionType::Single);
@@ -688,10 +692,12 @@ static MolExtraction extractMolData(const RDKit::ROMol& mol, const TFDComputeOpt
     torsionIdx++;
   };
 
-  for (const auto& t : ext.torsionList.nonRingTorsions)
+  for (const auto& t : ext.torsionList.nonRingTorsions) {
     addTorsion(t, false);
-  for (const auto& t : ext.torsionList.ringTorsions)
+  }
+  for (const auto& t : ext.torsionList.ringTorsions) {
     addTorsion(t, true);
+  }
 
   ext.numTorsions = static_cast<int>(ext.wts.size());
   ext.numQuartets = static_cast<int>(ext.atoms.size());

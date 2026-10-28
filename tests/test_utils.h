@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -93,5 +93,21 @@ void getMols(const std::string&                          fileName,
 // Helper function to convert positions from vector of unique pointers to a flattened vector
 std::vector<double> convertPositionsToVector(const std::vector<std::unique_ptr<RDGeom::Point>>& positions,
                                              unsigned int                                       dim);
+
+//! Tolerance policy for comparing per-molecule minimized energies against an RDKit reference.
+//! With `maxOutliers == 0` this reduces exactly to a strict Pointwise(DoubleNear(tightTolerance)) check.
+struct EnergyMatchTolerance {
+  double tightTolerance;
+  int    maxOutliers      = 0;
+  double averageTolerance = 0.0;  // 0 disables the average-difference check
+  bool   requireProgress  = false;
+};
+
+//! Compares `got` against `ref` per-molecule, allowing up to `tol.maxOutliers` molecules (e.g. ones that
+//! converged to an alternate local minimum) to exceed `tol.tightTolerance`.
+void expectEnergyMatch(const std::vector<double>&  got,
+                       const std::vector<double>&  ref,
+                       const std::vector<double>&  start,
+                       const EnergyMatchTolerance& tol);
 
 #endif  // NVMOLKIT_TEST_UTILS_H

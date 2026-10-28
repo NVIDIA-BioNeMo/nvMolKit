@@ -15,6 +15,7 @@
 
 #include "src/substruct/pinned_buffer_pool.h"
 
+#include <algorithm>
 #include <optional>
 
 namespace nvMolKit {
@@ -75,13 +76,35 @@ void PinnedHostBufferPool::initialize(int poolSize,
                                       int maxMatchIndicesEstimate,
                                       int maxPatternsPerDepth) {
   buffers_.clear();
-  available_ = std::make_unique<ThreadSafeQueue<PinnedHostBuffer*>>();
+  available_               = std::make_unique<ThreadSafeQueue<PinnedHostBuffer*>>();
+  maxBatchSize_            = maxBatchSize;
+  maxMatchIndicesEstimate_ = maxMatchIndicesEstimate;
+  maxPatternsPerDepth_     = maxPatternsPerDepth;
 
   buffers_.reserve(static_cast<size_t>(poolSize));
   for (int i = 0; i < poolSize; ++i) {
     auto buffer = createBuffer(maxBatchSize, maxMatchIndicesEstimate, maxPatternsPerDepth);
     available_->push(buffer.get());
     buffers_.push_back(std::move(buffer));
+  }
+}
+
+void PinnedHostBufferPool::prepare(int poolSize,
+                                   int maxBatchSize,
+                                   int maxMatchIndicesEstimate,
+                                   int maxPatternsPerDepth) {
+  if (static_cast<int>(buffers_.size()) < poolSize || maxBatchSize_ < maxBatchSize ||
+      maxMatchIndicesEstimate_ < maxMatchIndicesEstimate || maxPatternsPerDepth_ < maxPatternsPerDepth) {
+    initialize(std::max(poolSize, static_cast<int>(buffers_.size())),
+               std::max(maxBatchSize, maxBatchSize_),
+               std::max(maxMatchIndicesEstimate, maxMatchIndicesEstimate_),
+               std::max(maxPatternsPerDepth, maxPatternsPerDepth_));
+    return;
+  }
+
+  available_ = std::make_unique<ThreadSafeQueue<PinnedHostBuffer*>>();
+  for (auto& buffer : buffers_) {
+    available_->push(buffer.get());
   }
 }
 

@@ -204,15 +204,10 @@ void initETKDGContext(const std::vector<RDKit::ROMol*>& mols, ETKDGContext& cont
 /**
  * @brief Tracks conformer generation results and dispatches molecule IDs for processing
  *
- * Provides a batch of molecule IDs for the next round of conformer generation attempt. First, loops over all molecules,
- * and sequentially assigns molecules that are not yet at their target conformer count and have not exceeded the max
- * iterations threshold. Each molecule will be assigned up to `numConfsPerMol` conformers, either in one batch or
- * distributed over several. If a molecule has already reached its target conformer count, it will not be included in
- * the batch.
- *
- * Once all molecules have had at least n_conformers dispatched, the scheduler will loop back to the first molecule and
- * start oversubscribing, but will only add the number of unfinished remaining conformers to start. See unit tests for
- * examples of this behavior.
+ * Provides a batch of molecule IDs for the next round of conformer generation attempts. Each molecule keeps one attempt
+ * in flight per conformer it still needs; spare batch capacity is filled round-robin with extra attempts for
+ * unfinished molecules. A molecule is never dispatched more than maxIterations * numConfsPerMol times. See unit tests
+ * for examples of this behavior.
  *
  * Thread-safe operations.
  *
@@ -225,21 +220,19 @@ class Scheduler {
  public:
   /**
    * @brief Constructor
-   * @param numUniqueMols Number of unique molecules to track (must be > 0)
    * @param numConfsPerMol Target number of conformers per molecule (must be > 0)
-   * @param maxIterations Maximum iterations allowed per conformer attempt (must be > 0)
-   * @throws std::invalid_argument if any parameter is <= 0
+   * @param maxIterationsPerMol Maximum iterations allowed per conformer attempt, one entry per molecule (non-empty, all
+   *                            > 0)
+   * @throws std::invalid_argument if any parameter is <= 0 or the vector is empty
    */
-  Scheduler(int numUniqueMols, int numConfsPerMol, int maxIterations);
+  Scheduler(int numConfsPerMol, const std::vector<int>& maxIterationsPerMol);
 
   /**
    * @brief Dispatch molecule IDs for the next batch of processing
    *
    * Returns a vector of molecule IDs that need conformer generation attempts.
-   * Prioritizes molecules that haven't reached their target conformer count
-   * and haven't exceeded the maximum attempt limit. Will return duplicates when a
-   * molecule needs multiple conformers. If all safe work is currently in flight,
-   * waits until recording a result makes more work available or completes the search.
+   * Returns duplicates when a molecule needs multiple attempts. If no work can be dispatched but
+   * attempts are in flight, waits until a result is recorded.
    *
    * @param batchSize Maximum number of molecule IDs to return
    * @param attemptIds Optional output populated with each molecule's zero-based attempt number
@@ -277,10 +270,9 @@ class Scheduler {
   std::condition_variable progressCondition_;
 
   int    numConfsPerMol_;
-  int    maxIterations_;
   size_t numUniqueMolecules_;
-  int    maxTriesPerMolecule_;
 
+  std::vector<int> maxTriesPerMolecule_;
   std::vector<int> completedConformers_;
   std::vector<int> totalAttempts_;
   std::vector<int> attemptsInFlightByMolecule_;
@@ -288,6 +280,8 @@ class Scheduler {
   bool             canceled_         = false;
 
   std::vector<int> dispatchAvailableLocked(int batchSize, std::vector<int>* attemptIds);
+  //! Append one attempt for @p molIdx to the batch and update attempt bookkeeping. Requires mutex_ held.
+  void             pushAttemptLocked(size_t molIdx, std::vector<int>& molIds, std::vector<int>* attemptIds);
 };
 
 }  // namespace detail

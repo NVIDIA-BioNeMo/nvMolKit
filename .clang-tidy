@@ -23,8 +23,74 @@ Checks:
   # Enum representation is an ABI and data-layout decision, not a blanket
   # optimization; smaller underlying types can also add conversion overhead.
   - '-performance-enum-size'
+  - readability-ambiguous-smartptr-reset-call
+  - readability-avoid-return-with-void-value
+  - readability-avoid-unconditional-preprocessor-if
+  - readability-braces-around-statements
+  - readability-const-return-type
+  - readability-container-contains
+  - readability-container-data-pointer
+  - readability-container-size-empty
+  - readability-delete-null-pointer
+  - readability-duplicate-include
+  - readability-inconsistent-ifelse-braces
+  - readability-misleading-indentation
+  - readability-misplaced-array-index
+  - readability-qualified-auto
+  - readability-redundant-casting
+  - readability-reference-to-constructed-temporary
+  - readability-uniqueptr-delete-release
+  - cppcoreguidelines-*
+  # Required for CUDA, C, and RDKit interoperability.
+  - '-cppcoreguidelines-avoid-c-arrays'
+  - '-cppcoreguidelines-macro-to-enum'
+  - '-cppcoreguidelines-macro-usage'
+  - '-cppcoreguidelines-owning-memory'
+  - '-cppcoreguidelines-pro-bounds-array-to-pointer-decay'
+  - '-cppcoreguidelines-pro-type-reinterpret-cast'
+  - '-cppcoreguidelines-pro-type-union-access'
+  - '-cppcoreguidelines-pro-type-vararg'
+  - '-cppcoreguidelines-use-enum-class'
+  # Broad style and class-design policies.
+  - '-cppcoreguidelines-avoid-const-or-ref-data-members'
+  - '-cppcoreguidelines-explicit-virtual-functions'
+  - '-cppcoreguidelines-non-private-member-variables-in-classes'
+  - '-cppcoreguidelines-special-member-functions'
+  # Too noisy in existing numerical and performance-critical code.
+  - '-cppcoreguidelines-avoid-magic-numbers'
+  - '-cppcoreguidelines-init-variables'
+  - '-cppcoreguidelines-narrowing-conversions'
+  - '-cppcoreguidelines-pro-bounds-avoid-unchecked-container-access'
+  - '-cppcoreguidelines-pro-bounds-constant-array-index'
+  - '-cppcoreguidelines-pro-bounds-pointer-arithmetic'
+  - '-cppcoreguidelines-pro-type-member-init'
+  # pushBatch accepts lvalue or rvalue containers and moves their elements.
+  - '-cppcoreguidelines-missing-std-forward'
+  # Query descriptors are checked before casting to the matching RDKit type.
+  - '-cppcoreguidelines-pro-type-static-cast-downcast'
+  - misc-*
+  # Include cleanup is a separate dependency-maintenance policy and can be
+  # noisy when clang-tidy analyzes CUDA and third-party headers.
+  - '-misc-include-cleaner'
+  # Adding const to every non-mutated local is a broad style policy with a
+  # large mechanical delta and little correctness value.
+  - '-misc-const-correctness'
+  # Top-level const on CUDA handle typedefs is intentional and does not claim
+  # that the pointed-to runtime object is const.
+  - '-misc-misplaced-const'
+  # Recursive traversal is the natural implementation for RDKit query trees.
+  - '-misc-no-recursion'
+  # Public aggregate-style data structures intentionally expose state.
+  - '-misc-non-private-member-variables-in-classes'
+  # CUDA callbacks and interface implementations can require unused
+  # parameters; compiler warnings already diagnose accidental cases.
+  - '-misc-unused-parameters'
+  # Internal-linkage organization is a style and API-maintenance concern, not
+  # a correctness check; enforcing it would cause a broad source reorganization.
+  - '-misc-use-anonymous-namespace'
+  - '-misc-use-internal-linkage'
 WarningsAsErrors: '*'
-HeaderFilterRegex: '.*/(src|rdkit_extensions)/.*'
+HeaderFilterRegex: '.*/src/.*'
 FormatStyle: none
 CheckOptions:
   # int8_t is used as a small integer (including negative sentinels), not as a

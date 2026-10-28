@@ -61,8 +61,8 @@ RDKIT_PYPI_TAG=$1
 PYTHON_VERSION=$2
 OUT_DIR=$(realpath -m "$3")
 
-if [[ ! "${PYTHON_VERSION}" =~ ^3\.(10|11|12|13|14)$ ]]; then
-    echo "Error: python_version must be one of 3.10..3.14, got: ${PYTHON_VERSION}" >&2
+if [[ ! "${PYTHON_VERSION}" =~ ^3\.(11|12|13|14)$ ]]; then
+    echo "Error: python_version must be one of 3.11..3.14, got: ${PYTHON_VERSION}" >&2
     exit 1
 fi
 

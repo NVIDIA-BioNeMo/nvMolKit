@@ -20,6 +20,7 @@
 
 #include "src/butina.h"
 #include "src/butina_common.cuh"
+#include "src/utils/conditional_loop_graph.cuh"
 #include "src/utils/cub_helpers.cuh"
 #include "src/utils/host_vector.h"
 #include "src/utils/nvtx.h"

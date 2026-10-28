@@ -29,6 +29,15 @@ Similarity Calculations
    similarity.crossTanimotoSimilarityMemoryConstrained
    similarity.crossCosineSimilarity
    similarity.crossCosineSimilarityMemoryConstrained
+   similarity.aap_similarity
+
+.. autosummary::
+   :toctree: generated/
+   :template: class_template.rst
+
+   similarity.TanimotoMetric
+   similarity.CosineMetric
+   similarity.AAPMetric
 
 
 ETKDG Conformer Generation
@@ -72,8 +81,8 @@ UFF Optimization
    batchedForcefield.UFFBatchedForcefield
    batchedForcefield.UFFBatchElement
 
-Butina Clustering
------------------
+Clustering
+----------
 
 .. autosummary::
    :toctree: generated/
@@ -81,13 +90,28 @@ Butina Clustering
 
    clustering.butina
    clustering.fused_butina
+   clustering.dise
+   clustering.fused_dise
+   clustering.bitbirch
 
 .. autosummary::
    :toctree: generated/
    :template: class_template.rst
 
-   clustering.ButinaOutputMode
-   clustering.ButinaDeviceResult
+   clustering.OutputMode
+   clustering.ClusterDeviceResult
+
+Diversity Selection
+-------------------
+
+.. autosummary::
+   :toctree: generated/
+   :template: function_template.rst
+
+   pickers.leader
+   pickers.fused_leader
+   pickers.maxmin
+   pickers.fused_maxmin
 
 Maximum Common Substructure (MCS)
 ---------------------------------
@@ -123,6 +147,7 @@ Substructure Search
 
    substructure.SubstructSearchConfig
    substructure.SubstructMatchResults
+   substruct_library.SubstructLibrary
 
 Conformer RMSD
 --------------
@@ -133,6 +158,28 @@ Conformer RMSD
 
    conformerRmsd.GetConformerRMSMatrix
    conformerRmsd.GetConformerRMSMatrixBatch
+
+3D Descriptors
+--------------
+
+.. autosummary::
+   :toctree: generated/
+   :template: function_template.rst
+
+   descriptors3d.Calc3DProperties
+
+.. autosummary::
+   :toctree: generated/
+   :template: class_template.rst
+
+   descriptors3d.Property3D
+   descriptors3d.Device3DPropertyResult
+   descriptors3d.Dense3DPropertyResult
+   descriptors3d.Property3DOptions
+   descriptors3d.MomentOptions
+   descriptors3d.WhimOptions
+   descriptors3d.GetawayOptions
+   descriptors3d.DclvOptions
 
 Torsion Fingerprint Deviation (TFD)
 -----------------------------------

@@ -14,8 +14,9 @@
 // limitations under the License.
 
 #include <cub/cub.cuh>
+#include <type_traits>
 
-#include "src/forcefields/dist_geom_kernels_device.cuh"
+#include "src/forcefields/dist_geom_kernels_device_dispatch.cuh"
 #include "src/forcefields/mmff_kernels.h"
 #include "src/forcefields/mmff_kernels_device_dispatch.cuh"
 #include "src/minimizer/bfgs_minimize_permol_kernels.h"
@@ -32,53 +33,55 @@ constexpr double  FUNCTOL              = 1e-4;
 constexpr double  MOVETOL              = 1e-7;
 constexpr double  TOLX                 = 4. * 3e-8;
 
-__device__ void setMaxStep(const double*                                               pos,
-                           const int                                                   numTerms,
-                           float*                                                      maxStepOutSquared,
-                           typename cub::BlockReduce<double, BLOCK_SIZE>::TempStorage& tempStorage) {
-  float sumSquaredPos = 0.0;
+template <typename storageT>
+__device__ void setMaxStep(const storageT*                                               pos,
+                           const int                                                     numTerms,
+                           storageT*                                                     maxStepOutSquared,
+                           typename cub::BlockReduce<storageT, BLOCK_SIZE>::TempStorage& tempStorage) {
+  storageT sumSquaredPos = 0;
   for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
-    float dx2 = pos[i] * pos[i];
+    const storageT dx2 = pos[i] * pos[i];
     sumSquaredPos += dx2;
   }
-  using BlockReduce = cub::BlockReduce<double, BLOCK_SIZE>;
+  using BlockReduce = cub::BlockReduce<storageT, BLOCK_SIZE>;
 
-  const float squaredSum = BlockReduce(tempStorage).Sum(sumSquaredPos);
+  const storageT squaredSum = BlockReduce(tempStorage).Sum(sumSquaredPos);
   if (threadIdx.x == 0) {
-    constexpr float maxStepFactorSquared = 100.0 * 100.0;
-    *maxStepOutSquared =
-      maxStepFactorSquared * max(squaredSum, static_cast<float>(numTerms) * static_cast<float>(numTerms));
+    constexpr storageT maxStepFactorSquared = static_cast<storageT>(100.0 * 100.0);
+    const storageT     terms                = static_cast<storageT>(numTerms);
+    *maxStepOutSquared                      = maxStepFactorSquared * max(squaredSum, terms * terms);
   }
 }
 
-__device__ void lineSearchSetup(const int                                                   numTerms,
-                                const double*                                               posStart,
-                                const double*                                               gradStart,
-                                const float                                                 maxStepSquared,
-                                double*                                                     dirStart,
-                                double&                                                     slope,
-                                double&                                                     lambdaMin,
-                                typename cub::BlockReduce<double, BLOCK_SIZE>::TempStorage& tempStorage) {
+template <typename storageT>
+__device__ void lineSearchSetup(const int                                                     numTerms,
+                                const storageT*                                               posStart,
+                                const storageT*                                               gradStart,
+                                const storageT                                                maxStepSquared,
+                                storageT*                                                     dirStart,
+                                storageT&                                                     slope,
+                                storageT&                                                     lambdaMin,
+                                typename cub::BlockReduce<storageT, BLOCK_SIZE>::TempStorage& tempStorage) {
   const int idxInSys = threadIdx.x;
-  using BlockReduce  = cub::BlockReduce<double, BLOCK_SIZE>;
-  __shared__ float dirSumSquared;
+  using BlockReduce  = cub::BlockReduce<storageT, BLOCK_SIZE>;
+  __shared__ storageT dirSumSquared;
 
   // ---------------------------------
   //  Scale direction vector if needed
   // ---------------------------------
-  float sumSquaredLocal = 0.0;
+  storageT sumSquaredLocal = 0;
   for (int i = idxInSys; i < numTerms; i += blockDim.x) {
-    float dx2 = dirStart[i] * dirStart[i];
+    const storageT dx2 = dirStart[i] * dirStart[i];
     sumSquaredLocal += dx2;
   }
-  float blockSum = BlockReduce(tempStorage).Sum(sumSquaredLocal);
+  storageT blockSum = BlockReduce(tempStorage).Sum(sumSquaredLocal);
   if (idxInSys == 0) {
     dirSumSquared = blockSum;
   }
   __syncthreads();
   if (dirSumSquared > maxStepSquared) {
-    const float inverseScaleSquared = dirSumSquared / maxStepSquared;
-    const float scale               = rsqrtf(inverseScaleSquared);
+    const storageT inverseScaleSquared = dirSumSquared / maxStepSquared;
+    const storageT scale               = static_cast<storageT>(1) / sqrt(inverseScaleSquared);
     for (int i = idxInSys; i < numTerms; i += blockDim.x) {
       dirStart[i] *= scale;
     }
@@ -88,9 +91,9 @@ __device__ void lineSearchSetup(const int                                       
   // -------------------------
   // Set slope, check validity
   // -------------------------
-  float localSum     = 0.0;
-  float localGradSum = 0.0;
-  float localDirSum  = 0.0;
+  storageT localSum     = 0;
+  storageT localGradSum = 0;
+  storageT localDirSum  = 0;
   // Each thread computes its partial sum
   for (int i = idxInSys; i < numTerms; i += blockDim.x) {
     localSum += dirStart[i] * gradStart[i];
@@ -110,12 +113,12 @@ __device__ void lineSearchSetup(const int                                       
   // ----------------------
   // Compute initial lambda
   // ----------------------
-  float localMax_numerator   = 0.0;
-  float localMax_denominator = 1.0;
+  storageT localMax_numerator   = 0;
+  storageT localMax_denominator = 1;
   // Each thread computes its local maximum
   for (int i = idxInSys; i < numTerms; i += blockDim.x) {
-    float temp_numerator   = fabs(dirStart[i]);
-    float temp_denominator = fmax(fabs(posStart[i]), 1.0);
+    const storageT temp_numerator   = abs(dirStart[i]);
+    const storageT temp_denominator = max(abs(posStart[i]), static_cast<storageT>(1));
     // temp_numerator / temp_denominator > localMax_numerator / localMax_denominator
     // <=>
     // temp_numerator * localMax_denominator > localMax_numerator * temp_denominator
@@ -125,92 +128,98 @@ __device__ void lineSearchSetup(const int                                       
     }
   }
 
-  float localInvMax = localMax_denominator / (localMax_numerator > 0.0f ? localMax_numerator : 1.0e-20f);
+  const storageT localInvMax =
+    localMax_denominator /
+    (localMax_numerator > static_cast<storageT>(0) ? localMax_numerator : static_cast<storageT>(1.0e-20));
   // Perform block-wide reduction to find the maximum
-  float blockInvMax = BlockReduce(tempStorage).Reduce(static_cast<double>(localInvMax), cubMin());
+  const storageT blockInvMax = BlockReduce(tempStorage).Reduce(localInvMax, cubMin());
 
   // The first thread in the block writes the result
   if (threadIdx.x == 0) {
-    lambdaMin = static_cast<float>(MOVETOL) * blockInvMax;
+    lambdaMin = static_cast<storageT>(MOVETOL) * blockInvMax;
   }
 }
 
-__device__ void lineSearchPerturb(const int     numTerms,
-                                  const double* refPos,
-                                  const double* dirStart,
-                                  const float   lambda,
-                                  double*       scratchPos) {
+template <typename storageT>
+__device__ void lineSearchPerturb(const int       numTerms,
+                                  const storageT* refPos,
+                                  const storageT* dirStart,
+                                  const storageT  lambda,
+                                  storageT*       scratchPos) {
   for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
     scratchPos[i] = refPos[i] + lambda * dirStart[i];
   }
   __syncthreads();
 }
 
-__device__ bool lineSearchPostEnergy(const bool  isFirstIter,
-                                     const float prevE,
-                                     const float newE,
-                                     const float slope,
-                                     const float lambda,
-                                     const float lambdaMin,
-                                     double&     lambda2,
-                                     double&     eScratch,
-                                     double&     lambdaOut) {
+template <typename storageT>
+__device__ bool lineSearchPostEnergy(const bool     isFirstIter,
+                                     const storageT prevE,
+                                     const storageT newE,
+                                     const storageT slope,
+                                     const storageT lambda,
+                                     const storageT lambdaMin,
+                                     storageT&      lambda2,
+                                     storageT&      eScratch,
+                                     storageT&      lambdaOut) {
   bool converged = false;
 
   if (threadIdx.x == 0) {
-    const float eDiff = newE - prevE;
+    const storageT eDiff = newE - prevE;
     if (lambda < lambdaMin || eDiff <= FUNCTOL * lambda * slope) {
       converged = true;
     } else {
-      float tmpLambda;
+      storageT tmpLambda;
       if (isFirstIter) {
         tmpLambda = -slope / (2.0f * (eDiff - slope));
       } else {
-        const float rhs1     = eDiff - lambda * slope;
-        const float rhs2     = eScratch - prevE - lambda2 * slope;
-        const float rLambda  = 1.0f / static_cast<float>(lambda);
-        const float rLambda2 = 1.0f / static_cast<float>(lambda2);
-        const float rScale   = 1.0f / (lambda - static_cast<float>(lambda2));
-        const float a        = (rhs1 * rLambda * rLambda - rhs2 * rLambda2 * rLambda2) * rScale;
-        const float b        = (-lambda2 * rhs1 * rLambda * rLambda + lambda * rhs2 * rLambda2 * rLambda2) * rScale;
+        const storageT rhs1     = eDiff - lambda * slope;
+        const storageT rhs2     = eScratch - prevE - lambda2 * slope;
+        const storageT rLambda  = static_cast<storageT>(1) / lambda;
+        const storageT rLambda2 = static_cast<storageT>(1) / lambda2;
+        const storageT rScale   = static_cast<storageT>(1) / (lambda - lambda2);
+        const storageT a        = (rhs1 * rLambda * rLambda - rhs2 * rLambda2 * rLambda2) * rScale;
+        const storageT b        = (-lambda2 * rhs1 * rLambda * rLambda + lambda * rhs2 * rLambda2 * rLambda2) * rScale;
         if (a == 0.0f) {
           tmpLambda = -slope / (2.0f * b);
         } else {
-          const float disc = b * b - 3.0f * a * slope;
+          const storageT disc = b * b - static_cast<storageT>(3) * a * slope;
           if (disc < 0.0f) {
             tmpLambda = 0.5f * lambda;
           } else {
-            const float sqrtDisc = sqrtf(disc);
-            tmpLambda            = (b <= 0.0f) ? (-b + sqrtDisc) / (3.0f * a) : -slope / (b + sqrtDisc);
+            const storageT sqrtDisc = sqrt(disc);
+            tmpLambda = (b <= static_cast<storageT>(0)) ? (-b + sqrtDisc) / (static_cast<storageT>(3) * a) :
+                                                          -slope / (b + sqrtDisc);
           }
         }
-        tmpLambda = fminf(tmpLambda, 0.5f * lambda);
+        tmpLambda = min(tmpLambda, static_cast<storageT>(0.5) * lambda);
       }
       lambda2   = lambda;
       eScratch  = newE;
-      lambdaOut = fmaxf(tmpLambda, 0.1f * lambda);
+      lambdaOut = max(tmpLambda, static_cast<storageT>(0.1) * lambda);
     }
   }
   __syncthreads();
   return converged;
 }
 
-__device__ void setDirection(const int                                                   numTerms,
-                             const double*                                               posFromLineSearch,
-                             const double*                                               pos,
-                             double*                                                     xi,
-                             double*                                                     dGrad,
-                             const double*                                               grad,
-                             bool&                                                       converged,
-                             typename cub::BlockReduce<double, BLOCK_SIZE>::TempStorage& tempStorage) {
-  float localMax_numerator   = 0.0;
-  float localMax_denominator = 1.0;
+template <typename storageT>
+__device__ void setDirection(const int                                                     numTerms,
+                             const storageT*                                               posFromLineSearch,
+                             const storageT*                                               pos,
+                             storageT*                                                     xi,
+                             storageT*                                                     dGrad,
+                             const storageT*                                               grad,
+                             bool&                                                         converged,
+                             typename cub::BlockReduce<storageT, BLOCK_SIZE>::TempStorage& tempStorage) {
+  storageT localMax_numerator   = 0;
+  storageT localMax_denominator = 1;
   for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
     xi[i]    = posFromLineSearch[i] - pos[i];
     dGrad[i] = grad[i];
 
-    float temp_numerator   = fabs(xi[i]);
-    float temp_denominator = fmax(fabs(posFromLineSearch[i]), 1.0);
+    const storageT temp_numerator   = abs(xi[i]);
+    const storageT temp_denominator = max(abs(posFromLineSearch[i]), static_cast<storageT>(1));
     // temp_numerator / temp_denominator > localMax_numerator / localMax_denominator
     // <=>
     // temp_numerator * localMax_denominator > localMax_numerator * temp_denominator
@@ -220,8 +229,8 @@ __device__ void setDirection(const int                                          
     }
   }
 
-  float localMax = localMax_numerator / localMax_denominator;
-  float blockMax = cub::BlockReduce<double, BLOCK_SIZE>(tempStorage).Reduce(localMax, cubMax());
+  const storageT localMax = localMax_numerator / localMax_denominator;
+  const storageT blockMax = cub::BlockReduce<storageT, BLOCK_SIZE>(tempStorage).Reduce(localMax, cubMax());
 
   if (threadIdx.x == 0 && blockMax < TOLX) {
     converged = true;
@@ -229,30 +238,30 @@ __device__ void setDirection(const int                                          
   __syncthreads();
 }
 
-template <bool scaleGrads>
-__device__ void scaleGrad(const int                                                   numTerms,
-                          double*                                                     grad,
-                          double&                                                     gradScale,
-                          typename cub::BlockReduce<double, BLOCK_SIZE>::TempStorage& tempStorage) {
+template <bool scaleGrads, typename storageT>
+__device__ void scaleGrad(const int                                                     numTerms,
+                          storageT*                                                     grad,
+                          storageT&                                                     gradScale,
+                          typename cub::BlockReduce<storageT, BLOCK_SIZE>::TempStorage& tempStorage) {
   // See scaleGradKernel in bfgs_minimize.cu for the RDKit 5b1d04d23 (2025.09) rationale.
   constexpr bool kRdkitHasGradScaleFix =
     RDKIT_VERSION_MAJOR > 2025 || (RDKIT_VERSION_MAJOR == 2025 && RDKIT_VERSION_MINOR >= 9);
-  gradScale = scaleGrads ? 0.1 : 1.0;
+  gradScale = scaleGrads ? static_cast<storageT>(0.1) : static_cast<storageT>(1);
 
-  double maxGrad = kRdkitHasGradScaleFix ? 0.0 : -1e8;
+  storageT maxGrad = kRdkitHasGradScaleFix ? static_cast<storageT>(0) : static_cast<storageT>(-1e8);
   for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
     if constexpr (scaleGrads) {
       grad[i] *= gradScale;
     }
-    const double cmp = kRdkitHasGradScaleFix ? fabs(grad[i]) : grad[i];
+    const storageT cmp = kRdkitHasGradScaleFix ? abs(grad[i]) : grad[i];
     if (cmp > maxGrad) {
       maxGrad = cmp;
     }
   }
 
-  double blockMax = cub::BlockReduce<double, BLOCK_SIZE>(tempStorage).Reduce(maxGrad, cubMax());
+  const storageT blockMax = cub::BlockReduce<storageT, BLOCK_SIZE>(tempStorage).Reduce(maxGrad, cubMax());
 
-  __shared__ double distributedMax[1];
+  __shared__ storageT distributedMax[1];
   if (threadIdx.x == 0) {
     distributedMax[0] = blockMax;
   }
@@ -260,9 +269,9 @@ __device__ void scaleGrad(const int                                             
 
   maxGrad = distributedMax[0];
 
-  if (scaleGrads && maxGrad > 10.0) {
-    while (maxGrad * gradScale > 10.0) {
-      gradScale *= 0.5;
+  if (scaleGrads && maxGrad > static_cast<storageT>(10)) {
+    while (maxGrad * gradScale > static_cast<storageT>(10)) {
+      gradScale *= static_cast<storageT>(0.5);
     }
     for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
       grad[i] *= gradScale;
@@ -271,33 +280,34 @@ __device__ void scaleGrad(const int                                             
   __syncthreads();
 }
 
-__device__ void updateDGrad(const int                                                   numTerms,
-                            const double                                                gradTol,
-                            const double                                                energy,
-                            const double                                                gradScale,
-                            const double*                                               grad,
-                            const double*                                               pos,
-                            double*                                                     dGrad,
-                            bool&                                                       converged,
-                            typename cub::BlockReduce<double, BLOCK_SIZE>::TempStorage& tempStorage) {
-  double localMax = 0.0;
+template <typename storageT>
+__device__ void updateDGrad(const int                                                     numTerms,
+                            const storageT                                                gradTol,
+                            const storageT                                                energy,
+                            const storageT                                                gradScale,
+                            const storageT*                                               grad,
+                            const storageT*                                               pos,
+                            storageT*                                                     dGrad,
+                            bool&                                                         converged,
+                            typename cub::BlockReduce<storageT, BLOCK_SIZE>::TempStorage& tempStorage) {
+  storageT localMax = 0;
   for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
-    dGrad[i]    = grad[i] - dGrad[i];
-    double temp = fabs(grad[i]) * fmax(fabs(pos[i]), 1.0);
+    dGrad[i]            = grad[i] - dGrad[i];
+    const storageT temp = abs(grad[i]) * max(abs(pos[i]), static_cast<storageT>(1));
     if (temp > localMax) {
       localMax = temp;
     }
   }
 
-  float blockMax = cub::BlockReduce<double, BLOCK_SIZE>(tempStorage).Reduce(localMax, cubMax());
+  storageT blockMax = cub::BlockReduce<storageT, BLOCK_SIZE>(tempStorage).Reduce(localMax, cubMax());
 
   if (threadIdx.x == 0) {
     // rdkit/rdkit#9298 (merged RDKit 2026.03): use |energy| to avoid clamping the
     // denominator to 1 when energy is negative; match signed behavior on older RDKit.
     constexpr bool kRdkitHasGradDenomFix =
       RDKIT_VERSION_MAJOR > 2026 || (RDKIT_VERSION_MAJOR == 2026 && RDKIT_VERSION_MINOR >= 3);
-    const double energyMag = kRdkitHasGradDenomFix ? fabs(energy) : energy;
-    const float  term      = max(energyMag * gradScale, 1.0);
+    const storageT energyMag = kRdkitHasGradDenomFix ? abs(energy) : energy;
+    const storageT term      = max(energyMag * gradScale, static_cast<storageT>(1));
     blockMax /= term;
     if (blockMax < gradTol) {
       converged = true;
@@ -306,107 +316,196 @@ __device__ void updateDGrad(const int                                           
   __syncthreads();
 }
 
-__device__ void updateInverseHessian(const int                                                   numTerms,
-                                     double*                                                     invHessian,
-                                     double*                                                     dGrad,
-                                     double*                                                     xi,
-                                     double*                                                     hessDGrad,
-                                     double*                                                     grad,
-                                     typename cub::BlockReduce<double, BLOCK_SIZE>::TempStorage& tempStorage) {
-  using BlockReduce = cub::BlockReduce<double, BLOCK_SIZE>;
+//! Rank-3 BFGS inverse-Hessian update carried over from the previous iteration. The update is applied lazily during
+//! the next pass over the matrix, so each iteration reads and writes the (global-memory) inverse Hessian once instead
+//! of three reads and one write.
+template <typename storageT> struct PendingHessianUpdate {
+  storageT fac;  //!< 1 / (dGrad . xi)
+  storageT fad;  //!< 1 / (dGrad . H dGrad)
+  storageT fae;  //!< dGrad . H dGrad
+  bool     active;
+};
 
-  // Compute hessDGrad = invHessian * dGrad
-  for (int row = threadIdx.x; row < numTerms; row += blockDim.x) {
-    double dotProduct = 0.0;
-    for (int col = 0; col < numTerms; col++) {
-      dotProduct += invHessian[col * numTerms + row] * dGrad[col];
-    }
-    hessDGrad[row] = dotProduct;
-  }
-  __syncthreads();
+//! Applies the pending update (if any) to the inverse Hessian while computing H dGrad and H grad in the same pass.
+//! Rows are processed in chunks of 32 (one per lane). Within a chunk each warp owns a contiguous range of columns, so
+//! all loads and stores are coalesced and the warps get equal work. Per-warp partial sums go through a small shared
+//! buffer and are added in warp order, which keeps the result deterministic.
+template <bool ApplyPending, typename storageT>
+__device__ void hessianPass(const int                             numTerms,
+                            storageT*                             invHessian,
+                            const storageT*                       dGrad,
+                            const storageT*                       grad,
+                            const storageT*                       pendXi,
+                            const storageT*                       pendHd,
+                            const storageT*                       pendU,
+                            const PendingHessianUpdate<storageT>& pending,
+                            storageT*                             hessDGrad,
+                            storageT*                             hessGrad,
+                            storageT (*partials)[2][BLOCK_SIZE / 32][32]) {
+  constexpr int kNumWarps = BLOCK_SIZE / 32;
+  // Rows are handled one per lane and the two products are finished by threads 0-63.
+  static_assert(BLOCK_SIZE % 32 == 0 && BLOCK_SIZE >= 64, "hessianPass needs whole warps and at least two of them");
+  const int warpId   = threadIdx.x / 32;
+  const int laneId   = threadIdx.x % 32;
+  const int colStart = (numTerms * warpId) / kNumWarps;
+  const int colEnd   = (numTerms * (warpId + 1)) / kNumWarps;
 
-  // Compute BFGS sums
-  __shared__ double fac, fae, fad, sumDGrad, sumXi;
-  __shared__ bool   needUpdate;
-
-  double sumFac = 0.0;
-  for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
-    sumFac += dGrad[i] * xi[i];
-  }
-  double facReduced = BlockReduce(tempStorage).Sum(sumFac);
-  if (threadIdx.x == 0)
-    fac = facReduced;
-  __syncthreads();
-
-  double sumFae = 0.0;
-  for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
-    sumFae += dGrad[i] * hessDGrad[i];
-  }
-  double faeReduced = BlockReduce(tempStorage).Sum(sumFae);
-  if (threadIdx.x == 0)
-    fae = faeReduced;
-  __syncthreads();
-
-  double sumDGradSq = 0.0;
-  for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
-    sumDGradSq += dGrad[i] * dGrad[i];
-  }
-  double sumDGradReduced = BlockReduce(tempStorage).Sum(sumDGradSq);
-  if (threadIdx.x == 0)
-    sumDGrad = sumDGradReduced;
-  __syncthreads();
-
-  double sumXiSq = 0.0;
-  for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
-    sumXiSq += xi[i] * xi[i];
-  }
-  double sumXiReduced = BlockReduce(tempStorage).Sum(sumXiSq);
-  if (threadIdx.x == 0)
-    sumXi = sumXiReduced;
-  __syncthreads();
-
-  if (threadIdx.x == 0) {
-    constexpr double EPS = 3e-8;
-    needUpdate           = (fac > 0) && ((fac * fac) > (EPS * sumDGrad * sumXi));
-
-    if (needUpdate) {
-      fac = 1.0 / fac;
-      fad = 1.0 / fae;
-    }
-  }
-  __syncthreads();
-
-  if (needUpdate) {
-    // Update dGrad for Hessian update
-    for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
-      dGrad[i] = fac * xi[i] - fad * hessDGrad[i];
-    }
-    __syncthreads();
-
-    // Update inverse Hessian
-    for (int row = threadIdx.x; row < numTerms; row += blockDim.x) {
-      double pxi  = fac * xi[row];
-      double hdgi = fad * hessDGrad[row];
-      double dgi  = fae * dGrad[row];
-
-      for (int col = 0; col < numTerms; col++) {
-        double pxj    = xi[col];
-        double hdgj   = hessDGrad[col];
-        double dgj    = dGrad[col];
-        double update = pxi * pxj - hdgi * hdgj + dgi * dgj;
-        invHessian[col * numTerms + row] += update;
+  int buffer = 0;
+  for (int rowBase = 0; rowBase < numTerms; rowBase += 32, buffer ^= 1) {
+    const int  row   = rowBase + laneId;
+    const bool valid = row < numTerms;
+    storageT   pxi   = 0;
+    storageT   hdgi  = 0;
+    storageT   dgi   = 0;
+    if constexpr (ApplyPending) {
+      if (valid) {
+        pxi  = pending.fac * pendXi[row];
+        hdgi = pending.fad * pendHd[row];
+        dgi  = pending.fae * pendU[row];
       }
     }
+    storageT accDGrad = 0;
+    storageT accGrad  = 0;
+    if (valid) {
+      // Loads are issued in groups before the (possibly aliasing) stores so several are in flight per warp.
+      constexpr int kGroup   = 8;
+      storageT*     rowBaseH = invHessian + row;
+      int           col      = colStart;
+      for (; col + kGroup <= colEnd; col += kGroup) {
+        storageT h[kGroup];
+#pragma unroll
+        for (int k = 0; k < kGroup; ++k) {
+          h[k] = rowBaseH[(col + k) * numTerms];
+        }
+#pragma unroll
+        for (int k = 0; k < kGroup; ++k) {
+          if constexpr (ApplyPending) {
+            const int      c      = col + k;
+            const storageT update = pxi * pendXi[c] - hdgi * pendHd[c] + dgi * pendU[c];
+            h[k] += update;
+            rowBaseH[c * numTerms] = h[k];
+          }
+          accDGrad += h[k] * dGrad[col + k];
+          accGrad += h[k] * grad[col + k];
+        }
+      }
+      for (; col < colEnd; ++col) {
+        storageT h = rowBaseH[col * numTerms];
+        if constexpr (ApplyPending) {
+          const storageT update = pxi * pendXi[col] - hdgi * pendHd[col] + dgi * pendU[col];
+          h += update;
+          rowBaseH[col * numTerms] = h;
+        }
+        accDGrad += h * dGrad[col];
+        accGrad += h * grad[col];
+      }
+    }
+    partials[buffer][0][warpId][laneId] = accDGrad;
+    partials[buffer][1][warpId][laneId] = accGrad;
     __syncthreads();
+    // Threads 0-31 finish H dGrad, threads 32-63 finish H grad for this chunk. The other buffer is used by the next
+    // chunk, so one barrier per chunk suffices.
+    if (threadIdx.x < 64) {
+      const int product = threadIdx.x / 32;
+      const int outRow  = rowBase + laneId;
+      if (outRow < numTerms) {
+        storageT total = partials[buffer][product][0][laneId];
+#pragma unroll
+        for (int w = 1; w < kNumWarps; ++w) {
+          total += partials[buffer][product][w][laneId];
+        }
+        (product == 0 ? hessDGrad : hessGrad)[outRow] = total;
+      }
+    }
+  }
+  __syncthreads();
+}
+
+//! BFGS step: new direction xi = -H_{k+1} grad, with the rank-3 update of H_k deferred to the next call (applied
+//! during that call's single pass over the matrix). H_{k+1} grad is formed as H_k grad plus the rank-3 correction
+//! applied to grad.
+template <typename storageT>
+__device__ void updateInverseHessian(const int                       numTerms,
+                                     storageT*                       invHessian,
+                                     const storageT*                 dGrad,
+                                     storageT*                       xi,
+                                     storageT*                       hessDGrad,
+                                     const storageT*                 grad,
+                                     storageT*                       hessGrad,
+                                     storageT*                       pendXi,
+                                     storageT*                       pendHd,
+                                     storageT*                       pendU,
+                                     PendingHessianUpdate<storageT>& pending,
+                                     storageT (*partials)[2][BLOCK_SIZE / 32][32],
+                                     typename cub::BlockReduce<storageT, BLOCK_SIZE>::TempStorage& tempStorage) {
+  if (pending.active) {
+    hessianPass<true>(numTerms, invHessian, dGrad, grad, pendXi, pendHd, pendU, pending, hessDGrad, hessGrad, partials);
+  } else {
+    hessianPass<
+      false>(numTerms, invHessian, dGrad, grad, pendXi, pendHd, pendU, pending, hessDGrad, hessGrad, partials);
   }
 
-  // Update xi = -invHessian * grad
-  for (int row = threadIdx.x; row < numTerms; row += blockDim.x) {
-    double dotProduct = 0.0;
-    for (int col = 0; col < numTerms; col++) {
-      dotProduct += invHessian[col * numTerms + row] * grad[col];
+  // 0: dGrad.xi  1: dGrad.hessDGrad  2: dGrad.dGrad  3: xi.xi  4: xi.grad  5: hessDGrad.grad
+  storageT sums[6] = {0, 0, 0, 0, 0, 0};
+  for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
+    const storageT dg = dGrad[i];
+    const storageT x  = xi[i];
+    const storageT hd = hessDGrad[i];
+    const storageT g  = grad[i];
+    sums[0] += dg * x;
+    sums[1] += dg * hd;
+    sums[2] += dg * dg;
+    sums[3] += x * x;
+    sums[4] += x * g;
+    sums[5] += hd * g;
+  }
+  using BlockReduce = cub::BlockReduce<storageT, BLOCK_SIZE>;
+  __shared__ storageT sumsShared[6];
+  for (int k = 0; k < 6; ++k) {
+    const storageT total = BlockReduce(tempStorage).Sum(sums[k]);
+    if (threadIdx.x == 0) {
+      sumsShared[k] = total;
     }
-    xi[row] = -dotProduct;
+    __syncthreads();
+  }
+  for (int k = 0; k < 6; ++k) {
+    sums[k] = sumsShared[k];
+  }
+
+  constexpr storageT EPS        = static_cast<storageT>(3e-8);
+  const storageT     fac        = sums[0];
+  const storageT     fae        = sums[1];
+  const bool         needUpdate = (fac > 0) && ((fac * fac) > (EPS * sums[2] * sums[3]));
+
+  if (needUpdate) {
+    const storageT facInv = static_cast<storageT>(1) / fac;
+    const storageT fadInv = static_cast<storageT>(1) / fae;
+    const storageT xiG    = sums[4];
+    const storageT hdG    = sums[5];
+    const storageT uG     = facInv * xiG - fadInv * hdG;
+    for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
+      const storageT x  = xi[i];
+      const storageT hd = hessDGrad[i];
+      const storageT u  = facInv * x - fadInv * hd;
+      pendXi[i]         = x;
+      pendHd[i]         = hd;
+      pendU[i]          = u;
+      xi[i]             = -(hessGrad[i] + facInv * x * xiG - fadInv * hd * hdG + fae * u * uG);
+    }
+  } else {
+    for (int i = threadIdx.x; i < numTerms; i += blockDim.x) {
+      xi[i] = -hessGrad[i];
+    }
+  }
+  // All threads read pending.active above (inside hessianPass selection) before this point.
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    pending.active = needUpdate;
+    if (needUpdate) {
+      pending.fac = static_cast<storageT>(1) / fac;
+      pending.fad = static_cast<storageT>(1) / fae;
+      pending.fae = fae;
+    }
   }
   __syncthreads();
 }
@@ -433,7 +532,8 @@ template <int            MaxAtoms,
           ForceFieldType FFType,
           bool           HasConstraints,
           typename TermsType,
-          typename IndicesType>
+          typename IndicesType,
+          typename storageT>
 __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int               numIters,
                                                                  const double            gradTol,
                                                                  const bool              scaleGrads,
@@ -442,11 +542,11 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
                                                                  const int*              molIdList,
                                                                  const int*              atomStarts,
                                                                  const int*              hessianStarts,
-                                                                 double*                 positions,
-                                                                 double*                 grad,
-                                                                 double*                 inverseHessian,
-                                                                 double**                scratchBuffers,
-                                                                 double*                 energyOuts,
+                                                                 storageT*               positions,
+                                                                 storageT*               grad,
+                                                                 storageT*               inverseHessian,
+                                                                 storageT**              scratchBuffers,
+                                                                 storageT*               energyOuts,
                                                                  int16_t*                statuses,
                                                                  [[maybe_unused]] double chiralWeight,
                                                                  [[maybe_unused]] double fourthDimWeight) {
@@ -463,20 +563,22 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
   const int16_t     numTerms = dataDim * numAtoms;
 
   // Pointers to working memory (either shared or global)
-  double* localPos;
-  double* localGrad;
-  double* localDir;
-  double* scratchPos;
-  double* dGrad;
-  double* oldPos;
+  storageT*  localPos;
+  storageT*  localGrad;
+  storageT*  localDir;
+  storageT*  scratchPos;
+  storageT*  dGrad;
+  storageT*  oldPos;
+  __shared__ PendingHessianUpdate<storageT> pendingUpdate;
+  __shared__ storageT                       hessPartials[2][2][BLOCK_SIZE / 32][32];
 
   if constexpr (UseSharedMem) {
     // Shared memory for small molecules (≤64 atoms)
-    __shared__ double sharedLocalPos[maxTerms];
-    __shared__ double sharedLocalGrad[maxTerms];
-    __shared__ double sharedLocalDir[maxTerms];
-    __shared__ double sharedScratchPos[maxTerms];
-    __shared__ double sharedDGrad[maxTerms];
+    __shared__ storageT sharedLocalPos[maxTerms];
+    __shared__ storageT sharedLocalGrad[maxTerms];
+    __shared__ storageT sharedLocalDir[maxTerms];
+    __shared__ storageT sharedScratchPos[maxTerms];
+    __shared__ storageT sharedDGrad[maxTerms];
 
     const int termStart = atomStart * dataDim;
     localPos            = sharedLocalPos;
@@ -496,26 +598,31 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
     dGrad               = scratchBuffers[3] + termStart;    // hessDGrad
     oldPos              = scratchBuffers[4] + termStart;    // scratchGrad (used as oldPos)
   }
+  // Inverse-Hessian pass scratch: H grad and the three vectors of the pending rank-3 update.
+  storageT* hessGrad = scratchBuffers[5] + atomStart * dataDim;
+  storageT* pendXi   = scratchBuffers[6] + atomStart * dataDim;
+  storageT* pendHd   = scratchBuffers[7] + atomStart * dataDim;
+  storageT* pendU    = scratchBuffers[8] + atomStart * dataDim;
 
   // Shared scalars
-  __shared__ float  maxStep;
-  __shared__ double prevE;
-  __shared__ double currE;
-  __shared__ double slope;
-  __shared__ double lambda;
-  __shared__ double lambdaMin;
-  __shared__ double lambda2;
-  __shared__ double eScratch;
-  __shared__ double gradScale;
-  __shared__ bool   converged;
-  __shared__ bool   lineSearchConverged;
+  __shared__ storageT maxStep;
+  __shared__ storageT prevE;
+  __shared__ storageT currE;
+  __shared__ storageT slope;
+  __shared__ storageT lambda;
+  __shared__ storageT lambdaMin;
+  __shared__ storageT lambda2;
+  __shared__ storageT eScratch;
+  __shared__ storageT gradScale;
+  __shared__ bool     converged;
+  __shared__ bool     lineSearchConverged;
 
   // Inverse Hessian in global memory (O(n^2), too large for shared)
   // Indexed by hessianStarts which stores cumulative (numTerms * numTerms) offsets
-  double* invHessian = inverseHessian + hessianStarts[molIdx];
+  storageT* invHessian = inverseHessian + hessianStarts[molIdx];
 
   // Initialize positions from global memory
-  double* globalPos = positions + atomStart * dataDim;
+  storageT* globalPos = positions + atomStart * dataDim;
   // For shared memory case, copy to local shared buffer
   // For non-shared case, localPos already points to globalPos, so no copy needed
   if constexpr (UseSharedMem) {
@@ -528,33 +635,53 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
   // Initialize inverse Hessian to identity
   const int hessianSize = numTerms * numTerms;
   for (int i = tid; i < hessianSize; i += blockDim.x) {
-    invHessian[i] = 0.0;
+    invHessian[i] = static_cast<storageT>(0);
   }
   __syncthreads();
   for (int i = tid; i < numTerms; i += blockDim.x) {
-    invHessian[i * numTerms + i] = 1.0;
+    invHessian[i * numTerms + i] = static_cast<storageT>(1);
   }
 
   if (tid == 0) {
-    converged = false;
+    converged            = false;
+    pendingUpdate.active = false;
   }
   __syncthreads();
 
   // Shared temp storage for all BlockReduce operations
-  using BlockReduce = cub::BlockReduce<double, BLOCK_SIZE>;
+  using BlockReduce = cub::BlockReduce<storageT, BLOCK_SIZE>;
   __shared__ typename BlockReduce::TempStorage tempStorage;
 
   // Compute initial energy
-  double threadEnergy;
+  storageT threadEnergy;
   if constexpr (FFType == ForceFieldType::MMFF) {
     threadEnergy = MMFF::molEnergy<BLOCK_SIZE, HasConstraints>(*terms, *systemIndices, localPos, molIdx, tid);
   } else if constexpr (FFType == ForceFieldType::ETK) {
-    threadEnergy = DistGeom::molEnergyETK(*terms, *systemIndices, localPos, molIdx, tid);
+    if constexpr (std::is_same_v<storageT, float>) {
+      threadEnergy = DistGeom::fp32::molEnergyETK(*terms, *systemIndices, localPos, molIdx, tid);
+    } else {
+      threadEnergy = DistGeom::fp64::molEnergyETK(*terms, *systemIndices, localPos, molIdx, tid);
+    }
   } else {  // DG
-    threadEnergy =
-      DistGeom::molEnergyDG<dataDim>(*terms, *systemIndices, localPos, molIdx, chiralWeight, fourthDimWeight, tid);
+    if constexpr (std::is_same_v<storageT, float>) {
+      threadEnergy = DistGeom::fp32::molEnergyDG<dataDim>(*terms,
+                                                          *systemIndices,
+                                                          localPos,
+                                                          molIdx,
+                                                          chiralWeight,
+                                                          fourthDimWeight,
+                                                          tid);
+    } else {
+      threadEnergy = DistGeom::fp64::molEnergyDG<dataDim>(*terms,
+                                                          *systemIndices,
+                                                          localPos,
+                                                          molIdx,
+                                                          chiralWeight,
+                                                          fourthDimWeight,
+                                                          tid);
+    }
   }
-  const double blockEnergy = BlockReduce(tempStorage).Sum(threadEnergy);
+  const storageT blockEnergy = BlockReduce(tempStorage).Sum(threadEnergy);
 
   if (tid == 0) {
     prevE              = blockEnergy;
@@ -563,23 +690,38 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
   __syncthreads();
 
   for (int i = tid; i < numTerms; i += blockDim.x) {
-    localGrad[i] = 0.0;
+    localGrad[i] = static_cast<storageT>(0);
   }
   __syncthreads();
 
   if constexpr (FFType == ForceFieldType::MMFF) {
     MMFF::molGrad<BLOCK_SIZE, HasConstraints>(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
   } else if constexpr (FFType == ForceFieldType::ETK) {
-    DistGeom::molGradETK(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
+    if constexpr (std::is_same_v<storageT, float>) {
+      DistGeom::fp32::molGradETK(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
+    } else {
+      DistGeom::fp64::molGradETK(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
+    }
   } else {  // DG
-    DistGeom::molGradDG<dataDim>(*terms,
-                                 *systemIndices,
-                                 localPos,
-                                 localGrad,
-                                 molIdx,
-                                 chiralWeight,
-                                 fourthDimWeight,
-                                 tid);
+    if constexpr (std::is_same_v<storageT, float>) {
+      DistGeom::fp32::molGradDG<dataDim>(*terms,
+                                         *systemIndices,
+                                         localPos,
+                                         localGrad,
+                                         molIdx,
+                                         chiralWeight,
+                                         fourthDimWeight,
+                                         tid);
+    } else {
+      DistGeom::fp64::molGradDG<dataDim>(*terms,
+                                         *systemIndices,
+                                         localPos,
+                                         localGrad,
+                                         molIdx,
+                                         chiralWeight,
+                                         fourthDimWeight,
+                                         tid);
+    }
   }
   __syncthreads();
 
@@ -616,7 +758,7 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
     // Line search setup
     if (tid == 0) {
       lineSearchConverged = false;
-      lambda              = 1.0;
+      lambda              = static_cast<storageT>(1);
     }
     __syncthreads();
 
@@ -635,21 +777,35 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
       lineSearchPerturb(numTerms, oldPos, localDir, lambda, scratchPos);
 
       // Compute energy at perturbed position (use scratchPos which has the perturbed coordinates)
-      double lsThreadEnergy;
+      storageT lsThreadEnergy;
       if constexpr (FFType == ForceFieldType::MMFF) {
         lsThreadEnergy = MMFF::molEnergy<BLOCK_SIZE, HasConstraints>(*terms, *systemIndices, scratchPos, molIdx, tid);
       } else if constexpr (FFType == ForceFieldType::ETK) {
-        lsThreadEnergy = DistGeom::molEnergyETK(*terms, *systemIndices, scratchPos, molIdx, tid);
+        if constexpr (std::is_same_v<storageT, float>) {
+          lsThreadEnergy = DistGeom::fp32::molEnergyETK(*terms, *systemIndices, scratchPos, molIdx, tid);
+        } else {
+          lsThreadEnergy = DistGeom::fp64::molEnergyETK(*terms, *systemIndices, scratchPos, molIdx, tid);
+        }
       } else {  // DG
-        lsThreadEnergy = DistGeom::molEnergyDG<dataDim>(*terms,
-                                                        *systemIndices,
-                                                        scratchPos,
-                                                        molIdx,
-                                                        chiralWeight,
-                                                        fourthDimWeight,
-                                                        tid);
+        if constexpr (std::is_same_v<storageT, float>) {
+          lsThreadEnergy = DistGeom::fp32::molEnergyDG<dataDim>(*terms,
+                                                                *systemIndices,
+                                                                scratchPos,
+                                                                molIdx,
+                                                                chiralWeight,
+                                                                fourthDimWeight,
+                                                                tid);
+        } else {
+          lsThreadEnergy = DistGeom::fp64::molEnergyDG<dataDim>(*terms,
+                                                                *systemIndices,
+                                                                scratchPos,
+                                                                molIdx,
+                                                                chiralWeight,
+                                                                fourthDimWeight,
+                                                                tid);
+        }
       }
-      const double lsBlockEnergy = BlockReduce(tempStorage).Sum(lsThreadEnergy);
+      const storageT lsBlockEnergy = BlockReduce(tempStorage).Sum(lsThreadEnergy);
 
       if (tid == 0) {
         currE = lsBlockEnergy;
@@ -657,8 +813,12 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
       __syncthreads();
 
       // Check convergence and update lambda
-      lineSearchConverged =
+      // Only thread 0 computes the verdict; the others return false and must not overwrite it.
+      const bool lsDone =
         lineSearchPostEnergy(lineSearchIter == 0, prevE, currE, slope, lambda, lambdaMin, lambda2, eScratch, lambda);
+      if (tid == 0) {
+        lineSearchConverged = lsDone;
+      }
       __syncthreads();
 
       if (tid == 0) {
@@ -687,23 +847,38 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
 
     // Compute gradients at new position
     for (int i = tid; i < numTerms; i += blockDim.x) {
-      localGrad[i] = 0.0;
+      localGrad[i] = static_cast<storageT>(0);
     }
     __syncthreads();
 
     if constexpr (FFType == ForceFieldType::MMFF) {
       MMFF::molGrad<BLOCK_SIZE, HasConstraints>(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
     } else if constexpr (FFType == ForceFieldType::ETK) {
-      DistGeom::molGradETK(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
+      if constexpr (std::is_same_v<storageT, float>) {
+        DistGeom::fp32::molGradETK(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
+      } else {
+        DistGeom::fp64::molGradETK(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
+      }
     } else {  // DG
-      DistGeom::molGradDG<dataDim>(*terms,
-                                   *systemIndices,
-                                   localPos,
-                                   localGrad,
-                                   molIdx,
-                                   chiralWeight,
-                                   fourthDimWeight,
-                                   tid);
+      if constexpr (std::is_same_v<storageT, float>) {
+        DistGeom::fp32::molGradDG<dataDim>(*terms,
+                                           *systemIndices,
+                                           localPos,
+                                           localGrad,
+                                           molIdx,
+                                           chiralWeight,
+                                           fourthDimWeight,
+                                           tid);
+      } else {
+        DistGeom::fp64::molGradDG<dataDim>(*terms,
+                                           *systemIndices,
+                                           localPos,
+                                           localGrad,
+                                           molIdx,
+                                           chiralWeight,
+                                           fourthDimWeight,
+                                           tid);
+      }
     }
     __syncthreads();
 
@@ -715,13 +890,33 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
     }
 
     // Update dGrad and check convergence
-    updateDGrad(numTerms, gradTol, currE, gradScale, localGrad, localPos, dGrad, converged, tempStorage);
+    updateDGrad(numTerms,
+                static_cast<storageT>(gradTol),
+                currE,
+                gradScale,
+                localGrad,
+                localPos,
+                dGrad,
+                converged,
+                tempStorage);
     if (converged) {
       break;
     }
 
     // Update Hessian and compute new direction (reuses scratchPos as hessDGrad)
-    updateInverseHessian(numTerms, invHessian, dGrad, localDir, scratchPos, localGrad, tempStorage);
+    updateInverseHessian(numTerms,
+                         invHessian,
+                         dGrad,
+                         localDir,
+                         scratchPos,
+                         localGrad,
+                         hessGrad,
+                         pendXi,
+                         pendHd,
+                         pendU,
+                         pendingUpdate,
+                         hessPartials,
+                         tempStorage);
 
     if (tid == 0) {
       currIter++;
@@ -754,7 +949,8 @@ template <int            MaxAtoms,
           ForceFieldType FFType,
           bool           HasConstraints,
           typename TermsType,
-          typename IndicesType>
+          typename IndicesType,
+          typename storageT>
 cudaError_t launchKernelForSize(int                numMols,
                                 const int*         molIdList,
                                 int                numIters,
@@ -764,11 +960,11 @@ cudaError_t launchKernelForSize(int                numMols,
                                 const IndicesType* devSysIdx,
                                 const int*         atomStarts,
                                 const int*         hessianStarts,
-                                double*            positions,
-                                double*            grad,
-                                double*            inverseHessian,
-                                double**           scratchBuffers,
-                                double*            energyOuts,
+                                storageT*          positions,
+                                storageT*          grad,
+                                storageT*          inverseHessian,
+                                storageT**         scratchBuffers,
+                                storageT*          energyOuts,
                                 int16_t*           statuses,
                                 cudaStream_t       stream,
                                 double             chiralWeight,
@@ -777,7 +973,7 @@ cudaError_t launchKernelForSize(int                numMols,
     return cudaSuccess;
   }
 
-  bfgsMinimizeKernel<MaxAtoms, UseSharedMem, FFType, HasConstraints, TermsType, IndicesType>
+  bfgsMinimizeKernel<MaxAtoms, UseSharedMem, FFType, HasConstraints, TermsType, IndicesType, storageT>
     <<<numMols, BLOCK_SIZE, 0, stream>>>(numIters,
                                          gradTol,
                                          scaleGrads,
@@ -798,7 +994,7 @@ cudaError_t launchKernelForSize(int                numMols,
   return cudaGetLastError();
 }
 
-template <ForceFieldType FFType, bool HasConstraints, typename TermsType, typename IndicesType>
+template <ForceFieldType FFType, bool HasConstraints, typename TermsType, typename IndicesType, typename storageT>
 cudaError_t dispatchByMaxAtoms(int                numMols,
                                const int*         molIdList,
                                int                maxAtoms,
@@ -809,11 +1005,11 @@ cudaError_t dispatchByMaxAtoms(int                numMols,
                                const IndicesType* devSysIdx,
                                const int*         atomStarts,
                                const int*         hessianStarts,
-                               double*            positions,
-                               double*            grad,
-                               double*            inverseHessian,
-                               double**           scratchBuffers,
-                               double*            energyOuts,
+                               storageT*          positions,
+                               storageT*          grad,
+                               storageT*          inverseHessian,
+                               storageT**         scratchBuffers,
+                               storageT*          energyOuts,
                                int16_t*           statuses,
                                cudaStream_t       stream,
                                double             chiralWeight,
@@ -938,30 +1134,31 @@ cudaError_t dispatchByMaxAtoms(int                numMols,
 
 }  // namespace
 
-cudaError_t launchBfgsMinimizePerMolKernel(int                                       numMols,
-                                           const int*                                molIds,
-                                           int                                       maxAtoms,
-                                           const int*                                atomStarts,
-                                           const int*                                hessianStarts,
-                                           int                                       numIters,
-                                           double                                    gradTol,
-                                           bool                                      scaleGrads,
-                                           const MMFF::EnergyForceContribsDevicePtr& terms,
-                                           const MMFF::BatchedIndicesDevicePtr&      systemIndices,
-                                           double*                                   positions,
-                                           double*                                   grad,
-                                           double*                                   inverseHessian,
-                                           double**                                  scratchBuffers,
-                                           double*                                   energyOuts,
-                                           bool                                      hasConstraints,
-                                           int16_t*                                  statuses,
-                                           cudaStream_t                              stream) {
+template <typename Terms, typename storageT>
+cudaError_t launchBfgsMinimizePerMolKernelImpl(int                                  numMols,
+                                               const int*                           molIds,
+                                               int                                  maxAtoms,
+                                               const int*                           atomStarts,
+                                               const int*                           hessianStarts,
+                                               int                                  numIters,
+                                               double                               gradTol,
+                                               bool                                 scaleGrads,
+                                               const Terms&                         terms,
+                                               const MMFF::BatchedIndicesDevicePtr& systemIndices,
+                                               storageT*                            positions,
+                                               storageT*                            grad,
+                                               storageT*                            inverseHessian,
+                                               storageT**                           scratchBuffers,
+                                               storageT*                            energyOuts,
+                                               bool                                 hasConstraints,
+                                               int16_t*                             statuses,
+                                               cudaStream_t                         stream) {
   if (numMols == 0) {
     return cudaSuccess;
   }
 
-  const AsyncDevicePtr<MMFF::EnergyForceContribsDevicePtr> devTerms(terms, stream);
-  const AsyncDevicePtr<MMFF::BatchedIndicesDevicePtr>      devSysIdx(systemIndices, stream);
+  const AsyncDevicePtr<Terms>                         devTerms(terms, stream);
+  const AsyncDevicePtr<MMFF::BatchedIndicesDevicePtr> devSysIdx(systemIndices, stream);
 
   if (hasConstraints) {
     return dispatchByMaxAtoms<ForceFieldType::MMFF, true>(numMols,
@@ -1004,29 +1201,74 @@ cudaError_t launchBfgsMinimizePerMolKernel(int                                  
                                                          1.0,
                                                          1.0);
 }
-cudaError_t launchBfgsMinimizePerMolKernelETK(int                                             numMols,
-                                              const int*                                      molIds,
-                                              int                                             maxAtoms,
-                                              const int*                                      atomStarts,
-                                              const int*                                      hessianStarts,
-                                              int                                             numIters,
-                                              double                                          gradTol,
-                                              bool                                            scaleGrads,
-                                              const DistGeom::Energy3DForceContribsDevicePtr& terms,
-                                              const DistGeom::BatchedIndices3DDevicePtr&      systemIndices,
-                                              double*                                         positions,
-                                              double*                                         grad,
-                                              double*                                         inverseHessian,
-                                              double**                                        scratchBuffers,
-                                              double*                                         energyOuts,
-                                              int16_t*                                        statuses,
-                                              cudaStream_t                                    stream) {
+
+#define NVMOLKIT_DEFINE_MMFF_PER_MOL_LAUNCHER(TERMS_TYPE, STORAGE_TYPE)                           \
+  cudaError_t launchBfgsMinimizePerMolKernel(int                                  numMols,        \
+                                             const int*                           molIds,         \
+                                             int                                  maxAtoms,       \
+                                             const int*                           atomStarts,     \
+                                             const int*                           hessianStarts,  \
+                                             int                                  numIters,       \
+                                             double                               gradTol,        \
+                                             bool                                 scaleGrads,     \
+                                             const TERMS_TYPE&                    terms,          \
+                                             const MMFF::BatchedIndicesDevicePtr& systemIndices,  \
+                                             STORAGE_TYPE*                        positions,      \
+                                             STORAGE_TYPE*                        grad,           \
+                                             STORAGE_TYPE*                        inverseHessian, \
+                                             STORAGE_TYPE**                       scratchBuffers, \
+                                             STORAGE_TYPE*                        energyOuts,     \
+                                             bool                                 hasConstraints, \
+                                             int16_t*                             statuses,       \
+                                             cudaStream_t                         stream) {                               \
+    return launchBfgsMinimizePerMolKernelImpl(numMols,                                            \
+                                              molIds,                                             \
+                                              maxAtoms,                                           \
+                                              atomStarts,                                         \
+                                              hessianStarts,                                      \
+                                              numIters,                                           \
+                                              gradTol,                                            \
+                                              scaleGrads,                                         \
+                                              terms,                                              \
+                                              systemIndices,                                      \
+                                              positions,                                          \
+                                              grad,                                               \
+                                              inverseHessian,                                     \
+                                              scratchBuffers,                                     \
+                                              energyOuts,                                         \
+                                              hasConstraints,                                     \
+                                              statuses,                                           \
+                                              stream);                                            \
+  }
+
+NVMOLKIT_DEFINE_MMFF_PER_MOL_LAUNCHER(MMFF::EnergyForceContribsDevicePtr, double)
+NVMOLKIT_DEFINE_MMFF_PER_MOL_LAUNCHER(MMFF::EnergyForceContribsDevicePtrSingle, float)
+
+#undef NVMOLKIT_DEFINE_MMFF_PER_MOL_LAUNCHER
+template <typename Terms, typename storageT>
+cudaError_t launchBfgsMinimizePerMolKernelETKImpl(int                                        numMols,
+                                                  const int*                                 molIds,
+                                                  int                                        maxAtoms,
+                                                  const int*                                 atomStarts,
+                                                  const int*                                 hessianStarts,
+                                                  int                                        numIters,
+                                                  double                                     gradTol,
+                                                  bool                                       scaleGrads,
+                                                  const Terms&                               terms,
+                                                  const DistGeom::BatchedIndices3DDevicePtr& systemIndices,
+                                                  storageT*                                  positions,
+                                                  storageT*                                  grad,
+                                                  storageT*                                  inverseHessian,
+                                                  storageT**                                 scratchBuffers,
+                                                  storageT*                                  energyOuts,
+                                                  int16_t*                                   statuses,
+                                                  cudaStream_t                               stream) {
   if (numMols == 0) {
     return cudaSuccess;
   }
 
-  const AsyncDevicePtr<DistGeom::Energy3DForceContribsDevicePtr> devTerms(terms, stream);
-  const AsyncDevicePtr<DistGeom::BatchedIndices3DDevicePtr>      devSysIdx(systemIndices, stream);
+  const AsyncDevicePtr<Terms>                               devTerms(terms, stream);
+  const AsyncDevicePtr<DistGeom::BatchedIndices3DDevicePtr> devSysIdx(systemIndices, stream);
 
   return dispatchByMaxAtoms<ForceFieldType::ETK, false>(numMols,
                                                         molIds,
@@ -1049,31 +1291,32 @@ cudaError_t launchBfgsMinimizePerMolKernelETK(int                               
                                                         1.0);
 }
 
-cudaError_t launchBfgsMinimizePerMolKernelDG(int                                           numMols,
-                                             const int*                                    molIds,
-                                             int                                           maxAtoms,
-                                             const int*                                    atomStarts,
-                                             const int*                                    hessianStarts,
-                                             int                                           numIters,
-                                             double                                        gradTol,
-                                             bool                                          scaleGrads,
-                                             const DistGeom::EnergyForceContribsDevicePtr& terms,
-                                             const DistGeom::BatchedIndicesDevicePtr&      systemIndices,
-                                             double*                                       positions,
-                                             double*                                       grad,
-                                             double*                                       inverseHessian,
-                                             double**                                      scratchBuffers,
-                                             double*                                       energyOuts,
-                                             double                                        chiralWeight,
-                                             double                                        fourthDimWeight,
-                                             int16_t*                                      statuses,
-                                             cudaStream_t                                  stream) {
+template <typename Terms, typename storageT>
+cudaError_t launchBfgsMinimizePerMolKernelDGImpl(int                                      numMols,
+                                                 const int*                               molIds,
+                                                 int                                      maxAtoms,
+                                                 const int*                               atomStarts,
+                                                 const int*                               hessianStarts,
+                                                 int                                      numIters,
+                                                 double                                   gradTol,
+                                                 bool                                     scaleGrads,
+                                                 const Terms&                             terms,
+                                                 const DistGeom::BatchedIndicesDevicePtr& systemIndices,
+                                                 storageT*                                positions,
+                                                 storageT*                                grad,
+                                                 storageT*                                inverseHessian,
+                                                 storageT**                               scratchBuffers,
+                                                 storageT*                                energyOuts,
+                                                 double                                   chiralWeight,
+                                                 double                                   fourthDimWeight,
+                                                 int16_t*                                 statuses,
+                                                 cudaStream_t                             stream) {
   if (numMols == 0) {
     return cudaSuccess;
   }
 
-  const AsyncDevicePtr<DistGeom::EnergyForceContribsDevicePtr> devTerms(terms, stream);
-  const AsyncDevicePtr<DistGeom::BatchedIndicesDevicePtr>      devSysIdx(systemIndices, stream);
+  const AsyncDevicePtr<Terms>                             devTerms(terms, stream);
+  const AsyncDevicePtr<DistGeom::BatchedIndicesDevicePtr> devSysIdx(systemIndices, stream);
 
   return dispatchByMaxAtoms<ForceFieldType::DG, false>(numMols,
                                                        molIds,
@@ -1095,5 +1338,91 @@ cudaError_t launchBfgsMinimizePerMolKernelDG(int                                
                                                        chiralWeight,
                                                        fourthDimWeight);
 }
+
+#define NVMOLKIT_DEFINE_ETK_PER_MOL_LAUNCHER(TERMS_TYPE, STORAGE_TYPE)                                     \
+  cudaError_t launchBfgsMinimizePerMolKernelETK(int                                        numMols,        \
+                                                const int*                                 molIds,         \
+                                                int                                        maxAtoms,       \
+                                                const int*                                 atomStarts,     \
+                                                const int*                                 hessianStarts,  \
+                                                int                                        numIters,       \
+                                                double                                     gradTol,        \
+                                                bool                                       scaleGrads,     \
+                                                const TERMS_TYPE&                          terms,          \
+                                                const DistGeom::BatchedIndices3DDevicePtr& systemIndices,  \
+                                                STORAGE_TYPE*                              positions,      \
+                                                STORAGE_TYPE*                              grad,           \
+                                                STORAGE_TYPE*                              inverseHessian, \
+                                                STORAGE_TYPE**                             scratchBuffers, \
+                                                STORAGE_TYPE*                              energyOuts,     \
+                                                int16_t*                                   statuses,       \
+                                                cudaStream_t                               stream) {                                     \
+    return launchBfgsMinimizePerMolKernelETKImpl(numMols,                                                  \
+                                                 molIds,                                                   \
+                                                 maxAtoms,                                                 \
+                                                 atomStarts,                                               \
+                                                 hessianStarts,                                            \
+                                                 numIters,                                                 \
+                                                 gradTol,                                                  \
+                                                 scaleGrads,                                               \
+                                                 terms,                                                    \
+                                                 systemIndices,                                            \
+                                                 positions,                                                \
+                                                 grad,                                                     \
+                                                 inverseHessian,                                           \
+                                                 scratchBuffers,                                           \
+                                                 energyOuts,                                               \
+                                                 statuses,                                                 \
+                                                 stream);                                                  \
+  }
+
+NVMOLKIT_DEFINE_ETK_PER_MOL_LAUNCHER(DistGeom::Energy3DForceContribsDevicePtr, double)
+NVMOLKIT_DEFINE_ETK_PER_MOL_LAUNCHER(DistGeom::Energy3DForceContribsDevicePtrSingle, float)
+#undef NVMOLKIT_DEFINE_ETK_PER_MOL_LAUNCHER
+
+#define NVMOLKIT_DEFINE_DG_PER_MOL_LAUNCHER(TERMS_TYPE, STORAGE_TYPE)                                    \
+  cudaError_t launchBfgsMinimizePerMolKernelDG(int                                      numMols,         \
+                                               const int*                               molIds,          \
+                                               int                                      maxAtoms,        \
+                                               const int*                               atomStarts,      \
+                                               const int*                               hessianStarts,   \
+                                               int                                      numIters,        \
+                                               double                                   gradTol,         \
+                                               bool                                     scaleGrads,      \
+                                               const TERMS_TYPE&                        terms,           \
+                                               const DistGeom::BatchedIndicesDevicePtr& systemIndices,   \
+                                               STORAGE_TYPE*                            positions,       \
+                                               STORAGE_TYPE*                            grad,            \
+                                               STORAGE_TYPE*                            inverseHessian,  \
+                                               STORAGE_TYPE**                           scratchBuffers,  \
+                                               STORAGE_TYPE*                            energyOuts,      \
+                                               double                                   chiralWeight,    \
+                                               double                                   fourthDimWeight, \
+                                               int16_t*                                 statuses,        \
+                                               cudaStream_t                             stream) {                                    \
+    return launchBfgsMinimizePerMolKernelDGImpl(numMols,                                                 \
+                                                molIds,                                                  \
+                                                maxAtoms,                                                \
+                                                atomStarts,                                              \
+                                                hessianStarts,                                           \
+                                                numIters,                                                \
+                                                gradTol,                                                 \
+                                                scaleGrads,                                              \
+                                                terms,                                                   \
+                                                systemIndices,                                           \
+                                                positions,                                               \
+                                                grad,                                                    \
+                                                inverseHessian,                                          \
+                                                scratchBuffers,                                          \
+                                                energyOuts,                                              \
+                                                chiralWeight,                                            \
+                                                fourthDimWeight,                                         \
+                                                statuses,                                                \
+                                                stream);                                                 \
+  }
+
+NVMOLKIT_DEFINE_DG_PER_MOL_LAUNCHER(DistGeom::EnergyForceContribsDevicePtr, double)
+NVMOLKIT_DEFINE_DG_PER_MOL_LAUNCHER(DistGeom::EnergyForceContribsDevicePtrSingle, float)
+#undef NVMOLKIT_DEFINE_DG_PER_MOL_LAUNCHER
 
 }  // namespace nvMolKit

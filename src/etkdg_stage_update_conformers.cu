@@ -15,6 +15,8 @@
 
 #include <GraphMol/ROMol.h>
 
+#include <algorithm>
+
 #include "src/etkdg_stage_update_conformers.h"
 
 namespace nvMolKit {
@@ -28,7 +30,8 @@ ETKDGUpdateConformersStage::ETKDGUpdateConformersStage(
   PinnedHostVector<uint8_t>&                                                               activeScratch,
   cudaStream_t                                                                             stream,
   std::mutex*                                                                              conformer_mutex,
-  const int                                                                                maxConformersPerMol)
+  const int                                                                                maxConformersPerMol,
+  std::vector<int>                                                                         attemptIds)
     : mols_(mols),
       eargs_(eargs),
       conformers_(conformers),
@@ -36,7 +39,26 @@ ETKDGUpdateConformersStage::ETKDGUpdateConformersStage(
       activeScratch_(activeScratch),
       stream_(stream),
       conformer_mutex_(conformer_mutex),
-      maxConformersPerMol_(maxConformersPerMol) {}
+      maxConformersPerMol_(maxConformersPerMol),
+      attemptIds_(std::move(attemptIds)) {}
+
+void ETKDGUpdateConformersStage::addOrReplace(std::vector<std::unique_ptr<RDKit::Conformer>>& confVec,
+                                              std::unique_ptr<RDKit::Conformer>               newConf) const {
+  if (maxConformersPerMol_ <= 0 || static_cast<int>(confVec.size()) < maxConformersPerMol_) {
+    confVec.push_back(std::move(newConf));
+    return;
+  }
+  if (attemptIds_.empty()) {
+    return;
+  }
+  // Full: keep the lowest attempt IDs so the retained set does not depend on which worker finished first.
+  const auto worst = std::max_element(confVec.begin(), confVec.end(), [](const auto& a, const auto& b) {
+    return a->getId() < b->getId();
+  });
+  if (newConf->getId() < (*worst)->getId()) {
+    *worst = std::move(newConf);
+  }
+}
 
 void ETKDGUpdateConformersStage::execute(ETKDGContext& ctx) {
   // Copy positions from device to host
@@ -73,21 +95,20 @@ void ETKDGUpdateConformersStage::execute(ETKDGContext& ctx) {
       newConf->setAtomPos(j, pos);
     }
 
+    // Tag the conformer with its attempt ID so the lowest-ID successes can be kept regardless of arrival order.
+    if (!attemptIds_.empty()) {
+      newConf->setId(static_cast<unsigned int>(attemptIds_[i]));
+    }
+
     // Thread-safe conformer addition with count checking
     if (conformer_mutex_) {
       std::lock_guard<std::mutex> lock(*conformer_mutex_);
-      auto&                       confVec = conformers_[mol];
-      if (maxConformersPerMol_ <= 0 || static_cast<int>(confVec.size()) < maxConformersPerMol_) {
-        confVec.push_back(std::move(newConf));
-      }
+      addOrReplace(conformers_[mol], std::move(newConf));
     } else {
       // Without mutex, assume single-threaded. Since we're in a batch, we could still be oversubscribing.
-      auto& confVec = conformers_[mol];
-      if (maxConformersPerMol_ <= 0 || static_cast<int>(confVec.size()) < maxConformersPerMol_) {
-        confVec.push_back(std::move(newConf));
-      }
+      addOrReplace(conformers_[mol], std::move(newConf));
     }
-    // If conformer wasn't added, it's still a unique_ptr, and will destruct out of scope.
+    // If conformer wasn't kept, it's still a unique_ptr, and will destruct out of scope.
   }
 }
 

@@ -52,7 +52,7 @@ enum class SubstructOutputMode {
  */
 struct PaintModeParams {
   uint32_t* recursiveBits;   ///< Buffer to paint bits into [maxTargetAtoms per pair]
-  int       patternId;       ///< Bit position (0-31) to set
+  uint32_t  patternMask;     ///< Bits to set for all equivalent pattern occurrences
   int       maxTargetAtoms;  ///< Stride for indexing recursiveBits
   int       outputPairIdx;   ///< Which pair's buffer to write to
 };
@@ -387,14 +387,13 @@ __device__ void gsiBFSSearchGPU(const TargetMoleculeView&                       
         } else {
           // Paint mode: set bit for this target atom
           atomicOr(&paintParams.recursiveBits[paintParams.outputPairIdx * paintParams.maxTargetAtoms + t],
-                   1u << paintParams.patternId);
+                   paintParams.patternMask);
           atomicAdd(reportedCount, 1);
           if constexpr (kDebugGSI) {
-            printf("[GSI Paint] pairIdx=%d, targetAtom=%d, patternId=%d, bit=0x%x\n",
+            printf("[GSI Paint] pairIdx=%d, targetAtom=%d, patternMask=0x%x\n",
                    paintParams.outputPairIdx,
                    t,
-                   paintParams.patternId,
-                   1u << paintParams.patternId);
+                   paintParams.patternMask);
           }
         }
       } else {
@@ -561,7 +560,7 @@ __device__ void gsiBFSSearchGPU(const TargetMoleculeView&                       
               const int firstTargetAtom = partial[0];
               atomicOr(
                 &paintParams.recursiveBits[paintParams.outputPairIdx * paintParams.maxTargetAtoms + firstTargetAtom],
-                1u << paintParams.patternId);
+                paintParams.patternMask);
               atomicAdd(reportedCount, 1);
             }
           } else {

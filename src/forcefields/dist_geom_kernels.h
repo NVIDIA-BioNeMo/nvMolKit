@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,24 +18,10 @@
 
 #include <cuda_runtime.h>
 
+#include <cstdint>
+
 namespace nvMolKit {
 namespace DistGeom {
-cudaError_t launchDistViolationEnergyKernel(int            numDist,
-                                            const int*     idx1,
-                                            const int*     idx2,
-                                            const double*  lb2,
-                                            const double*  ub2,
-                                            const double*  weight,
-                                            const double*  pos,
-                                            double*        energyBuffer,
-                                            const int*     energyBufferStarts,
-                                            const int*     atomIdxToBatchIdx,
-                                            const int*     distTermStarts,
-                                            const int*     atomStarts,
-                                            int            dimension,
-                                            const uint8_t* activeThisStage = nullptr,
-                                            cudaStream_t   stream          = 0);
-
 cudaError_t launchDistViolationGradientKernel(int            numDist,
                                               const int*     idx1,
                                               const int*     idx2,
@@ -45,24 +31,6 @@ cudaError_t launchDistViolationGradientKernel(int            numDist,
                                               const double*  pos,
                                               double*        grad,
                                               const int*     atomIdxToBatchIdx,
-                                              const int*     atomStarts,
-                                              int            dimension,
-                                              const uint8_t* activeThisStage = nullptr,
-                                              cudaStream_t   stream          = 0);
-
-cudaError_t launchChiralViolationEnergyKernel(int            numChiral,
-                                              const int*     idx1,
-                                              const int*     idx2,
-                                              const int*     idx3,
-                                              const int*     idx4,
-                                              const double*  volLower,
-                                              const double*  volUpper,
-                                              double         weight,
-                                              const double*  pos,
-                                              double*        energyBuffer,
-                                              const int*     energyBufferStarts,
-                                              const int*     atomIdxToBatchIdx,
-                                              const int*     chiralTermStarts,
                                               const int*     atomStarts,
                                               int            dimension,
                                               const uint8_t* activeThisStage = nullptr,
@@ -83,19 +51,6 @@ cudaError_t launchChiralViolationGradientKernel(int            numChiral,
                                                 int            dimension,
                                                 const uint8_t* activeThisStage = nullptr,
                                                 cudaStream_t   stream          = 0);
-
-cudaError_t launchFourthDimEnergyKernel(int            numFD,
-                                        const int*     idx,
-                                        double         weight,
-                                        const double*  pos,
-                                        double*        energyBuffer,
-                                        const int*     energyBufferStarts,
-                                        const int*     atomIdxToBatchIdx,
-                                        const int*     fourthTermStarts,
-                                        const int*     atomStarts,
-                                        int            dimension,
-                                        const uint8_t* activeThisStage = nullptr,
-                                        cudaStream_t   stream          = 0);
 
 cudaError_t launchFourthDimGradientKernel(int            numFD,
                                           const int*     idx,
@@ -246,31 +201,31 @@ cudaError_t launchReduceEnergiesKernel(int            numBlocks,
                                        const uint8_t* activeThisStage = nullptr,
                                        cudaStream_t   stream          = 0);
 
-struct DistViolationContribTermsDevicePtr {
+template <typename Scalar> struct DistViolationContribTermsDevicePtrT {
   const int*    idx1;
   const int*    idx2;
-  const double* ub2;
-  const double* lb2;
-  const double* weight;
+  const Scalar* ub2;
+  const Scalar* lb2;
+  const Scalar* weight;
 };
 
-struct ChiralViolationContribTermsDevicePtr {
+template <typename Scalar> struct ChiralViolationContribTermsDevicePtrT {
   const int*    idx1;
   const int*    idx2;
   const int*    idx3;
   const int*    idx4;
-  const double* volUpper;
-  const double* volLower;
+  const Scalar* volUpper;
+  const Scalar* volLower;
 };
 
 struct FourthDimContribTermsDevicePtr {
   const int* idx;
 };
 
-struct EnergyForceContribsDevicePtr {
-  DistViolationContribTermsDevicePtr   distTerms;
-  ChiralViolationContribTermsDevicePtr chiralTerms;
-  FourthDimContribTermsDevicePtr       fourthTerms;
+template <typename Scalar> struct EnergyForceContribsDevicePtrT {
+  DistViolationContribTermsDevicePtrT<Scalar>   distTerms;
+  ChiralViolationContribTermsDevicePtrT<Scalar> chiralTerms;
+  FourthDimContribTermsDevicePtr                fourthTerms;
 };
 
 struct BatchedIndicesDevicePtr {
@@ -280,52 +235,64 @@ struct BatchedIndicesDevicePtr {
   const int* fourthTermStarts;
 };
 
-struct TorsionAngleContribTermsDevicePtr {
+template <typename Scalar> struct TorsionAngleContribTermsDevicePtrT {
   const int*    idx1;
   const int*    idx2;
   const int*    idx3;
   const int*    idx4;
-  const double* forceConstants;
+  const Scalar* forceConstants;
   const int*    signs;
 };
 
-struct InversionContribTermsDevicePtr {
+template <typename Scalar> struct InversionContribTermsDevicePtrT {
   const int*     idx1;
   const int*     idx2;
   const int*     idx3;
   const int*     idx4;
   const int*     at2AtomicNum;
   const uint8_t* isCBoundToO;
-  const double*  C0;
-  const double*  C1;
-  const double*  C2;
-  const double*  forceConstant;
+  const Scalar*  C0;
+  const Scalar*  C1;
+  const Scalar*  C2;
+  const Scalar*  forceConstant;
 };
 
-struct DistanceConstraintContribTermsDevicePtr {
+template <typename Scalar> struct DistanceConstraintContribTermsDevicePtrT {
   const int*    idx1;
   const int*    idx2;
-  const double* minLen;
-  const double* maxLen;
-  const double* forceConstant;
+  const Scalar* minLen;
+  const Scalar* maxLen;
+  const Scalar* forceConstant;
 };
 
-struct AngleConstraintContribTermsDevicePtr {
+template <typename Scalar> struct AngleConstraintContribTermsDevicePtrT {
   const int*    idx1;
   const int*    idx2;
   const int*    idx3;
-  const double* minAngle;
-  const double* maxAngle;
+  const Scalar* minAngle;
+  const Scalar* maxAngle;
 };
 
-struct Energy3DForceContribsDevicePtr {
-  TorsionAngleContribTermsDevicePtr       experimentalTorsionTerms;
-  InversionContribTermsDevicePtr          improperTorsionTerms;
-  DistanceConstraintContribTermsDevicePtr dist12Terms;
-  DistanceConstraintContribTermsDevicePtr dist13Terms;
-  AngleConstraintContribTermsDevicePtr    angle13Terms;
-  DistanceConstraintContribTermsDevicePtr longRangeDistTerms;
+template <typename Scalar> struct Energy3DForceContribsDevicePtrT {
+  TorsionAngleContribTermsDevicePtrT<Scalar>       experimentalTorsionTerms;
+  InversionContribTermsDevicePtrT<Scalar>          improperTorsionTerms;
+  DistanceConstraintContribTermsDevicePtrT<Scalar> dist12Terms;
+  DistanceConstraintContribTermsDevicePtrT<Scalar> dist13Terms;
+  AngleConstraintContribTermsDevicePtrT<Scalar>    angle13Terms;
+  DistanceConstraintContribTermsDevicePtrT<Scalar> longRangeDistTerms;
 };
+
+using DistViolationContribTermsDevicePtr      = DistViolationContribTermsDevicePtrT<double>;
+using ChiralViolationContribTermsDevicePtr    = ChiralViolationContribTermsDevicePtrT<double>;
+using EnergyForceContribsDevicePtr            = EnergyForceContribsDevicePtrT<double>;
+using TorsionAngleContribTermsDevicePtr       = TorsionAngleContribTermsDevicePtrT<double>;
+using InversionContribTermsDevicePtr          = InversionContribTermsDevicePtrT<double>;
+using DistanceConstraintContribTermsDevicePtr = DistanceConstraintContribTermsDevicePtrT<double>;
+using AngleConstraintContribTermsDevicePtr    = AngleConstraintContribTermsDevicePtrT<double>;
+using Energy3DForceContribsDevicePtr          = Energy3DForceContribsDevicePtrT<double>;
+
+using EnergyForceContribsDevicePtrSingle   = EnergyForceContribsDevicePtrT<float>;
+using Energy3DForceContribsDevicePtrSingle = Energy3DForceContribsDevicePtrT<float>;
 
 struct BatchedIndices3DDevicePtr {
   const int* atomStarts;
@@ -358,7 +325,6 @@ cudaError_t launchBlockPerMolGradKernel(int                                 numM
                                         double                              fourthDimWeight,
                                         const uint8_t*                      activeThisStage = nullptr,
                                         cudaStream_t                        stream          = 0);
-
 cudaError_t launchBlockPerMolEnergyKernelETK(int                                   numMols,
                                              const Energy3DForceContribsDevicePtr& terms,
                                              const BatchedIndices3DDevicePtr&      systemIndices,
@@ -374,6 +340,120 @@ cudaError_t launchBlockPerMolGradKernelETK(int                                  
                                            double*                               grad,
                                            const uint8_t*                        activeThisStage = nullptr,
                                            cudaStream_t                          stream          = 0);
+cudaError_t launchBlockPerMolEnergyKernel(int                                       numMols,
+                                          const EnergyForceContribsDevicePtrSingle& terms,
+                                          const BatchedIndicesDevicePtr&            systemIndices,
+                                          const float*                              coords,
+                                          float*                                    energies,
+                                          int                                       dimension,
+                                          float                                     chiralWeight,
+                                          float                                     fourthDimWeight,
+                                          const uint8_t*                            activeThisStage = nullptr,
+                                          cudaStream_t                              stream          = 0);
+cudaError_t launchBlockPerMolGradKernel(int                                       numMols,
+                                        const EnergyForceContribsDevicePtrSingle& terms,
+                                        const BatchedIndicesDevicePtr&            systemIndices,
+                                        const float*                              coords,
+                                        float*                                    grad,
+                                        int                                       dimension,
+                                        float                                     chiralWeight,
+                                        float                                     fourthDimWeight,
+                                        const uint8_t*                            activeThisStage = nullptr,
+                                        cudaStream_t                              stream          = 0);
+cudaError_t launchBlockPerMolEnergyKernelETK(int                                         numMols,
+                                             const Energy3DForceContribsDevicePtrSingle& terms,
+                                             const BatchedIndices3DDevicePtr&            systemIndices,
+                                             const float*                                coords,
+                                             float*                                      energies,
+                                             const uint8_t*                              activeThisStage = nullptr,
+                                             cudaStream_t                                stream          = 0);
+cudaError_t launchBlockPerMolGradKernelETK(int                                         numMols,
+                                           const Energy3DForceContribsDevicePtrSingle& terms,
+                                           const BatchedIndices3DDevicePtr&            systemIndices,
+                                           const float*                                coords,
+                                           float*                                      grad,
+                                           const uint8_t*                              activeThisStage = nullptr,
+                                           cudaStream_t                                stream          = 0);
+cudaError_t launchPlanarEnergyKernelETK(int                                         numMols,
+                                        const Energy3DForceContribsDevicePtrSingle& terms,
+                                        const BatchedIndices3DDevicePtr&            systemIndices,
+                                        const float*                                coords,
+                                        float*                                      energies,
+                                        const uint8_t*                              activeThisStage = nullptr,
+                                        cudaStream_t                                stream          = 0);
+
+// All-in-one ETKDG (AIO) block-per-molecule kernels
+
+struct PlanarityContribTermsDevicePtr {
+  const int* idx1;
+  const int* idx2;
+  const int* idx3;
+  const int* idx4;
+};
+
+//! Device view of an all-in-one ETKDG batch: the 4D distance-geometry terms plus the all-in-one terms, each with
+//! per-molecule CSR offsets.
+template <typename Scalar> struct AllInOneContribsDevicePtrT {
+  EnergyForceContribsDevicePtrT<Scalar>            distanceGeometry;
+  BatchedIndicesDevicePtr                          distanceGeometryIndices;
+  DistanceConstraintContribTermsDevicePtrT<Scalar> harmonicDistanceTerms;
+  AngleConstraintContribTermsDevicePtrT<Scalar>    linearAngleTerms;
+  TorsionAngleContribTermsDevicePtrT<Scalar>       experimentalTorsionTerms;
+  PlanarityContribTermsDevicePtr                   planarityTerms;
+  const int*                                       harmonicDistanceTermStarts;
+  const int*                                       linearAngleTermStarts;
+  const int*                                       experimentalTorsionTermStarts;
+  const int*                                       planarityTermStarts;
+};
+
+using AllInOneContribsDevicePtr       = AllInOneContribsDevicePtrT<double>;
+using AllInOneContribsDevicePtrSingle = AllInOneContribsDevicePtrT<float>;
+
+//! Force constants shared by every system in an all-in-one ETKDG batch.
+struct AllInOneForceWeights {
+  double chiral;
+  double fourthDim;
+  double linearAngle;
+  double planarity;
+};
+
+//! Computes all-in-one ETKDG energies, one block per molecule. Experimental torsion and planarity terms are included
+//! only when includeTorsionTerms is set, matching RDKit's second minimization phase. Inactive systems get zero energy.
+cudaError_t launchBlockPerMolEnergyKernelAIO(int                              numMols,
+                                             const AllInOneContribsDevicePtr& terms,
+                                             const double*                    coords,
+                                             double*                          energies,
+                                             const AllInOneForceWeights&      weights,
+                                             bool                             includeTorsionTerms,
+                                             const uint8_t*                   activeThisStage = nullptr,
+                                             cudaStream_t                     stream          = 0);
+cudaError_t launchBlockPerMolEnergyKernelAIO(int                                    numMols,
+                                             const AllInOneContribsDevicePtrSingle& terms,
+                                             const float*                           coords,
+                                             float*                                 energies,
+                                             const AllInOneForceWeights&            weights,
+                                             bool                                   includeTorsionTerms,
+                                             const uint8_t*                         activeThisStage = nullptr,
+                                             cudaStream_t                           stream          = 0);
+
+//! Computes all-in-one ETKDG gradients, one block per molecule. Gradients of active systems are overwritten; inactive
+//! systems are left untouched.
+cudaError_t launchBlockPerMolGradKernelAIO(int                              numMols,
+                                           const AllInOneContribsDevicePtr& terms,
+                                           const double*                    coords,
+                                           double*                          grad,
+                                           const AllInOneForceWeights&      weights,
+                                           bool                             includeTorsionTerms,
+                                           const uint8_t*                   activeThisStage = nullptr,
+                                           cudaStream_t                     stream          = 0);
+cudaError_t launchBlockPerMolGradKernelAIO(int                                    numMols,
+                                           const AllInOneContribsDevicePtrSingle& terms,
+                                           const float*                           coords,
+                                           float*                                 grad,
+                                           const AllInOneForceWeights&            weights,
+                                           bool                                   includeTorsionTerms,
+                                           const uint8_t*                         activeThisStage = nullptr,
+                                           cudaStream_t                           stream          = 0);
 }  // namespace DistGeom
 }  // namespace nvMolKit
 

@@ -55,6 +55,7 @@ import argparse
 import gc
 import random
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Callable
 
@@ -69,6 +70,8 @@ from bench_utils import (
     load_smiles,
     print_csv_rows,
     process_map_bounded,
+    process_pool,
+    resolve_substructure_threads,
     write_csv_rows,
 )
 from bench_utils import (
@@ -99,7 +102,7 @@ _worker_params = None
 
 def _rdkit_worker_init(query_binaries: list[bytes], max_matches: int):
     """Initialize worker process with shared query data."""
-    global _worker_queries, _worker_params
+    global _worker_queries, _worker_params  # noqa: PLW0603 - process-local worker cache
     _worker_queries = [Chem.Mol(qb) for qb in query_binaries]
     _worker_params = Chem.SubstructMatchParameters()
     _worker_params.uniquify = False
@@ -169,65 +172,67 @@ def bench_rdkit_substruct(
     complete_results_data = None
     pairs_done_this_run = 0
 
-    if threads > 1:
-        mol_binaries = [mol.ToBinary() for mol in mols]
-        query_binaries = [q.ToBinary() for q in queries]
-        if mode == "hasSubstructMatch":
-            worker_func = _rdkit_worker_has_batch
-        elif mode == "countSubstructMatches":
-            worker_func = _rdkit_worker_count_batch
+    with ExitStack() as workers:
+        if threads > 1:
+            mol_binaries = [mol.ToBinary() for mol in mols]
+            query_binaries = [q.ToBinary() for q in queries]
+            if mode == "hasSubstructMatch":
+                worker_func = _rdkit_worker_has_batch
+            elif mode == "countSubstructMatches":
+                worker_func = _rdkit_worker_count_batch
+            else:
+                worker_func = _rdkit_worker_get_batch
+            batch_size = max(1, len(mol_binaries) // (threads * 8))
+            batches = [
+                (start, mol_binaries[start : start + batch_size]) for start in range(0, len(mol_binaries), batch_size)
+            ]
+
+            pool = workers.enter_context(process_pool(threads, _rdkit_worker_init, (query_binaries, max_matches)))
+
+            @nvtx.annotate("substruct_run_mp", color="yellow")
+            def run(deadline: Deadline):
+                nonlocal complete_results_data, results_data, pairs_done_this_run
+                mapped = process_map_bounded(
+                    worker_func,
+                    batches,
+                    max_workers=threads,
+                    deadline=deadline,
+                    pool=pool,
+                )
+                completed = dict(mapped.results)
+                pairs_done_this_run = sum(len(rows) * num_queries for rows in completed.values())
+                results_data = [row for start in sorted(completed) for row in completed[start]]
+                if pairs_done_this_run == pairs_total:
+                    complete_results_data = results_data
         else:
-            worker_func = _rdkit_worker_get_batch
-        batch_size = max(1, len(mol_binaries) // (threads * 8))
-        batches = [
-            (start, mol_binaries[start : start + batch_size]) for start in range(0, len(mol_binaries), batch_size)
-        ]
+            if mode == "hasSubstructMatch":
+                match_fn = lambda mol, query: mol.HasSubstructMatch(query, params)  # noqa: E731
+            elif mode == "countSubstructMatches":
+                match_fn = lambda mol, query: len(mol.GetSubstructMatches(query, params))  # noqa: E731
+            else:
+                match_fn = lambda mol, query: mol.GetSubstructMatches(query, params)  # noqa: E731
 
-        @nvtx.annotate("substruct_run_mp", color="yellow")
-        def run(deadline: Deadline):
-            nonlocal complete_results_data, results_data, pairs_done_this_run
-            mapped = process_map_bounded(
-                worker_func,
-                batches,
-                max_workers=threads,
-                deadline=deadline,
-                initializer=_rdkit_worker_init,
-                initargs=(query_binaries, max_matches),
-            )
-            completed = dict(mapped.results)
-            pairs_done_this_run = sum(len(rows) * num_queries for rows in completed.values())
-            results_data = [row for start in sorted(completed) for row in completed[start]]
-            if pairs_done_this_run == pairs_total:
-                complete_results_data = results_data
-    else:
-        if mode == "hasSubstructMatch":
-            match_fn = lambda mol, query: mol.HasSubstructMatch(query, params)  # noqa: E731
-        elif mode == "countSubstructMatches":
-            match_fn = lambda mol, query: len(mol.GetSubstructMatches(query, params))  # noqa: E731
-        else:
-            match_fn = lambda mol, query: mol.GetSubstructMatches(query, params)  # noqa: E731
+            @nvtx.annotate("substruct_run", color="yellow")
+            def run(deadline):
+                nonlocal complete_results_data, results_data, pairs_done_this_run
+                results_data = []
+                pairs_done_this_run = 0
+                for mol in mols:
+                    if deadline.expired():
+                        break
+                    results_data.append([match_fn(mol, query) for query in queries])
+                    pairs_done_this_run += num_queries
+                if pairs_done_this_run == pairs_total:
+                    complete_results_data = results_data
 
-        @nvtx.annotate("substruct_run", color="yellow")
-        def run(deadline):
-            nonlocal complete_results_data, results_data, pairs_done_this_run
-            results_data = []
-            pairs_done_this_run = 0
-            for mol in mols:
-                if deadline.expired():
-                    break
-                results_data.append([match_fn(mol, query) for query in queries])
-                pairs_done_this_run += num_queries
-            if pairs_done_this_run == pairs_total:
-                complete_results_data = results_data
-
-    timing = _time_it(
-        run,
-        runs=runs,
-        warmups=0,
-        max_seconds=max_seconds,
-        progress_getter=lambda: pairs_done_this_run,
-        progress_target=pairs_total,
-    )
+        timing = _time_it(
+            run,
+            runs=runs,
+            warmups=0,
+            max_seconds=max_seconds,
+            progress_getter=lambda: pairs_done_this_run,
+            progress_target=pairs_total,
+        )
     if timing.progress is None:
         raise RuntimeError("bounded timing did not report progress")
     last_pairs = timing.progress
@@ -395,6 +400,12 @@ def main():
         help="Target wall-clock seconds per Optuna trial (default: 10.0)",
     )
     parser.add_argument(
+        "--autotune_cpu_budget",
+        type=int,
+        default=None,
+        help=("CPU-core budget used to bound the autotune search space. Default: detected physical core count"),
+    )
+    parser.add_argument(
         "--autotune_calibration_size",
         type=int,
         default=0,
@@ -532,6 +543,12 @@ def main():
         print("\nRun configuration:")
         print(f"  SMARTS file: {smarts_path}")
         print(f"  Mode: {mode}")
+        selected_workers = config_row["workers"]
+        selected_prep_threads = config_row["prep_threads"]
+        if not args.autotune and not args.autotune_load:
+            selected_workers, selected_prep_threads = resolve_substructure_threads(
+                selected_workers, config_row["num_gpus"], selected_prep_threads
+            )
         if not args.no_nvmolkit:
             print("  nvmolkit config:")
             if args.autotune_load and args.algorithm is None:
@@ -540,8 +557,14 @@ def main():
                 print(f"    algorithm: {algorithm}")
             print(f"    batch_size: {config_row['batch_size']}")
             print(f"    num_gpus: {config_row['num_gpus']}")
-            print(f"    workers: {config_row['workers'] if config_row['workers'] >= 0 else 'auto'}")
-            print(f"    prep_threads: {config_row['prep_threads'] if config_row['prep_threads'] >= 0 else 'auto'}")
+            print(f"    workers: {selected_workers if selected_workers >= 0 else 'auto'}")
+            if config_row["prep_threads"] >= 0:
+                prep_threads_label = str(selected_prep_threads)
+            elif not args.autotune and not args.autotune_load:
+                prep_threads_label = f"{selected_prep_threads} (auto)"
+            else:
+                prep_threads_label = "auto"
+            print(f"    prep_threads: {prep_threads_label}")
 
         if smarts_path in smarts_cache:
             queries, _ = smarts_cache[smarts_path]
@@ -604,8 +627,14 @@ def main():
                     )
                     explicit_calibration = None
                     if args.autotune_calibration_size > 0:
+                        if args.autotune_calibration_size > len(mols):
+                            print(
+                                "Error: --autotune_calibration_size="
+                                f"{args.autotune_calibration_size} exceeds the {len(mols)} loaded molecules"
+                            )
+                            sys.exit(1)
                         rng = random.Random(args.autotune_seed)
-                        size = min(args.autotune_calibration_size, len(mols))
+                        size = args.autotune_calibration_size
                         explicit_calibration = rng.sample(range(len(mols)), size)
                     tune_result = nv_autotune.tune_substructure(
                         mols,
@@ -617,6 +646,7 @@ def main():
                         n_trials=args.autotune_trials,
                         target_seconds_per_trial=args.autotune_time_budget,
                         calibration_set=explicit_calibration,
+                        cpu_budget=args.autotune_cpu_budget,
                         seed=args.autotune_seed,
                         verbose=True,
                     )
@@ -634,8 +664,8 @@ def main():
                 else:
                     config = SubstructSearchConfig()
                     config.batchSize = config_row["batch_size"]
-                    config.workerThreads = config_row["workers"]
-                    config.preprocessingThreads = config_row["prep_threads"]
+                    config.workerThreads = selected_workers
+                    config.preprocessingThreads = selected_prep_threads
                     config.gpuIds = gpu_ids
                     if args.max_matches > 0:
                         config.maxMatches = args.max_matches

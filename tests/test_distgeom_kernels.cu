@@ -25,11 +25,14 @@
 #include <GraphMol/ForceFieldHelpers/CrystalFF/TorsionAngleContribs.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <random>
 
 #include "rdkit_extensions/bounds_matrix.h"
 #include "rdkit_extensions/dist_geom_flattened_builder.h"
+#include "rdkit_extensions/torsion_compat.h"
 #include "src/embedder_utils.h"
 #include "src/forcefields/dist_geom.h"
 #include "src/forcefields/dist_geom_kernels.h"
@@ -41,6 +44,13 @@ namespace {
 constexpr double E_TOL_FUNCTION = 1e-5;
 constexpr double E_TOL_COMBINED = 1e-4;
 constexpr double G_TOL          = 1e-4;
+// Terms the device accumulates in FP32 (experimental torsions) carry error that scales with energy magnitude, so an
+// absolute tolerance is only a few ULPs and flips with host/device rounding differences across platforms.
+constexpr double E_TOL_FP32_REL = 2e-6;
+
+double fp32EnergyTolerance(double wantEnergy) {
+  return std::max(E_TOL_FUNCTION, E_TOL_FP32_REL * std::abs(wantEnergy));
+}
 
 // Copy of term additions for 3D forcefield.
 constexpr double KNOWN_DIST_FORCE_CONSTANT = 100.0;  // Force constant for known distances
@@ -120,8 +130,8 @@ void addExperimentalTorsionTerms(ForceFields::ForceField*                       
     } else {
       atomPairs[l * numAtoms + i] = true;
     }
-    torsionContribs
-      ->addContrib(i, j, k, l, etkdgDetails.expTorsionAngles[t].second, etkdgDetails.expTorsionAngles[t].first);
+    const auto& torsionParameters = nvMolKit::detail::getCosineTorsionParameters(etkdgDetails.expTorsionAngles[t]);
+    torsionContribs->addContrib(i, j, k, l, torsionParameters.second, torsionParameters.first);
   }
   if (!torsionContribs->empty()) {
     ff->contribs().push_back(std::move(torsionContribs));
@@ -693,74 +703,33 @@ std::vector<std::vector<double>> getReferenceETK3DGradientTerms(
   return results;
 }
 
+// Isolates one DG term family through the production energy path. Distance violations carry no global weight, so the
+// chiral and fourth-dimension energies are taken as the difference from an evaluation with their weights zeroed.
 std::vector<double> getEnergyTerm(nvMolKit::DistGeom::BatchedMolecularDeviceBuffers& deviceFF,
                                   const double*                                      pos,
                                   const int*                                         atomStarts,
-                                  const FFTerm&                                      term,
-                                  const int                                          dim) {
-  switch (term) {
-    case FFTerm::DistanceViolation:
-      if (deviceFF.contribs.distTerms.idx1.size() == 0) {
-        return {0.0};
-      }
-      CHECK_CUDA_RETURN(nvMolKit::DistGeom::launchDistViolationEnergyKernel(deviceFF.contribs.distTerms.idx1.size(),
-                                                                            deviceFF.contribs.distTerms.idx1.data(),
-                                                                            deviceFF.contribs.distTerms.idx2.data(),
-                                                                            deviceFF.contribs.distTerms.lb2.data(),
-                                                                            deviceFF.contribs.distTerms.ub2.data(),
-                                                                            deviceFF.contribs.distTerms.weight.data(),
-                                                                            pos,
-                                                                            deviceFF.energyBuffer.data(),
-                                                                            deviceFF.indices.energyBufferStarts.data(),
-                                                                            deviceFF.indices.atomIdxToBatchIdx.data(),
-                                                                            deviceFF.indices.distTermStarts.data(),
-                                                                            atomStarts,
-                                                                            dim));
-      break;
-    case FFTerm::ChiralViolation:
-      if (deviceFF.contribs.chiralTerms.idx1.size() == 0) {
-        return {0.0};
-      }
-      CHECK_CUDA_RETURN(
-        nvMolKit::DistGeom::launchChiralViolationEnergyKernel(deviceFF.contribs.chiralTerms.idx1.size(),
-                                                              deviceFF.contribs.chiralTerms.idx1.data(),
-                                                              deviceFF.contribs.chiralTerms.idx2.data(),
-                                                              deviceFF.contribs.chiralTerms.idx3.data(),
-                                                              deviceFF.contribs.chiralTerms.idx4.data(),
-                                                              deviceFF.contribs.chiralTerms.volLower.data(),
-                                                              deviceFF.contribs.chiralTerms.volUpper.data(),
-                                                              1.0,
-                                                              pos,
-                                                              deviceFF.energyBuffer.data(),
-                                                              deviceFF.indices.energyBufferStarts.data(),
-                                                              deviceFF.indices.atomIdxToBatchIdx.data(),
-                                                              deviceFF.indices.chiralTermStarts.data(),
-                                                              atomStarts,
-                                                              dim));
-      break;
-    case FFTerm::FourthDim:
-      if (deviceFF.contribs.fourthTerms.idx.size() == 0) {
-        return {0.0};
-      }
-      CHECK_CUDA_RETURN(nvMolKit::DistGeom::launchFourthDimEnergyKernel(deviceFF.contribs.fourthTerms.idx.size(),
-                                                                        deviceFF.contribs.fourthTerms.idx.data(),
-                                                                        0.1,
-                                                                        pos,
-                                                                        deviceFF.energyBuffer.data(),
-                                                                        deviceFF.indices.energyBufferStarts.data(),
-                                                                        deviceFF.indices.atomIdxToBatchIdx.data(),
-                                                                        deviceFF.indices.fourthTermStarts.data(),
-                                                                        atomStarts,
-                                                                        dim));
-      break;
+                                  const FFTerm&                                      term) {
+  const auto energyWithWeights = [&](const double chiralWeight, const double fourthDimWeight) {
+    CHECK_CUDA_RETURN(nvMolKit::DistGeom::computeEnergy(deviceFF,
+                                                        deviceFF.energyOuts.data(),
+                                                        atomStarts,
+                                                        pos,
+                                                        chiralWeight,
+                                                        fourthDimWeight));
+    std::vector<double> energy(deviceFF.energyOuts.size());
+    deviceFF.energyOuts.copyToHost(energy);
+    return energy;
+  };
+
+  std::vector<double> energy = energyWithWeights(0.0, 0.0);
+  if (term == FFTerm::DistanceViolation) {
+    return energy;
   }
-  CHECK_CUDA_RETURN(
-    nvMolKit::DistGeom::launchReduceEnergiesKernel(deviceFF.indices.energyBufferBlockIdxToBatchIdx.size(),
-                                                   deviceFF.energyBuffer.data(),
-                                                   deviceFF.indices.energyBufferBlockIdxToBatchIdx.data(),
-                                                   deviceFF.energyOuts.data()));
-  std::vector<double> energy(deviceFF.energyOuts.size());
-  deviceFF.energyOuts.copyToHost(energy);
+  const std::vector<double> weighted =
+    term == FFTerm::ChiralViolation ? energyWithWeights(1.0, 0.0) : energyWithWeights(0.0, 0.1);
+  for (size_t i = 0; i < energy.size(); ++i) {
+    energy[i] = weighted[i] - energy[i];
+  }
   return energy;
 }
 
@@ -1121,7 +1090,7 @@ void DistGeomDGKernelTestFixture::setUpSystems(const std::vector<RDKit::ROMol*>&
   // Set up device buffers
   sendContribsAndIndicesToDevice(systemHost, systemDevice);
   nvMolKit::DistGeom::sendContextToDevice(positionsHost, positionsDevice, atomStartsHost, atomStartsDevice);
-  setupDeviceBuffers(systemHost, systemDevice, positionsHost, atomStartsHost.size() - 1);
+  setupDeviceBuffers(systemDevice, positionsHost, atomStartsHost.size() - 1);
 
   // Set up gradients buffer
   int totalAtoms = atomStartsHost.back();
@@ -1134,7 +1103,7 @@ TEST_F(DistGeomDGKernelTestFixture, DistViolationEnergySingleMolecule) {
   const double wantEnergy =
     getReferenceEnergyTerm(allEargs_[0], allPointVecHolders[0], FFTerm::DistanceViolation, options.basinThresh);
   const double gotEnergy =
-    getEnergyTerm(systemDevice, positionsDevice.data(), atomStartsDevice.data(), FFTerm::DistanceViolation, 4)[0];
+    getEnergyTerm(systemDevice, positionsDevice.data(), atomStartsDevice.data(), FFTerm::DistanceViolation)[0];
 
   std::vector<double> hostPos;
   hostPos.resize(allPointVecHolders[0].size() * 4);
@@ -1158,7 +1127,7 @@ TEST_F(DistGeomDGKernelTestFixture, ChiralViolationEnergySingleMolecule) {
   const double wantEnergy =
     getReferenceEnergyTerm(allEargs_[0], allPointVecHolders[0], FFTerm::ChiralViolation, options.basinThresh);
   const double gotEnergy =
-    getEnergyTerm(systemDevice, positionsDevice.data(), atomStartsDevice.data(), FFTerm::ChiralViolation, 4)[0];
+    getEnergyTerm(systemDevice, positionsDevice.data(), atomStartsDevice.data(), FFTerm::ChiralViolation)[0];
 
   std::vector<double> hostPos;
   hostPos.resize(allPointVecHolders[0].size() * 4);
@@ -1182,7 +1151,7 @@ TEST_F(DistGeomDGKernelTestFixture, FourthDimEnergySingleMolecule) {
   const double wantEnergy =
     getReferenceEnergyTerm(allEargs_[0], allPointVecHolders[0], FFTerm::FourthDim, options.basinThresh);
   const double gotEnergy =
-    getEnergyTerm(systemDevice, positionsDevice.data(), atomStartsDevice.data(), FFTerm::FourthDim, 4)[0];
+    getEnergyTerm(systemDevice, positionsDevice.data(), atomStartsDevice.data(), FFTerm::FourthDim)[0];
 
   std::vector<double> hostPos;
   hostPos.resize(allPointVecHolders[0].size() * 4);
@@ -1209,7 +1178,7 @@ TEST_F(DistGeomDGKernelTestFixture, DistViolationEnergyMultiMol) {
   constexpr auto term = FFTerm::DistanceViolation;
   loadMMFFMols(100);
   std::vector<double> wantEnergy = getReferenceEnergyTerms(allEargs_, allPointVecHolders, term, options.basinThresh);
-  std::vector<double> gotEnergy = getEnergyTerm(systemDevice, positionsDevice.data(), atomStartsDevice.data(), term, 4);
+  std::vector<double> gotEnergy  = getEnergyTerm(systemDevice, positionsDevice.data(), atomStartsDevice.data(), term);
   EXPECT_THAT(gotEnergy, ::testing::Pointwise(::testing::DoubleNear(E_TOL_FUNCTION), wantEnergy));
 }
 
@@ -1230,7 +1199,7 @@ TEST_F(DistGeomDGKernelTestFixture, ChiralViolationEnergyMultiMol) {
   constexpr auto term = FFTerm::ChiralViolation;
   loadMMFFMols(100);
   std::vector<double> wantEnergy = getReferenceEnergyTerms(allEargs_, allPointVecHolders, term, options.basinThresh);
-  std::vector<double> gotEnergy = getEnergyTerm(systemDevice, positionsDevice.data(), atomStartsDevice.data(), term, 4);
+  std::vector<double> gotEnergy  = getEnergyTerm(systemDevice, positionsDevice.data(), atomStartsDevice.data(), term);
   EXPECT_THAT(gotEnergy, ::testing::Pointwise(::testing::DoubleNear(E_TOL_FUNCTION), wantEnergy));
 }
 
@@ -1251,7 +1220,7 @@ TEST_F(DistGeomDGKernelTestFixture, FourthDimEnergyMultiMol) {
   constexpr auto term = FFTerm::FourthDim;
   loadMMFFMols(100);
   std::vector<double> wantEnergy = getReferenceEnergyTerms(allEargs_, allPointVecHolders, term, options.basinThresh);
-  std::vector<double> gotEnergy = getEnergyTerm(systemDevice, positionsDevice.data(), atomStartsDevice.data(), term, 4);
+  std::vector<double> gotEnergy  = getEnergyTerm(systemDevice, positionsDevice.data(), atomStartsDevice.data(), term);
   EXPECT_THAT(gotEnergy, ::testing::Pointwise(::testing::DoubleNear(E_TOL_FUNCTION), wantEnergy));
 }
 
@@ -1365,7 +1334,7 @@ TEST_F(ETK3DGpuTestFixture, ExperimentalTorsionEnergySingleMolecule) {
   double gotEnergy =
     getETK3DEnergyTerms(systemDevice, atomStartsDevice, positionsDevice, ETK3DTerm::ExperimentalTorsion)[0];
   ASSERT_NE(wantEnergy, 0.0);
-  EXPECT_NEAR(gotEnergy, wantEnergy, E_TOL_FUNCTION);
+  EXPECT_NEAR(gotEnergy, wantEnergy, fp32EnergyTolerance(wantEnergy));
 }
 
 TEST_F(ETK3DGpuTestFixture, ExperimentalTorsionGradientSingleMolecule) {
@@ -1489,7 +1458,7 @@ TEST_F(ETK3DGpuTestFixture, CombinedEnergiesSingleMolecule) {
     wantEnergy += e;
   }
 
-  EXPECT_NEAR(gotEnergy, wantEnergy, E_TOL_FUNCTION);
+  EXPECT_NEAR(gotEnergy, wantEnergy, fp32EnergyTolerance(wantEnergy));
 }
 
 TEST_F(ETK3DGpuTestFixture, CombinedGradientsSingleMolecue) {
@@ -1529,7 +1498,7 @@ TEST_F(ETK3DGpuTestFixture, PlainCombinedEnergiesSingleMolecule) {
 
   const double wantEnergy = getReferencePlain3DEnergy(mol_.get(), positionsHost.data());
 
-  EXPECT_NEAR(gotEnergy, wantEnergy, E_TOL_FUNCTION);
+  EXPECT_NEAR(gotEnergy, wantEnergy, fp32EnergyTolerance(wantEnergy));
 }
 
 TEST_F(ETK3DGpuTestFixture, PlainCombinedGradientsSingleMolecule) {

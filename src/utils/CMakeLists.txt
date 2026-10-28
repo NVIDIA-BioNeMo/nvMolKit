@@ -24,6 +24,9 @@ add_library(device_vector INTERFACE)
 target_link_libraries(device_vector INTERFACE CUDA::cudart cuda_error_check
                                               cccl_interface)
 
+add_library(device_convert device_convert.cu)
+target_link_libraries(device_convert PUBLIC CUDA::cudart)
+
 add_library(host_vector INTERFACE)
 target_link_libraries(host_vector INTERFACE CUDA::cudart cuda_error_check)
 

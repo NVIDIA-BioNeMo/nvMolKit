@@ -25,7 +25,7 @@ from rdkit.Chem import AllChem
 from rdkit.DataStructs import BulkTanimotoSimilarity
 from rdkit.ML.Cluster.Butina import ClusterData
 
-from nvmolkit.clustering import ButinaOutputMode, fused_butina
+from nvmolkit.clustering import OutputMode, fused_butina
 from nvmolkit.clustering import butina as butina_nvmol
 from nvmolkit.fingerprints import MorganFingerprintGenerator as nvmolMorganGen
 from nvmolkit.similarity import crossTanimotoSimilarity
@@ -141,6 +141,13 @@ if __name__ == "__main__":
     )
     parser.add_argument("--cutoff", type=float, default=None, help="Run only this cutoff value")
     parser.add_argument(
+        "--rdkit-max-size",
+        "--rdkit_max_size",
+        type=int,
+        default=0,
+        help="Largest size run with the (single-threaded, O(n^2)) RDKit backends; 0 = no cap",
+    )
+    parser.add_argument(
         "--nvmolkit-reordering",
         choices=["true", "false", "both"],
         default="true",
@@ -190,6 +197,10 @@ if __name__ == "__main__":
         default_runs = VALID_BENCHMARKS - disabled
         run_plan = [{"size": s, "run": set(default_runs)} for s in DEFAULT_SIZES]
 
+    if args.rdkit_max_size > 0:
+        for entry in run_plan:
+            if entry["size"] > args.rdkit_max_size:
+                entry["run"] = entry["run"] - {"rdkit", "rdkit_lowmem"}
     run_plan = [e for e in run_plan if e["run"]]
     if not run_plan:
         print("Error: no benchmarks to run", file=sys.stderr)
@@ -273,11 +284,11 @@ if __name__ == "__main__":
                 if "fused" in runs:
                     print(f"Running fused_butina size {size} cutoff {cutoff}")
                     fused_result = time_it(
-                        lambda: fused_butina(
+                        lambda fps_mat=fps_mat, cutoff=cutoff: fused_butina(
                             fps_mat,
                             cutoff=cutoff,
                             metric="tanimoto",
-                            output=ButinaOutputMode.DEVICE,
+                            output=OutputMode.DEVICE,
                         ),
                         gpu_sync=True,
                         runs=n_runs,
@@ -297,7 +308,9 @@ if __name__ == "__main__":
                                 f"reordering {nvmol_reordering}"
                             )
                             nvmolkit_cluster_only_result = time_it(
-                                lambda: bench_nvmol_inner(dist_mat, cutoff, max_nl, nvmol_reordering),
+                                lambda dist_mat=dist_mat, cutoff=cutoff, max_nl=max_nl, nvmol_reordering=nvmol_reordering: (
+                                    bench_nvmol_inner(dist_mat, cutoff, max_nl, nvmol_reordering)
+                                ),
                                 gpu_sync=True,
                                 runs=n_runs,
                             )
@@ -308,7 +321,9 @@ if __name__ == "__main__":
                             if nvmol_reordering:
                                 print(f"Running nvmolkit_with_tanimoto size {size} cutoff {cutoff} max_nl {max_nl}")
                                 nvmolkit_with_tanimoto_result = time_it(
-                                    lambda: bench_nvmol_with_tanimoto(fps_mat, cutoff, max_nl),
+                                    lambda fps_mat=fps_mat, cutoff=cutoff, max_nl=max_nl: bench_nvmol_with_tanimoto(
+                                        fps_mat, cutoff, max_nl
+                                    ),
                                     gpu_sync=True,
                                     runs=n_runs,
                                 )
@@ -317,7 +332,7 @@ if __name__ == "__main__":
 
                             nvmol_res = butina_nvmol(
                                 dist_mat, cutoff, neighborlist_max_size=max_nl, reordering=nvmol_reordering
-                            ).torch()
+                            ).cluster_ids.torch()
                             torch.cuda.synchronize()
                             nvmol_clusts = [
                                 tuple(torch.argwhere(nvmol_res == i).flatten().tolist())

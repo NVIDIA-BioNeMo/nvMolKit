@@ -23,7 +23,7 @@ from rdkit.Chem import AllChem, rdDistGeom
 from rdkit.Chem.rdDistGeom import EmbedParameters
 
 import nvmolkit.embedMolecules as embed
-from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions
+from nvmolkit.types import CoordinateOutput, Device3DResult, HardwareOptions, PrecisionMode
 
 
 @pytest.fixture
@@ -189,8 +189,13 @@ def compare_conformers_rmsd(rdkit_mols, nvmolkit_mols, rmsd_threshold=0.2, min_m
         )
 
 
+@pytest.fixture(params=[PrecisionMode.FULL, PrecisionMode.SINGLE], ids=["full", "single"])
+def precision(request):
+    return request.param
+
+
 @pytest.mark.parametrize("etkdg_variant", ["ETKDG", "ETKDGv2", "ETKDGv3", "srETKDGv3", "KDG", "ETDG", "DG"])
-def test_embed_molecules_serial_vs_rdkit(embed_test_mols, etkdg_variant):
+def test_embed_molecules_serial_vs_rdkit(embed_test_mols, etkdg_variant, precision):
     """Test nvMolKit EmbedMolecules one molecule at a time against RDKit reference.
 
     This test compares the conformer generation when embedding molecules individually
@@ -238,7 +243,12 @@ def test_embed_molecules_serial_vs_rdkit(embed_test_mols, etkdg_variant):
         )
 
         embed.EmbedMolecules(
-            [mol], params, confsPerMolecule=confs_per_mol, maxIterations=-1, hardwareOptions=hardware_opts
+            [mol],
+            params,
+            confsPerMolecule=confs_per_mol,
+            maxIterations=-1,
+            hardwareOptions=hardware_opts,
+            precision=precision,
         )
         nvmolkit_conf_counts.append(mol.GetNumConformers())
 
@@ -265,7 +275,7 @@ def test_embed_molecules_serial_vs_rdkit(embed_test_mols, etkdg_variant):
 
 @pytest.mark.parametrize("etkdg_variant", ["ETKDG", "ETKDGv2", "ETKDGv3", "srETKDGv3", "KDG", "ETDG", "DG"])
 @pytest.mark.parametrize("gpu_ids", [[], [0], [1], [0, 1]])
-def test_embed_molecules_batch_vs_rdkit(embed_test_mols, etkdg_variant, gpu_ids):
+def test_embed_molecules_batch_vs_rdkit(embed_test_mols, etkdg_variant, gpu_ids, precision):
     """Test nvMolKit EmbedMolecules batch mode against RDKit reference.
 
     This test compares the conformer generation when embedding all molecules together
@@ -314,7 +324,12 @@ def test_embed_molecules_batch_vs_rdkit(embed_test_mols, etkdg_variant, gpu_ids)
     )
 
     embed.EmbedMolecules(
-        nvmolkit_mols, params, confsPerMolecule=confs_per_mol, maxIterations=-1, hardwareOptions=hardware_opts
+        nvmolkit_mols,
+        params,
+        confsPerMolecule=confs_per_mol,
+        maxIterations=-1,
+        hardwareOptions=hardware_opts,
+        precision=precision,
     )
 
     # Get nvMolKit conformer counts
@@ -341,13 +356,13 @@ def test_embed_molecules_batch_vs_rdkit(embed_test_mols, etkdg_variant, gpu_ids)
     compare_conformers_rmsd(rdkit_mols, nvmolkit_mols, rmsd_threshold=0.2, min_match_fraction=0.5)
 
 
-def test_embed_molecules_empty_input():
+def test_embed_molecules_empty_input(precision):
     """Test nvMolKit EmbedMolecules with empty input."""
     params = EmbedParameters()
     params.useRandomCoords = True
 
     # Should not raise any errors
-    embed.EmbedMolecules([], params)
+    embed.EmbedMolecules([], params, precision=precision)
 
 
 def test_embed_molecules_invalid_input():
@@ -399,7 +414,7 @@ def test_embed_molecules_eigenvalue_initialization_atom_limit():
         embed.EmbedMolecules([mol], params)
 
 
-def test_embed_molecules_with_hardware_options(embed_test_mols):
+def test_embed_molecules_with_hardware_options(embed_test_mols, precision):
     """Test nvMolKit EmbedMolecules using hardware options wrapper."""
     confs_per_mol = 3
 
@@ -420,7 +435,12 @@ def test_embed_molecules_with_hardware_options(embed_test_mols):
 
     # Embed molecules using the struct interface
     embed.EmbedMolecules(
-        nvmolkit_mols, params, confsPerMolecule=confs_per_mol, maxIterations=-1, hardwareOptions=hardware_opts
+        nvmolkit_mols,
+        params,
+        confsPerMolecule=confs_per_mol,
+        maxIterations=-1,
+        hardwareOptions=hardware_opts,
+        precision=precision,
     )
 
     # Verify conformer counts
@@ -431,7 +451,7 @@ def test_embed_molecules_with_hardware_options(embed_test_mols):
         )
 
 
-def test_embed_molecules_allows_large_molecule_interleaved():
+def test_embed_molecules_allows_large_molecule_interleaved(precision):
     """Ensure a large (>256 atoms) molecule in batch is accepted and embedded."""
     small1 = Chem.AddHs(Chem.MolFromSmiles("CCCCCC"))  # 6 atoms
     small2 = Chem.AddHs(Chem.MolFromSmiles("CCC"))  # 3 atoms
@@ -442,23 +462,23 @@ def test_embed_molecules_allows_large_molecule_interleaved():
     params.useRandomCoords = True
     params.maxIterations = 5
 
-    embed.EmbedMolecules([small1, big, small2], params, confsPerMolecule=1)
+    embed.EmbedMolecules([small1, big, small2], params, confsPerMolecule=1, precision=precision)
     assert small1.GetNumConformers() == 1
     assert small2.GetNumConformers() == 1
     assert big.GetNumConformers() == 1
 
 
-def test_embed_molecules_prune_rmsthresh():
+def test_embed_molecules_prune_rmsthresh(precision):
     mols = [Chem.MolFromSmiles("c1ccccc1"), Chem.MolFromSmiles("C" * 30)]
     params = EmbedParameters()
     params.useRandomCoords = True
     params.pruneRmsThresh = 0.5
-    embed.EmbedMolecules(mols, params, confsPerMolecule=5)
+    embed.EmbedMolecules(mols, params, confsPerMolecule=5, precision=precision)
     assert mols[0].GetNumConformers() == 1
     assert mols[1].GetNumConformers() == 5
 
 
-def test_embed_molecules_device_output_returns_device3d_no_writeback():
+def test_embed_molecules_device_output_returns_device3d_no_writeback(precision):
     """EmbedMolecules(output=DEVICE) returns Device3DResult and does NOT modify RDKit conformers."""
     mols = [Chem.AddHs(Chem.MolFromSmiles("CCO")), Chem.AddHs(Chem.MolFromSmiles("CCCC"))]
     params = EmbedParameters()
@@ -470,6 +490,7 @@ def test_embed_molecules_device_output_returns_device3d_no_writeback():
         params,
         confsPerMolecule=confs_per_mol,
         output=CoordinateOutput.DEVICE,
+        precision=precision,
     )
     assert isinstance(result, Device3DResult)
     assert result.n_mols == 2
@@ -493,6 +514,21 @@ def test_embed_molecules_device_output_returns_device3d_no_writeback():
         # Total atoms accounted for so far must match the cumulative atom_starts entry
         # for this molecule's last conformer.
     assert atom_starts[-1] == cursor
+
+    # Coordinates must be real geometry: finite, with sensible heavy-atom bond lengths.
+    positions = result.values.torch().cpu()
+    assert positions.shape == (atom_starts[-1], 3)
+    assert torch.isfinite(positions).all()
+    for conf_idx, mol_idx in enumerate(mol_indices):
+        conf_positions = positions[atom_starts[conf_idx] : atom_starts[conf_idx + 1]]
+        for bond in mols[mol_idx].GetBonds():
+            begin, end = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+            if mols[mol_idx].GetAtomWithIdx(begin).GetAtomicNum() == 1:
+                continue
+            if mols[mol_idx].GetAtomWithIdx(end).GetAtomicNum() == 1:
+                continue
+            length = torch.linalg.norm(conf_positions[begin] - conf_positions[end]).item()
+            assert 1.3 < length < 1.7
 
     # ETKDG does not produce energies / convergence flags - those Optional fields must be None,
     # not AsyncGpuResults wrapping empty tensors.

@@ -97,8 +97,17 @@ target_include_directories(_embedMolecules SYSTEM PUBLIC ${Boost_INCLUDE_DIRS})
 installpythontarget(_embedMolecules ./)
 
 add_library(_clustering MODULE clustering.cpp)
-target_link_libraries(_clustering PUBLIC ${Boost_LIBRARIES} ${PYTHON_LIBRARIES}
-                                         device_vector butina device)
+target_link_libraries(
+  _clustering
+  PUBLIC ${Boost_LIBRARIES}
+         ${PYTHON_LIBRARIES}
+         device_vector
+         bitbirch
+         butina
+         aap
+         diversity_pickers
+         device)
+target_link_libraries(_clustering PRIVATE ${RDKit_LIBS})
 target_include_directories(_clustering PUBLIC ${Boost_INCLUDE_DIRS}
                                               ${Python_INCLUDE_DIRS})
 installpythontarget(_clustering ./)
@@ -112,6 +121,15 @@ target_include_directories(_conformerRmsd PUBLIC ${Boost_INCLUDE_DIRS}
                                                  ${Python_INCLUDE_DIRS})
 installpythontarget(_conformerRmsd ./)
 
+add_library(_descriptors3d MODULE descriptors3d.cpp)
+target_link_libraries(
+  _descriptors3d PUBLIC ${Boost_LIBRARIES} ${PYTHON_LIBRARIES}
+                        descriptors3d_mol device CUDA::cudart)
+target_link_libraries(_descriptors3d PRIVATE ${RDKit_LIBS})
+target_include_directories(_descriptors3d PUBLIC ${Boost_INCLUDE_DIRS}
+                                                 ${Python_INCLUDE_DIRS})
+installpythontarget(_descriptors3d ./)
+
 add_library(_substructure MODULE substructure.cpp)
 target_link_libraries(_substructure PUBLIC ${Boost_LIBRARIES}
                                            ${PYTHON_LIBRARIES})
@@ -120,6 +138,14 @@ target_link_libraries(_substructure PRIVATE ${RDKit_LIBS} substructure_search
 target_include_directories(_substructure PUBLIC ${Boost_INCLUDE_DIRS}
                                                 ${Python_INCLUDE_DIRS})
 installpythontarget(_substructure ./)
+
+add_library(_substructLibrary MODULE substructLibrary.cpp)
+target_link_libraries(_substructLibrary PUBLIC ${Boost_LIBRARIES}
+                                               ${PYTHON_LIBRARIES})
+target_link_libraries(_substructLibrary PRIVATE ${RDKit_LIBS} substruct_library)
+target_include_directories(_substructLibrary PUBLIC ${Boost_INCLUDE_DIRS}
+                                                    ${Python_INCLUDE_DIRS})
+installpythontarget(_substructLibrary ./)
 
 add_library(_mcs MODULE mcs.cpp)
 target_link_libraries(_mcs PUBLIC ${Boost_LIBRARIES} ${PYTHON_LIBRARIES})

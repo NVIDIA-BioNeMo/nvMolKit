@@ -6,9 +6,11 @@
 #include <RDGeneral/Invariant.h>
 
 #include <boost/dynamic_bitset.hpp>
+#include <cmath>
 #include <map>
 #include <sstream>
 
+#include "rdkit_extensions/torsion_compat.h"
 #include "versions.h"
 
 // No clang-tidy for 1:1 RDKit ports.
@@ -157,8 +159,9 @@ void addExperimentalTorsionTerms(nvMolKit::DistGeom::Energy3DForceContribsHost& 
     contribs.experimentalTorsionTerms.idx4.push_back(atomIdx4);
 
     // Add force constants and signs (6 values per torsion)
-    const auto& signs          = etkdgDetails.expTorsionAngles[torsionIdx].first;
-    const auto& forceConstants = etkdgDetails.expTorsionAngles[torsionIdx].second;
+    const auto& torsionParameters = detail::getCosineTorsionParameters(etkdgDetails.expTorsionAngles[torsionIdx]);
+    const auto& signs             = torsionParameters.first;
+    const auto& forceConstants    = torsionParameters.second;
 
     // Ensure we have 6 values for each torsion
     for (int term = 0; term < TORSION_TERMS_PER_ANGLE; ++term) {
@@ -489,6 +492,89 @@ nvMolKit::DistGeom::EnergyForceContribsHost constructForceFieldContribs(
 
   return contribs;
 }
+
+#if RDKIT_AIO_ETKDG_API
+nvMolKit::DistGeom::AllInOneForceContribsHost constructAllInOneForceFieldContribs(
+  const int                                         dim,
+  const ::DistGeom::BoundsMatrix&                   mmat,
+  const ::DistGeom::VECT_CHIRALSET&                 csets,
+  const ::ForceFields::CrystalFF::CrystalFFDetails& etkdgDetails,
+  const bool                                        useExpTorsionAnglePrefs,
+  const bool                                        useBasicKnowledge) {
+  PRECONDITION(etkdgDetails.distMat, "all-in-one ETKDG requires a topological distance matrix");
+  AllInOneForceContribsHost contribs;
+  const unsigned int        numAtoms    = mmat.numRows();
+  const auto&               forceConsts = etkdgDetails.forceConsts;
+
+  // DistGeom::addAngleTerms
+  for (const auto& angle : etkdgDetails.angles) {
+    if (angle[3]) {
+      addAngleConstraintContrib(contribs.linearAngleTerms,
+                                angle[0],
+                                angle[1],
+                                angle[2],
+                                TRIPLE_BOND_MIN_ANGLE,
+                                TRIPLE_BOND_MAX_ANGLE);
+    }
+  }
+
+  // DistGeom::addChiralityTerms
+  if (dim == 4) {
+    addChiralViolationContribs(contribs.distanceGeometry, numAtoms, csets, forceConsts.chiral);
+    addFourthDimContribs(contribs.distanceGeometry, dim, numAtoms, forceConsts.fourthDim);
+  }
+
+  // DistGeom::addDistanceTerms: harmonic 1-2 and 1-3 terms, distance violation terms for every other pair
+  for (unsigned int i = 1; i < numAtoms; ++i) {
+    for (unsigned int j = 0; j < i; ++j) {
+      const double lowerBound          = mmat.getLowerBound(i, j);
+      const double upperBound          = mmat.getUpperBound(i, j);
+      const double topologicalDistance = etkdgDetails.distMat[i * numAtoms + j];
+      if (std::abs(topologicalDistance - 1.0) < 1e-4 || std::abs(topologicalDistance - 2.0) < 1e-4) {
+        addDistanceConstraintContrib(contribs.harmonicDistanceTerms, i, j, lowerBound, upperBound, 10.0);
+        continue;
+      }
+      auto& distTerms = contribs.distanceGeometry.distTerms;
+      distTerms.idx1.push_back(static_cast<int>(i));
+      distTerms.idx2.push_back(static_cast<int>(j));
+      distTerms.lb2.push_back(lowerBound * lowerBound);
+      distTerms.ub2.push_back(upperBound * upperBound);
+      distTerms.weight.push_back(forceConsts.distance * etkdgDetails.boundsMatForceScaling);
+    }
+  }
+
+  // DistGeom::addTorsionTerms
+  if (useBasicKnowledge) {
+    constexpr int improperIndices[3][3] = {
+      {0, 2, 3},
+      {0, 3, 2},
+      {2, 3, 0}
+    };
+    for (const auto& improperAtom : etkdgDetails.improperAtoms) {
+      for (const auto& permutation : improperIndices) {
+        contribs.planarityTerms.idx1.push_back(improperAtom[permutation[0]]);
+        contribs.planarityTerms.idx2.push_back(improperAtom[1]);
+        contribs.planarityTerms.idx3.push_back(improperAtom[permutation[1]]);
+        contribs.planarityTerms.idx4.push_back(improperAtom[permutation[2]]);
+      }
+    }
+  }
+  if (useBasicKnowledge || useExpTorsionAnglePrefs) {
+    boost::dynamic_bitset<>   atomPairs(numAtoms * numAtoms);
+    Energy3DForceContribsHost torsionContribs;
+    addExperimentalTorsionTerms(torsionContribs, etkdgDetails, numAtoms, atomPairs);
+    contribs.experimentalTorsionTerms = std::move(torsionContribs.experimentalTorsionTerms);
+  }
+
+  return contribs;
+}
+
+nvMolKit::DistGeom::AllInOneForceWeights allInOneForceWeights(
+  const ::ForceFields::CrystalFF::CrystalFFDetails& etkdgDetails) {
+  const auto& forceConsts = etkdgDetails.forceConsts;
+  return {forceConsts.chiral, forceConsts.fourthDim, forceConsts.kTermAngle, forceConsts.kTermImproper};
+}
+#endif
 
 nvMolKit::DistGeom::Energy3DForceContribsHost construct3DForceFieldContribs(
   const ::DistGeom::BoundsMatrix&                   mmat,

@@ -15,7 +15,8 @@
 
 add_library(conformer_types INTERFACE)
 
-add_library(device_coord_collector device_coord_collector.cpp)
+add_library(device_coord_collector device_coord_collector.cpp
+                                   device_coord_gather.cu)
 target_link_libraries(
   device_coord_collector
   PUBLIC conformer_types device_vector
@@ -32,3 +33,9 @@ target_link_libraries(
   ff_device_collect
   PUBLIC conformer_types device_coord_collector device_vector
   PRIVATE p2p device cuda_error_check ${RDKit_LIBS})
+
+add_library(conformer_coord_upload conformer_coord_upload.cpp)
+target_link_libraries(
+  conformer_coord_upload
+  PUBLIC conformer_types device_vector
+  PRIVATE cuda_error_check openmp_helpers ${RDKit_LIBS} OpenMP::OpenMP_CXX)

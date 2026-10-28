@@ -33,6 +33,34 @@ using real = double;
 
 }  // namespace nvMolKit::MMFF::fp64
 
+namespace nvMolKit::MMFF::fp32 {
+using real = float;
+#define NVMOLKIT_FMOD    fmodf
+#define NVMOLKIT_FMIN    fminf
+#define NVMOLKIT_FMAX    fmaxf
+#define NVMOLKIT_RSQRT   rsqrtf
+#define NVMOLKIT_SQRT    sqrtf
+#define NVMOLKIT_ACOS    acosf
+#define NVMOLKIT_ASIN    asinf
+#define NVMOLKIT_COS     cosf
+#define NVMOLKIT_ATAN2   atan2f
+#define NVMOLKIT_EXP     expf
+#define NVMOLKIT_IS_ZERO isFloatZero
+#include "src/forcefields/mmff_kernels_device.cuh"
+#undef NVMOLKIT_FMOD
+#undef NVMOLKIT_FMIN
+#undef NVMOLKIT_FMAX
+#undef NVMOLKIT_RSQRT
+#undef NVMOLKIT_SQRT
+#undef NVMOLKIT_ACOS
+#undef NVMOLKIT_ASIN
+#undef NVMOLKIT_COS
+#undef NVMOLKIT_ATAN2
+#undef NVMOLKIT_EXP
+#undef NVMOLKIT_IS_ZERO
+
+}  // namespace nvMolKit::MMFF::fp32
+
 namespace nvMolKit::MMFF {
 // Unqualified device helpers use the full-precision instantiation.
 using namespace fp64;

@@ -14,6 +14,7 @@
 #include "src/butina.h"
 #include "src/butina_common.cuh"
 #include "src/fingerprint_similarity_device.cuh"
+#include "src/utils/conditional_loop_graph.cuh"
 #include "src/utils/cub_helpers.cuh"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
@@ -300,6 +301,12 @@ __global__ void extractClusterKernel(const cuda::std::span<const std::uint32_t> 
   clusterIds[row]            = *clusterCount;
 }
 
+// Record where the next cluster's members start in the output.
+// Launched inside the conditional graph body in place of a memcpy node, which faults there on sm_100.
+__global__ void copyClusterStartKernel(const int* outputCount, int* clusterStart) {
+  *clusterStart = *outputCount;
+}
+
 // Record the centroid for the cluster that was just extracted.
 // This kernel must be launched with exactly one thread.
 __global__ void recordClusterKernel(const int*                 maxValue,
@@ -515,8 +522,8 @@ ButinaResult fusedButinaGpuImpl(cuda::std::span<const std::uint32_t> fingerprint
 
   ScopedNvtxRange            buildRange("Build fused Butina graph");
   const ConditionalLoopGraph graph([&](cudaStream_t captureStream, cudaGraphConditionalHandle handle) {
-    cudaCheckError(
-      cudaMemcpyAsync(clusterStart.data(), outputCount.data(), sizeof(int), cudaMemcpyDeviceToDevice, captureStream));
+    copyClusterStartKernel<<<1, 1, 0, captureStream>>>(outputCount.data(), clusterStart.data());
+    cudaCheckError(cudaGetLastError());
     extractClusterKernel<Metric><<<numIterationBlocks, kIterationBlockSize, 0, captureStream>>>(fingerprints,
                                                                                                 bitCountsSpan,
                                                                                                 clusterMembersSpan,

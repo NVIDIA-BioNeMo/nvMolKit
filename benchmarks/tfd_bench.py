@@ -73,7 +73,7 @@ def generate_conformers_batch(
     """
     if num_confs < 2:
         raise ValueError(f"num_confs must be >= 2 for TFD, got {num_confs}")
-    workers = num_workers if num_workers > 0 else max(1, available_cpu_count() // 2)
+    workers = num_workers if num_workers > 0 else available_cpu_count()
     return embed_and_jitter(
         mols,
         confs_per_mol=num_confs,
@@ -98,7 +98,7 @@ def prepare_molecules(
         input_mols: Parsed RDKit molecules to prepare with conformers.
         num_confs: Number of conformers per molecule
         max_mols: Maximum number of molecules to prepare
-        num_workers: Parallel workers for ETKDG embedding (0 = auto, half of CPUs)
+        num_workers: Parallel workers for ETKDG embedding (0 = all available CPUs)
         seed: Seed for base embedding and conformer perturbations.
 
     Returns:
@@ -187,11 +187,7 @@ def verify_correctness(mol: Chem.Mol, tolerance: float = 0.01) -> bool:
     if len(rdkit_result) != len(nvmol_result):
         return False
 
-    for rd, nv in zip(rdkit_result, nvmol_result):
-        if abs(rd - nv) > tolerance:
-            return False
-
-    return True
+    return all(abs(rd - nv) <= tolerance for rd, nv in zip(rdkit_result, nvmol_result, strict=True))
 
 
 def load_pkl_files(pkl_paths: List[str]) -> List[Chem.Mol]:
@@ -235,7 +231,7 @@ def run_benchmarks(
         preloaded_mols: Pre-loaded molecules with conformers (e.g. from --pkl-file).
             When provided, input_mols/smiles_file/conformer_counts are ignored and
             the actual conformer count is read from the molecules.
-        num_workers: Parallel workers for ETKDG embedding (0 = auto, half of CPUs).
+        num_workers: Parallel workers for ETKDG embedding (0 = all available CPUs).
         runs: Number of timed repetitions per workload point.
         warmups: Number of warmup repetitions per workload point.
         seed: Sampling and conformer-preparation seed.
@@ -334,19 +330,19 @@ def run_benchmarks(
                 result["rdkit_molecules_processed"] = None
 
             if not skip_nvmolkit:
-                timing = time_it(lambda: bench_nvmol_gpu_list(mols), runs=runs, warmups=warmups)
+                timing = time_it(lambda mols=mols: bench_nvmol_gpu_list(mols), runs=runs, warmups=warmups)
                 t, s = timing.mean_ms, timing.std_ms
                 result["nvmol_gpu_list_time_ms"] = t
                 result["nvmol_gpu_list_std_ms"] = s
                 print(f"  nvMolKit (GPU list):  {t:8.2f} ms (+/- {s:.2f})")
 
-                timing = time_it(lambda: bench_nvmol_gpu_numpy(mols), runs=runs, warmups=warmups)
+                timing = time_it(lambda mols=mols: bench_nvmol_gpu_numpy(mols), runs=runs, warmups=warmups)
                 t, s = timing.mean_ms, timing.std_ms
                 result["nvmol_gpu_numpy_time_ms"] = t
                 result["nvmol_gpu_numpy_std_ms"] = s
                 print(f"  nvMolKit (GPU numpy): {t:8.2f} ms (+/- {s:.2f})")
 
-                timing = time_it(lambda: bench_nvmol_gpu_tensor(mols), runs=runs, warmups=warmups)
+                timing = time_it(lambda mols=mols: bench_nvmol_gpu_tensor(mols), runs=runs, warmups=warmups)
                 t, s = timing.mean_ms, timing.std_ms
                 result["nvmol_gpu_tensor_time_ms"] = t
                 result["nvmol_gpu_tensor_std_ms"] = s
@@ -448,7 +444,7 @@ def main():
         "--prep-workers",
         type=int,
         default=0,
-        help="Parallel workers for ETKDG embedding during prep (0 = auto, half of CPUs)",
+        help="Parallel workers for the untimed ETKDG embedding prep (0 = all available CPUs)",
     )
     parser.add_argument("--runs", type=int, default=3, help="Number of timed repetitions (default: 3)")
     parser.add_argument("--warmups", type=int, default=1, help="Number of warmup repetitions (default: 1)")

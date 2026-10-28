@@ -16,10 +16,12 @@
 #include "tests/test_utils.h"
 
 #include <Geometry/point.h>
+#include <gmock/gmock.h>
 #include <GraphMol/DistGeomHelpers/Embedder.h>
 #include <GraphMol/FileParsers/MolSupplier.h>
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <stdexcept>
@@ -114,4 +116,38 @@ std::vector<double> convertPositionsToVector(const std::vector<std::unique_ptr<R
     }
   }
   return posVec;
+}
+
+void expectEnergyMatch(const std::vector<double>&  got,
+                       const std::vector<double>&  ref,
+                       const std::vector<double>&  start,
+                       const EnergyMatchTolerance& tol) {
+  if (tol.maxOutliers == 0) {
+    EXPECT_THAT(got, ::testing::Pointwise(::testing::DoubleNear(tol.tightTolerance), ref));
+  }
+  int    outliers        = 0;
+  double matchingDiffSum = 0.0;
+  for (size_t i = 0; i < got.size(); ++i) {
+    if (tol.requireProgress) {
+      EXPECT_TRUE(std::isfinite(got[i]));
+      EXPECT_LT(got[i], start[i]);
+    }
+    const double diff = std::abs(got[i] - ref[i]);
+    if (diff > tol.tightTolerance) {
+      ++outliers;
+    } else {
+      matchingDiffSum += diff;
+    }
+  }
+  if (tol.maxOutliers > 0) {
+    EXPECT_LE(outliers, tol.maxOutliers) << outliers << " of " << got.size() << " molecules exceeded tight tolerance "
+                                         << tol.tightTolerance;
+  }
+  if (tol.averageTolerance > 0.0) {
+    const int matchingCount = static_cast<int>(got.size()) - outliers;
+    if (matchingCount > 0) {
+      EXPECT_LT(matchingDiffSum / static_cast<double>(matchingCount), tol.averageTolerance)
+        << "Average energy difference between RDKit and nvMolKit minimizations is too large";
+    }
+  }
 }

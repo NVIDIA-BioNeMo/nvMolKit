@@ -14,16 +14,30 @@
 // limitations under the License.
 
 #include <cassert>
+#include <type_traits>
 #include <vector>
 
 #include "src/forcefields/dist_geom.h"
 #include "src/forcefields/dist_geom_kernels.h"
-#include "src/forcefields/dist_geom_kernels_device.cuh"
+#include "src/forcefields/dist_geom_kernels_device_dispatch.cuh"
 #include "src/forcefields/kernel_utils.cuh"
 #include "src/utils/device_vector.h"
 
 namespace nvMolKit {
 namespace DistGeom {
+namespace {
+
+template <typename ParameterScalar>
+void uploadWithPrecisionConversion(AsyncDeviceVector<ParameterScalar>& destination, const std::vector<double>& source) {
+  if constexpr (std::is_same_v<ParameterScalar, double>) {
+    destination.setFromVector(source);
+  } else {
+    static_assert(std::is_same_v<ParameterScalar, float>);
+    destination.setFromVector(std::vector<float>(source.begin(), source.end()));
+  }
+}
+
+}  // namespace
 
 void addMoleculeToContext(int                  dimension,
                           int                  numAtoms,
@@ -77,7 +91,6 @@ void preallocateEstimatedBatch(const EnergyForceContribsHost& templateContribs,
   indexHolder.distTermStarts.reserve(estimatedBatchSize + 1);
   indexHolder.chiralTermStarts.reserve(estimatedBatchSize + 1);
   indexHolder.fourthTermStarts.reserve(estimatedBatchSize + 1);
-  indexHolder.energyBufferStarts.reserve(estimatedBatchSize + 1);
 }
 
 void preallocateEstimatedBatch3D(const Energy3DForceContribsHost& templateContribs,
@@ -190,20 +203,6 @@ void addMoleculeToMolecularSystem(const EnergyForceContribsHost& contribs,
   indexHolder.distTermStarts.push_back(indexHolder.distTermStarts.back() + contribs.distTerms.idx1.size());
   indexHolder.chiralTermStarts.push_back(indexHolder.chiralTermStarts.back() + contribs.chiralTerms.idx1.size());
   indexHolder.fourthTermStarts.push_back(indexHolder.fourthTermStarts.back() + contribs.fourthTerms.idx.size());
-
-  // Calculate number of blocks needed
-  int maxNumContribs = 0;
-  maxNumContribs     = std::max<int>(maxNumContribs, contribs.distTerms.idx1.size());
-  maxNumContribs     = std::max<int>(maxNumContribs, contribs.chiralTerms.idx1.size());
-  maxNumContribs     = std::max<int>(maxNumContribs, contribs.fourthTerms.idx.size());
-
-  const int numBlocksNeeded  = std::max(1, (maxNumContribs + 127) / nvMolKit::FFKernelUtils::blockSizeEnergyReduction);
-  const int numThreadsNeeded = numBlocksNeeded * nvMolKit::FFKernelUtils::blockSizeEnergyReduction;
-
-  indexHolder.energyBufferStarts.push_back(indexHolder.energyBufferStarts.back() + numThreadsNeeded);
-  for (int i = 0; i < numBlocksNeeded; i++) {
-    indexHolder.energyBufferBlockIdxToBatchIdx.push_back(batchIdx);
-  }
 
   // Update contributions
   // DistViolation term
@@ -523,25 +522,26 @@ void addMoleculeToBatch3D(const Energy3DForceContribsHost& contribs,
   addMoleculeToMolecularSystem3D(contribs, ctxAtomStarts, molSystem, metadata, moleculeIdx, conformerIdx);
 }
 
-void sendContribsAndIndicesToDevice(const BatchedMolecularSystemHost& molSystemHost,
-                                    BatchedMolecularDeviceBuffers&    molSystemDevice) {
+template <typename ParameterScalar>
+void sendContribsAndIndicesToDeviceImpl(const BatchedMolecularSystemHost&                molSystemHost,
+                                        BatchedMolecularDeviceBuffersT<ParameterScalar>& molSystemDevice) {
   auto&       deviceContribs = molSystemDevice.contribs;
   const auto& hostContribs   = molSystemHost.contribs;
 
   // DistViolation term
   deviceContribs.distTerms.idx1.setFromVector(hostContribs.distTerms.idx1);
   deviceContribs.distTerms.idx2.setFromVector(hostContribs.distTerms.idx2);
-  deviceContribs.distTerms.lb2.setFromVector(hostContribs.distTerms.lb2);
-  deviceContribs.distTerms.ub2.setFromVector(hostContribs.distTerms.ub2);
-  deviceContribs.distTerms.weight.setFromVector(hostContribs.distTerms.weight);
+  uploadWithPrecisionConversion(deviceContribs.distTerms.lb2, hostContribs.distTerms.lb2);
+  uploadWithPrecisionConversion(deviceContribs.distTerms.ub2, hostContribs.distTerms.ub2);
+  uploadWithPrecisionConversion(deviceContribs.distTerms.weight, hostContribs.distTerms.weight);
 
   // ChiralViolation term
   deviceContribs.chiralTerms.idx1.setFromVector(hostContribs.chiralTerms.idx1);
   deviceContribs.chiralTerms.idx2.setFromVector(hostContribs.chiralTerms.idx2);
   deviceContribs.chiralTerms.idx3.setFromVector(hostContribs.chiralTerms.idx3);
   deviceContribs.chiralTerms.idx4.setFromVector(hostContribs.chiralTerms.idx4);
-  deviceContribs.chiralTerms.volLower.setFromVector(hostContribs.chiralTerms.volLower);
-  deviceContribs.chiralTerms.volUpper.setFromVector(hostContribs.chiralTerms.volUpper);
+  uploadWithPrecisionConversion(deviceContribs.chiralTerms.volLower, hostContribs.chiralTerms.volLower);
+  uploadWithPrecisionConversion(deviceContribs.chiralTerms.volUpper, hostContribs.chiralTerms.volUpper);
 
   // FourthDim term
   deviceContribs.fourthTerms.idx.setFromVector(hostContribs.fourthTerms.idx);
@@ -549,9 +549,7 @@ void sendContribsAndIndicesToDevice(const BatchedMolecularSystemHost& molSystemH
   // Indices
   auto&       deviceIndices = molSystemDevice.indices;
   const auto& hostIndices   = molSystemHost.indices;
-  deviceIndices.energyBufferStarts.setFromVector(hostIndices.energyBufferStarts);
   deviceIndices.atomIdxToBatchIdx.setFromVector(hostIndices.atomIdxToBatchIdx);
-  deviceIndices.energyBufferBlockIdxToBatchIdx.setFromVector(hostIndices.energyBufferBlockIdxToBatchIdx);
   deviceIndices.distTermStarts.setFromVector(hostIndices.distTermStarts);
   deviceIndices.chiralTermStarts.setFromVector(hostIndices.chiralTermStarts);
   deviceIndices.fourthTermStarts.setFromVector(hostIndices.fourthTermStarts);
@@ -560,8 +558,9 @@ void sendContribsAndIndicesToDevice(const BatchedMolecularSystemHost& molSystemH
   molSystemDevice.dimension = molSystemHost.dimension;
 }
 
-void sendContribsAndIndicesToDevice3D(const BatchedMolecularSystem3DHost& molSystemHost,
-                                      BatchedMolecular3DDeviceBuffers&    molSystemDevice) {
+template <typename ParameterScalar>
+void sendContribsAndIndicesToDevice3DImpl(const BatchedMolecularSystem3DHost&                molSystemHost,
+                                          BatchedMolecular3DDeviceBuffersT<ParameterScalar>& molSystemDevice) {
   auto&       deviceContribs = molSystemDevice.contribs;
   const auto& hostContribs   = molSystemHost.contribs;
 
@@ -570,8 +569,8 @@ void sendContribsAndIndicesToDevice3D(const BatchedMolecularSystem3DHost& molSys
   deviceContribs.experimentalTorsionTerms.idx2.setFromVector(hostContribs.experimentalTorsionTerms.idx2);
   deviceContribs.experimentalTorsionTerms.idx3.setFromVector(hostContribs.experimentalTorsionTerms.idx3);
   deviceContribs.experimentalTorsionTerms.idx4.setFromVector(hostContribs.experimentalTorsionTerms.idx4);
-  deviceContribs.experimentalTorsionTerms.forceConstants.setFromVector(
-    hostContribs.experimentalTorsionTerms.forceConstants);
+  uploadWithPrecisionConversion(deviceContribs.experimentalTorsionTerms.forceConstants,
+                                hostContribs.experimentalTorsionTerms.forceConstants);
   deviceContribs.experimentalTorsionTerms.signs.setFromVector(hostContribs.experimentalTorsionTerms.signs);
 
   // Improper torsion terms
@@ -584,40 +583,42 @@ void sendContribsAndIndicesToDevice3D(const BatchedMolecularSystem3DHost& molSys
   std::vector<uint8_t> isCBoundToOInt(hostContribs.improperTorsionTerms.isCBoundToO.begin(),
                                       hostContribs.improperTorsionTerms.isCBoundToO.end());
   deviceContribs.improperTorsionTerms.isCBoundToO.setFromVector(isCBoundToOInt);
-  deviceContribs.improperTorsionTerms.C0.setFromVector(hostContribs.improperTorsionTerms.C0);
-  deviceContribs.improperTorsionTerms.C1.setFromVector(hostContribs.improperTorsionTerms.C1);
-  deviceContribs.improperTorsionTerms.C2.setFromVector(hostContribs.improperTorsionTerms.C2);
-  deviceContribs.improperTorsionTerms.forceConstant.setFromVector(hostContribs.improperTorsionTerms.forceConstant);
+  uploadWithPrecisionConversion(deviceContribs.improperTorsionTerms.C0, hostContribs.improperTorsionTerms.C0);
+  uploadWithPrecisionConversion(deviceContribs.improperTorsionTerms.C1, hostContribs.improperTorsionTerms.C1);
+  uploadWithPrecisionConversion(deviceContribs.improperTorsionTerms.C2, hostContribs.improperTorsionTerms.C2);
+  uploadWithPrecisionConversion(deviceContribs.improperTorsionTerms.forceConstant,
+                                hostContribs.improperTorsionTerms.forceConstant);
   deviceContribs.improperTorsionTerms.numImpropers.setFromVector(hostContribs.improperTorsionTerms.numImpropers);
 
   // 1-2 distance terms
   deviceContribs.dist12Terms.idx1.setFromVector(hostContribs.dist12Terms.idx1);
   deviceContribs.dist12Terms.idx2.setFromVector(hostContribs.dist12Terms.idx2);
-  deviceContribs.dist12Terms.minLen.setFromVector(hostContribs.dist12Terms.minLen);
-  deviceContribs.dist12Terms.maxLen.setFromVector(hostContribs.dist12Terms.maxLen);
-  deviceContribs.dist12Terms.forceConstant.setFromVector(hostContribs.dist12Terms.forceConstant);
+  uploadWithPrecisionConversion(deviceContribs.dist12Terms.minLen, hostContribs.dist12Terms.minLen);
+  uploadWithPrecisionConversion(deviceContribs.dist12Terms.maxLen, hostContribs.dist12Terms.maxLen);
+  uploadWithPrecisionConversion(deviceContribs.dist12Terms.forceConstant, hostContribs.dist12Terms.forceConstant);
 
   // 1-3 distance terms
   deviceContribs.dist13Terms.idx1.setFromVector(hostContribs.dist13Terms.idx1);
   deviceContribs.dist13Terms.idx2.setFromVector(hostContribs.dist13Terms.idx2);
-  deviceContribs.dist13Terms.minLen.setFromVector(hostContribs.dist13Terms.minLen);
-  deviceContribs.dist13Terms.maxLen.setFromVector(hostContribs.dist13Terms.maxLen);
-  deviceContribs.dist13Terms.forceConstant.setFromVector(hostContribs.dist13Terms.forceConstant);
+  uploadWithPrecisionConversion(deviceContribs.dist13Terms.minLen, hostContribs.dist13Terms.minLen);
+  uploadWithPrecisionConversion(deviceContribs.dist13Terms.maxLen, hostContribs.dist13Terms.maxLen);
+  uploadWithPrecisionConversion(deviceContribs.dist13Terms.forceConstant, hostContribs.dist13Terms.forceConstant);
   deviceContribs.dist13Terms.isImproperConstrained.setFromVector(hostContribs.dist13Terms.isImproperConstrained);
 
   // 1-3 angle terms
   deviceContribs.angle13Terms.idx1.setFromVector(hostContribs.angle13Terms.idx1);
   deviceContribs.angle13Terms.idx2.setFromVector(hostContribs.angle13Terms.idx2);
   deviceContribs.angle13Terms.idx3.setFromVector(hostContribs.angle13Terms.idx3);
-  deviceContribs.angle13Terms.minAngle.setFromVector(hostContribs.angle13Terms.minAngle);
-  deviceContribs.angle13Terms.maxAngle.setFromVector(hostContribs.angle13Terms.maxAngle);
+  uploadWithPrecisionConversion(deviceContribs.angle13Terms.minAngle, hostContribs.angle13Terms.minAngle);
+  uploadWithPrecisionConversion(deviceContribs.angle13Terms.maxAngle, hostContribs.angle13Terms.maxAngle);
 
   // Long range distance terms
   deviceContribs.longRangeDistTerms.idx1.setFromVector(hostContribs.longRangeDistTerms.idx1);
   deviceContribs.longRangeDistTerms.idx2.setFromVector(hostContribs.longRangeDistTerms.idx2);
-  deviceContribs.longRangeDistTerms.minLen.setFromVector(hostContribs.longRangeDistTerms.minLen);
-  deviceContribs.longRangeDistTerms.maxLen.setFromVector(hostContribs.longRangeDistTerms.maxLen);
-  deviceContribs.longRangeDistTerms.forceConstant.setFromVector(hostContribs.longRangeDistTerms.forceConstant);
+  uploadWithPrecisionConversion(deviceContribs.longRangeDistTerms.minLen, hostContribs.longRangeDistTerms.minLen);
+  uploadWithPrecisionConversion(deviceContribs.longRangeDistTerms.maxLen, hostContribs.longRangeDistTerms.maxLen);
+  uploadWithPrecisionConversion(deviceContribs.longRangeDistTerms.forceConstant,
+                                hostContribs.longRangeDistTerms.forceConstant);
 
   // Indices
   auto&       deviceIndices = molSystemDevice.indices;
@@ -636,16 +637,14 @@ void sendContribsAndIndicesToDevice3D(const BatchedMolecularSystem3DHost& molSys
 }
 
 //! Set all DeviceVector streams for the batched molecular device buffers.
-void setStreams(BatchedMolecularDeviceBuffers& devBuffers, cudaStream_t stream) {
+template <typename ParameterScalar>
+void setStreamsImpl(BatchedMolecularDeviceBuffersT<ParameterScalar>& devBuffers, cudaStream_t stream) {
   // First the isolated buffers.
-  devBuffers.energyBuffer.setStream(stream);
   devBuffers.grad.setStream(stream);
   devBuffers.energyOuts.setStream(stream);
 
   // Indices
   devBuffers.indices.atomIdxToBatchIdx.setStream(stream);
-  devBuffers.indices.energyBufferStarts.setStream(stream);
-  devBuffers.indices.energyBufferBlockIdxToBatchIdx.setStream(stream);
   devBuffers.indices.distTermStarts.setStream(stream);
   devBuffers.indices.chiralTermStarts.setStream(stream);
   devBuffers.indices.fourthTermStarts.setStream(stream);
@@ -665,7 +664,8 @@ void setStreams(BatchedMolecularDeviceBuffers& devBuffers, cudaStream_t stream) 
   devBuffers.contribs.fourthTerms.idx.setStream(stream);
 }
 //! Set all DeviceVector streams for the batched 3D molecular device buffers.
-void setStreams(BatchedMolecular3DDeviceBuffers& devBuffers, cudaStream_t stream) {
+template <typename ParameterScalar>
+void setStreams3DImpl(BatchedMolecular3DDeviceBuffersT<ParameterScalar>& devBuffers, cudaStream_t stream) {
   devBuffers.energyBuffer.setStream(stream);
   devBuffers.grad.setStream(stream);
   devBuffers.energyOuts.setStream(stream);
@@ -727,11 +727,33 @@ void setStreams(BatchedMolecular3DDeviceBuffers& devBuffers, cudaStream_t stream
   devBuffers.contribs.longRangeDistTerms.forceConstant.setStream(stream);
 }
 
-void allocateIntermediateBuffers(const BatchedMolecularSystemHost& molSystemHost,
-                                 BatchedMolecularDeviceBuffers&    molSystemDevice) {
-  nvMolKit::FFKernelUtils::allocateIntermediateBuffers(molSystemHost,
-                                                       molSystemDevice,
-                                                       molSystemHost.indices.distTermStarts.size() - 1);
+void setStreams(BatchedMolecularDeviceBuffers& buffers, cudaStream_t stream) {
+  setStreamsImpl(buffers, stream);
+}
+void setStreams(BatchedMolecularDeviceBuffersSingle& buffers, cudaStream_t stream) {
+  setStreamsImpl(buffers, stream);
+}
+void setStreams(BatchedMolecular3DDeviceBuffers& buffers, cudaStream_t stream) {
+  setStreams3DImpl(buffers, stream);
+}
+void setStreams(BatchedMolecular3DDeviceBuffersSingle& buffers, cudaStream_t stream) {
+  setStreams3DImpl(buffers, stream);
+}
+
+void sendContribsAndIndicesToDevice(const BatchedMolecularSystemHost& host, BatchedMolecularDeviceBuffers& buffers) {
+  sendContribsAndIndicesToDeviceImpl(host, buffers);
+}
+void sendContribsAndIndicesToDevice(const BatchedMolecularSystemHost&    host,
+                                    BatchedMolecularDeviceBuffersSingle& buffers) {
+  sendContribsAndIndicesToDeviceImpl(host, buffers);
+}
+void sendContribsAndIndicesToDevice3D(const BatchedMolecularSystem3DHost& host,
+                                      BatchedMolecular3DDeviceBuffers&    buffers) {
+  sendContribsAndIndicesToDevice3DImpl(host, buffers);
+}
+void sendContribsAndIndicesToDevice3D(const BatchedMolecularSystem3DHost&    host,
+                                      BatchedMolecular3DDeviceBuffersSingle& buffers) {
+  sendContribsAndIndicesToDevice3DImpl(host, buffers);
 }
 
 void allocateIntermediateBuffers3D(const BatchedMolecularSystem3DHost& molSystemHost,
@@ -749,11 +771,11 @@ void sendContextToDevice(const std::vector<double>&           ctxPositionsHost,
   ctxAtomStartsDevice.setFromVector(ctxAtomStartsHost);
 }
 
-void setupDeviceBuffers(BatchedMolecularSystemHost&    molSystemHost,
-                        BatchedMolecularDeviceBuffers& molSystemDevice,
+void setupDeviceBuffers(BatchedMolecularDeviceBuffers& molSystemDevice,
                         const std::vector<double>&     ctxPositionsHost,
                         const int                      numMols) {
-  nvMolKit::FFKernelUtils::allocateIntermediateBuffers(molSystemHost, molSystemDevice, numMols);
+  molSystemDevice.energyOuts.resize(numMols);
+  molSystemDevice.energyOuts.zero();
   molSystemDevice.grad.resize(ctxPositionsHost.size());
   molSystemDevice.grad.zero();
 }
@@ -776,73 +798,17 @@ cudaError_t computeEnergy(BatchedMolecularDeviceBuffers& molSystemDevice,
                           const uint8_t*                 activeSystemMask,
                           const double*                  positions,
                           cudaStream_t                   stream) {
-  assert(molSystemDevice.energyBuffer.size() > 0);
   assert(energyOuts != nullptr);
-  molSystemDevice.energyBuffer.zero();
-
-  const double* posData  = positions ? positions : ctxPositions;
-  const auto&   contribs = molSystemDevice.contribs;
-
-  cudaError_t err = cudaSuccess;
-  if (contribs.distTerms.idx1.size() > 0) {
-    err = launchDistViolationEnergyKernel(contribs.distTerms.idx1.size(),
-                                          contribs.distTerms.idx1.data(),
-                                          contribs.distTerms.idx2.data(),
-                                          contribs.distTerms.lb2.data(),
-                                          contribs.distTerms.ub2.data(),
-                                          contribs.distTerms.weight.data(),
-                                          posData,
-                                          molSystemDevice.energyBuffer.data(),
-                                          molSystemDevice.indices.energyBufferStarts.data(),
-                                          molSystemDevice.indices.atomIdxToBatchIdx.data(),
-                                          molSystemDevice.indices.distTermStarts.data(),
-                                          ctxAtomStarts,
-                                          molSystemDevice.dimension,
-                                          activeSystemMask,
-                                          stream);
-  }
-  if (err == cudaSuccess && contribs.chiralTerms.idx1.size() > 0) {
-    err = launchChiralViolationEnergyKernel(contribs.chiralTerms.idx1.size(),
-                                            contribs.chiralTerms.idx1.data(),
-                                            contribs.chiralTerms.idx2.data(),
-                                            contribs.chiralTerms.idx3.data(),
-                                            contribs.chiralTerms.idx4.data(),
-                                            contribs.chiralTerms.volLower.data(),
-                                            contribs.chiralTerms.volUpper.data(),
-                                            chiralWeight,
-                                            posData,
-                                            molSystemDevice.energyBuffer.data(),
-                                            molSystemDevice.indices.energyBufferStarts.data(),
-                                            molSystemDevice.indices.atomIdxToBatchIdx.data(),
-                                            molSystemDevice.indices.chiralTermStarts.data(),
-                                            ctxAtomStarts,
-                                            molSystemDevice.dimension,
-                                            activeSystemMask,
-                                            stream);
-  }
-  if (err == cudaSuccess && contribs.fourthTerms.idx.size() > 0) {
-    err = launchFourthDimEnergyKernel(contribs.fourthTerms.idx.size(),
-                                      contribs.fourthTerms.idx.data(),
-                                      fourthDimWeight,
-                                      posData,
-                                      molSystemDevice.energyBuffer.data(),
-                                      molSystemDevice.indices.energyBufferStarts.data(),
-                                      molSystemDevice.indices.atomIdxToBatchIdx.data(),
-                                      molSystemDevice.indices.fourthTermStarts.data(),
-                                      ctxAtomStarts,
-                                      molSystemDevice.dimension,
-                                      activeSystemMask,
-                                      stream);
-  }
-  if (err == cudaSuccess) {
-    return launchReduceEnergiesKernel(molSystemDevice.indices.energyBufferBlockIdxToBatchIdx.size(),
-                                      molSystemDevice.energyBuffer.data(),
-                                      molSystemDevice.indices.energyBufferBlockIdxToBatchIdx.data(),
-                                      energyOuts,
-                                      activeSystemMask,
-                                      stream);
-  }
-  return err;
+  return launchBlockPerMolEnergyKernel(static_cast<int>(molSystemDevice.indices.distTermStarts.size()) - 1,
+                                       toEnergyForceContribsDevicePtr(molSystemDevice),
+                                       toBatchedIndicesDevicePtr(molSystemDevice, ctxAtomStarts),
+                                       positions ? positions : ctxPositions,
+                                       energyOuts,
+                                       molSystemDevice.dimension,
+                                       chiralWeight,
+                                       fourthDimWeight,
+                                       activeSystemMask,
+                                       stream);
 }
 
 // TODO: More sophisticated error handling for energy and gradient.
@@ -948,6 +914,18 @@ cudaError_t computeEnergyETK(BatchedMolecular3DDeviceBuffers& molSystemDevice,
                              const double*                    positions,
                              const ETKTerm                    term,
                              cudaStream_t                     stream) {
+  // The block-per-molecule kernel evaluates every term family. PLAIN differs from ALL only by the improper torsions,
+  // which are not generated without basic knowledge.
+  if (term == ETKTerm::ALL ||
+      (term == ETKTerm::PLAIN && molSystemDevice.contribs.improperTorsionTerms.idx1.size() == 0)) {
+    return launchBlockPerMolEnergyKernelETK(static_cast<int>(molSystemDevice.indices.dist12TermStarts.size()) - 1,
+                                            toEnergy3DForceContribsDevicePtr(molSystemDevice),
+                                            toBatchedIndices3DDevicePtr(molSystemDevice, ctxAtomStarts),
+                                            positions ? positions : ctxPositions,
+                                            energyOuts,
+                                            activeSystemMask,
+                                            stream);
+  }
   assert(molSystemDevice.energyBuffer.size() > 0);
   assert(energyOuts != nullptr);
   molSystemDevice.energyBuffer.zero();
@@ -1329,8 +1307,9 @@ cudaError_t computePlanarEnergy(BatchedMolecular3DDeviceBuffers&           molSy
                              stream);
 }
 
-EnergyForceContribsDevicePtr toPointerStruct(const EnergyForceContribsDevice& src) {
-  EnergyForceContribsDevicePtr dst;
+template <typename Scalar>
+EnergyForceContribsDevicePtrT<Scalar> toPointerStruct(const EnergyForceContribsDeviceT<Scalar>& src) {
+  EnergyForceContribsDevicePtrT<Scalar> dst;
   dst.distTerms.idx1   = src.distTerms.idx1.data();
   dst.distTerms.idx2   = src.distTerms.idx2.data();
   dst.distTerms.ub2    = src.distTerms.ub2.data();
@@ -1356,33 +1335,6 @@ inline BatchedIndicesDevicePtr toPointerStruct(const BatchedIndicesDevice& src) 
   dst.fourthTermStarts = src.fourthTermStarts.data();
 
   return dst;
-}
-
-cudaError_t computeEnergyBlockPerMol(BatchedMolecularDeviceBuffers&             molSystemDevice,
-                                     const nvMolKit::AsyncDeviceVector<int>&    ctxAtomStartsDevice,
-                                     const nvMolKit::AsyncDeviceVector<double>& ctxPositionsDevice,
-                                     const double                               chiralWeight,
-                                     const double                               fourthDimWeight,
-                                     const uint8_t*                             activeThisStage,
-                                     const double*                              positions,
-                                     cudaStream_t                               stream) {
-  const auto              pointers = toPointerStruct(molSystemDevice.contribs);
-  BatchedIndicesDevicePtr indices;
-  indices.atomStarts       = ctxAtomStartsDevice.data();
-  indices.distTermStarts   = molSystemDevice.indices.distTermStarts.data();
-  indices.chiralTermStarts = molSystemDevice.indices.chiralTermStarts.data();
-  indices.fourthTermStarts = molSystemDevice.indices.fourthTermStarts.data();
-
-  return launchBlockPerMolEnergyKernel(ctxAtomStartsDevice.size() - 1,
-                                       pointers,
-                                       indices,
-                                       positions != nullptr ? positions : ctxPositionsDevice.data(),
-                                       molSystemDevice.energyOuts.data(),
-                                       molSystemDevice.dimension,
-                                       chiralWeight,
-                                       fourthDimWeight,
-                                       activeThisStage,
-                                       stream);
 }
 
 cudaError_t computeGradBlockPerMol(BatchedMolecularDeviceBuffers&             molSystemDevice,
@@ -1411,8 +1363,9 @@ cudaError_t computeGradBlockPerMol(BatchedMolecularDeviceBuffers&             mo
                                      stream);
 }
 
-Energy3DForceContribsDevicePtr toPointerStruct(const Energy3DForceContribsDevice& src) {
-  Energy3DForceContribsDevicePtr dst;
+template <typename Scalar>
+Energy3DForceContribsDevicePtrT<Scalar> toPointerStruct(const Energy3DForceContribsDeviceT<Scalar>& src) {
+  Energy3DForceContribsDevicePtrT<Scalar> dst;
 
   dst.experimentalTorsionTerms.idx1           = src.experimentalTorsionTerms.idx1.data();
   dst.experimentalTorsionTerms.idx2           = src.experimentalTorsionTerms.idx2.data();
@@ -1510,9 +1463,19 @@ cudaError_t computeGradBlockPerMolETK(BatchedMolecular3DDeviceBuffers&          
 EnergyForceContribsDevicePtr toEnergyForceContribsDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice) {
   return toPointerStruct(molSystemDevice.contribs);
 }
+EnergyForceContribsDevicePtrSingle toEnergyForceContribsDevicePtr(
+  const BatchedMolecularDeviceBuffersSingle& molSystemDevice) {
+  return toPointerStruct(molSystemDevice.contribs);
+}
 
 BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBuffers& molSystemDevice,
                                                   const int*                           atomStarts) {
+  auto dst       = toPointerStruct(molSystemDevice.indices);
+  dst.atomStarts = atomStarts;
+  return dst;
+}
+BatchedIndicesDevicePtr toBatchedIndicesDevicePtr(const BatchedMolecularDeviceBuffersSingle& molSystemDevice,
+                                                  const int*                                 atomStarts) {
   auto dst       = toPointerStruct(molSystemDevice.indices);
   dst.atomStarts = atomStarts;
   return dst;
@@ -1522,10 +1485,201 @@ Energy3DForceContribsDevicePtr toEnergy3DForceContribsDevicePtr(
   const BatchedMolecular3DDeviceBuffers& molSystemDevice) {
   return toPointerStruct(molSystemDevice.contribs);
 }
+Energy3DForceContribsDevicePtrSingle toEnergy3DForceContribsDevicePtr(
+  const BatchedMolecular3DDeviceBuffersSingle& molSystemDevice) {
+  return toPointerStruct(molSystemDevice.contribs);
+}
 
 BatchedIndices3DDevicePtr toBatchedIndices3DDevicePtr(const BatchedMolecular3DDeviceBuffers& molSystemDevice,
                                                       const int*                             atomStarts) {
   return toPointerStruct(molSystemDevice.indices, atomStarts);
+}
+BatchedIndices3DDevicePtr toBatchedIndices3DDevicePtr(const BatchedMolecular3DDeviceBuffersSingle& molSystemDevice,
+                                                      const int*                                   atomStarts) {
+  return toPointerStruct(molSystemDevice.indices, atomStarts);
+}
+
+namespace {
+
+void appendOffsetIndices(std::vector<int>& destination, const std::vector<int>& source, const int offset) {
+  for (const int idx : source) {
+    destination.push_back(idx + offset);
+  }
+}
+
+template <typename T> void append(std::vector<T>& destination, const std::vector<T>& source) {
+  destination.insert(destination.end(), source.begin(), source.end());
+}
+
+void appendTermStart(std::vector<int>& termStarts, const std::size_t numTerms) {
+  termStarts.push_back(termStarts.back() + static_cast<int>(numTerms));
+}
+
+void upload(AsyncDeviceVector<int>& destination, const std::vector<int>& source, cudaStream_t stream) {
+  destination.setStream(stream);
+  destination.setFromVector(source);
+}
+
+template <typename ParameterScalar>
+void upload(AsyncDeviceVector<ParameterScalar>& destination, const std::vector<double>& source, cudaStream_t stream) {
+  destination.setStream(stream);
+  uploadWithPrecisionConversion(destination, source);
+}
+
+template <typename ParameterScalar>
+void sendAllInOneSystemToDeviceImpl(const BatchedAllInOneSystemHost&                systemHost,
+                                    BatchedAllInOneDeviceBuffersT<ParameterScalar>& systemDevice,
+                                    cudaStream_t                                    stream) {
+  setStreamsImpl(systemDevice.distanceGeometry, stream);
+  sendContribsAndIndicesToDeviceImpl(systemHost.distanceGeometry, systemDevice.distanceGeometry);
+
+  const auto& harmonicHost   = systemHost.harmonicDistanceTerms;
+  auto&       harmonicDevice = systemDevice.harmonicDistanceTerms;
+  upload(harmonicDevice.idx1, harmonicHost.idx1, stream);
+  upload(harmonicDevice.idx2, harmonicHost.idx2, stream);
+  upload(harmonicDevice.minLen, harmonicHost.minLen, stream);
+  upload(harmonicDevice.maxLen, harmonicHost.maxLen, stream);
+  upload(harmonicDevice.forceConstant, harmonicHost.forceConstant, stream);
+
+  const auto& angleHost   = systemHost.linearAngleTerms;
+  auto&       angleDevice = systemDevice.linearAngleTerms;
+  upload(angleDevice.idx1, angleHost.idx1, stream);
+  upload(angleDevice.idx2, angleHost.idx2, stream);
+  upload(angleDevice.idx3, angleHost.idx3, stream);
+  upload(angleDevice.minAngle, angleHost.minAngle, stream);
+  upload(angleDevice.maxAngle, angleHost.maxAngle, stream);
+
+  const auto& torsionHost   = systemHost.experimentalTorsionTerms;
+  auto&       torsionDevice = systemDevice.experimentalTorsionTerms;
+  upload(torsionDevice.idx1, torsionHost.idx1, stream);
+  upload(torsionDevice.idx2, torsionHost.idx2, stream);
+  upload(torsionDevice.idx3, torsionHost.idx3, stream);
+  upload(torsionDevice.idx4, torsionHost.idx4, stream);
+  upload(torsionDevice.forceConstants, torsionHost.forceConstants, stream);
+  upload(torsionDevice.signs, torsionHost.signs, stream);
+
+  const auto& planarityHost   = systemHost.planarityTerms;
+  auto&       planarityDevice = systemDevice.planarityTerms;
+  upload(planarityDevice.idx1, planarityHost.idx1, stream);
+  upload(planarityDevice.idx2, planarityHost.idx2, stream);
+  upload(planarityDevice.idx3, planarityHost.idx3, stream);
+  upload(planarityDevice.idx4, planarityHost.idx4, stream);
+
+  upload(systemDevice.harmonicDistanceTermStarts, systemHost.harmonicDistanceTermStarts, stream);
+  upload(systemDevice.linearAngleTermStarts, systemHost.linearAngleTermStarts, stream);
+  upload(systemDevice.experimentalTorsionTermStarts, systemHost.experimentalTorsionTermStarts, stream);
+  upload(systemDevice.planarityTermStarts, systemHost.planarityTermStarts, stream);
+}
+
+template <typename ParameterScalar>
+AllInOneContribsDevicePtrT<ParameterScalar> toAllInOneContribsDevicePtrImpl(
+  const BatchedAllInOneDeviceBuffersT<ParameterScalar>& systemDevice,
+  const int*                                            atomStarts) {
+  AllInOneContribsDevicePtrT<ParameterScalar> dst;
+  dst.distanceGeometry                   = toPointerStruct(systemDevice.distanceGeometry.contribs);
+  dst.distanceGeometryIndices            = toPointerStruct(systemDevice.distanceGeometry.indices);
+  dst.distanceGeometryIndices.atomStarts = atomStarts;
+
+  const auto& harmonic         = systemDevice.harmonicDistanceTerms;
+  dst.harmonicDistanceTerms    = {harmonic.idx1.data(),
+                                  harmonic.idx2.data(),
+                                  harmonic.minLen.data(),
+                                  harmonic.maxLen.data(),
+                                  harmonic.forceConstant.data()};
+  const auto& angle            = systemDevice.linearAngleTerms;
+  dst.linearAngleTerms         = {angle.idx1.data(),
+                                  angle.idx2.data(),
+                                  angle.idx3.data(),
+                                  angle.minAngle.data(),
+                                  angle.maxAngle.data()};
+  const auto& torsion          = systemDevice.experimentalTorsionTerms;
+  dst.experimentalTorsionTerms = {torsion.idx1.data(),
+                                  torsion.idx2.data(),
+                                  torsion.idx3.data(),
+                                  torsion.idx4.data(),
+                                  torsion.forceConstants.data(),
+                                  torsion.signs.data()};
+  const auto& planarity        = systemDevice.planarityTerms;
+  dst.planarityTerms = {planarity.idx1.data(), planarity.idx2.data(), planarity.idx3.data(), planarity.idx4.data()};
+
+  dst.harmonicDistanceTermStarts    = systemDevice.harmonicDistanceTermStarts.data();
+  dst.linearAngleTermStarts         = systemDevice.linearAngleTermStarts.data();
+  dst.experimentalTorsionTermStarts = systemDevice.experimentalTorsionTermStarts.data();
+  dst.planarityTermStarts           = systemDevice.planarityTermStarts.data();
+  return dst;
+}
+
+}  // namespace
+
+void addMoleculeToAllInOneSystem(const AllInOneForceContribsHost& contribs,
+                                 const int                        numAtoms,
+                                 const std::vector<int>&          ctxAtomStarts,
+                                 BatchedAllInOneSystemHost&       system,
+                                 BatchedForcefieldMetadata*       metadata,
+                                 const int                        moleculeIdx,
+                                 const int                        conformerIdx) {
+  const int batchIdx   = static_cast<int>(system.harmonicDistanceTermStarts.size()) - 1;
+  const int atomOffset = ctxAtomStarts[batchIdx];
+  addMoleculeToMolecularSystem(contribs.distanceGeometry,
+                               numAtoms,
+                               4,
+                               ctxAtomStarts,
+                               system.distanceGeometry,
+                               metadata,
+                               moleculeIdx,
+                               conformerIdx);
+
+  const auto& harmonic = contribs.harmonicDistanceTerms;
+  appendOffsetIndices(system.harmonicDistanceTerms.idx1, harmonic.idx1, atomOffset);
+  appendOffsetIndices(system.harmonicDistanceTerms.idx2, harmonic.idx2, atomOffset);
+  append(system.harmonicDistanceTerms.minLen, harmonic.minLen);
+  append(system.harmonicDistanceTerms.maxLen, harmonic.maxLen);
+  append(system.harmonicDistanceTerms.forceConstant, harmonic.forceConstant);
+  appendTermStart(system.harmonicDistanceTermStarts, harmonic.idx1.size());
+
+  const auto& angle = contribs.linearAngleTerms;
+  appendOffsetIndices(system.linearAngleTerms.idx1, angle.idx1, atomOffset);
+  appendOffsetIndices(system.linearAngleTerms.idx2, angle.idx2, atomOffset);
+  appendOffsetIndices(system.linearAngleTerms.idx3, angle.idx3, atomOffset);
+  append(system.linearAngleTerms.minAngle, angle.minAngle);
+  append(system.linearAngleTerms.maxAngle, angle.maxAngle);
+  appendTermStart(system.linearAngleTermStarts, angle.idx1.size());
+
+  const auto& torsion = contribs.experimentalTorsionTerms;
+  appendOffsetIndices(system.experimentalTorsionTerms.idx1, torsion.idx1, atomOffset);
+  appendOffsetIndices(system.experimentalTorsionTerms.idx2, torsion.idx2, atomOffset);
+  appendOffsetIndices(system.experimentalTorsionTerms.idx3, torsion.idx3, atomOffset);
+  appendOffsetIndices(system.experimentalTorsionTerms.idx4, torsion.idx4, atomOffset);
+  append(system.experimentalTorsionTerms.forceConstants, torsion.forceConstants);
+  append(system.experimentalTorsionTerms.signs, torsion.signs);
+  appendTermStart(system.experimentalTorsionTermStarts, torsion.idx1.size());
+
+  const auto& planarity = contribs.planarityTerms;
+  appendOffsetIndices(system.planarityTerms.idx1, planarity.idx1, atomOffset);
+  appendOffsetIndices(system.planarityTerms.idx2, planarity.idx2, atomOffset);
+  appendOffsetIndices(system.planarityTerms.idx3, planarity.idx3, atomOffset);
+  appendOffsetIndices(system.planarityTerms.idx4, planarity.idx4, atomOffset);
+  appendTermStart(system.planarityTermStarts, planarity.idx1.size());
+}
+
+void sendAllInOneSystemToDevice(const BatchedAllInOneSystemHost& systemHost,
+                                BatchedAllInOneDeviceBuffers&    systemDevice,
+                                cudaStream_t                     stream) {
+  sendAllInOneSystemToDeviceImpl(systemHost, systemDevice, stream);
+}
+void sendAllInOneSystemToDevice(const BatchedAllInOneSystemHost&    systemHost,
+                                BatchedAllInOneDeviceBuffersSingle& systemDevice,
+                                cudaStream_t                        stream) {
+  sendAllInOneSystemToDeviceImpl(systemHost, systemDevice, stream);
+}
+
+AllInOneContribsDevicePtr toAllInOneContribsDevicePtr(const BatchedAllInOneDeviceBuffers& systemDevice,
+                                                      const int*                          atomStarts) {
+  return toAllInOneContribsDevicePtrImpl(systemDevice, atomStarts);
+}
+AllInOneContribsDevicePtrSingle toAllInOneContribsDevicePtr(const BatchedAllInOneDeviceBuffersSingle& systemDevice,
+                                                            const int*                                atomStarts) {
+  return toAllInOneContribsDevicePtrImpl(systemDevice, atomStarts);
 }
 
 }  // namespace DistGeom

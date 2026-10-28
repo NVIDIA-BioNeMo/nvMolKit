@@ -1,0 +1,456 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <string>
+
+#include "src/descriptors3d.h"
+#include "src/descriptors3d_dclv.cuh"
+#include "src/descriptors3d_eem.cuh"
+#include "src/descriptors3d_getaway.cuh"
+#include "src/descriptors3d_kernel.cuh"
+#include "src/descriptors3d_moments.cuh"
+#include "src/descriptors3d_pairwise.cuh"
+#include "src/descriptors3d_projection.cuh"
+#include "src/descriptors3d_topology.cuh"
+#include "src/descriptors3d_usr.cuh"
+#include "src/utils/cuda_error_check.h"
+
+namespace nvMolKit {
+
+std::string_view property3DName(const Property3D property) {
+  switch (property) {
+    case Property3D::PMI1:
+      return "PMI1";
+    case Property3D::PMI2:
+      return "PMI2";
+    case Property3D::PMI3:
+      return "PMI3";
+    case Property3D::RadiusOfGyration:
+      return "RadiusOfGyration";
+    case Property3D::NPR1:
+      return "NPR1";
+    case Property3D::NPR2:
+      return "NPR2";
+    case Property3D::InertialShapeFactor:
+      return "InertialShapeFactor";
+    case Property3D::Eccentricity:
+      return "Eccentricity";
+    case Property3D::Asphericity:
+      return "Asphericity";
+    case Property3D::SpherocityIndex:
+      return "SpherocityIndex";
+    case Property3D::PBF:
+      return "PBF";
+    case Property3D::WHIM:
+      return "WHIM";
+    case Property3D::RDF:
+      return "RDF";
+    case Property3D::MORSE:
+      return "MORSE";
+    case Property3D::AUTOCORR3D:
+      return "AUTOCORR3D";
+    case Property3D::USR:
+      return "USR";
+    case Property3D::USRCAT:
+      return "USRCAT";
+    case Property3D::GETAWAY:
+      return "GETAWAY";
+    case Property3D::DCLVSurfaceArea:
+      return "DCLVSurfaceArea";
+    case Property3D::DCLVPolarSurfaceArea:
+      return "DCLVPolarSurfaceArea";
+    case Property3D::DCLVVolume:
+      return "DCLVVolume";
+    case Property3D::DCLVVDWVolume:
+      return "DCLVVDWVolume";
+    case Property3D::DCLVPolarVolume:
+      return "DCLVPolarVolume";
+    case Property3D::DCLVCompactness:
+      return "DCLVCompactness";
+    case Property3D::DCLVPackingDensity:
+      return "DCLVPackingDensity";
+    case Property3D::EEMcharges:
+      return "EEMcharges";
+  }
+  throw std::invalid_argument("Unknown Property3D value " + std::to_string(static_cast<int>(property)));
+}
+
+Property3D property3DFromName(const std::string_view name) {
+  for (const Property3D property : kAllProperty3D) {
+    if (property3DName(property) == name) {
+      return property;
+    }
+  }
+  throw std::invalid_argument("Unknown 3D property '" + std::string(name) + "'");
+}
+
+namespace {
+
+using descriptors3d_detail::computeInertiaTensor;
+using descriptors3d_detail::computeMomentProperty;
+using descriptors3d_detail::computePrincipalMoments;
+using descriptors3d_detail::ConformerAtoms;
+using descriptors3d_detail::dclvColumn;
+using descriptors3d_detail::DclvOutputs;
+using descriptors3d_detail::kBlockSize;
+using descriptors3d_detail::kConformersPerBlock;
+using descriptors3d_detail::kGroupSize;
+using descriptors3d_detail::kGroupsPerWarp;
+using descriptors3d_detail::kWarpSize;
+using descriptors3d_detail::kWarpsPerBlock;
+using descriptors3d_detail::launchDclvProperties;
+using descriptors3d_detail::launchEemCharges;
+using descriptors3d_detail::launchGetawayProperties;
+using descriptors3d_detail::launchPairwiseProperties;
+using descriptors3d_detail::launchProjectionProperties;
+using descriptors3d_detail::launchUsrProperties;
+using descriptors3d_detail::loadConformer;
+using descriptors3d_detail::MomentState;
+using descriptors3d_detail::PairwiseOutputs;
+
+constexpr int countFamilyProperties(const Property3DFamily family) {
+  int count = 0;
+  for (const Property3D property : kAllProperty3D) {
+    count += property3DFamily(property) == family ? 1 : 0;
+  }
+  return count;
+}
+
+constexpr int kNumMomentProperty3D = countFamilyProperties(Property3DFamily::Moments);
+
+//! Per-conformer work shared between properties. Enumerators are in dependency order.
+enum class SharedStage : int {
+  InertiaTensor    = 0,  //!< Total weight and inertia tensor about the weighted centroid.
+  PrincipalMoments = 1,  //!< Eigenvalues of the inertia tensor. Requires InertiaTensor.
+};
+constexpr int kNumSharedStages = 2;
+
+using SharedStageSet = uint32_t;
+
+constexpr SharedStageSet stageBit(const SharedStage stage) {
+  return 1u << static_cast<int>(stage);
+}
+
+//! Shared stages a property reads directly.
+constexpr SharedStageSet directStages(const Property3D property) {
+  switch (property) {
+    case Property3D::PMI1:
+    case Property3D::PMI2:
+    case Property3D::PMI3:
+    case Property3D::NPR1:
+    case Property3D::NPR2:
+    case Property3D::InertialShapeFactor:
+    case Property3D::Eccentricity:
+    case Property3D::Asphericity:
+    case Property3D::SpherocityIndex:
+      return stageBit(SharedStage::PrincipalMoments);
+    case Property3D::RadiusOfGyration:
+      return stageBit(SharedStage::InertiaTensor);
+    case Property3D::PBF:
+    case Property3D::WHIM:
+    case Property3D::RDF:
+    case Property3D::MORSE:
+    case Property3D::AUTOCORR3D:
+    case Property3D::USR:
+    case Property3D::USRCAT:
+    case Property3D::GETAWAY:
+    case Property3D::DCLVSurfaceArea:
+    case Property3D::DCLVPolarSurfaceArea:
+    case Property3D::DCLVVolume:
+    case Property3D::DCLVVDWVolume:
+    case Property3D::DCLVPolarVolume:
+    case Property3D::DCLVCompactness:
+    case Property3D::DCLVPackingDensity:
+    case Property3D::EEMcharges:
+      return 0;
+  }
+  return 0;
+}
+
+//! Close a stage set over its prerequisites.
+constexpr SharedStageSet withPrerequisites(SharedStageSet stages) {
+  if (stages & stageBit(SharedStage::PrincipalMoments)) {
+    stages |= stageBit(SharedStage::InertiaTensor);
+  }
+  return stages;
+}
+
+//! Host-precomputed work list: shared stages in dependency order, then requested properties and their
+//! output buffers in request order. Trivially constructible so the kernel can stage it in shared memory
+//! for its runtime-indexed loops.
+template <typename Real> struct Property3DWork {
+  SharedStage stages[kNumSharedStages];
+  Property3D  properties[kNumMomentProperty3D];
+  Real*       values[kNumMomentProperty3D];
+  int         numStages;
+  int         numProperties;
+};
+
+//! Everything a shared stage or property sees for one conformer. Every lane of a group holds the same
+//! atoms and shared state.
+template <typename Real> struct ConformerContext {
+  ConformerAtoms    atoms;
+  int               laneInGroup;
+  MomentState<Real> moments;
+};
+
+//! Must be called by every lane of the warp with the same @p stage.
+template <typename Real>
+__device__ __forceinline__ void runSharedStage(const SharedStage stage, ConformerContext<Real>& context) {
+  switch (stage) {
+    case SharedStage::InertiaTensor:
+      computeInertiaTensor(context.atoms, context.laneInGroup, context.moments);
+      return;
+    case SharedStage::PrincipalMoments:
+      computePrincipalMoments(context.moments);
+      return;
+  }
+}
+
+template <typename Real>
+__device__ __forceinline__ Real computeUnitWeightSpherocity(const ConformerContext<Real>& context) {
+  ConformerAtoms unitAtoms = context.atoms;
+  unitAtoms.weights        = nullptr;
+  MomentState<Real> unitMoments;
+  computeInertiaTensor(unitAtoms, context.laneInGroup, unitMoments);
+  computePrincipalMoments(unitMoments);
+  return computeMomentProperty(Property3D::SpherocityIndex, unitMoments);
+}
+
+template <typename Real, bool kSeparateSpherocityState>
+__global__ void property3DKernel(const DeviceCoordView coordinates,
+                                 const double* __restrict__ atomWeights,
+                                 const int32_t* __restrict__ moleculeAtomStarts,
+                                 const Property3DWork<Real> work) {
+  __shared__ Property3DWork<Real> blockWork;
+  if (threadIdx.x == 0) {
+    blockWork = work;
+  }
+  __syncthreads();
+
+  const int lane         = static_cast<int>(threadIdx.x) % kWarpSize;
+  const int warpStart    = (blockIdx.x * kWarpsPerBlock + static_cast<int>(threadIdx.x) / kWarpSize) * kGroupsPerWarp;
+  const int conformerIdx = warpStart + lane / kGroupSize;
+  if (warpStart >= coordinates.numConformers) {
+    return;  // Uniform across the warp; partially filled warps keep every lane for the shuffles.
+  }
+
+  ConformerContext<Real> context;
+  context.atoms       = loadConformer(coordinates, atomWeights, moleculeAtomStarts, conformerIdx);
+  context.laneInGroup = lane % kGroupSize;
+
+  Real unitWeightSpherocity = 0;
+  if constexpr (kSeparateSpherocityState) {
+    unitWeightSpherocity = computeUnitWeightSpherocity(context);
+  }
+  for (int i = 0; i < blockWork.numStages; ++i) {
+    runSharedStage(blockWork.stages[i], context);
+  }
+  for (int i = 0; i < blockWork.numProperties; ++i) {
+    Real value;
+    if constexpr (kSeparateSpherocityState) {
+      value = blockWork.properties[i] == Property3D::SpherocityIndex ?
+                unitWeightSpherocity :
+                computeMomentProperty(blockWork.properties[i], context.moments);
+    } else {
+      value = computeMomentProperty(blockWork.properties[i], context.moments);
+    }
+    if (context.laneInGroup == 0 && conformerIdx < coordinates.numConformers) {
+      blockWork.values[i][conformerIdx] = context.atoms.valid ? value : static_cast<Real>(nan(""));
+    }
+  }
+}
+
+template <typename Real> void addMomentProperty(Property3DWork<Real>& work, const Property3D property, Real* values) {
+  work.properties[work.numProperties] = property;
+  work.values[work.numProperties]     = values;
+  ++work.numProperties;
+}
+
+template <typename Real> void prepareStages(Property3DWork<Real>& work, const bool separateSpherocityState) {
+  SharedStageSet stages = 0;
+  for (int propertyIdx = 0; propertyIdx < work.numProperties; ++propertyIdx) {
+    if (separateSpherocityState && work.properties[propertyIdx] == Property3D::SpherocityIndex) {
+      continue;
+    }
+    stages |= directStages(work.properties[propertyIdx]);
+  }
+  stages = withPrerequisites(stages);
+  for (int stage = 0; stage < kNumSharedStages; ++stage) {
+    if (stages & stageBit(static_cast<SharedStage>(stage))) {
+      work.stages[work.numStages++] = static_cast<SharedStage>(stage);
+    }
+  }
+}
+
+template <typename Real>
+void launchMomentProperties(const DeviceCoordView& coordinates,
+                            const double*          atomWeights,
+                            const int32_t*         moleculeAtomStarts,
+                            Property3DWork<Real>&  work,
+                            const bool             separateSpherocityState,
+                            const cudaStream_t     stream) {
+  if (work.numProperties == 0 || coordinates.numConformers == 0) {
+    return;
+  }
+  prepareStages(work, separateSpherocityState);
+  const int numBlocks = (coordinates.numConformers + kConformersPerBlock - 1) / kConformersPerBlock;
+  if (separateSpherocityState) {
+    property3DKernel<Real, true>
+      <<<numBlocks, kBlockSize, 0, stream>>>(coordinates, atomWeights, moleculeAtomStarts, work);
+  } else {
+    property3DKernel<Real, false>
+      <<<numBlocks, kBlockSize, 0, stream>>>(coordinates, atomWeights, moleculeAtomStarts, work);
+  }
+  cudaCheckError(cudaGetLastError());
+}
+
+}  // namespace
+
+template <typename Real>
+Property3DResults<Real> calc3DPropertiesGpu(const DeviceCoordView&         coordinates,
+                                            const Property3DDeviceInputs&  inputs,
+                                            const std::vector<Property3D>& properties,
+                                            const Property3DOptions&       options,
+                                            const cudaStream_t             stream) {
+  if (properties.empty()) {
+    throw std::invalid_argument("At least one 3D property must be requested");
+  }
+  if (coordinates.numConformers < 0 || coordinates.nMols < 0) {
+    throw std::invalid_argument("Batch dimensions must not be negative");
+  }
+
+  Property3DResults<Real> results;
+  Property3DWork<Real>    work{};
+  bool                    hasSpherocity = false;
+  Real*                   pbfOutput     = nullptr;
+  Real*                   whimOutput    = nullptr;
+  PairwiseOutputs<Real>   pairwiseOutputs;
+  Real*                   usrOutput     = nullptr;
+  Real*                   usrcatOutput  = nullptr;
+  Real*                   getawayOutput = nullptr;
+  DclvOutputs<Real>       dclvOutputs;
+  Real*                   eemOutput = nullptr;
+  for (const Property3D property : properties) {
+    // Bounds the work arrays, which hold one slot per known property.
+    if (std::find(kAllProperty3D.begin(), kAllProperty3D.end(), property) == kAllProperty3D.end()) {
+      throw std::invalid_argument("Unknown Property3D value " + std::to_string(static_cast<int>(property)));
+    }
+    const int64_t outputRows =
+      property3DExtent(property) == Property3DExtent::Atom ? coordinates.numAtoms : coordinates.numConformers;
+    const size_t outputSize = static_cast<size_t>(outputRows) * property3DWidth(property);
+    auto [it, inserted]     = results.try_emplace(property, outputSize, stream);
+    if (!inserted) {
+      throw std::invalid_argument("Duplicate 3D property '" + std::string(property3DName(property)) + "'");
+    }
+    switch (property3DFamily(property)) {
+      case Property3DFamily::Moments:
+        addMomentProperty(work, property, it->second.data());
+        hasSpherocity |= property == Property3D::SpherocityIndex;
+        break;
+      case Property3DFamily::Projection:
+        (property == Property3D::PBF ? pbfOutput : whimOutput) = it->second.data();
+        break;
+      case Property3DFamily::Pairwise:
+        (property == Property3D::RDF   ? pairwiseOutputs.rdf :
+         property == Property3D::MORSE ? pairwiseOutputs.morse :
+                                         pairwiseOutputs.autocorr3D) = it->second.data();
+        break;
+      case Property3DFamily::Usr:
+        (property == Property3D::USR ? usrOutput : usrcatOutput) = it->second.data();
+        break;
+      case Property3DFamily::Getaway:
+        getawayOutput = it->second.data();
+        break;
+      case Property3DFamily::Dclv:
+        dclvOutputs.values[dclvColumn(property)] = it->second.data();
+        break;
+      case Property3DFamily::Eem:
+        eemOutput = it->second.data();
+        break;
+    }
+  }
+
+  // Options are validated only for requested families; the rest are ignored.
+  if (whimOutput != nullptr && (!std::isfinite(options.whim.threshold) || options.whim.threshold < 0)) {
+    throw std::invalid_argument("WHIM threshold must be finite and non-negative");
+  }
+  if (getawayOutput != nullptr && (options.getaway.precision < 1 || options.getaway.precision > 6)) {
+    throw std::invalid_argument("GETAWAY precision must be between 1 and 6 significant digits");
+  }
+  if (dclvOutputs.any() && (!std::isfinite(options.dclv.probeRadius) || options.dclv.probeRadius < 0)) {
+    throw std::invalid_argument("DCLV probe radius must be finite and non-negative");
+  }
+
+  if (coordinates.numConformers == 0) {
+    launchEemCharges(coordinates, inputs, eemOutput, stream);
+    return results;
+  }
+  if (coordinates.positions == nullptr || coordinates.atomStarts == nullptr || coordinates.molIndices == nullptr ||
+      inputs.moleculeAtomStarts == nullptr) {
+    throw std::invalid_argument("3D property input buffers must not be null for a non-empty batch");
+  }
+  const bool anyPairwise =
+    pairwiseOutputs.rdf != nullptr || pairwiseOutputs.morse != nullptr || pairwiseOutputs.autocorr3D != nullptr;
+  if ((whimOutput != nullptr || anyPairwise || getawayOutput != nullptr) && inputs.atomPropertyWeights == nullptr) {
+    throw std::invalid_argument(
+      "Atom-property weights must not be null when WHIM, RDF, MORSE, AUTOCORR3D or GETAWAY is requested");
+  }
+  if (getawayOutput != nullptr &&
+      (inputs.bondNeighborStarts == nullptr || inputs.bondNeighbors == nullptr || inputs.heavyAtomFlags == nullptr)) {
+    throw std::invalid_argument("Bond adjacency and heavy-atom flags must not be null when GETAWAY is requested");
+  }
+  if (pairwiseOutputs.autocorr3D != nullptr &&
+      (inputs.covalentRadiusWeights == nullptr || inputs.bondNeighborStarts == nullptr ||
+       inputs.bondNeighbors == nullptr)) {
+    throw std::invalid_argument("Covalent radii and bond adjacency must not be null when AUTOCORR3D is requested");
+  }
+  if (usrcatOutput != nullptr && inputs.usrcatAtomClasses == nullptr) {
+    throw std::invalid_argument("USRCAT atom classes must not be null when USRCAT is requested");
+  }
+  if (pairwiseOutputs.rdf != nullptr && inputs.iStateDragWeights == nullptr) {
+    throw std::invalid_argument("I-state drag weights must not be null when RDF is requested");
+  }
+  if (dclvOutputs.any() && (inputs.vdwRadii == nullptr || inputs.dclvPolarClasses == nullptr)) {
+    throw std::invalid_argument(
+      "Van der Waals radii and polar classes must not be null when a DCLV property is requested");
+  }
+  if (eemOutput != nullptr && (inputs.eemElectronegativity == nullptr || inputs.eemHardness == nullptr ||
+                               inputs.moleculeFormalCharges == nullptr)) {
+    throw std::invalid_argument("EEM parameters and formal charges must not be null when EEMcharges is requested");
+  }
+
+  const bool    momentWeightsAreUnit    = inputs.momentWeights == nullptr;
+  const bool    onlySpherocity          = hasSpherocity && work.numProperties == 1;
+  const bool    separateSpherocityState = hasSpherocity && !onlySpherocity && !momentWeightsAreUnit;
+  const double* momentWeights           = onlySpherocity ? nullptr : inputs.momentWeights;
+  launchMomentProperties(coordinates, momentWeights, inputs.moleculeAtomStarts, work, separateSpherocityState, stream);
+  launchProjectionProperties(coordinates, inputs, options.whim, pbfOutput, whimOutput, stream);
+  // Bond distances depend only on the molecule, so AUTOCORR3D and GETAWAY share one table for all conformers.
+  descriptors3d_detail::BondDistanceTableStorage bondTable;
+  if (pairwiseOutputs.autocorr3D != nullptr || getawayOutput != nullptr) {
+    descriptors3d_detail::buildBondDistanceTable(coordinates, inputs, bondTable, stream);
+  }
+  launchPairwiseProperties(coordinates, inputs, pairwiseOutputs, bondTable.table, stream);
+  launchUsrProperties(coordinates, inputs, usrOutput, usrcatOutput, stream);
+  launchGetawayProperties(coordinates, inputs, options.getaway, bondTable.table, getawayOutput, stream);
+  launchDclvProperties(coordinates, inputs, options.dclv, dclvOutputs, stream);
+  launchEemCharges(coordinates, inputs, eemOutput, stream);
+  return results;
+}
+
+template Property3DResults<float>  calc3DPropertiesGpu<float>(const DeviceCoordView&,
+                                                             const Property3DDeviceInputs&,
+                                                             const std::vector<Property3D>&,
+                                                             const Property3DOptions&,
+                                                             cudaStream_t);
+template Property3DResults<double> calc3DPropertiesGpu<double>(const DeviceCoordView&,
+                                                               const Property3DDeviceInputs&,
+                                                               const std::vector<Property3D>&,
+                                                               const Property3DOptions&,
+                                                               cudaStream_t);
+
+}  // namespace nvMolKit

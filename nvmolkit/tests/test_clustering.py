@@ -19,7 +19,8 @@ import torch
 from rdkit.ML.Cluster.Butina import ClusterData
 
 import nvmolkit.clustering as clustering
-from nvmolkit.clustering import ButinaDeviceResult, ButinaOutputMode, butina, fused_butina
+from nvmolkit.clustering import ClusterDeviceResult, OutputMode, bitbirch, butina, fused_butina
+from nvmolkit.similarity import AAPMetric, CosineMetric, TanimotoMetric
 from nvmolkit.types import AsyncGpuResult
 
 
@@ -59,7 +60,7 @@ def _nvmolkit_butina_clusters(distance_matrix, cutoff, *, reordering):
         torch.tensor(distance_matrix, device="cuda"),
         cutoff,
         reordering=reordering,
-        output=ButinaOutputMode.DEVICE,
+        output=OutputMode.DEVICE,
     )
     labels = result.cluster_ids.torch().cpu().numpy()
     centroids = result.centroids.torch().cpu().numpy()
@@ -172,13 +173,13 @@ def test_butina_rdkit_output_matches_rdkit(reordering):
         distance_matrix,
         0.2,
         reordering=reordering,
-        output=ButinaOutputMode.RDKIT,
+        output=OutputMode.RDKIT,
     )
     device_result = butina(
         distance_matrix,
         0.2,
         reordering=reordering,
-        output=ButinaOutputMode.DEVICE,
+        output=OutputMode.DEVICE,
     )
 
     assert got == _rdkit_butina_clusters(distance_matrix, 0.2, reordering=reordering)
@@ -198,20 +199,20 @@ def test_butina_device_output_has_fixed_result_type(explicit_output):
         device="cuda",
     )
 
-    output_args = {"output": ButinaOutputMode.DEVICE} if explicit_output else {}
+    output_args = {"output": OutputMode.DEVICE} if explicit_output else {}
     result = butina(dists, 0.2, **output_args)
 
-    assert isinstance(result, ButinaDeviceResult)
+    assert isinstance(result, ClusterDeviceResult)
     torch.testing.assert_close(result.cluster_sizes.torch(), torch.tensor([2, 2], device="cuda"))
     assert result.cluster_ids.torch().shape == (4,)
     assert result.centroids.torch().shape == (2,)
 
 
 def test_to_rdkit_clusters_preserves_cluster_and_member_order():
-    cluster_ids = AsyncGpuResult(torch.tensor([1, 0, 1, 2, 0, 2], dtype=torch.int32, device="cuda"))
-    centroids = AsyncGpuResult(torch.tensor([4, 2, 5], dtype=torch.int32, device="cuda"))
+    cluster_ids = np.asarray([1, 0, 1, 2, 0, 2], dtype=np.int32)
+    centroids = np.asarray([4, 2, 5], dtype=np.int32)
 
-    assert clustering._to_rdkit_clusters(cluster_ids, centroids) == ((4, 1), (2, 0), (5, 3))
+    assert clustering._cluster_arrays_to_rdkit(cluster_ids, centroids) == ((4, 1), (2, 0), (5, 3))
 
 
 @pytest.mark.parametrize("input_kind", ["async", "cpu_tensor", "numpy"])
@@ -273,7 +274,7 @@ def test_butina_invalid_neighborlist_max_size(invalid_size):
 
 def test_butina_rejects_invalid_output():
     dists = torch.zeros(2, 2, dtype=torch.float64)
-    with pytest.raises(TypeError, match="output must be a ButinaOutputMode"):
+    with pytest.raises(TypeError, match="output must be an OutputMode"):
         butina(dists, 0.1, output="device")
 
 
@@ -346,7 +347,7 @@ def fused_butina_clusters(x, cutoff, metric="tanimoto", stream=None):
         cutoff,
         metric=metric,
         stream=stream,
-        output=ButinaOutputMode.DEVICE,
+        output=OutputMode.DEVICE,
     )
     cluster_ids = result.cluster_ids.numpy()
     centroids = result.centroids.numpy()
@@ -427,7 +428,7 @@ def test_fused_butina_all_singletons(metric):
 def test_fused_butina_returns_centroids(n, metric):
     cutoff = 0.4
     x = generate_clustered_fingerprints(n, num_words=32, num_clusters=10)
-    result = fused_butina(x, cutoff=cutoff, metric=metric, output=ButinaOutputMode.DEVICE)
+    result = fused_butina(x, cutoff=cutoff, metric=metric, output=OutputMode.DEVICE)
     cluster_ids = result.cluster_ids.numpy()
     centroids = result.centroids.numpy()
 
@@ -447,7 +448,7 @@ def test_fused_butina_returns_centroids(n, metric):
 def test_fused_butina_accepts_array_input_types(input_kind):
     x = generate_clustered_fingerprints(50, num_words=32, num_clusters=10)
     cutoff = 0.4
-    expected_cluster_ids = fused_butina(x, cutoff=cutoff, output=ButinaOutputMode.DEVICE).cluster_ids.torch().cpu()
+    expected_cluster_ids = fused_butina(x, cutoff=cutoff, output=OutputMode.DEVICE).cluster_ids.torch().cpu()
 
     if input_kind == "async":
         inp = AsyncGpuResult(x)
@@ -456,7 +457,7 @@ def test_fused_butina_accepts_array_input_types(input_kind):
     else:
         inp = x.cpu().numpy()
 
-    cluster_ids = fused_butina(inp, cutoff=cutoff, output=ButinaOutputMode.DEVICE).cluster_ids.torch().cpu()
+    cluster_ids = fused_butina(inp, cutoff=cutoff, output=OutputMode.DEVICE).cluster_ids.torch().cpu()
     torch.testing.assert_close(cluster_ids, expected_cluster_ids)
 
 
@@ -464,20 +465,18 @@ def test_fused_butina_accepts_int32_and_uint32():
     fingerprints_int32 = generate_clustered_fingerprints(50, num_words=32, num_clusters=10)
     fingerprints_uint32 = fingerprints_int32.view(torch.uint32)
 
-    expected_cluster_ids = fused_butina(
-        fingerprints_int32, cutoff=0.4, output=ButinaOutputMode.DEVICE
-    ).cluster_ids.torch()
-    cluster_ids = fused_butina(fingerprints_uint32, cutoff=0.4, output=ButinaOutputMode.DEVICE).cluster_ids.torch()
+    expected_cluster_ids = fused_butina(fingerprints_int32, cutoff=0.4, output=OutputMode.DEVICE).cluster_ids.torch()
+    cluster_ids = fused_butina(fingerprints_uint32, cutoff=0.4, output=OutputMode.DEVICE).cluster_ids.torch()
 
     torch.testing.assert_close(cluster_ids, expected_cluster_ids)
 
 
 def test_fused_butina_on_explicit_stream():
     x = generate_clustered_fingerprints(100, num_words=32, num_clusters=10)
-    expected = fused_butina(x, cutoff=0.4, output=ButinaOutputMode.DEVICE).cluster_ids.torch()
+    expected = fused_butina(x, cutoff=0.4, output=OutputMode.DEVICE).cluster_ids.torch()
 
     s = torch.cuda.Stream()
-    actual = fused_butina(x, cutoff=0.4, stream=s, output=ButinaOutputMode.DEVICE).cluster_ids.torch()
+    actual = fused_butina(x, cutoff=0.4, stream=s, output=OutputMode.DEVICE).cluster_ids.torch()
     s.synchronize()
 
     torch.testing.assert_close(actual, expected)
@@ -497,8 +496,24 @@ def test_fused_butina_empty_fingerprints(metric, expected_cluster_count):
 
 def test_fused_butina_invalid_metric():
     x = torch.randint(-(2**31 - 1), 2**31 - 1, (10, 32), dtype=torch.int32).cuda()
-    with pytest.raises(ValueError, match="metric must be one of"):
+    with pytest.raises(ValueError, match="metric must be"):
         fused_butina(x, cutoff=0.5, metric="euclidean")
+
+
+@pytest.mark.parametrize("name, instance", [("tanimoto", TanimotoMetric()), ("cosine", CosineMetric())])
+def test_fused_butina_metric_objects_match_names(name, instance):
+    x = torch.randint(0, 2**31 - 1, (200, 8), dtype=torch.int32).cuda()
+
+    by_name = fused_butina(x, cutoff=0.6, metric=name, output=OutputMode.RDKIT)
+
+    assert fused_butina(x, cutoff=0.6, metric=instance, output=OutputMode.RDKIT) == by_name
+
+
+@pytest.mark.parametrize("metric", ["aap", AAPMetric()])
+def test_fused_butina_does_not_yet_support_aap(metric):
+    x = torch.zeros((2, 1), dtype=torch.int32).cuda()
+    with pytest.raises(NotImplementedError, match="AAPMetric"):
+        fused_butina(x, cutoff=0.5, metric=metric)
 
 
 def test_fused_butina_invalid_stream_type():
@@ -511,9 +526,9 @@ def test_fused_butina_defaults_to_device_output():
     x = generate_clustered_fingerprints(50, num_words=32, num_clusters=10)
 
     default_result = fused_butina(x, cutoff=0.4)
-    explicit_result = fused_butina(x, cutoff=0.4, output=ButinaOutputMode.DEVICE)
+    explicit_result = fused_butina(x, cutoff=0.4, output=OutputMode.DEVICE)
 
-    assert isinstance(default_result, ButinaDeviceResult)
+    assert isinstance(default_result, ClusterDeviceResult)
     torch.testing.assert_close(default_result.cluster_ids.torch(), explicit_result.cluster_ids.torch())
     torch.testing.assert_close(default_result.centroids.torch(), explicit_result.centroids.torch())
     torch.testing.assert_close(default_result.cluster_sizes.torch(), explicit_result.cluster_sizes.torch())
@@ -522,11 +537,115 @@ def test_fused_butina_defaults_to_device_output():
 def test_fused_butina_rdkit_and_device_outputs_agree():
     x = generate_clustered_fingerprints(50, num_words=32, num_clusters=10)
 
-    rdkit_result = fused_butina(x, cutoff=0.4, output=ButinaOutputMode.RDKIT)
-    device_result = fused_butina(x, cutoff=0.4, output=ButinaOutputMode.DEVICE)
+    rdkit_result = fused_butina(x, cutoff=0.4, output=OutputMode.RDKIT)
+    device_result = fused_butina(x, cutoff=0.4, output=OutputMode.DEVICE)
 
     assert isinstance(rdkit_result, tuple)
-    assert isinstance(device_result, ButinaDeviceResult)
+    assert isinstance(device_result, ClusterDeviceResult)
     assert rdkit_result == fused_butina_clusters(x, cutoff=0.4)
     assert [cluster[0] for cluster in rdkit_result] == device_result.centroids.numpy().tolist()
     assert device_result.cluster_sizes.torch().tolist() == [len(cluster) for cluster in rdkit_result]
+
+
+# ---------------------------------------------------------------------------
+# BitBIRCH tests
+# ---------------------------------------------------------------------------
+
+
+def test_bitbirch_merges_at_exact_diameter_threshold_and_returns_centroids():
+    x = torch.tensor([[0b0011], [0b0001], [0b1100], [0b0100]], dtype=torch.int32, device="cuda")
+    labels, centroids = bitbirch(x, threshold=0.5, branching_factor=3, return_centroids=True)
+    torch.testing.assert_close(labels.torch().cpu(), torch.tensor([0, 0, 1, 1], dtype=torch.int32))
+    torch.testing.assert_close(
+        centroids.torch().cpu().view(torch.int32),
+        torch.tensor([[0b0011], [0b1100]], dtype=torch.int32),
+    )
+
+
+@pytest.mark.parametrize("branching_factor", [3, 4, 7])
+def test_bitbirch_cascading_splits_are_deterministic(branching_factor):
+    x = (
+        torch.ones(24, dtype=torch.int32, device="cuda") << torch.arange(24, dtype=torch.int32, device="cuda")
+    ).reshape(-1, 1)
+    labels = bitbirch(x, threshold=0.9, branching_factor=branching_factor).torch()
+    torch.testing.assert_close(labels, torch.arange(24, dtype=torch.int32, device="cuda"))
+
+
+@pytest.mark.parametrize("input_kind", ["async", "cpu_tensor", "numpy"])
+def test_bitbirch_accepts_array_input_types(input_kind):
+    x = torch.tensor([[3], [1], [12], [4]], dtype=torch.int32, device="cuda")
+    if input_kind == "async":
+        inp = AsyncGpuResult(x)
+    elif input_kind == "cpu_tensor":
+        inp = x.cpu()
+    else:
+        inp = x.cpu().numpy()
+    labels = bitbirch(inp, threshold=0.5, branching_factor=3).torch().cpu()
+    torch.testing.assert_close(labels, torch.tensor([0, 0, 1, 1], dtype=torch.int32))
+
+
+def test_bitbirch_explicit_stream():
+    x = torch.tensor([[3], [1], [12], [4]], dtype=torch.int32, device="cuda")
+    stream = torch.cuda.Stream()
+    labels = bitbirch(x, threshold=0.5, branching_factor=3, stream=stream).torch()
+    stream.synchronize()
+    torch.testing.assert_close(labels, torch.tensor([0, 0, 1, 1], dtype=torch.int32, device="cuda"))
+
+
+def test_bitbirch_empty_and_all_zero_fingerprints():
+    empty = torch.empty((0, 3), dtype=torch.uint32, device="cuda")
+    empty_labels, empty_centroids = bitbirch(empty, threshold=0.5, return_centroids=True)
+    assert empty_labels.torch().shape == (0,)
+    assert empty_centroids.torch().shape == (0, 3)
+
+    zeros = torch.zeros((12, 3), dtype=torch.uint32, device="cuda")
+    labels, centroids = bitbirch(zeros, threshold=1.0, branching_factor=3, return_centroids=True)
+    torch.testing.assert_close(labels.torch(), torch.zeros(12, dtype=torch.int32, device="cuda"))
+    torch.testing.assert_close(centroids.torch(), torch.zeros((1, 3), dtype=torch.uint32, device="cuda"))
+
+
+def test_bitbirch_threshold_extremes_and_all_one_majority_centroid():
+    x = torch.tensor([[0], [1], [3], [0xFFFFFFFF]], dtype=torch.uint32, device="cuda")
+    labels, centroids = bitbirch(x, threshold=0.0, branching_factor=3, return_centroids=True)
+    torch.testing.assert_close(labels.torch(), torch.zeros(4, dtype=torch.int32, device="cuda"))
+    torch.testing.assert_close(centroids.torch(), torch.tensor([[3]], dtype=torch.uint32, device="cuda"))
+
+    duplicates = torch.full((17, 2), 0xFFFFFFFF, dtype=torch.uint32, device="cuda")
+    labels, centroids = bitbirch(duplicates, threshold=1.0, return_centroids=True)
+    torch.testing.assert_close(labels.torch(), torch.zeros(17, dtype=torch.int32, device="cuda"))
+    torch.testing.assert_close(centroids.torch(), torch.full((1, 2), 0xFFFFFFFF, dtype=torch.uint32, device="cuda"))
+
+
+def test_bitbirch_accepts_noncontiguous_packed_input():
+    storage = torch.tensor(
+        [[3, 99, 1, 99], [1, 99, 1, 99], [12, 99, 4, 99], [4, 99, 4, 99]],
+        dtype=torch.uint32,
+        device="cuda",
+    )
+    x = storage[:, ::2]
+    assert not x.is_contiguous()
+    labels = bitbirch(x, threshold=0.5, branching_factor=3).torch()
+    torch.testing.assert_close(labels, torch.tensor([0, 0, 1, 1], dtype=torch.int32, device="cuda"))
+
+
+@pytest.mark.parametrize(
+    "kwargs,error",
+    [
+        ({"threshold": -0.1}, r"threshold must be finite and in \[0, 1\]"),
+        ({"threshold": np.nan}, r"threshold must be finite and in \[0, 1\]"),
+        ({"threshold": np.inf}, r"threshold must be finite and in \[0, 1\]"),
+        ({"threshold": 0.5, "branching_factor": 2}, r"branching_factor must be in \[3, 65534\]"),
+        ({"threshold": 0.5, "branching_factor": 65535}, r"branching_factor must be in \[3, 65534\]"),
+        ({"threshold": 0.5, "batch_size": 0}, "batch_size must be positive"),
+    ],
+)
+def test_bitbirch_validation(kwargs, error):
+    x = torch.zeros((2, 1), dtype=torch.int32)
+    with pytest.raises(ValueError, match=error):
+        bitbirch(x, **kwargs)
+
+
+def test_bitbirch_rejects_zero_word_fingerprints():
+    x = torch.empty((4, 0), dtype=torch.uint32, device="cuda")
+    with pytest.raises(ValueError, match="at least one fingerprint word"):
+        bitbirch(x, threshold=0.5)

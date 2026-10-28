@@ -16,12 +16,23 @@
 #include "src/substruct/minibatch_planner.h"
 
 #include <algorithm>
+#include <stdexcept>
 
 #include "src/substruct/recursive_preprocessor.h"
 #include "src/substruct/thread_worker_context.h"
 #include "src/utils/nvtx.h"
 
 namespace nvMolKit {
+
+namespace {
+
+/// Match-index slots reserved for one (target, query) pair.
+int pairMatchCapacity(const ThreadWorkerContext& ctx, const int targetIdx, const int queryIdx) {
+  const int queryAtoms = ctx.queryAtomCounts[queryIdx];
+  return ctx.maxMatches > 0 ? ctx.maxMatches * queryAtoms : (*ctx.targetAtomCounts)[targetIdx] * queryAtoms;
+}
+
+}  // namespace
 
 void MiniBatchPlanner::precomputePipelineSchedule(MiniBatchPlan&             plan,
                                                   const ThreadWorkerContext& ctx,
@@ -53,14 +64,15 @@ void MiniBatchPlanner::precomputePipelineSchedule(MiniBatchPlan&             pla
 void MiniBatchPlanner::prepareRecursiveMiniBatch(MiniBatchPlan&             plan,
                                                  const ThreadWorkerContext& ctx,
                                                  const LeafSubpatterns&     leafSubpatterns,
-                                                 PinnedHostBuffer&          buffer) const {
+                                                 PinnedHostBuffer&          buffer,
+                                                 const int                  firstTarget,
+                                                 const int                  numTargets) const {
   ScopedNvtxRange prepRecRange("prepareRecursiveMiniBatchOnCPU");
 
   precomputePipelineSchedule(plan, ctx, buffer);
 
-  plan.firstTargetInMiniBatch     = plan.miniBatchPairOffset / ctx.numQueries;
-  const int lastTargetInMiniBatch = (plan.miniBatchPairOffset + plan.numPairsInMiniBatch - 1) / ctx.numQueries;
-  plan.numTargetsInMiniBatch      = lastTargetInMiniBatch - plan.firstTargetInMiniBatch + 1;
+  plan.firstTargetInMiniBatch = firstTarget;
+  plan.numTargetsInMiniBatch  = numTargets;
 
   // Use precomputed all-queries pattern entries (shared across all mini-batches)
   plan.patternsAtDepth   = &leafSubpatterns.allQueriesPatternsAtDepth;
@@ -82,17 +94,14 @@ void MiniBatchPlanner::prepareMiniBatch(MiniBatchPlan&             plan,
   plan.miniBatchPairOffset = miniBatchPairOffset;
   plan.numPairsInMiniBatch = numPairsInMiniBatch;
 
-  const bool useMaxMatchesLimit = ctx.maxMatches > 0;
-  int        targetIdx          = miniBatchPairOffset / ctx.numQueries;
-  int        queryIdx           = miniBatchPairOffset % ctx.numQueries;
+  int targetIdx = miniBatchPairOffset / ctx.numQueries;
+  int queryIdx  = miniBatchPairOffset % ctx.numQueries;
 
   buffer.miniBatchPairMatchStarts[0] = 0;
   for (int i = 0; i < numPairsInMiniBatch; ++i) {
-    const int targetAtoms  = (*ctx.targetAtomCounts)[targetIdx];
-    const int queryAtoms   = ctx.queryAtomCounts[queryIdx];
-    const int pairCapacity = useMaxMatchesLimit ? (ctx.maxMatches * queryAtoms) : (targetAtoms * queryAtoms);
-    buffer.miniBatchPairMatchStarts[i + 1] = buffer.miniBatchPairMatchStarts[i] + pairCapacity;
-    buffer.pairIndices[i]                  = miniBatchPairOffset + i;
+    buffer.miniBatchPairMatchStarts[i + 1] =
+      buffer.miniBatchPairMatchStarts[i] + pairMatchCapacity(ctx, targetIdx, queryIdx);
+    buffer.pairIndices[i] = miniBatchPairOffset + i;
 
     if (++queryIdx >= ctx.numQueries) {
       queryIdx = 0;
@@ -101,7 +110,41 @@ void MiniBatchPlanner::prepareMiniBatch(MiniBatchPlan&             plan,
   }
   plan.totalMatchIndices = buffer.miniBatchPairMatchStarts[numPairsInMiniBatch];
 
-  prepareRecursiveMiniBatch(plan, ctx, leafSubpatterns, buffer);
+  const int firstTarget = miniBatchPairOffset / ctx.numQueries;
+  const int lastTarget  = (miniBatchPairOffset + numPairsInMiniBatch - 1) / ctx.numQueries;
+  prepareRecursiveMiniBatch(plan, ctx, leafSubpatterns, buffer, firstTarget, lastTarget - firstTarget + 1);
+}
+
+void MiniBatchPlanner::prepareSelectedTargetsMiniBatch(MiniBatchPlan&             plan,
+                                                       PinnedHostBuffer&          buffer,
+                                                       const ThreadWorkerContext& ctx,
+                                                       const LeafSubpatterns&     leafSubpatterns,
+                                                       const std::vector<int>&    selectedTargetIndices,
+                                                       const int                  selectionOffset,
+                                                       const int                  maxTargetsInMiniBatch) const {
+  if (ctx.numQueries != 1) {
+    throw std::invalid_argument("Selected targets require exactly one query");
+  }
+  const int selectionEnd =
+    std::min(selectionOffset + maxTargetsInMiniBatch, static_cast<int>(selectedTargetIndices.size()));
+  const int count          = selectionEnd - selectionOffset;
+  plan.miniBatchPairOffset = selectionOffset;
+  plan.numPairsInMiniBatch = count;
+
+  const int* selected                = selectedTargetIndices.data() + selectionOffset;
+  buffer.miniBatchPairMatchStarts[0] = 0;
+  for (int i = 0; i < count; ++i) {
+    const int targetIdx = selected[i];
+    if (targetIdx < 0 || targetIdx >= ctx.numTargets) {
+      throw std::out_of_range("Selected target index is outside the target batch");
+    }
+    buffer.miniBatchPairMatchStarts[i + 1] = buffer.miniBatchPairMatchStarts[i] + pairMatchCapacity(ctx, targetIdx, 0);
+    buffer.pairIndices[i]                  = targetIdx;
+  }
+  plan.totalMatchIndices = buffer.miniBatchPairMatchStarts[count];
+
+  const int firstTarget = count == 0 ? 0 : selected[0];
+  prepareRecursiveMiniBatch(plan, ctx, leafSubpatterns, buffer, firstTarget, count);
 }
 
 }  // namespace nvMolKit

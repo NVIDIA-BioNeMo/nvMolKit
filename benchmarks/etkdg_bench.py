@@ -37,6 +37,7 @@ from bench_utils import (
     TimingResult,
     add_backend_selection_args,
     add_rdkit_max_seconds_arg,
+    available_cpu_count,
     clone_mols_with_conformers,
     load_pickle,
     load_sdf,
@@ -47,6 +48,7 @@ from bench_utils import (
     time_it,
     write_csv_rows,
 )
+from bench_utils.precision import add_precision_arg, precision_mode
 from rdkit import Chem
 from rdkit.Chem import AllChem, rdDistGeom
 from tqdm.contrib.concurrent import process_map
@@ -146,6 +148,7 @@ def bench_nvmolkit(
     hardware_options,
     runs: int,
     warmup: bool,
+    precision: str = "full",
 ) -> tuple[TimingResult, list[Chem.Mol]]:
     """Benchmark nvmolkit ``EmbedMolecules``; return ``(timing, last_run_mols)``."""
     from nvmolkit.embedMolecules import EmbedMolecules
@@ -155,13 +158,13 @@ def bench_nvmolkit(
     @nvtx.annotate("etkdg_nvmolkit_run", color="orange")
     def run() -> None:
         cloned = clone_mols_with_conformers(mols)
-        EmbedMolecules(cloned, params, confs_per_mol, max_iters, hardware_options)
+        EmbedMolecules(cloned, params, confs_per_mol, max_iters, hardware_options, precision=precision_mode(precision))
         last_run_mols[0] = cloned
 
     if warmup:
         warmup_mols = clone_mols_with_conformers(mols[: min(4, len(mols))])
         with nvtx.annotate("etkdg_nvmolkit_warmup", color="purple"):
-            EmbedMolecules(warmup_mols, params, 1, max_iters, hardware_options)
+            EmbedMolecules(warmup_mols, params, 1, max_iters, hardware_options, precision=precision_mode(precision))
 
     timing = time_it(run, runs=runs, warmups=0, gpu_sync=True)
     return timing, last_run_mols[0]
@@ -296,6 +299,13 @@ def main() -> None:
         "--prep_threads", type=int, default=-1, help="nvmolkit preprocessing threads (-1 = library default)"
     )
     parser.add_argument("--num_gpus", type=int, default=1, help="Number of GPUs to use (default: 1)")
+    parser.add_argument(
+        "--prep_workers",
+        type=int,
+        default=0,
+        help="Processes for the untimed MMFF-energy validation pass (0 = all available CPUs)",
+    )
+    add_precision_arg(parser)
 
     parser.add_argument(
         "--autotune",
@@ -333,6 +343,12 @@ def main() -> None:
         help="Target wall-clock seconds per Optuna trial (default: 10.0)",
     )
     parser.add_argument(
+        "--autotune_cpu_budget",
+        type=int,
+        default=None,
+        help=("CPU-core budget used to bound the autotune search space. Default: detected physical core count"),
+    )
+    parser.add_argument(
         "--autotune_calibration_size",
         type=int,
         default=0,
@@ -357,6 +373,8 @@ def main() -> None:
     parser.add_argument("--output", "-o", default=None, help="Optional path to write the CSV results")
 
     args = parser.parse_args()
+    if args.autotune and args.precision != "full":
+        parser.error("SINGLE autotuning is unsupported; use explicit hardware options or --autotune_load")
 
     input_paths = [p for p in (args.smiles, args.sdf, args.pickle) if p]
     if not input_paths:
@@ -393,6 +411,7 @@ def main() -> None:
     print(f"  Max molecules: {args.num_mols if args.num_mols > 0 else 'all'}")
     print(f"  Conformers per mol: {args.confs_per_mol}")
     print(f"  Max iterations: {args.max_iterations if args.max_iterations > 0 else 'auto'}")
+    print(f"  nvmolkit precision: {args.precision}")
     print(f"  Runs: {args.runs}")
     print(f"  Warmup: {args.warmup}")
     print(f"  Validate (MMFF energies): {args.validate}")
@@ -468,8 +487,14 @@ def main() -> None:
                 )
                 explicit_calibration = None
                 if args.autotune_calibration_size > 0:
+                    if args.autotune_calibration_size > len(mols):
+                        print(
+                            "Error: --autotune_calibration_size="
+                            f"{args.autotune_calibration_size} exceeds the {len(mols)} prepared molecules"
+                        )
+                        sys.exit(1)
                     rng = random.Random(args.autotune_seed)
-                    size = min(args.autotune_calibration_size, len(mols))
+                    size = args.autotune_calibration_size
                     explicit_calibration = rng.sample(range(len(mols)), size)
                 tune_result = nv_autotune.tune_embed_molecules(
                     mols,
@@ -480,6 +505,7 @@ def main() -> None:
                     n_trials=args.autotune_trials,
                     target_seconds_per_trial=args.autotune_time_budget,
                     calibration_set=explicit_calibration,
+                    cpu_budget=args.autotune_cpu_budget,
                     seed=args.autotune_seed,
                     verbose=True,
                 )
@@ -516,6 +542,7 @@ def main() -> None:
                 hardware_options,
                 args.runs,
                 args.warmup,
+                args.precision,
             )
             print(f"  nvmolkit:        {nv_timing.mean_ms:10.2f} ms (+/- {nv_timing.std_ms:.2f} ms)")
             results["nvmolkit"] = (nv_timing, nv_mols)
@@ -546,7 +573,7 @@ def main() -> None:
         rdkit_throughput_per_s = throughput_per_s(
             rdkit_processed_count * args.confs_per_mol, results["rdkit"][0].mean_ms
         )
-    for name, (timing, run_mols) in results.items():
+    for name, (timing, _run_mols) in results.items():
         speedup = ""
         if rdkit_throughput_per_s is not None and name != "rdkit" and timing.mean_ms > 0:
             method_throughput = throughput_per_s(len(mols) * args.confs_per_mol, timing.mean_ms)
@@ -560,7 +587,9 @@ def main() -> None:
     if args.validate and "nvmolkit" in results and "rdkit" in results:
         print("\nValidation (MMFF94 energies)...")
         energy_mean, energy_median, energy_pairs = _energy_diff_summary(
-            results["rdkit"][1], results["nvmolkit"][1], num_threads=max(1, args.rdkit_threads)
+            results["rdkit"][1],
+            results["nvmolkit"][1],
+            num_threads=args.prep_workers if args.prep_workers > 0 else available_cpu_count(),
         )
         diff_computed = energy_pairs > 0
         if diff_computed:
@@ -595,6 +624,7 @@ def main() -> None:
         csv_rows.append(
             {
                 "method": name,
+                "precision": args.precision if is_nv else "N/A",
                 "input_file": input_file,
                 "input_type": input_type,
                 "num_mols": len(mols),

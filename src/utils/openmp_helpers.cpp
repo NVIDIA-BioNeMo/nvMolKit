@@ -15,6 +15,11 @@
 
 #include "src/utils/openmp_helpers.h"
 
+#include <omp.h>
+
+#include <stdexcept>
+#include <string>
+
 namespace nvMolKit {
 namespace detail {
 
@@ -36,6 +41,17 @@ void OpenMPExceptionRegistry::rethrow() {
   if (toThrow) {
     std::rethrow_exception(toThrow);
   }
+}
+
+int resolveNumThreads(const int requested) {
+  if (requested == -1) {
+    return omp_get_max_threads();
+  }
+  if (requested < 1) {
+    throw std::invalid_argument("Thread count must be positive or -1 for all threads, got " +
+                                std::to_string(requested));
+  }
+  return requested;
 }
 
 }  // namespace detail

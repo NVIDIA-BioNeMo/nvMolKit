@@ -18,6 +18,7 @@
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <memory>
@@ -161,6 +162,60 @@ TEST(EmbedMoleculesDeviceOutput, EmptyDeviceResultInitializesAtomStarts) {
   EXPECT_EQ(atomStarts[0], 0);
 }
 
+TEST(EmbedMoleculesDeviceOutput, FinalizeKeepsLowestAttemptIdsPerMolecule) {
+  // Two collectors each hold surplus successes for molecule 0, with attempt IDs interleaved across them. Only the two
+  // lowest IDs may survive, ranked by ID, whichever collector holds them. One-atom conformers carry their attempt ID
+  // as the x coordinate so the surviving data can be identified.
+  const WithDevice withDevice(0);
+  ScopedStream     streamA;
+  ScopedStream     streamB;
+
+  const auto fill = [](detail::DeviceCoordCollector& collector,
+                       cudaStream_t                  stream,
+                       const std::vector<int>&       molIds,
+                       const std::vector<int>&       attemptIds) {
+    collector.gpuId  = 0;
+    collector.stream = stream;
+    collector.positions.setStream(stream);
+    std::vector<double> positions;
+    for (const int attemptId : attemptIds) {
+      positions.insert(positions.end(), {static_cast<double>(attemptId), 0.0, 0.0});
+    }
+    collector.positions.resize(positions.size());
+    collector.positions.copyFromHost(positions);
+    cudaCheckError(cudaStreamSynchronize(stream));
+    collector.atomCounts.assign(attemptIds.size(), 1);
+    collector.molIds     = molIds;
+    collector.attemptIds = attemptIds;
+  };
+  std::vector<detail::DeviceCoordCollector> collectors(2);
+  fill(collectors[0], streamA.stream(), {0, 0, 1}, {5, 1, 0});
+  fill(collectors[1], streamB.stream(), {0, 0, 1}, {3, 0, 4});
+
+  const auto result     = detail::finalizeOnTarget(collectors, /*targetGpu=*/0, /*nMols=*/2, /*maxConformersPerMol=*/2);
+  const auto positions  = downloadDeviceVector(result.positions);
+  const auto atomStarts = downloadDeviceVector(result.atomStarts);
+  const auto molIndices = downloadDeviceVector(result.molIndices);
+  const auto confIdx    = downloadDeviceVector(result.confIndices);
+
+  // Molecule 0 keeps attempts 1 (collector 0) and 0 (collector 1); molecule 1 has only two attempts and keeps both.
+  ASSERT_EQ(molIndices.size(), 4u);
+  ASSERT_EQ(atomStarts.size(), 5u);
+  ASSERT_EQ(positions.size(), 12u);
+  std::vector<std::array<int, 3>> kept;  // {mol, confIndex, attemptId}
+  for (size_t i = 0; i < molIndices.size(); ++i) {
+    kept.push_back({molIndices[i], confIdx[i], static_cast<int>(positions[atomStarts[i] * 3])});
+  }
+  std::sort(kept.begin(), kept.end());
+  const std::vector<std::array<int, 3>> expected = {
+    {0, 0, 0},
+    {0, 1, 1},
+    {1, 0, 0},
+    {1, 1, 4}
+  };
+  EXPECT_EQ(kept, expected);
+}
+
 TEST(EmbedMoleculesDeviceOutput, MultipleMoleculesProduceCorrectIndexing) {
   // Two distinct molecules in one batch. The CSR output must group conformers by global
   // mol index and report the right atom counts; the actual positions are produced by
@@ -268,6 +323,46 @@ TEST(DeviceConformerPruning, PreservesGreedyOrderAcrossInterleavedMolecules) {
   EXPECT_EQ(downloadDeviceVector(result.atomStarts), (std::vector<int32_t>{0, 2, 4, 6}));
   EXPECT_EQ(downloadDeviceVector(result.molIndices), (std::vector<int32_t>{0, 1, 0}));
   EXPECT_EQ(downloadDeviceVector(result.confIndices), (std::vector<int32_t>{0, 0, 1}));
+}
+
+TEST(DeviceConformerPruning, PrunesInConformerIndexOrderNotBufferOrder) {
+  auto mol = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol("CC"));
+  ASSERT_NE(mol, nullptr);
+
+  // Bond lengths 2, 1, 3 sit in the buffer in that order, but their conformer indices (attempt-ID ranks) are 1, 0, 2.
+  // Greedy pruning must follow the conformer index: keep length 1, drop length 2 (conflicts with 1), keep length 3.
+  // In buffer order it would keep length 2 and drop both others.
+  const std::vector<double> positions = {
+    0.0,
+    0.0,
+    0.0,
+    2.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    3.0,
+    0.0,
+    0.0,
+  };
+  auto input = makeDeviceResult(positions, {0, 0, 0}, 1);
+  input.confIndices.copyFromHost(std::vector<int32_t>{1, 0, 2});
+  cudaCheckError(cudaStreamSynchronize(nullptr));
+  auto                       params = pruningParams(0.75);
+  std::vector<RDKit::ROMol*> mols   = {mol.get()};
+
+  const auto result = detail::pruneDeviceConformers(std::move(input), mols, params);
+  EXPECT_EQ(downloadDeviceVector(result.positions),
+            (std::vector<double>{0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 3.0, 0.0, 0.0}));
+  EXPECT_EQ(downloadDeviceVector(result.molIndices), (std::vector<int32_t>{0, 0}));
+  EXPECT_EQ(downloadDeviceVector(result.confIndices), (std::vector<int32_t>{0, 1}));
 }
 
 TEST(DeviceConformerPruning, UsesSymmetryAtomMappings) {
