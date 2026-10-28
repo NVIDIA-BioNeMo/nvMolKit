@@ -8,7 +8,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <numeric>
 #include <random>
+#include <set>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -317,6 +319,141 @@ TEST(KMeansAssign, RejectsInvalidArguments) {
                                          labels.data(),
                                          distances.data(),
                                          stream),
+               std::invalid_argument);
+}
+
+TEST(KMeansFit, CentersAreMeansAndLabelsAreConsistent) {
+  const nvMolKit::ScopedStream streamOwner;
+  const auto                   stream   = streamOwner.stream();
+  constexpr int                rows     = 400;
+  constexpr int                words    = 4;
+  constexpr int                clusters = 12;
+  const auto                   packed   = randomFingerprints(rows, words, 0.15, 3);
+  auto                         device   = upload(packed, stream);
+
+  auto       initRows = nvMolKit::kmeansInitGpu({device.data(), device.size()},
+                                          rows,
+                                          words,
+                                          clusters,
+                                          KMeansMetric::Tanimoto,
+                                          nvMolKit::KMeansInit::MaxMin,
+                                          5,
+                                          stream);
+  const auto picks    = download(initRows, stream);
+  EXPECT_EQ(std::set<int>(picks.begin(), picks.end()).size(), static_cast<std::size_t>(clusters));
+  auto centers =
+    nvMolKit::kmeansCentersFromRows({device.data(), device.size()}, words, initRows, KMeansMetric::Tanimoto, stream);
+
+  nvMolKit::KMeansOptions options;
+  options.numClusters = clusters;
+  options.metric      = KMeansMetric::Tanimoto;
+  auto result = nvMolKit::kmeansFitGpu({device.data(), device.size()}, rows, words, centers.data(), options, stream);
+  const auto labels = download(result.labels, stream);
+  const auto fitted = download(result.centers, stream);
+  const auto sizes  = download(result.clusterSizes, stream);
+  EXPECT_GE(result.numIterations, 1);
+
+  std::vector<std::int64_t> counted(clusters, 0);
+  for (int row = 0; row < rows; ++row) {
+    ++counted[labels[row]];
+  }
+  EXPECT_EQ(counted, sizes);
+  double inertia = 0.0;
+  for (int row = 0; row < rows; ++row) {
+    double best = -INFINITY;
+    for (int center = 0; center < clusters; ++center) {
+      best = std::max(best, referenceScore(packed, fitted, words, row, center, KMeansMetric::Tanimoto));
+    }
+    const double chosen = referenceScore(packed, fitted, words, row, labels[row], KMeansMetric::Tanimoto);
+    EXPECT_LE(best - chosen, 1e-5);
+    inertia += 1.0 - chosen;
+  }
+  EXPECT_NEAR(result.inertia, inertia, 1e-3);
+}
+
+class KMeansReseedTest : public ::testing::TestWithParam<KMeansMetric> {};
+
+// Four planted groups and initial centers [p0, p0, p0, p1]: the two duplicate centers lose every member, and the two
+// reseeds must land in different far groups (groups 2 and 3) for the fit to recover the planted partition.
+TEST_P(KMeansReseedTest, SpreadsReseedsAcrossFarGroups) {
+  const KMeansMetric            metric = GetParam();
+  const nvMolKit::ScopedStream  streamOwner;
+  const auto                    stream  = streamOwner.stream();
+  constexpr int                 words   = 64;
+  constexpr int                 groups  = 4;
+  constexpr int                 members = 25;
+  constexpr int                 rows    = groups * members;
+  constexpr int                 setBits = 60;
+  constexpr int                 flipped = 4;
+  std::mt19937                  generator(0);
+  std::vector<std::vector<int>> prototypes(groups);
+  for (auto& prototype : prototypes) {
+    std::vector<int> bits(words * 32);
+    std::iota(bits.begin(), bits.end(), 0);
+    std::shuffle(bits.begin(), bits.end(), generator);
+    prototype.assign(bits.begin(), bits.begin() + setBits);
+  }
+  std::vector<std::uint32_t>         packed(static_cast<std::size_t>(rows) * words, 0U);
+  std::vector<int>                   truth(rows);
+  std::uniform_int_distribution<int> anyBit(0, words * 32 - 1);
+  for (int row = 0; row < rows; ++row) {
+    truth[row] = row % groups;
+    for (const int bit : prototypes[truth[row]]) {
+      packed[static_cast<std::size_t>(row) * words + bit / 32] |= 1U << (bit % 32);
+    }
+    for (int flip = 0; flip < flipped; ++flip) {
+      const int bit = anyBit(generator);
+      packed[static_cast<std::size_t>(row) * words + bit / 32] ^= 1U << (bit % 32);
+    }
+  }
+  std::vector<float> initial(static_cast<std::size_t>(groups) * words * 32, 0.0F);
+  const int          initialGroups[groups] = {0, 0, 0, 1};
+  for (int center = 0; center < groups; ++center) {
+    const auto& prototype = prototypes[initialGroups[center]];
+    for (const int bit : prototype) {
+      // Cosine centers are L2-normalized.
+      initial[static_cast<std::size_t>(center) * words * 32 + bit] =
+        metric == KMeansMetric::Cosine ? 1.0F / std::sqrt(static_cast<float>(setBits)) : 1.0F;
+    }
+  }
+  auto                    device  = upload(packed, stream);
+  auto                    centers = upload(initial, stream);
+  nvMolKit::KMeansOptions options;
+  options.numClusters = groups;
+  options.metric      = metric;
+  auto result = nvMolKit::kmeansFitGpu({device.data(), device.size()}, rows, words, centers.data(), options, stream);
+  const auto labels = download(result.labels, stream);
+  EXPECT_GE(result.reseeded, 2);
+  std::set<std::pair<int, int>> pairs;
+  for (int row = 0; row < rows; ++row) {
+    pairs.emplace(labels[row], truth[row]);
+  }
+  EXPECT_EQ(pairs.size(), static_cast<std::size_t>(groups)) << "a planted group was split or merged";
+}
+
+INSTANTIATE_TEST_SUITE_P(KMeans, KMeansReseedTest, ::testing::Values(KMeansMetric::Cosine, KMeansMetric::Tanimoto));
+
+TEST(KMeansFit, RejectsInvalidArguments) {
+  const nvMolKit::ScopedStream streamOwner;
+  const auto                   stream = streamOwner.stream();
+  auto                         device = upload(randomFingerprints(10, 2, 0.2, 1), stream);
+  EXPECT_THROW(nvMolKit::kmeansInitGpu({device.data(), device.size()},
+                                       10,
+                                       2,
+                                       11,
+                                       KMeansMetric::Tanimoto,
+                                       nvMolKit::KMeansInit::Random,
+                                       0,
+                                       stream),
+               std::invalid_argument);
+  EXPECT_THROW(nvMolKit::kmeansInitGpu({device.data(), device.size()},
+                                       10,
+                                       3,
+                                       2,
+                                       KMeansMetric::Tanimoto,
+                                       nvMolKit::KMeansInit::Random,
+                                       0,
+                                       stream),
                std::invalid_argument);
 }
 

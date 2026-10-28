@@ -26,6 +26,79 @@ enum class KMeansMetric {
   Tanimoto
 };
 
+//! k-means++ seeding is batched on top of kmeansAssignGpu in the Python layer.
+enum class KMeansInit {
+  Random,  //!< numClusters distinct rows chosen uniformly.
+  MaxMin,  //!< Fused MaxMin picks (Tanimoto distance, or cosine distance for the cosine metric).
+};
+
+struct KMeansOptions {
+  int           numClusters = 8;
+  KMeansMetric  metric      = KMeansMetric::Tanimoto;
+  int           maxIter     = 300;
+  //! Stop when the relative decrease of the objective, (previous - current) / current, is at most tol, or when no
+  //! label changes. tol == 0 runs exactly maxIter iterations.
+  double        tol         = 1e-4;
+  //! Seed for empty-cluster reseeding ties and the initialization.
+  std::uint64_t seed        = 0;
+};
+
+struct KMeansFitResult {
+  AsyncDeviceVector<int>          labels;
+  //! Row-major float32 centers, numClusters x (numWords * 32), in the metric's space.
+  AsyncDeviceVector<float>        centers;
+  AsyncDeviceVector<std::int64_t> clusterSizes;
+  //! Objective of the final labels: summed squared Euclidean distance on normalized bits (cosine), or summed Tanimoto
+  //! distance.
+  double                          inertia       = 0.0;
+  //! Number of center updates.
+  int                             numIterations = 0;
+  //! Clusters reseeded because they lost every member, summed over all iterations.
+  std::int64_t                    reseeded      = 0;
+};
+
+/**
+ * @brief Choose numClusters initial centers from the rows of a packed fingerprint matrix.
+ *
+ * Returns row indices; centers are the (normalized, for cosine) rows. Deterministic for a given seed.
+ */
+AsyncDeviceVector<int> kmeansInitGpu(cuda::std::span<const std::uint32_t> fingerprints,
+                                     int                                  numFingerprints,
+                                     int                                  numWords,
+                                     int                                  numClusters,
+                                     KMeansMetric                         metric,
+                                     KMeansInit                           init,
+                                     std::uint64_t                        seed,
+                                     cudaStream_t                         stream = nullptr);
+
+//! Builds float32 centers from fingerprint rows, normalized for the cosine metric.
+AsyncDeviceVector<float> kmeansCentersFromRows(cuda::std::span<const std::uint32_t> fingerprints,
+                                               int                                  numWords,
+                                               const AsyncDeviceVector<int>&        rows,
+                                               KMeansMetric                         metric,
+                                               cudaStream_t                         stream = nullptr);
+
+/**
+ * @brief Lloyd iterations from the given initial centers (numClusters x numWords * 32 float32, device).
+ *
+ * The packed matrix is never unpacked. Memory beyond the input is O(numClusters * numWords * 32) for the centers and
+ * their sums plus O(numFingerprints) for labels and distances.
+ */
+KMeansFitResult kmeansFitGpu(cuda::std::span<const std::uint32_t> fingerprints,
+                             int                                  numFingerprints,
+                             int                                  numWords,
+                             const float*                         initialCenters,
+                             const KMeansOptions&                 options,
+                             cudaStream_t                         stream = nullptr);
+
+//! As above, taking ownership of the initial centers buffer (it becomes the fitted centers; no copy).
+KMeansFitResult kmeansFitGpu(cuda::std::span<const std::uint32_t> fingerprints,
+                             int                                  numFingerprints,
+                             int                                  numWords,
+                             AsyncDeviceVector<float>             initialCenters,
+                             const KMeansOptions&                 options,
+                             cudaStream_t                         stream = nullptr);
+
 /**
  * @brief Assigns each fingerprint to its best center.
  *
