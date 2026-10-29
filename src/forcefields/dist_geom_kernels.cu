@@ -167,6 +167,71 @@ __global__ void TorsionAngleGradientKernel(const int      numTorsion,
   }
 }
 
+__global__ void GaussianTorsionEnergyKernel(const int      numTorsion,
+                                            const int*     idx1s,
+                                            const int*     idx2s,
+                                            const int*     idx3s,
+                                            const int*     idx4s,
+                                            const int*     tableStarts,
+                                            const int*     tableSizes,
+                                            const double*  scaling,
+                                            const double*  energies,
+                                            const double*  pos,
+                                            double*        energyBuffer,
+                                            const int*     energyBufferStarts,
+                                            const int*     atomIdxToBatchIdx,
+                                            const int*     torsionTermStarts,
+                                            const uint8_t* activeThisStage) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < numTorsion) {
+    const int idx1     = idx1s[idx];
+    const int batchIdx = atomIdxToBatchIdx[idx1];
+    if (activeThisStage == nullptr || activeThisStage[batchIdx] == 1) {
+      const double energy    = gaussianTorsionEnergy(pos,
+                                                  idx1,
+                                                  idx2s[idx],
+                                                  idx3s[idx],
+                                                  idx4s[idx],
+                                                  energies + tableStarts[idx],
+                                                  tableSizes[idx],
+                                                  scaling[idx]);
+      const int    outputIdx = getEnergyAccumulatorIndex(idx, batchIdx, energyBufferStarts, torsionTermStarts);
+      energyBuffer[outputIdx] += energy;
+    }
+  }
+}
+
+__global__ void GaussianTorsionGradientKernel(const int      numTorsion,
+                                              const int*     idx1s,
+                                              const int*     idx2s,
+                                              const int*     idx3s,
+                                              const int*     idx4s,
+                                              const int*     tableStarts,
+                                              const int*     tableSizes,
+                                              const double*  scaling,
+                                              const double*  derivatives,
+                                              const double*  pos,
+                                              double*        grad,
+                                              const int*     atomIdxToBatchIdx,
+                                              const uint8_t* activeThisStage) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < numTorsion) {
+    const int idx1     = idx1s[idx];
+    const int batchIdx = atomIdxToBatchIdx[idx1];
+    if (activeThisStage == nullptr || activeThisStage[batchIdx] == 1) {
+      gaussianTorsionGrad(pos,
+                          idx1,
+                          idx2s[idx],
+                          idx3s[idx],
+                          idx4s[idx],
+                          derivatives + tableStarts[idx],
+                          tableSizes[idx],
+                          scaling[idx],
+                          grad);
+    }
+  }
+}
+
 __global__ void InversionEnergyKernel(const int      numInversion,
                                       const int*     idx1s,
                                       const int*     idx2s,
@@ -559,6 +624,80 @@ cudaError_t launchTorsionAngleGradientKernel(const int      numTorsion,
                                                                   atomIdxToBatchIdx,
                                                                   atomStarts,
                                                                   activeThisStage);
+  return cudaGetLastError();
+}
+
+cudaError_t launchGaussianTorsionEnergyKernel(const int      numTorsion,
+                                              const int*     idx1,
+                                              const int*     idx2,
+                                              const int*     idx3,
+                                              const int*     idx4,
+                                              const int*     tableStarts,
+                                              const int*     tableSizes,
+                                              const double*  scaling,
+                                              const double*  energies,
+                                              const double*  pos,
+                                              double*        energyBuffer,
+                                              const int*     energyBufferStarts,
+                                              const int*     atomIdxToBatchIdx,
+                                              const int*     torsionTermStarts,
+                                              const uint8_t* activeThisStage,
+                                              cudaStream_t   stream) {
+  if (numTorsion == 0) {
+    return cudaSuccess;
+  }
+  constexpr int blockSize = 256;
+  const int     numBlocks = (numTorsion + blockSize - 1) / blockSize;
+  GaussianTorsionEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numTorsion,
+                                                                   idx1,
+                                                                   idx2,
+                                                                   idx3,
+                                                                   idx4,
+                                                                   tableStarts,
+                                                                   tableSizes,
+                                                                   scaling,
+                                                                   energies,
+                                                                   pos,
+                                                                   energyBuffer,
+                                                                   energyBufferStarts,
+                                                                   atomIdxToBatchIdx,
+                                                                   torsionTermStarts,
+                                                                   activeThisStage);
+  return cudaGetLastError();
+}
+
+cudaError_t launchGaussianTorsionGradientKernel(const int      numTorsion,
+                                                const int*     idx1,
+                                                const int*     idx2,
+                                                const int*     idx3,
+                                                const int*     idx4,
+                                                const int*     tableStarts,
+                                                const int*     tableSizes,
+                                                const double*  scaling,
+                                                const double*  derivatives,
+                                                const double*  pos,
+                                                double*        grad,
+                                                const int*     atomIdxToBatchIdx,
+                                                const uint8_t* activeThisStage,
+                                                cudaStream_t   stream) {
+  if (numTorsion == 0) {
+    return cudaSuccess;
+  }
+  constexpr int blockSize = 256;
+  const int     numBlocks = (numTorsion + blockSize - 1) / blockSize;
+  GaussianTorsionGradientKernel<<<numBlocks, blockSize, 0, stream>>>(numTorsion,
+                                                                     idx1,
+                                                                     idx2,
+                                                                     idx3,
+                                                                     idx4,
+                                                                     tableStarts,
+                                                                     tableSizes,
+                                                                     scaling,
+                                                                     derivatives,
+                                                                     pos,
+                                                                     grad,
+                                                                     atomIdxToBatchIdx,
+                                                                     activeThisStage);
   return cudaGetLastError();
 }
 

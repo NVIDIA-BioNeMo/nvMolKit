@@ -120,8 +120,10 @@ target_link_libraries(test_openmp_helpers PRIVATE openmp_helpers
 
 add_library(test_utils test_utils.cpp)
 target_link_libraries(
-  test_utils PRIVATE ${RDKit_LIBS} GTest::gtest GTest::gtest_main GTest::gmock
-                     GTest::gmock_main)
+  test_utils
+  PUBLIC nvmolkit_versions
+  PRIVATE ${RDKit_LIBS} GTest::gtest GTest::gtest_main GTest::gmock
+          GTest::gmock_main)
 
 add_executable(smarts_filter smarts_filter.cpp)
 target_link_libraries(smarts_filter PRIVATE molecules molData ${RDKit_LIBS})
@@ -203,6 +205,18 @@ target_link_libraries(
   PRIVATE ${RDKit_LIBS}
           rdkit_dist_geom_flattened
           aio_etkdg_batched_forcefield
+          dist_geom
+          device_vector
+          test_utils
+          embedder_utils
+          nvmolkit_versions)
+
+add_executable(test_gaussian_torsions test_gaussian_torsions.cu)
+target_link_libraries(
+  test_gaussian_torsions
+  PRIVATE ${RDKit_LIBS}
+          rdkit_dist_geom_flattened
+          etk_batched_forcefield
           dist_geom
           device_vector
           test_utils
@@ -496,6 +510,7 @@ set(TEST_LIST
     test_device_vector
     test_distgeom_kernels
     test_aio_etkdg_forcefield
+    test_gaussian_torsions
     test_etkdg
     test_etkdg_device_output
     test_ff_device_output
