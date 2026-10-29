@@ -159,6 +159,12 @@ target_link_libraries(
 target_include_directories(diversity_pickers SYSTEM
                            PRIVATE ${Boost_INCLUDE_DIRS})
 
+add_library(fingerprint_search fingerprint_search.cu)
+target_link_libraries(
+  fingerprint_search
+  PUBLIC device_vector
+  PRIVATE cuda_error_check cub_helpers nvtx)
+
 add_library(conformer_rmsd conformer_rmsd.cu)
 target_link_libraries(
   conformer_rmsd

@@ -357,6 +357,9 @@ target_link_libraries(test_pinned_host_allocator PRIVATE pinned_host_allocator)
 add_executable(test_etkdg_result_tracker test_etkdg_result_tracker.cpp)
 target_link_libraries(test_etkdg_result_tracker PRIVATE etkdg_impl)
 
+add_executable(test_fingerprint_search test_fingerprint_search.cpp)
+target_link_libraries(test_fingerprint_search PRIVATE fingerprint_search device)
+
 add_executable(test_butina test_butina.cpp)
 target_link_libraries(test_butina PRIVATE butina device)
 
@@ -480,6 +483,7 @@ set(TEST_LIST
     test_boolean_tree
     test_bitbirch
     test_butina
+    test_fingerprint_search
     test_diversity_pickers
     test_bfgs_hessian
     test_tfd_cpu
