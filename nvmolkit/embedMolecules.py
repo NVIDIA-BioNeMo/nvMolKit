@@ -80,7 +80,8 @@ def EmbedMolecules(
         - embedFragmentsSeparately is not supported. All fragments will be embedded together.
         - Eigenvalue-based initialization supports at most 256 atoms per molecule.
         - Only ETversion 1 and 2 are supported, so the ETKDGv4 preset raises ValueError.
-        - All-in-one refinement (useLegacyImplementation=False) raises ValueError.
+        - RDKit 2026.03.4 and later support all-in-one refinement via
+          useLegacyImplementation=False.
         - On RDKit 2026.09 and later, these EmbedParameters settings raise ValueError:
           embedForceField=MMFF, onlyInitialEmbedding=True, and
           initialEmbeddingMode=INTERNAL_COORDINATE_EMBEDDING.

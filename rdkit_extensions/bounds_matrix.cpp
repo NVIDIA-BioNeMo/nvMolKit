@@ -46,26 +46,6 @@ bool setupInitialBoundsMatrix(const ROMol*                              mol,
   return true;
 }
 
-void initETKDG(ROMol* mol, const EmbedParameters& params, ForceFields::CrystalFF::CrystalFFDetails& etkdgDetails) {
-  PRECONDITION(mol, "bad molecule");
-  const unsigned int nAtoms = mol->getNumAtoms();
-  if (params.useExpTorsionAnglePrefs || params.useBasicKnowledge) {
-    ForceFields::CrystalFF::getExperimentalTorsions(*mol,
-                                                    etkdgDetails,
-                                                    params.useExpTorsionAnglePrefs,
-                                                    params.useSmallRingTorsions,
-                                                    params.useMacrocycleTorsions,
-                                                    params.useBasicKnowledge,
-                                                    params.ETversion,
-                                                    params.verbose);
-    etkdgDetails.atomNums.resize(nAtoms);
-    for (unsigned int i = 0; i < nAtoms; ++i) {
-      etkdgDetails.atomNums[i] = mol->getAtomWithIdx(i)->getAtomicNum();
-    }
-  }
-  etkdgDetails.boundsMatForceScaling = params.boundsMatForceScaling;
-}
-
 // turn off linting for RDKit port.
 // NOLINTBEGIN
 bool initialCoordsNormDistances(const RDNumeric::SymmMatrix<double>& initialDistMat,

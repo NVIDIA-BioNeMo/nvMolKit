@@ -142,6 +142,47 @@ cudaError_t launchBfgsMinimizePerMolKernelDG(int                                
                                              double                                              fourthDimWeight,
                                              int16_t*                                            statuses = nullptr,
                                              cudaStream_t                                        stream   = nullptr);
+/// Launch per-molecule BFGS minimization kernel - all-in-one ETKDG specialization.
+/// Torsion and planarity terms are included only when `includeTorsionTerms` is set. `maxItersPerSystem` optionally
+/// holds per-system iteration limits below `numIters`; a system that reaches its limit counts as finished.
+cudaError_t launchBfgsMinimizePerMolKernelAIO(int                                        numMols,
+                                              const int*                                 molIds,
+                                              int                                        maxAtoms,
+                                              const int*                                 atomStarts,
+                                              const int*                                 hessianStarts,
+                                              int                                        numIters,
+                                              double                                     gradTol,
+                                              bool                                       scaleGrads,
+                                              const DistGeom::AllInOneContribsDevicePtr& terms,
+                                              double*                                    positions,
+                                              double*                                    grad,
+                                              double*                                    inverseHessian,
+                                              double**                                   scratchBuffers,
+                                              double*                                    energyOuts,
+                                              const DistGeom::AllInOneForceWeights&      weights,
+                                              bool                                       includeTorsionTerms,
+                                              const int*                                 maxItersPerSystem,
+                                              int16_t*                                   statuses = nullptr,
+                                              cudaStream_t                               stream   = nullptr);
+cudaError_t launchBfgsMinimizePerMolKernelAIO(int                                              numMols,
+                                              const int*                                       molIds,
+                                              int                                              maxAtoms,
+                                              const int*                                       atomStarts,
+                                              const int*                                       hessianStarts,
+                                              int                                              numIters,
+                                              double                                           gradTol,
+                                              bool                                             scaleGrads,
+                                              const DistGeom::AllInOneContribsDevicePtrSingle& terms,
+                                              float*                                           positions,
+                                              float*                                           grad,
+                                              float*                                           inverseHessian,
+                                              float**                                          scratchBuffers,
+                                              float*                                           energyOuts,
+                                              const DistGeom::AllInOneForceWeights&            weights,
+                                              bool                                             includeTorsionTerms,
+                                              const int*                                       maxItersPerSystem,
+                                              int16_t*                                         statuses = nullptr,
+                                              cudaStream_t                                     stream   = nullptr);
 }  // namespace nvMolKit
 
 #endif  // NVMOLKIT_BFGS_MINIMIZE_PERMOL_KERNELS_H

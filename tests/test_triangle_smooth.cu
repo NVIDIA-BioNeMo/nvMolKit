@@ -29,32 +29,9 @@
 #include <memory>
 #include <vector>
 
+#include "src/embedder_utils.h"
 #include "src/triangle_smooth.h"
 #include "tests/test_utils.h"
-
-namespace {
-void initETKDG(const RDKit::ROMol*                         mol,
-               const RDKit::DGeomHelpers::EmbedParameters& params,
-               ForceFields::CrystalFF::CrystalFFDetails&   etkdgDetails) {
-  PRECONDITION(mol, "bad molecule");
-  const unsigned int nAtoms = mol->getNumAtoms();
-  if (params.useExpTorsionAnglePrefs || params.useBasicKnowledge) {
-    ForceFields::CrystalFF::getExperimentalTorsions(*mol,
-                                                    etkdgDetails,
-                                                    params.useExpTorsionAnglePrefs,
-                                                    params.useSmallRingTorsions,
-                                                    params.useMacrocycleTorsions,
-                                                    params.useBasicKnowledge,
-                                                    params.ETversion,
-                                                    params.verbose);
-    etkdgDetails.atomNums.resize(nAtoms);
-    for (unsigned int i = 0; i < nAtoms; ++i) {
-      etkdgDetails.atomNums[i] = mol->getAtomWithIdx(i)->getAtomicNum();
-    }
-  }
-  etkdgDetails.boundsMatForceScaling = params.boundsMatForceScaling;
-}
-}  // namespace
 
 class TriangleSmoothTest : public ::testing::Test {
  protected:
@@ -105,7 +82,8 @@ class TriangleSmoothTest : public ::testing::Test {
 
     // Initialize ETKDG details
     ForceFields::CrystalFF::CrystalFFDetails etkdgDetails;
-    initETKDG(&mol, params, etkdgDetails);
+    // Only the bounds are tested; the torsions initETKDG builds before them are not used.
+    nvMolKit::DGeomHelpers::EmbeddingOps::initETKDG(&mol, params, etkdgDetails);
 
     // Create bounds matrix using RDKit's expected shared_ptr type for API calls
     DistGeom::BoundsMatPtr boundsMatrix = boost::make_shared<DistGeom::BoundsMatrix>(nAtoms);

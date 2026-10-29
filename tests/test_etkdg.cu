@@ -19,6 +19,7 @@
 #include <GraphMol/MolOps.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
+#include <RDGeneral/Exceptions.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -691,6 +692,7 @@ void testConformerEnergyComparison(const std::vector<RDKit::ROMol*>&    mols,
   }
   params.useRandomCoords = true;
   params.basinThresh     = 1e8;
+  params.randomSeed      = 42;
   // Generate conformers using RDKit for copied molecules
   for (size_t i = 0; i < molCopyPtrs.size(); ++i) {
     auto*                       molCopy = molCopyPtrs[i];
@@ -992,11 +994,6 @@ TEST(ETKDGParameters, RejectsUnsupportedOptions) {
     parameters.ETversion = version;
     EXPECT_THROW(validateSupportedEmbedParameters(parameters), ValueErrorException) << "ETversion " << version;
   }
-#if RDKIT_AIO_ETKDG_API
-  auto allInOne                    = RDKit::DGeomHelpers::ETKDGv3;
-  allInOne.useLegacyImplementation = false;
-  EXPECT_THROW(validateSupportedEmbedParameters(allInOne), ValueErrorException);
-#endif
 #if RDKIT_ETKDG_2026_09_API
   auto mmff            = RDKit::DGeomHelpers::ETKDGv3;
   mmff.embedForceField = RDKit::DGeomHelpers::EmbedFF::MMFF;
@@ -1051,3 +1048,80 @@ TEST(ETKDGParameters, RandomCoordinateModeEmbedsLikeUseRandomCoords) {
   }
 }
 #endif
+
+#if RDKIT_AIO_ETKDG_API
+class AllInOneETKDGBackendTest : public ::testing::TestWithParam<nvMolKit::BfgsBackend> {};
+
+//! Small molecules and one too large for the per-molecule kernel's shared memory all embed on every backend. Batches of
+//! two conformers keep each molecule in its own batch, so HYBRID sends the small molecules to the per-molecule kernels.
+TEST_P(AllInOneETKDGBackendTest, EmbedsSmallAndLargeMolecules) {
+  std::vector<std::unique_ptr<RDKit::RWMol>> owners;
+  std::vector<RDKit::ROMol*>                 mols;
+  for (const auto& smiles :
+       {std::string("CCO"), std::string("CC#N"), std::string("C[C@H](O)F"), std::string(45, 'C')}) {
+    auto& mol = owners.emplace_back(RDKit::SmilesToMol(smiles));
+    ASSERT_NE(mol, nullptr);
+    RDKit::MolOps::addHs(*mol);
+    mols.push_back(mol.get());
+  }
+  ASSERT_GT(mols.back()->getNumAtoms(), 128u);
+  auto parameters                    = RDKit::DGeomHelpers::ETKDGv3;
+  parameters.useLegacyImplementation = false;
+  parameters.randomSeed              = 42;
+  nvMolKit::BatchHardwareOptions options;
+  options.batchSize = 2;
+  nvMolKit::embedMolecules(mols, parameters, 2, -1, false, nullptr, options, GetParam());
+  for (std::size_t molIdx = 0; molIdx < mols.size(); ++molIdx) {
+    EXPECT_EQ(mols[molIdx]->getNumConformers(), 2u) << "molecule " << molIdx;
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(Backends,
+                         AllInOneETKDGBackendTest,
+                         ::testing::Values(nvMolKit::BfgsBackend::BATCHED,
+                                           nvMolKit::BfgsBackend::PER_MOLECULE,
+                                           nvMolKit::BfgsBackend::HYBRID),
+                         [](const ::testing::TestParamInfo<nvMolKit::BfgsBackend>& info) {
+                           switch (info.param) {
+                             case nvMolKit::BfgsBackend::BATCHED:
+                               return std::string("Batched");
+                             case nvMolKit::BfgsBackend::PER_MOLECULE:
+                               return std::string("PerMolecule");
+                             default:
+                               return std::string("Hybrid");
+                           }
+                         });
+#endif
+
+TEST(ETKDGParameters, SupportedModesAndUnsupportedOptions) {
+  for (const int version : {1, 2}) {
+    auto parameters      = RDKit::DGeomHelpers::ETKDGv3;
+    parameters.ETversion = version;
+    EXPECT_NO_THROW(nvMolKit::DGeomHelpers::validateSupportedEmbedParameters(parameters));
+#if RDKIT_AIO_ETKDG_API
+    parameters.useLegacyImplementation = false;
+    EXPECT_NO_THROW(nvMolKit::DGeomHelpers::validateSupportedEmbedParameters(parameters));
+#endif
+  }
+  for (const int version : {-1, 0, 3, 4}) {
+    auto parameters      = RDKit::DGeomHelpers::ETKDGv3;
+    parameters.ETversion = version;
+    EXPECT_THROW(nvMolKit::DGeomHelpers::validateSupportedEmbedParameters(parameters), ValueErrorException);
+  }
+#if RDKIT_ETKDG_2026_09_API
+  auto parameters            = RDKit::DGeomHelpers::ETKDGv3;
+  parameters.embedForceField = RDKit::DGeomHelpers::EmbedFF::MMFF;
+  EXPECT_THROW(nvMolKit::DGeomHelpers::validateSupportedEmbedParameters(parameters), ValueErrorException);
+  parameters                      = RDKit::DGeomHelpers::ETKDGv3;
+  parameters.onlyInitialEmbedding = true;
+  EXPECT_THROW(nvMolKit::DGeomHelpers::validateSupportedEmbedParameters(parameters), ValueErrorException);
+  parameters                      = RDKit::DGeomHelpers::ETKDGv3;
+  parameters.initialEmbeddingMode = RDKit::DGeomHelpers::InitialEmbeddingMode::INTERNAL_COORDINATE_EMBEDDING;
+  EXPECT_THROW(nvMolKit::DGeomHelpers::validateSupportedEmbedParameters(parameters), ValueErrorException);
+  parameters                      = RDKit::DGeomHelpers::ETKDGv3;
+  parameters.initialEmbeddingMode = RDKit::DGeomHelpers::InitialEmbeddingMode::RANDOM_COORDINATE_EMBEDDING;
+  EXPECT_NO_THROW(nvMolKit::DGeomHelpers::validateSupportedEmbedParameters(parameters));
+  parameters.useRandomCoords = true;
+  EXPECT_NO_THROW(nvMolKit::DGeomHelpers::validateSupportedEmbedParameters(parameters));
+#endif
+}

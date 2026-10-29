@@ -20,6 +20,7 @@
 #include <gtest/gtest.h>
 
 #include "rdkit_extensions/bounds_matrix.h"
+#include "src/embedder_utils.h"
 #include "versions.h"
 
 namespace nvMolKit {
@@ -53,8 +54,7 @@ TEST(BoundsMatrixTest, Hexane) {
   mols.emplace_back(RDKit::SmilesToMol(smiles));
   std::vector<const RDKit::ROMol*> molsView{mols[0].get()};
 
-  // Plain distance geometry with macrocycle 1-4 heuristics. Field assignment because RDKit 2026.03.4 removed the
-  // positional EmbedParameters constructor.
+  // Plain distance geometry with macrocycle 1-4 heuristics.
   RDKit::DGeomHelpers::EmbedParameters params;
   params.maxIterations           = 30;
   params.randomSeed              = -1;
@@ -66,7 +66,9 @@ TEST(BoundsMatrixTest, Hexane) {
   params.useMacrocycle14config   = true;
 
   std::vector<ForceFields::CrystalFF::CrystalFFDetails> details(mols.size());
-  RDKit::DGeomHelpers::initETKDG(mols[0].get(), params, details[0]);
+  // Without experimental torsions or basic knowledge initETKDG adds no torsion terms, so running it before the bounds
+  // does not change them.
+  nvMolKit::DGeomHelpers::EmbeddingOps::initETKDG(mols[0].get(), params, details[0]);
 
   auto        bounds_matrices = nvMolKit::getBoundsMatrices(molsView, params, details);
   const auto& result          = bounds_matrices[0];

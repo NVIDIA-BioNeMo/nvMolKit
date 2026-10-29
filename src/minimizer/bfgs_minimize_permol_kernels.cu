@@ -525,6 +525,111 @@ template <> struct DataDimTraits<ForceFieldType::DG> {
   static constexpr int value = 4;
 };
 
+template <> struct DataDimTraits<ForceFieldType::AIO_ETKDG> {
+  static constexpr int value = 4;
+};
+
+//! Force field settings that are not stored with the terms. DG uses the chiral and fourth-dimension weights; all-in-one
+//! ETKDG uses its weights, the torsion phase, and optional per-system iteration limits below numIters.
+struct PerMolForcefieldParams {
+  double                         chiralWeight        = 1.0;
+  double                         fourthDimWeight     = 1.0;
+  DistGeom::AllInOneForceWeights allInOneWeights     = {};
+  bool                           includeTorsionTerms = false;
+  const int*                     maxItersPerSystem   = nullptr;
+};
+
+template <ForceFieldType FFType, bool HasConstraints, typename TermsType, typename IndicesType, typename storageT>
+__device__ __forceinline__ storageT molEnergy(const TermsType&              terms,
+                                              const IndicesType&            systemIndices,
+                                              storageT*                     pos,
+                                              const int                     molIdx,
+                                              const PerMolForcefieldParams& params,
+                                              const int16_t                 tid) {
+  constexpr int16_t dataDim = DataDimTraits<FFType>::value;
+  if constexpr (FFType == ForceFieldType::MMFF) {
+    return MMFF::molEnergy<BLOCK_SIZE, HasConstraints>(terms, systemIndices, pos, molIdx, tid);
+  } else if constexpr (FFType == ForceFieldType::ETK) {
+    if constexpr (std::is_same_v<storageT, float>) {
+      return DistGeom::fp32::molEnergyETK(terms, systemIndices, pos, molIdx, tid);
+    } else {
+      return DistGeom::fp64::molEnergyETK(terms, systemIndices, pos, molIdx, tid);
+    }
+  } else if constexpr (FFType == ForceFieldType::DG) {
+    if constexpr (std::is_same_v<storageT, float>) {
+      return DistGeom::fp32::molEnergyDG<dataDim>(terms,
+                                                  systemIndices,
+                                                  pos,
+                                                  molIdx,
+                                                  params.chiralWeight,
+                                                  params.fourthDimWeight,
+                                                  tid);
+    } else {
+      return DistGeom::fp64::molEnergyDG<dataDim>(terms,
+                                                  systemIndices,
+                                                  pos,
+                                                  molIdx,
+                                                  params.chiralWeight,
+                                                  params.fourthDimWeight,
+                                                  tid);
+    }
+  } else {
+    static_assert(FFType == ForceFieldType::AIO_ETKDG);
+    if constexpr (std::is_same_v<storageT, float>) {
+      return DistGeom::fp32::molEnergyAIO(terms, pos, molIdx, params.allInOneWeights, params.includeTorsionTerms, tid);
+    } else {
+      return DistGeom::fp64::molEnergyAIO(terms, pos, molIdx, params.allInOneWeights, params.includeTorsionTerms, tid);
+    }
+  }
+}
+
+template <ForceFieldType FFType, bool HasConstraints, typename TermsType, typename IndicesType, typename storageT>
+__device__ __forceinline__ void molGrad(const TermsType&              terms,
+                                        const IndicesType&            systemIndices,
+                                        storageT*                     pos,
+                                        storageT*                     grad,
+                                        const int                     molIdx,
+                                        const PerMolForcefieldParams& params,
+                                        const int16_t                 tid) {
+  constexpr int16_t dataDim = DataDimTraits<FFType>::value;
+  if constexpr (FFType == ForceFieldType::MMFF) {
+    MMFF::molGrad<BLOCK_SIZE, HasConstraints>(terms, systemIndices, pos, grad, molIdx, tid);
+  } else if constexpr (FFType == ForceFieldType::ETK) {
+    if constexpr (std::is_same_v<storageT, float>) {
+      DistGeom::fp32::molGradETK(terms, systemIndices, pos, grad, molIdx, tid);
+    } else {
+      DistGeom::fp64::molGradETK(terms, systemIndices, pos, grad, molIdx, tid);
+    }
+  } else if constexpr (FFType == ForceFieldType::DG) {
+    if constexpr (std::is_same_v<storageT, float>) {
+      DistGeom::fp32::molGradDG<dataDim>(terms,
+                                         systemIndices,
+                                         pos,
+                                         grad,
+                                         molIdx,
+                                         params.chiralWeight,
+                                         params.fourthDimWeight,
+                                         tid);
+    } else {
+      DistGeom::fp64::molGradDG<dataDim>(terms,
+                                         systemIndices,
+                                         pos,
+                                         grad,
+                                         molIdx,
+                                         params.chiralWeight,
+                                         params.fourthDimWeight,
+                                         tid);
+    }
+  } else {
+    static_assert(FFType == ForceFieldType::AIO_ETKDG);
+    if constexpr (std::is_same_v<storageT, float>) {
+      DistGeom::fp32::molGradAIO(terms, pos, grad, molIdx, params.allInOneWeights, params.includeTorsionTerms, tid);
+    } else {
+      DistGeom::fp64::molGradAIO(terms, pos, grad, molIdx, params.allInOneWeights, params.includeTorsionTerms, tid);
+    }
+  }
+}
+
 }  // namespace
 
 template <int            MaxAtoms,
@@ -534,22 +639,21 @@ template <int            MaxAtoms,
           typename TermsType,
           typename IndicesType,
           typename storageT>
-__launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int               numIters,
-                                                                 const double            gradTol,
-                                                                 const bool              scaleGrads,
-                                                                 const TermsType*        terms,
-                                                                 const IndicesType*      systemIndices,
-                                                                 const int*              molIdList,
-                                                                 const int*              atomStarts,
-                                                                 const int*              hessianStarts,
-                                                                 storageT*               positions,
-                                                                 storageT*               grad,
-                                                                 storageT*               inverseHessian,
-                                                                 storageT**              scratchBuffers,
-                                                                 storageT*               energyOuts,
-                                                                 int16_t*                statuses,
-                                                                 [[maybe_unused]] double chiralWeight,
-                                                                 [[maybe_unused]] double fourthDimWeight) {
+__launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int                    numIters,
+                                                                 const double                 gradTol,
+                                                                 const bool                   scaleGrads,
+                                                                 const TermsType*             terms,
+                                                                 const IndicesType*           systemIndices,
+                                                                 const int*                   molIdList,
+                                                                 const int*                   atomStarts,
+                                                                 const int*                   hessianStarts,
+                                                                 storageT*                    positions,
+                                                                 storageT*                    grad,
+                                                                 storageT*                    inverseHessian,
+                                                                 storageT**                   scratchBuffers,
+                                                                 storageT*                    energyOuts,
+                                                                 int16_t*                     statuses,
+                                                                 const PerMolForcefieldParams params) {
   const int     molIdx = molIdList[blockIdx.x];
   const int16_t tid    = threadIdx.x;
 
@@ -653,34 +757,8 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
   __shared__ typename BlockReduce::TempStorage tempStorage;
 
   // Compute initial energy
-  storageT threadEnergy;
-  if constexpr (FFType == ForceFieldType::MMFF) {
-    threadEnergy = MMFF::molEnergy<BLOCK_SIZE, HasConstraints>(*terms, *systemIndices, localPos, molIdx, tid);
-  } else if constexpr (FFType == ForceFieldType::ETK) {
-    if constexpr (std::is_same_v<storageT, float>) {
-      threadEnergy = DistGeom::fp32::molEnergyETK(*terms, *systemIndices, localPos, molIdx, tid);
-    } else {
-      threadEnergy = DistGeom::fp64::molEnergyETK(*terms, *systemIndices, localPos, molIdx, tid);
-    }
-  } else {  // DG
-    if constexpr (std::is_same_v<storageT, float>) {
-      threadEnergy = DistGeom::fp32::molEnergyDG<dataDim>(*terms,
-                                                          *systemIndices,
-                                                          localPos,
-                                                          molIdx,
-                                                          chiralWeight,
-                                                          fourthDimWeight,
-                                                          tid);
-    } else {
-      threadEnergy = DistGeom::fp64::molEnergyDG<dataDim>(*terms,
-                                                          *systemIndices,
-                                                          localPos,
-                                                          molIdx,
-                                                          chiralWeight,
-                                                          fourthDimWeight,
-                                                          tid);
-    }
-  }
+  const storageT threadEnergy =
+    molEnergy<FFType, HasConstraints>(*terms, *systemIndices, localPos, molIdx, params, tid);
   const storageT blockEnergy = BlockReduce(tempStorage).Sum(threadEnergy);
 
   if (tid == 0) {
@@ -694,35 +772,7 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
   }
   __syncthreads();
 
-  if constexpr (FFType == ForceFieldType::MMFF) {
-    MMFF::molGrad<BLOCK_SIZE, HasConstraints>(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
-  } else if constexpr (FFType == ForceFieldType::ETK) {
-    if constexpr (std::is_same_v<storageT, float>) {
-      DistGeom::fp32::molGradETK(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
-    } else {
-      DistGeom::fp64::molGradETK(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
-    }
-  } else {  // DG
-    if constexpr (std::is_same_v<storageT, float>) {
-      DistGeom::fp32::molGradDG<dataDim>(*terms,
-                                         *systemIndices,
-                                         localPos,
-                                         localGrad,
-                                         molIdx,
-                                         chiralWeight,
-                                         fourthDimWeight,
-                                         tid);
-    } else {
-      DistGeom::fp64::molGradDG<dataDim>(*terms,
-                                         *systemIndices,
-                                         localPos,
-                                         localGrad,
-                                         molIdx,
-                                         chiralWeight,
-                                         fourthDimWeight,
-                                         tid);
-    }
-  }
+  molGrad<FFType, HasConstraints>(*terms, *systemIndices, localPos, localGrad, molIdx, params, tid);
   __syncthreads();
 
   // Scale gradients
@@ -748,7 +798,9 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
   }
   __syncthreads();
 
-  while (!converged && currIter < numIters) {
+  const int iterLimit =
+    params.maxItersPerSystem != nullptr ? min(numIters, params.maxItersPerSystem[molIdx]) : numIters;
+  while (!converged && currIter < iterLimit) {
     // Save current position before line search
     for (int i = tid; i < numTerms; i += blockDim.x) {
       oldPos[i] = localPos[i];
@@ -777,34 +829,8 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
       lineSearchPerturb(numTerms, oldPos, localDir, lambda, scratchPos);
 
       // Compute energy at perturbed position (use scratchPos which has the perturbed coordinates)
-      storageT lsThreadEnergy;
-      if constexpr (FFType == ForceFieldType::MMFF) {
-        lsThreadEnergy = MMFF::molEnergy<BLOCK_SIZE, HasConstraints>(*terms, *systemIndices, scratchPos, molIdx, tid);
-      } else if constexpr (FFType == ForceFieldType::ETK) {
-        if constexpr (std::is_same_v<storageT, float>) {
-          lsThreadEnergy = DistGeom::fp32::molEnergyETK(*terms, *systemIndices, scratchPos, molIdx, tid);
-        } else {
-          lsThreadEnergy = DistGeom::fp64::molEnergyETK(*terms, *systemIndices, scratchPos, molIdx, tid);
-        }
-      } else {  // DG
-        if constexpr (std::is_same_v<storageT, float>) {
-          lsThreadEnergy = DistGeom::fp32::molEnergyDG<dataDim>(*terms,
-                                                                *systemIndices,
-                                                                scratchPos,
-                                                                molIdx,
-                                                                chiralWeight,
-                                                                fourthDimWeight,
-                                                                tid);
-        } else {
-          lsThreadEnergy = DistGeom::fp64::molEnergyDG<dataDim>(*terms,
-                                                                *systemIndices,
-                                                                scratchPos,
-                                                                molIdx,
-                                                                chiralWeight,
-                                                                fourthDimWeight,
-                                                                tid);
-        }
-      }
+      const storageT lsThreadEnergy =
+        molEnergy<FFType, HasConstraints>(*terms, *systemIndices, scratchPos, molIdx, params, tid);
       const storageT lsBlockEnergy = BlockReduce(tempStorage).Sum(lsThreadEnergy);
 
       if (tid == 0) {
@@ -851,35 +877,7 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
     }
     __syncthreads();
 
-    if constexpr (FFType == ForceFieldType::MMFF) {
-      MMFF::molGrad<BLOCK_SIZE, HasConstraints>(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
-    } else if constexpr (FFType == ForceFieldType::ETK) {
-      if constexpr (std::is_same_v<storageT, float>) {
-        DistGeom::fp32::molGradETK(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
-      } else {
-        DistGeom::fp64::molGradETK(*terms, *systemIndices, localPos, localGrad, molIdx, tid);
-      }
-    } else {  // DG
-      if constexpr (std::is_same_v<storageT, float>) {
-        DistGeom::fp32::molGradDG<dataDim>(*terms,
-                                           *systemIndices,
-                                           localPos,
-                                           localGrad,
-                                           molIdx,
-                                           chiralWeight,
-                                           fourthDimWeight,
-                                           tid);
-      } else {
-        DistGeom::fp64::molGradDG<dataDim>(*terms,
-                                           *systemIndices,
-                                           localPos,
-                                           localGrad,
-                                           molIdx,
-                                           chiralWeight,
-                                           fourthDimWeight,
-                                           tid);
-      }
-    }
+    molGrad<FFType, HasConstraints>(*terms, *systemIndices, localPos, localGrad, molIdx, params, tid);
     __syncthreads();
 
     // Scale gradients
@@ -934,10 +932,12 @@ __launch_bounds__(BLOCK_SIZE) __global__ void bfgsMinimizeKernel(const int      
 
   // Write final energy and status
   if (tid == 0) {
-    energyOuts[molIdx] = prevE;
+    energyOuts[molIdx]         = prevE;
     // Write status to match batched kernel behavior (0 = converged, 1 = not converged)
+    // A system that used up its own iteration limit counts as finished, as in the batched minimizer.
+    const bool reachedOwnLimit = iterLimit < numIters && currIter >= iterLimit;
     if (statuses != nullptr) {
-      statuses[molIdx] = converged ? 0 : 1;
+      statuses[molIdx] = converged || reachedOwnLimit ? 0 : 1;
     }
   }
 }
@@ -951,24 +951,23 @@ template <int            MaxAtoms,
           typename TermsType,
           typename IndicesType,
           typename storageT>
-cudaError_t launchKernelForSize(int                numMols,
-                                const int*         molIdList,
-                                int                numIters,
-                                double             gradTol,
-                                bool               scaleGrads,
-                                const TermsType*   devTerms,
-                                const IndicesType* devSysIdx,
-                                const int*         atomStarts,
-                                const int*         hessianStarts,
-                                storageT*          positions,
-                                storageT*          grad,
-                                storageT*          inverseHessian,
-                                storageT**         scratchBuffers,
-                                storageT*          energyOuts,
-                                int16_t*           statuses,
-                                cudaStream_t       stream,
-                                double             chiralWeight,
-                                double             fourthDimWeight) {
+cudaError_t launchKernelForSize(int                           numMols,
+                                const int*                    molIdList,
+                                int                           numIters,
+                                double                        gradTol,
+                                bool                          scaleGrads,
+                                const TermsType*              devTerms,
+                                const IndicesType*            devSysIdx,
+                                const int*                    atomStarts,
+                                const int*                    hessianStarts,
+                                storageT*                     positions,
+                                storageT*                     grad,
+                                storageT*                     inverseHessian,
+                                storageT**                    scratchBuffers,
+                                storageT*                     energyOuts,
+                                int16_t*                      statuses,
+                                cudaStream_t                  stream,
+                                const PerMolForcefieldParams& params) {
   if (numMols == 0) {
     return cudaSuccess;
   }
@@ -988,32 +987,30 @@ cudaError_t launchKernelForSize(int                numMols,
                                          scratchBuffers,
                                          energyOuts,
                                          statuses,
-                                         chiralWeight,
-                                         fourthDimWeight);
+                                         params);
 
   return cudaGetLastError();
 }
 
 template <ForceFieldType FFType, bool HasConstraints, typename TermsType, typename IndicesType, typename storageT>
-cudaError_t dispatchByMaxAtoms(int                numMols,
-                               const int*         molIdList,
-                               int                maxAtoms,
-                               int                numIters,
-                               double             gradTol,
-                               bool               scaleGrads,
-                               const TermsType*   devTerms,
-                               const IndicesType* devSysIdx,
-                               const int*         atomStarts,
-                               const int*         hessianStarts,
-                               storageT*          positions,
-                               storageT*          grad,
-                               storageT*          inverseHessian,
-                               storageT**         scratchBuffers,
-                               storageT*          energyOuts,
-                               int16_t*           statuses,
-                               cudaStream_t       stream,
-                               double             chiralWeight,
-                               double             fourthDimWeight) {
+cudaError_t dispatchByMaxAtoms(int                           numMols,
+                               const int*                    molIdList,
+                               int                           maxAtoms,
+                               int                           numIters,
+                               double                        gradTol,
+                               bool                          scaleGrads,
+                               const TermsType*              devTerms,
+                               const IndicesType*            devSysIdx,
+                               const int*                    atomStarts,
+                               const int*                    hessianStarts,
+                               storageT*                     positions,
+                               storageT*                     grad,
+                               storageT*                     inverseHessian,
+                               storageT**                    scratchBuffers,
+                               storageT*                     energyOuts,
+                               int16_t*                      statuses,
+                               cudaStream_t                  stream,
+                               const PerMolForcefieldParams& params) {
   // Use shared memory for <=128 atoms (in increments of 32), global memory for larger
   if (maxAtoms <= 32) {
     return launchKernelForSize<32, true, FFType, HasConstraints>(numMols,
@@ -1032,8 +1029,7 @@ cudaError_t dispatchByMaxAtoms(int                numMols,
                                                                  energyOuts,
                                                                  statuses,
                                                                  stream,
-                                                                 chiralWeight,
-                                                                 fourthDimWeight);
+                                                                 params);
   } else if (maxAtoms <= 64) {
     return launchKernelForSize<64, true, FFType, HasConstraints>(numMols,
                                                                  molIdList,
@@ -1051,8 +1047,7 @@ cudaError_t dispatchByMaxAtoms(int                numMols,
                                                                  energyOuts,
                                                                  statuses,
                                                                  stream,
-                                                                 chiralWeight,
-                                                                 fourthDimWeight);
+                                                                 params);
   } else if (maxAtoms <= 96) {
     return launchKernelForSize<96, true, FFType, HasConstraints>(numMols,
                                                                  molIdList,
@@ -1070,8 +1065,7 @@ cudaError_t dispatchByMaxAtoms(int                numMols,
                                                                  energyOuts,
                                                                  statuses,
                                                                  stream,
-                                                                 chiralWeight,
-                                                                 fourthDimWeight);
+                                                                 params);
   } else if (maxAtoms <= 128) {
     return launchKernelForSize<128, true, FFType, HasConstraints>(numMols,
                                                                   molIdList,
@@ -1089,8 +1083,7 @@ cudaError_t dispatchByMaxAtoms(int                numMols,
                                                                   energyOuts,
                                                                   statuses,
                                                                   stream,
-                                                                  chiralWeight,
-                                                                  fourthDimWeight);
+                                                                  params);
   } else if (maxAtoms <= 256) {
     return launchKernelForSize<256, false, FFType, HasConstraints>(numMols,
                                                                    molIdList,
@@ -1108,8 +1101,7 @@ cudaError_t dispatchByMaxAtoms(int                numMols,
                                                                    energyOuts,
                                                                    statuses,
                                                                    stream,
-                                                                   chiralWeight,
-                                                                   fourthDimWeight);
+                                                                   params);
   } else {
     return launchKernelForSize<2048, false, FFType, HasConstraints>(numMols,
                                                                     molIdList,
@@ -1127,8 +1119,7 @@ cudaError_t dispatchByMaxAtoms(int                numMols,
                                                                     energyOuts,
                                                                     statuses,
                                                                     stream,
-                                                                    chiralWeight,
-                                                                    fourthDimWeight);
+                                                                    params);
   }
 }
 
@@ -1178,8 +1169,7 @@ cudaError_t launchBfgsMinimizePerMolKernelImpl(int                              
                                                           energyOuts,
                                                           statuses,
                                                           stream,
-                                                          1.0,
-                                                          1.0);
+                                                          PerMolForcefieldParams{});
   }
   return dispatchByMaxAtoms<ForceFieldType::MMFF, false>(numMols,
                                                          molIds,
@@ -1198,8 +1188,7 @@ cudaError_t launchBfgsMinimizePerMolKernelImpl(int                              
                                                          energyOuts,
                                                          statuses,
                                                          stream,
-                                                         1.0,
-                                                         1.0);
+                                                         PerMolForcefieldParams{});
 }
 
 #define NVMOLKIT_DEFINE_MMFF_PER_MOL_LAUNCHER(TERMS_TYPE, STORAGE_TYPE)                           \
@@ -1287,8 +1276,7 @@ cudaError_t launchBfgsMinimizePerMolKernelETKImpl(int                           
                                                         energyOuts,
                                                         statuses,
                                                         stream,
-                                                        1.0,
-                                                        1.0);
+                                                        PerMolForcefieldParams{});
 }
 
 template <typename Terms, typename storageT>
@@ -1335,8 +1323,7 @@ cudaError_t launchBfgsMinimizePerMolKernelDGImpl(int                            
                                                        energyOuts,
                                                        statuses,
                                                        stream,
-                                                       chiralWeight,
-                                                       fourthDimWeight);
+                                                       PerMolForcefieldParams{chiralWeight, fourthDimWeight});
 }
 
 #define NVMOLKIT_DEFINE_ETK_PER_MOL_LAUNCHER(TERMS_TYPE, STORAGE_TYPE)                                     \
@@ -1424,5 +1411,102 @@ NVMOLKIT_DEFINE_ETK_PER_MOL_LAUNCHER(DistGeom::Energy3DForceContribsDevicePtrSin
 NVMOLKIT_DEFINE_DG_PER_MOL_LAUNCHER(DistGeom::EnergyForceContribsDevicePtr, double)
 NVMOLKIT_DEFINE_DG_PER_MOL_LAUNCHER(DistGeom::EnergyForceContribsDevicePtrSingle, float)
 #undef NVMOLKIT_DEFINE_DG_PER_MOL_LAUNCHER
+
+template <typename Terms, typename storageT>
+cudaError_t launchBfgsMinimizePerMolKernelAIOImpl(int                                   numMols,
+                                                  const int*                            molIds,
+                                                  int                                   maxAtoms,
+                                                  const int*                            atomStarts,
+                                                  const int*                            hessianStarts,
+                                                  int                                   numIters,
+                                                  double                                gradTol,
+                                                  bool                                  scaleGrads,
+                                                  const Terms&                          terms,
+                                                  storageT*                             positions,
+                                                  storageT*                             grad,
+                                                  storageT*                             inverseHessian,
+                                                  storageT**                            scratchBuffers,
+                                                  storageT*                             energyOuts,
+                                                  const DistGeom::AllInOneForceWeights& weights,
+                                                  bool                                  includeTorsionTerms,
+                                                  const int*                            maxItersPerSystem,
+                                                  int16_t*                              statuses,
+                                                  cudaStream_t                          stream) {
+  if (numMols == 0) {
+    return cudaSuccess;
+  }
+
+  // The all-in-one terms carry their own system indices.
+  const AsyncDevicePtr<Terms>                             devTerms(terms, stream);
+  const AsyncDevicePtr<DistGeom::BatchedIndicesDevicePtr> devSysIdx(terms.distanceGeometryIndices, stream);
+  PerMolForcefieldParams                                  params;
+  params.allInOneWeights     = weights;
+  params.includeTorsionTerms = includeTorsionTerms;
+  params.maxItersPerSystem   = maxItersPerSystem;
+
+  return dispatchByMaxAtoms<ForceFieldType::AIO_ETKDG, false>(numMols,
+                                                              molIds,
+                                                              maxAtoms,
+                                                              numIters,
+                                                              gradTol,
+                                                              scaleGrads,
+                                                              devTerms.data(),
+                                                              devSysIdx.data(),
+                                                              atomStarts,
+                                                              hessianStarts,
+                                                              positions,
+                                                              grad,
+                                                              inverseHessian,
+                                                              scratchBuffers,
+                                                              energyOuts,
+                                                              statuses,
+                                                              stream,
+                                                              params);
+}
+
+#define NVMOLKIT_DEFINE_AIO_PER_MOL_LAUNCHER(TERMS_TYPE, STORAGE_TYPE)                                     \
+  cudaError_t launchBfgsMinimizePerMolKernelAIO(int                                   numMols,             \
+                                                const int*                            molIds,              \
+                                                int                                   maxAtoms,            \
+                                                const int*                            atomStarts,          \
+                                                const int*                            hessianStarts,       \
+                                                int                                   numIters,            \
+                                                double                                gradTol,             \
+                                                bool                                  scaleGrads,          \
+                                                const TERMS_TYPE&                     terms,               \
+                                                STORAGE_TYPE*                         positions,           \
+                                                STORAGE_TYPE*                         grad,                \
+                                                STORAGE_TYPE*                         inverseHessian,      \
+                                                STORAGE_TYPE**                        scratchBuffers,      \
+                                                STORAGE_TYPE*                         energyOuts,          \
+                                                const DistGeom::AllInOneForceWeights& weights,             \
+                                                bool                                  includeTorsionTerms, \
+                                                const int*                            maxItersPerSystem,   \
+                                                int16_t*                              statuses,            \
+                                                cudaStream_t                          stream) {                                     \
+    return launchBfgsMinimizePerMolKernelAIOImpl(numMols,                                                  \
+                                                 molIds,                                                   \
+                                                 maxAtoms,                                                 \
+                                                 atomStarts,                                               \
+                                                 hessianStarts,                                            \
+                                                 numIters,                                                 \
+                                                 gradTol,                                                  \
+                                                 scaleGrads,                                               \
+                                                 terms,                                                    \
+                                                 positions,                                                \
+                                                 grad,                                                     \
+                                                 inverseHessian,                                           \
+                                                 scratchBuffers,                                           \
+                                                 energyOuts,                                               \
+                                                 weights,                                                  \
+                                                 includeTorsionTerms,                                      \
+                                                 maxItersPerSystem,                                        \
+                                                 statuses,                                                 \
+                                                 stream);                                                  \
+  }
+
+NVMOLKIT_DEFINE_AIO_PER_MOL_LAUNCHER(DistGeom::AllInOneContribsDevicePtr, double)
+NVMOLKIT_DEFINE_AIO_PER_MOL_LAUNCHER(DistGeom::AllInOneContribsDevicePtrSingle, float)
+#undef NVMOLKIT_DEFINE_AIO_PER_MOL_LAUNCHER
 
 }  // namespace nvMolKit

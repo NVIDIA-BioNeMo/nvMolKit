@@ -24,9 +24,11 @@
 
 #include <filesystem>
 #include <random>
+#include <unordered_map>
 
 #include "src/embedder_utils.h"
 #include "src/etkdg_impl.h"
+#include "src/etkdg_stage_aio_minimization.h"
 #include "src/etkdg_stage_stereochem_checks.h"
 #include "src/forcefields/dist_geom.h"
 #include "src/utils/device.h"
@@ -103,6 +105,20 @@ std::pair<std::vector<std::unique_ptr<ROMol>>, std::vector<const ROMol*>> getMol
 
 constexpr int wantNumConfsParsedMMFF = 761;
 
+ETKDGContext makeSingleSystemContext(const std::vector<double>& positions, int numAtoms) {
+  ETKDGContext context;
+  context.nTotalSystems         = 1;
+  context.systemHost.atomStarts = {0, numAtoms};
+  context.systemHost.positions  = positions;
+  nvMolKit::DistGeom::sendContextToDevice(positions,
+                                          context.systemDevice.positions,
+                                          context.systemHost.atomStarts,
+                                          context.systemDevice.atomStarts);
+  context.activeThisStage.setFromVector(std::vector<uint8_t>{1});
+  context.failedThisStage.setFromVector(std::vector<uint8_t>{0});
+  return context;
+}
+
 // Check that all molecules in the set have succeeded, with noted exception counts.
 void allPassChecks(const ETKDGDriver& driver, int expectedExceptions = 0) {
   EXPECT_EQ(driver.numConfsFinished(), wantNumConfsParsedMMFF - expectedExceptions);
@@ -120,6 +136,183 @@ void allPassChecks(const ETKDGDriver& driver, int expectedExceptions = 0) {
   const int  completedCount = std::accumulate(completed.begin(), completed.end(), static_cast<int16_t>(0));
   const int  totalConfs     = failureCounts[0].size();
   EXPECT_EQ(completedCount, totalConfs - expectedExceptions);
+}
+
+TEST(ETKDGAllInOneChecks, ClashUsesLowerBoundInsideThreshold) {
+  struct ClashCase {
+    double  distance;
+    double  lowerBound;
+    uint8_t active;
+    uint8_t expectedFailure;
+  };
+  for (const auto& example : {
+         ClashCase{ 0.2, 1.0, 1, 1},
+         ClashCase{ 0.2, 1.0, 0, 0},
+         ClashCase{ 0.2, 0.1, 1, 0},
+         ClashCase{ 0.5, 0.5, 1, 0},
+         ClashCase{0.89, 1.0, 1, 1},
+         ClashCase{0.90, 1.0, 1, 0}
+  }) {
+    SCOPED_TRACE(example.distance);
+    SCOPED_TRACE(example.lowerBound);
+    SCOPED_TRACE(example.active);
+    auto context = makeSingleSystemContext({0.0, 0.0, 0.0, 0.0, example.distance, 0.0, 0.0, 0.0}, 2);
+    context.activeThisStage.setFromVector(std::vector<uint8_t>{example.active});
+    std::vector<EmbedArgs> arguments(1);
+    arguments[0].mmat = std::make_unique<::DistGeom::BoundsMatrix>(2);
+    arguments[0].mmat->setLowerBound(1, 0, example.lowerBound);
+    arguments[0].mmat->setUpperBound(1, 0, 1.5);
+    ETKDGClashCheckStage stage(arguments);
+    stage.execute(context);
+    std::vector<uint8_t> failures(1);
+    context.failedThisStage.copyToHost(failures);
+    CHECK_CUDA_RETURN(cudaDeviceSynchronize());
+    EXPECT_EQ(failures[0], example.expectedFailure);
+  }
+}
+
+//! Systems of several sizes, two of them conformers sharing one bounds matrix, checked against a host evaluation of
+//! RDKit's rule. The 60-atom systems have more pairs than a block has threads.
+TEST(ETKDGAllInOneChecks, ClashCheckMatchesHostAcrossSystemsSharingBounds) {
+  std::mt19937                           generator(7);
+  std::uniform_real_distribution<double> coordinate(-1.6, 1.6);
+  std::uniform_real_distribution<double> bound(0.0, 1.2);
+  const auto                             makeBounds = [&](const unsigned int numAtoms) {
+    ::DistGeom::BoundsMatPtr bounds(new ::DistGeom::BoundsMatrix(numAtoms));
+    for (unsigned int i = 1; i < numAtoms; ++i) {
+      for (unsigned int j = 0; j < i; ++j) {
+        bounds->setLowerBound(i, j, bound(generator));
+        bounds->setUpperBound(i, j, 3.0);
+      }
+    }
+    return bounds;
+  };
+  const auto                                  shared = makeBounds(60);
+  const std::vector<::DistGeom::BoundsMatPtr> matrices{makeBounds(3), shared, shared, makeBounds(17), makeBounds(1)};
+
+  std::vector<EmbedArgs> arguments(matrices.size());
+  std::vector<int>       atomStarts{0};
+  std::vector<double>    positions;
+  for (std::size_t systemIdx = 0; systemIdx < matrices.size(); ++systemIdx) {
+    arguments[systemIdx].mmat = matrices[systemIdx];
+    const int numAtoms        = static_cast<int>(matrices[systemIdx]->numRows());
+    atomStarts.push_back(atomStarts.back() + numAtoms);
+    for (int atom = 0; atom < numAtoms; ++atom) {
+      positions.insert(positions.end(), {coordinate(generator), coordinate(generator), coordinate(generator), 0.0});
+    }
+  }
+  const std::vector<uint8_t> active{1, 1, 1, 1, 1};
+
+  std::vector<uint8_t> expected(matrices.size(), 0);
+  for (std::size_t systemIdx = 0; systemIdx < matrices.size(); ++systemIdx) {
+    const auto& bounds = *matrices[systemIdx];
+    for (unsigned int i = 1; i < bounds.numRows(); ++i) {
+      for (unsigned int j = 0; j < i; ++j) {
+        const double* p0 = &positions[4 * (atomStarts[systemIdx] + i)];
+        const double* p1 = &positions[4 * (atomStarts[systemIdx] + j)];
+        const double  d2 =
+          (p0[0] - p1[0]) * (p0[0] - p1[0]) + (p0[1] - p1[1]) * (p0[1] - p1[1]) + (p0[2] - p1[2]) * (p0[2] - p1[2]);
+        const double lowerBound = bounds.getLowerBound(i, j);
+        if (d2 < 0.8 && d2 < lowerBound * lowerBound) {
+          expected[systemIdx] = 1;
+        }
+      }
+    }
+  }
+  ASSERT_NE(std::count(expected.begin(), expected.end(), 1), 0);
+  ASSERT_NE(std::count(expected.begin(), expected.end(), 0), 0);
+
+  ETKDGContext context;
+  context.nTotalSystems         = static_cast<int>(matrices.size());
+  context.systemHost.atomStarts = atomStarts;
+  context.systemHost.positions  = positions;
+  nvMolKit::DistGeom::sendContextToDevice(positions,
+                                          context.systemDevice.positions,
+                                          context.systemHost.atomStarts,
+                                          context.systemDevice.atomStarts);
+  context.activeThisStage.setFromVector(active);
+  context.failedThisStage.setFromVector(std::vector<uint8_t>(matrices.size(), 0));
+  ETKDGClashCheckStage stage(arguments);
+  stage.execute(context);
+  std::vector<uint8_t> failures(matrices.size());
+  context.failedThisStage.copyToHost(failures);
+  CHECK_CUDA_RETURN(cudaDeviceSynchronize());
+  EXPECT_EQ(failures, expected);
+}
+
+TEST(ETKDGAllInOneChecks, SP2CenterUsesStricterGeometryCheck) {
+  auto context =
+    makeSingleSystemContext({-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0}, 4);
+  std::vector<EmbedArgs> eargs(1);
+  eargs[0].etkdgDetails.improperAtoms.push_back({0, 1, 2, 3, 6, 0});
+  ETKDGDoubleBondGeometryCheckStage stage(context, eargs, 4, nullptr, 3e-3, true);
+  stage.execute(context);
+  std::vector<uint8_t> failed(1);
+  context.failedThisStage.copyToHost(failed);
+  CHECK_CUDA_RETURN(cudaDeviceSynchronize());
+  EXPECT_EQ(failed[0], 1);
+}
+
+TEST(ETKDGAllInOneChecks, KTermRejectsBentLinearCenter) {
+  auto context = makeSingleSystemContext({-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0}, 3);
+  std::vector<EmbedArgs> eargs(1);
+  eargs[0].mmat = std::make_unique<::DistGeom::BoundsMatrix>(3);
+  for (unsigned int i = 1; i < 3; ++i) {
+    for (unsigned int j = 0; j < i; ++j) {
+      eargs[0].mmat->setLowerBound(i, j, 0.8);
+      eargs[0].mmat->setUpperBound(i, j, 2.2);
+    }
+  }
+  eargs[0].etkdgDetails.angles.push_back({0, 1, 2, 1});
+  ETKDGKTermCheckStage stage({nullptr}, eargs, context);
+  stage.execute(context);
+  std::vector<uint8_t> failed(1);
+  context.failedThisStage.copyToHost(failed);
+  CHECK_CUDA_RETURN(cudaDeviceSynchronize());
+  EXPECT_EQ(failed[0], 1);
+}
+
+//! Both checks reuse the first one's terms through the per-molecule cache.
+TEST(ETKDGAllInOneChecks, KTermTotalRejectsAccumulatedModerateTerms) {
+  const RDKit::ROMol                                       molecule;
+  std::unordered_map<const RDKit::ROMol*, KTermCheckTerms> cache;
+  for (const double centerHeight : {0.03, 0.10}) {
+    SCOPED_TRACE(centerHeight);
+    auto                   context = makeSingleSystemContext({1.0,
+                                                              0.0,
+                                                              0.0,
+                                                              0.0,
+                                                              0.0,
+                                                              0.0,
+                                                              centerHeight,
+                                                              0.0,
+                                                              -0.5,
+                                                              0.866025403784,
+                                                              0.0,
+                                                              0.0,
+                                                              -0.5,
+                                                              -0.866025403784,
+                                                              0.0,
+                                                              0.0},
+                                           4);
+    std::vector<EmbedArgs> arguments(1);
+    arguments[0].mmat = std::make_unique<::DistGeom::BoundsMatrix>(4);
+    for (unsigned int first = 1; first < 4; ++first) {
+      for (unsigned int second = 0; second < first; ++second) {
+        arguments[0].mmat->setLowerBound(first, second, 0.8);
+        arguments[0].mmat->setUpperBound(first, second, 2.2);
+      }
+    }
+    arguments[0].etkdgDetails.improperAtoms.push_back({0, 1, 2, 3, 6, 0});
+    ETKDGKTermCheckStage stage({&molecule}, arguments, context, nullptr, &cache);
+    stage.execute(context);
+    std::vector<uint8_t> failures(1);
+    context.failedThisStage.copyToHost(failures);
+    CHECK_CUDA_RETURN(cudaDeviceSynchronize());
+    EXPECT_EQ(failures[0], centerHeight > 0.05);
+    ASSERT_EQ(cache.size(), 1u);
+    EXPECT_EQ(cache.begin()->second.numCenters, 1);
+  }
 }
 
 // ------------------------------------

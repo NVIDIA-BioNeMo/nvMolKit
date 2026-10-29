@@ -38,6 +38,8 @@ using BatchedMolecularDeviceBuffers = BatchedMolecularDeviceBuffersT<double, dou
 namespace DistGeom {
 template <typename ParameterScalar> struct BatchedMolecularDeviceBuffersT;
 template <typename ParameterScalar> struct BatchedMolecular3DDeviceBuffersT;
+template <typename ParameterScalar> struct BatchedAllInOneDeviceBuffersT;
+struct AllInOneForceWeights;
 using BatchedMolecularDeviceBuffers         = BatchedMolecularDeviceBuffersT<double>;
 using BatchedMolecularDeviceBuffersSingle   = BatchedMolecularDeviceBuffersT<float>;
 using BatchedMolecular3DDeviceBuffers       = BatchedMolecular3DDeviceBuffersT<double>;
@@ -69,6 +71,8 @@ template <typename real> struct BfgsBatchMinimizerT {
   using DGDeviceBuffers                     = DistGeom::BatchedMolecularDeviceBuffersT<real>;
   //! ETK device buffers consumed by the per-molecule kernels at this precision.
   using ETKDeviceBuffers                    = DistGeom::BatchedMolecular3DDeviceBuffersT<real>;
+  //! All-in-one ETKDG device buffers consumed by the per-molecule kernels at this precision.
+  using AIODeviceBuffers                    = DistGeom::BatchedAllInOneDeviceBuffersT<real>;
 
   explicit BfgsBatchMinimizerT(int          dataDim    = 3,
                                DebugLevel   debugLevel = DebugLevel::NONE,
@@ -85,6 +89,8 @@ template <typename real> struct BfgsBatchMinimizerT {
   //! \param grad Gradient output buffer matching `positions`.
   //! \param energyOuts Per-system energy output buffer.
   //! \param activeSystemMask Optional per-system activity mask for staged minimization.
+  //! \param maxItersPerSystem Optional device array of per-system iteration limits below `numIters`. A system that
+  //!        reaches its limit counts as finished.
   //! \return `false` when all systems converged and `true` when at least one system needs another cycle.
   //! \note This overload is only valid for the batched backend.
   bool minimize(int                        numIters,
@@ -93,7 +99,8 @@ template <typename real> struct BfgsBatchMinimizerT {
                 AsyncDeviceVector<double>& positions,
                 AsyncDeviceVector<double>& grad,
                 AsyncDeviceVector<double>& energyOuts,
-                const uint8_t*             activeSystemMask = nullptr);
+                const uint8_t*             activeSystemMask  = nullptr,
+                const int*                 maxItersPerSystem = nullptr);
 
   //! \brief Runs MMFF minimization through the per-molecule CUDA kernels.
   //! \param numIters Maximum number of BFGS iterations to perform.
@@ -146,10 +153,40 @@ template <typename real> struct BfgsBatchMinimizerT {
                       double                        fourthDimWeight,
                       const uint8_t*                activeThisStage = nullptr);
 
+  //! \brief Runs all-in-one ETKDG minimization through the per-molecule CUDA kernels.
+  //! \param numIters Maximum number of BFGS iterations to perform.
+  //! \param gradTol Convergence tolerance applied to the scaled gradients.
+  //! \param atomStartsHost Host-side atom offsets for the flattened systems.
+  //! \param atomStarts Device-side atom offsets for the flattened systems.
+  //! \param positions Flattened coordinate buffer for the batch.
+  //! \param systemDevice All-in-one device buffers; the gradient and energy outputs of its distance-geometry buffers
+  //! are
+  //!        used as working storage.
+  //! \param weights Force constants shared by every system in the batch.
+  //! \param includeTorsionTerms Whether to include the experimental torsion and planarity terms.
+  //! \param activeThisStage Optional per-system activity mask for staged minimization.
+  //! \param maxItersPerSystem Optional device array of per-system iteration limits below `numIters`. A system that
+  //!        reaches its limit counts as finished.
+  //! \return `false` when all systems converged and `true` when at least one system needs another cycle.
+  bool minimizeWithAIO(int                                   numIters,
+                       double                                gradTol,
+                       const std::vector<int>&               atomStartsHost,
+                       const AsyncDeviceVector<int>&         atomStarts,
+                       AsyncDeviceVector<real>&              positions,
+                       AIODeviceBuffers&                     systemDevice,
+                       const DistGeom::AllInOneForceWeights& weights,
+                       bool                                  includeTorsionTerms,
+                       const uint8_t*                        activeThisStage   = nullptr,
+                       const int*                            maxItersPerSystem = nullptr);
+
   //! \brief Resolves the effective backend for the provided batch.
   //! \param atomStartsHost Host-side atom offsets for the systems under consideration.
   //! \return The effective backend after applying the HYBRID size heuristic.
   BfgsBackend resolveBackend(const std::vector<int>& atomStartsHost) const;
+
+  //! \brief Device per-system statuses from the last minimization: nonzero for systems that still need iterations.
+  //! Only systems active in that minimization are meaningful.
+  const int16_t* statuses() const { return statuses_.data(); }
 
   //! \brief Initializes persistent buffers for a new batch of systems.
   //! \param atomStartsHost Host-side atom offsets for the batch.
@@ -296,7 +333,8 @@ template <typename real> struct BfgsBatchMinimizerT {
   bool minimizeBatched(int               numIters,
                        double            gradTol,
                        EnergyEvaluator   evaluateEnergy,
-                       GradientEvaluator evaluateGradient);
+                       GradientEvaluator evaluateGradient,
+                       const int*        maxItersPerSystem = nullptr);
 };
 
 using BfgsBatchMinimizer       = BfgsBatchMinimizerT<double>;
