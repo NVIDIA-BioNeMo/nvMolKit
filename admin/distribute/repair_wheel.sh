@@ -84,15 +84,16 @@ trap 'rm -rf "${WORK}"' EXIT
 
 unzip -q "${REPAIRED_WHEEL}" -d "${WORK}"
 
-# Each nvmolkit/_*.so resolves siblings in nvmolkit.libs/ (auditwheel's vendor
-# dir), and externally-shipped libs in rdkit.libs/ and nvidia/cuda_runtime/lib
-# under the same site-packages root. Use DT_RPATH (--force-rpath) rather than
+# Each nvmolkit/*.so (the _*.so modules and the internal shared libraries they
+# link) resolves internal libraries in nvmolkit/, siblings in nvmolkit.libs/
+# (auditwheel's vendor dir), and externally-shipped libs in rdkit.libs/ and
+# nvidia/cuda_runtime/lib under the same site-packages root. Use DT_RPATH (--force-rpath) rather than
 # DT_RUNPATH so the search applies recursively to second-level deps. The libs
 # inside rdkit.libs/ have no rpath of their own and rely on RPATH inheritance
 # from the entry-point module to find their rdkit.libs/ siblings - rdkit's
 # own python bindings work the same way.
-NEW_RPATH="\$ORIGIN/../nvmolkit.libs:\$ORIGIN/../rdkit.libs:\$ORIGIN/../nvidia/cuda_runtime/lib"
-find "${WORK}/nvmolkit" -maxdepth 1 -name '_*.so' -type f | while read -r so; do
+NEW_RPATH="\$ORIGIN:\$ORIGIN/../nvmolkit.libs:\$ORIGIN/../rdkit.libs:\$ORIGIN/../nvidia/cuda_runtime/lib"
+find "${WORK}/nvmolkit" -maxdepth 1 -name '*.so' -type f | while read -r so; do
     patchelf --force-rpath --set-rpath "${NEW_RPATH}" "${so}"
 done
 
