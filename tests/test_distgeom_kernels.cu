@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include <DistGeom/ChiralViolationContribs.h>
+#include <DistGeom/DistGeomUtils.h>
 #include <DistGeom/DistViolationContribs.h>
 #include <DistGeom/FourthDimContribs.h>
 #include <ForceField/AngleConstraints.h>
@@ -37,6 +38,7 @@
 #include "src/forcefields/dist_geom.h"
 #include "src/forcefields/dist_geom_kernels.h"
 #include "tests/test_utils.h"
+#include "versions.h"
 
 namespace {
 
@@ -103,6 +105,29 @@ void addImproperTorsionTerms(ForceFields::ForceField*             ff,
   }
 }
 
+//! Indices of the experimental torsions that RDKit turns into force-field terms
+std::vector<unsigned int> usedExperimentalTorsions(const ForceFields::CrystalFF::CrystalFFDetails& etkdgDetails,
+                                                   [[maybe_unused]] unsigned int                   numAtoms) {
+  std::vector<unsigned int> used;
+#if RDKIT_ETKDG_2026_09_API
+  // RDKit 2026.09 keeps only the first experimental torsion about each central bond.
+  boost::dynamic_bitset<> doneBonds(numAtoms * numAtoms);
+#endif
+  for (unsigned int t = 0; t < etkdgDetails.expTorsionAtoms.size(); ++t) {
+#if RDKIT_ETKDG_2026_09_API
+    const unsigned int j       = etkdgDetails.expTorsionAtoms[t][1];
+    const unsigned int k       = etkdgDetails.expTorsionAtoms[t][2];
+    const unsigned int bondIdx = j < k ? j * numAtoms + k : k * numAtoms + j;
+    if (doneBonds[bondIdx]) {
+      continue;
+    }
+    doneBonds[bondIdx] = true;
+#endif
+    used.push_back(t);
+  }
+  return used;
+}
+
 //! Add experimental torsion angle contributions to a force field
 /*!
 
@@ -120,7 +145,7 @@ void addExperimentalTorsionTerms(ForceFields::ForceField*                       
                                  unsigned int                                    numAtoms) {
   PRECONDITION(ff, "bad force field");
   auto torsionContribs = std::make_unique<ForceFields::CrystalFF::TorsionAngleContribs>(ff);
-  for (unsigned int t = 0; t < etkdgDetails.expTorsionAtoms.size(); ++t) {
+  for (const unsigned int t : usedExperimentalTorsions(etkdgDetails, numAtoms)) {
     int i = etkdgDetails.expTorsionAtoms[t][0];
     int j = etkdgDetails.expTorsionAtoms[t][1];
     int k = etkdgDetails.expTorsionAtoms[t][2];
@@ -302,7 +327,7 @@ void markAtomPairsForIsolatedLongRange(const ForceFields::CrystalFF::CrystalFFDe
                                        boost::dynamic_bitset<>&                        atomPairs,
                                        boost::dynamic_bitset<>&                        isImproperConstrained) {
   // Mark experimental torsion pairs (end atoms of torsions)
-  for (unsigned int t = 0; t < etkdgDetails.expTorsionAtoms.size(); ++t) {
+  for (const unsigned int t : usedExperimentalTorsions(etkdgDetails, numAtoms)) {
     int i = etkdgDetails.expTorsionAtoms[t][0];
     int l = etkdgDetails.expTorsionAtoms[t][3];
     if (i < l) {
@@ -1530,6 +1555,41 @@ TEST_F(ETK3DGpuTestFixture, ExperimentalTorsionEnergyMultiMol) {
   std::vector<double> wantEnergy = getReferenceETK3DEnergyTerms(molsPtrs_, term, positionsHost.data(), atomStartsHost);
   std::vector<double> gotEnergy  = getETK3DEnergyTerms(systemDevice, atomStartsDevice, positionsDevice, term);
   EXPECT_THAT(gotEnergy, ::testing::Pointwise(::testing::DoubleNear(E_TOL_COMBINED), wantEnergy));
+}
+
+//! The reference force fields above re-implement RDKit's torsion selection. This compares nvMolKit's experimental
+//! torsion energy with RDKit's own DistGeom::construct3DForceField instead, so a wrong selection rule (for example the
+//! one-term-per-central-bond rule of RDKit 2026.09) cannot cancel out.
+TEST_F(ETK3DGpuTestFixture, ExperimentalTorsionEnergyMatchesRdkitConstruct3DForceField) {
+  loadMMFFMols(20);
+  const std::vector<double> gotEnergy =
+    getETK3DEnergyTerms(systemDevice, atomStartsDevice, positionsDevice, ETK3DTerm::ExperimentalTorsion);
+  auto params            = DGeomHelpers::ETKDGv3;
+  params.useRandomCoords = true;
+  for (std::size_t molIdx = 0; molIdx < molsPtrs_.size(); ++molIdx) {
+    nvMolKit::detail::EmbedArgs eargs;
+    ASSERT_TRUE(nvMolKit::DGeomHelpers::prepareEmbedderArgs(*molsPtrs_[molIdx], params, eargs));
+    const unsigned int           numAtoms = molsPtrs_[molIdx]->getNumAtoms();
+    std::vector<RDGeom::Point3D> points;
+    for (unsigned int atom = 0; atom < numAtoms; ++atom) {
+      const double* position = &positionsHost[3 * (atomStartsHost[molIdx] + atom)];
+      points.emplace_back(position[0], position[1], position[2]);
+    }
+    RDGeom::Point3DPtrVect pointers;
+    for (auto& point : points) {
+      pointers.push_back(&point);
+    }
+    std::unique_ptr<ForceFields::ForceField> field(
+      ::DistGeom::construct3DForceField(*eargs.mmat, pointers, eargs.etkdgDetails));
+    std::erase_if(field->contribs(), [](const auto& contrib) {
+      return dynamic_cast<const ForceFields::CrystalFF::TorsionAngleContribs*>(contrib.get()) == nullptr;
+    });
+    field->initialize();
+    // The cosine torsion energy is partly evaluated in float, which differs from RDKit by up to about 1e-5 relative
+    // depending on the GPU. A missing or extra term would change the energy by far more.
+    const double want = field->calcEnergy();
+    EXPECT_NEAR(gotEnergy[molIdx], want, std::max(E_TOL_COMBINED, 5e-5 * std::abs(want))) << "molecule " << molIdx;
+  }
 }
 
 TEST_F(ETK3DGpuTestFixture, ExperimentalTorsionGradMultiMol) {

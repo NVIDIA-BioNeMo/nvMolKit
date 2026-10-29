@@ -129,6 +129,10 @@ void addExperimentalTorsionTerms(nvMolKit::DistGeom::Energy3DForceContribsHost& 
                                  const ::ForceFields::CrystalFF::CrystalFFDetails& etkdgDetails,
                                  unsigned int                                      numAtoms,
                                  boost::dynamic_bitset<>&                          atomPairs) {
+#if RDKIT_ETKDG_2026_09_API
+  // RDKit 2026.09 keeps only the first experimental torsion about each central bond.
+  boost::dynamic_bitset<> doneBonds(numAtoms * numAtoms);
+#endif
   // Process each experimental torsion term
   for (unsigned int torsionIdx = 0; torsionIdx < etkdgDetails.expTorsionAtoms.size(); ++torsionIdx) {
     const int atomIdx1 = etkdgDetails.expTorsionAtoms[torsionIdx][0];
@@ -144,6 +148,14 @@ void addExperimentalTorsionTerms(nvMolKit::DistGeom::Energy3DForceContribsHost& 
     URANGE_CHECK(static_cast<unsigned int>(atomIdx2), numAtoms);
     URANGE_CHECK(static_cast<unsigned int>(atomIdx3), numAtoms);
     URANGE_CHECK(static_cast<unsigned int>(atomIdx4), numAtoms);
+
+#if RDKIT_ETKDG_2026_09_API
+    const unsigned int bondIdx = atomIdx2 < atomIdx3 ? atomIdx2 * numAtoms + atomIdx3 : atomIdx3 * numAtoms + atomIdx2;
+    if (doneBonds[bondIdx]) {
+      continue;
+    }
+    doneBonds[bondIdx] = true;
+#endif
 
     // Update atomPairs (similar to RDKit's atomPairs logic)
     if (atomIdx1 < atomIdx4) {
