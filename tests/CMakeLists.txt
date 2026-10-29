@@ -368,6 +368,9 @@ add_executable(test_aap_threads test_aap_threads.cpp)
 add_executable(test_diversity_pickers test_diversity_pickers.cu)
 target_link_libraries(test_diversity_pickers PRIVATE diversity_pickers device)
 
+add_executable(test_kmeans test_kmeans.cu)
+target_link_libraries(test_kmeans PRIVATE kmeans device)
+
 add_executable(test_boolean_tree test_boolean_tree.cu)
 target_link_libraries(test_boolean_tree PRIVATE substruct_definitions device)
 
@@ -481,6 +484,7 @@ set(TEST_LIST
     test_bitbirch
     test_butina
     test_diversity_pickers
+    test_kmeans
     test_bfgs_hessian
     test_tfd_cpu
     test_tfd_kernels

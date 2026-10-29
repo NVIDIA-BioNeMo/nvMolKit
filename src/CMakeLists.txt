@@ -159,6 +159,13 @@ target_link_libraries(
 target_include_directories(diversity_pickers SYSTEM
                            PRIVATE ${Boost_INCLUDE_DIRS})
 
+add_library(kmeans kmeans.cu kmeans_mma.cu)
+target_link_libraries(
+  kmeans
+  PUBLIC device_vector
+  PRIVATE cuda_error_check diversity_pickers cccl_interface)
+target_include_directories(kmeans SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
+
 add_library(conformer_rmsd conformer_rmsd.cu)
 target_link_libraries(
   conformer_rmsd

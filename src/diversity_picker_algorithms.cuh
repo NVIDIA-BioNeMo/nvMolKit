@@ -153,6 +153,12 @@ void             launchResolveLeaderWindow(const LeaderState&         state,
                                            cudaStream_t               stream);
 void             launchApplyLeaderWindow(const LeaderState& state, int numItems, cudaStream_t stream);
 void             launchFillFloats(float* values, int numItems, float value, cudaStream_t stream);
+//! Writes the popcount of each packed fingerprint row to @p bitCounts.
+void             launchFingerprintBitCounts(const std::uint32_t* fingerprints,
+                                            int*                 bitCounts,
+                                            int                  numItems,
+                                            int                  numWords,
+                                            cudaStream_t         stream);
 void             launchMarkIndices(const int* indices, int count, std::uint8_t* flags, cudaStream_t stream);
 //! Records the pick encoded in @p best as @p currentPick, or -1 once selection stops, and decides whether to
 //! continue. Resets @p best for the next pass.
