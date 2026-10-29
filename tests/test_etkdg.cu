@@ -745,7 +745,9 @@ void testConformerEnergyComparison(const std::vector<RDKit::ROMol*>&    mols,
 
 }  // anonymous namespace
 
-class ETKDGPipelineEnergyTestFixture : public ::testing::TestWithParam<std::tuple<ETKDGOption, nvMolKit::BfgsBackend>> {
+//! Parameters: ETKDG preset, BFGS backend, and whether to use RDKit's legacy refinement (true) or all-in-one (false).
+class ETKDGPipelineEnergyTestFixture
+    : public ::testing::TestWithParam<std::tuple<ETKDGOption, nvMolKit::BfgsBackend, bool>> {
  public:
   ETKDGPipelineEnergyTestFixture() { testDataFolderPath_ = getTestDataFolderPath(); }
 
@@ -771,66 +773,75 @@ class ETKDGPipelineEnergyTestFixture : public ::testing::TestWithParam<std::tupl
   }
 
  protected:
+  //! The preset with the refinement set explicitly, since presets differ in their default.
+  static RDKit::DGeomHelpers::EmbedParameters embedParams() {
+    auto params = getETKDGOption(std::get<0>(GetParam()));
+#if RDKIT_AIO_ETKDG_API
+    params.useLegacyImplementation = std::get<2>(GetParam());
+#endif
+    return params;
+  }
+
   std::string                                testDataFolderPath_;
   std::vector<std::unique_ptr<RDKit::RWMol>> molsPtrs_;
   std::vector<RDKit::ROMol*>                 mols_;
 };
 
 TEST_P(ETKDGPipelineEnergyTestFixture, SingleMoleculeEnergyImprovement) {
-  auto                       params    = getETKDGOption(std::get<0>(GetParam()));
+  auto                       params    = embedParams();
   auto                       backend   = std::get<1>(GetParam());
   std::vector<RDKit::ROMol*> singleMol = {mols_[0]};
   testEnergyImprovement(singleMol, 1, params, backend);
 }
 
 TEST_P(ETKDGPipelineEnergyTestFixture, MultipleMoleculesEnergyImprovement) {
-  auto params  = getETKDGOption(std::get<0>(GetParam()));
+  auto params  = embedParams();
   auto backend = std::get<1>(GetParam());
   testEnergyImprovement(mols_, 1, params, backend);
 }
 
 TEST_P(ETKDGPipelineEnergyTestFixture, SingleMoleculeMultipleConformers) {
-  auto                       params    = getETKDGOption(std::get<0>(GetParam()));
+  auto                       params    = embedParams();
   auto                       backend   = std::get<1>(GetParam());
   std::vector<RDKit::ROMol*> singleMol = {mols_[0]};
   testEnergyImprovement(singleMol, 5, params, backend);
 }
 
 TEST_P(ETKDGPipelineEnergyTestFixture, MultipleMoleculesMultipleConformers) {
-  auto params  = getETKDGOption(std::get<0>(GetParam()));
+  auto params  = embedParams();
   auto backend = std::get<1>(GetParam());
   testEnergyImprovement(mols_, 3, params, backend);
 }
 
 TEST_P(ETKDGPipelineEnergyTestFixture, SingleMoleculeConformerEnergyComparison) {
-  auto                       params    = getETKDGOption(std::get<0>(GetParam()));
+  auto                       params    = embedParams();
   auto                       backend   = std::get<1>(GetParam());
   std::vector<RDKit::ROMol*> singleMol = {mols_[0]};
   testConformerEnergyComparison(singleMol, 1, params, {10, 7, 10}, backend);
 }
 
 TEST_P(ETKDGPipelineEnergyTestFixture, MultipleMoleculesConformerEnergyComparison) {
-  auto params  = getETKDGOption(std::get<0>(GetParam()));
+  auto params  = embedParams();
   auto backend = std::get<1>(GetParam());
   testConformerEnergyComparison(mols_, 1, params, {10, 7, 10}, backend);
 }
 
 TEST_P(ETKDGPipelineEnergyTestFixture, SingleMoleculeMultipleConformersEnergyComparison) {
-  auto                       params    = getETKDGOption(std::get<0>(GetParam()));
+  auto                       params    = embedParams();
   auto                       backend   = std::get<1>(GetParam());
   std::vector<RDKit::ROMol*> singleMol = {mols_[0]};
   testConformerEnergyComparison(singleMol, 10, params, {10, 7, 10}, backend);
 }
 
 TEST_P(ETKDGPipelineEnergyTestFixture, MultipleMoleculesMultipleConformersEnergyComparison) {
-  auto params  = getETKDGOption(std::get<0>(GetParam()));
+  auto params  = embedParams();
   auto backend = std::get<1>(GetParam());
   testConformerEnergyComparison(mols_, 10, params, {10, 7, 10}, backend);
 }
 
 TEST_P(ETKDGPipelineEnergyTestFixture, DefaultHardwareOptionsOpenMPMaxThreads) {
   // Test using default BatchHardwareOptions which should use omp_get_max_threads()
-  auto                                 params  = getETKDGOption(std::get<0>(GetParam()));
+  auto                                 params  = embedParams();
   auto                                 backend = std::get<1>(GetParam());
   const nvMolKit::BatchHardwareOptions defaultOptions;                   // Uses -1 values for automatic detection
   const std::vector<RDKit::ROMol*>     testMols = {mols_[0], mols_[1]};  // Use subset for efficiency
@@ -839,7 +850,7 @@ TEST_P(ETKDGPipelineEnergyTestFixture, DefaultHardwareOptionsOpenMPMaxThreads) {
 
 TEST_P(ETKDGPipelineEnergyTestFixture, SpecificGpuIds) {
   // Test using GPU ID 0 (should always be available if CUDA is working)
-  auto                           params  = getETKDGOption(std::get<0>(GetParam()));
+  auto                           params  = embedParams();
   auto                           backend = std::get<1>(GetParam());
   nvMolKit::BatchHardwareOptions customOptions;
   customOptions.preprocessingThreads = 1;
@@ -858,7 +869,7 @@ TEST_P(ETKDGPipelineEnergyTestFixture, NonZeroGPUID) {
     GTEST_SKIP() << "Test requires multiple GPUs, only " << numDevices << " available";
   }
 
-  auto                           params  = getETKDGOption(std::get<0>(GetParam()));
+  auto                           params  = embedParams();
   auto                           backend = std::get<1>(GetParam());
   nvMolKit::BatchHardwareOptions customOptions;
   customOptions.preprocessingThreads = 1;
@@ -877,7 +888,7 @@ TEST_P(ETKDGPipelineEnergyTestFixture, MultiGPUSpecificIds) {
     GTEST_SKIP() << "Test requires multiple GPUs, only " << numDevices << " available";
   }
 
-  auto                           params  = getETKDGOption(std::get<0>(GetParam()));
+  auto                           params  = embedParams();
   auto                           backend = std::get<1>(GetParam());
   nvMolKit::BatchHardwareOptions customOptions;
   customOptions.preprocessingThreads = 1;
@@ -890,22 +901,36 @@ TEST_P(ETKDGPipelineEnergyTestFixture, MultiGPUSpecificIds) {
 }
 
 // Instantiate parameterized tests for different ETKDG variants and backends
-INSTANTIATE_TEST_SUITE_P(ETKDGVariants,
-                         ETKDGPipelineEnergyTestFixture,
-                         ::testing::Combine(::testing::Values(ETKDGOption::ETKDG,
-                                                              ETKDGOption::ETKDGv2,
-                                                              ETKDGOption::srETKDGv3,
-                                                              ETKDGOption::ETKDGv3,
-                                                              ETKDGOption::KDG,
-                                                              ETKDGOption::ETDG,
-                                                              ETKDGOption::DG),
-                                            ::testing::Values(nvMolKit::BfgsBackend::BATCHED,
-                                                              nvMolKit::BfgsBackend::PER_MOLECULE)),
-                         [](const ::testing::TestParamInfo<std::tuple<ETKDGOption, nvMolKit::BfgsBackend>>& info) {
-                           std::string backend_name =
-                             (std::get<1>(info.param) == nvMolKit::BfgsBackend::BATCHED) ? "Batched" : "PerMolecule";
-                           return getETKDGOptionName(std::get<0>(info.param)) + "_" + backend_name;
-                         });
+const std::vector<ETKDGOption> kPipelineOptions = {
+  ETKDGOption::ETKDG,
+  ETKDGOption::ETKDGv2,
+  ETKDGOption::srETKDGv3,
+  ETKDGOption::ETKDGv3,
+  ETKDGOption::KDG,
+  ETKDGOption::ETDG,
+  ETKDGOption::DG,
+#if RDKIT_ETKDG_2026_09_API
+  ETKDGOption::ETKDGv4,
+#endif
+};
+
+#if RDKIT_AIO_ETKDG_API
+const std::vector<bool> kPipelineRefinements = {true, false};
+#else
+const std::vector<bool> kPipelineRefinements = {true};
+#endif
+
+INSTANTIATE_TEST_SUITE_P(
+  ETKDGVariants,
+  ETKDGPipelineEnergyTestFixture,
+  ::testing::Combine(::testing::ValuesIn(kPipelineOptions),
+                     ::testing::Values(nvMolKit::BfgsBackend::BATCHED, nvMolKit::BfgsBackend::PER_MOLECULE),
+                     ::testing::ValuesIn(kPipelineRefinements)),
+  [](const ::testing::TestParamInfo<std::tuple<ETKDGOption, nvMolKit::BfgsBackend, bool>>& info) {
+    std::string backend_name = (std::get<1>(info.param) == nvMolKit::BfgsBackend::BATCHED) ? "Batched" : "PerMolecule";
+    const std::string refinement = std::get<2>(info.param) ? "Legacy" : "AllInOne";
+    return getETKDGOptionName(std::get<0>(info.param)) + "_" + backend_name + "_" + refinement;
+  });
 
 class ETKDGBackendTestFixture : public ::testing::TestWithParam<nvMolKit::BfgsBackend> {};
 

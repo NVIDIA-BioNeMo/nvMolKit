@@ -206,7 +206,7 @@ def use_implementation(params, implementation):
 
 
 @pytest.mark.parametrize("implementation", ["legacy", "all_in_one"])
-@pytest.mark.parametrize("etkdg_variant", ["ETKDG", "ETKDGv2", "ETKDGv3", "srETKDGv3", "KDG", "ETDG", "DG"])
+@pytest.mark.parametrize("etkdg_variant", ["ETKDG", "ETKDGv2", "ETKDGv3", "srETKDGv3", "ETKDGv4", "KDG", "ETDG", "DG"])
 def test_embed_molecules_serial_vs_rdkit(embed_test_mols, etkdg_variant, implementation, precision):
     """Test nvMolKit EmbedMolecules one molecule at a time against RDKit reference.
 
@@ -228,6 +228,10 @@ def test_embed_molecules_serial_vs_rdkit(embed_test_mols, etkdg_variant, impleme
         params = rdDistGeom.ETKDGv3()
     elif etkdg_variant == "srETKDGv3":
         params = rdDistGeom.srETKDGv3()
+    elif etkdg_variant == "ETKDGv4":
+        if not hasattr(rdDistGeom, "ETKDGv4"):
+            pytest.skip("ETKDGv4 requires RDKit 2026.09 or later")
+        params = rdDistGeom.ETKDGv4()
     elif etkdg_variant == "KDG":
         params = rdDistGeom.KDG()
     elif etkdg_variant == "ETDG":
@@ -287,7 +291,7 @@ def test_embed_molecules_serial_vs_rdkit(embed_test_mols, etkdg_variant, impleme
 
 
 @pytest.mark.parametrize("implementation", ["legacy", "all_in_one"])
-@pytest.mark.parametrize("etkdg_variant", ["ETKDG", "ETKDGv2", "ETKDGv3", "srETKDGv3", "KDG", "ETDG", "DG"])
+@pytest.mark.parametrize("etkdg_variant", ["ETKDG", "ETKDGv2", "ETKDGv3", "srETKDGv3", "ETKDGv4", "KDG", "ETDG", "DG"])
 @pytest.mark.parametrize("gpu_ids", [[], [0], [1], [0, 1]])
 def test_embed_molecules_batch_vs_rdkit(embed_test_mols, etkdg_variant, gpu_ids, implementation, precision):
     """Test nvMolKit EmbedMolecules batch mode against RDKit reference.
@@ -313,6 +317,10 @@ def test_embed_molecules_batch_vs_rdkit(embed_test_mols, etkdg_variant, gpu_ids,
         params = rdDistGeom.ETKDGv3()
     elif etkdg_variant == "srETKDGv3":
         params = rdDistGeom.srETKDGv3()
+    elif etkdg_variant == "ETKDGv4":
+        if not hasattr(rdDistGeom, "ETKDGv4"):
+            pytest.skip("ETKDGv4 requires RDKit 2026.09 or later")
+        params = rdDistGeom.ETKDGv4()
     elif etkdg_variant == "KDG":
         params = rdDistGeom.KDG()
     elif etkdg_variant == "ETDG":
