@@ -15,6 +15,9 @@
 #include <ForceField/DistanceConstraints.h>
 #include <ForceField/ForceField.h>
 #include <GraphMol/ForceFieldHelpers/CrystalFF/PlanarityContribs.h>
+#if RDKIT_ETKDG_2026_09_API
+#include <GraphMol/ForceFieldHelpers/CrystalFF/GaussianTorsionAngleContribs.h>
+#endif
 #include <GraphMol/ForceFieldHelpers/CrystalFF/TorsionAngleContribs.h>
 #include <GraphMol/MolOps.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
@@ -64,7 +67,8 @@ std::vector<std::unique_ptr<RDKit::ROMol>> sdfMolecules(const std::string& fileN
 }
 
 //! Prepares each molecule with the all-in-one force constants. Coordinates start from the input conformer when there
-//! is one, are perturbed, and get a nonzero fourth dimension.
+//! is one, are perturbed, and get a nonzero fourth dimension. prepareEmbedderArgs does not accept ETversion 4 yet, so
+//! ETKDGv4 molecules are prepared with ETversion 2 and their torsions rebuilt in RDKit's Gaussian form.
 std::vector<AllInOneMolecule> prepareMolecules(const std::vector<std::unique_ptr<RDKit::ROMol>>& mols,
                                                const RDKit::DGeomHelpers::EmbedParameters&       params) {
   std::mt19937                           generator(1729);
@@ -73,12 +77,23 @@ std::vector<AllInOneMolecule> prepareMolecules(const std::vector<std::unique_ptr
 
   std::vector<AllInOneMolecule> prepared(mols.size());
   for (std::size_t molIdx = 0; molIdx < mols.size(); ++molIdx) {
-    auto& mol          = *mols[molIdx];
-    auto& molecule     = prepared[molIdx];
-    molecule.eargs.dim = 4;
-    EXPECT_TRUE(nvMolKit::DGeomHelpers::prepareEmbedderArgs(mol, params, molecule.eargs));
+    auto& mol                             = *mols[molIdx];
+    auto& molecule                        = prepared[molIdx];
+    molecule.eargs.dim                    = 4;
+    auto prepareParams                    = params;
+    prepareParams.ETversion               = std::min(params.ETversion, 2u);
+    prepareParams.useLegacyImplementation = true;
+    EXPECT_TRUE(nvMolKit::DGeomHelpers::prepareEmbedderArgs(mol, prepareParams, molecule.eargs));
     molecule.eargs.etkdgDetails.forceConsts = ForceFields::CrystalFF::ETKDGForceConsts::AIO::Cosine;
-    molecule.eargs.etkdgDetails.distMat     = RDKit::MolOps::getDistanceMat(mol);
+#if RDKIT_ETKDG_2026_09_API
+    if (params.ETversion == 4) {
+      setGaussianTorsions(mol,
+                          params,
+                          ForceFields::CrystalFF::ETKDGForceConsts::AIO::Gaussian,
+                          molecule.eargs.etkdgDetails);
+    }
+#endif
+    molecule.eargs.etkdgDetails.distMat = RDKit::MolOps::getDistanceMat(mol);
 
     for (unsigned int atomIdx = 0; atomIdx < mol.getNumAtoms(); ++atomIdx) {
       auto& point = *molecule.pointOwners.emplace_back(std::make_unique<RDGeom::PointND>(4));
@@ -347,6 +362,7 @@ enum class AllInOneTerm {
   HarmonicDistance,
   LinearAngle,
   ExperimentalTorsion,
+  GaussianTorsion,
   Planarity
 };
 
@@ -364,6 +380,8 @@ std::string termName(const AllInOneTerm term) {
       return "LinearAngle";
     case AllInOneTerm::ExperimentalTorsion:
       return "ExperimentalTorsion";
+    case AllInOneTerm::GaussianTorsion:
+      return "GaussianTorsion";
     case AllInOneTerm::Planarity:
       return "Planarity";
   }
@@ -384,6 +402,12 @@ bool isTermContrib(const ForceFields::ForceFieldContrib* contrib, const AllInOne
       return dynamic_cast<const ForceFields::AngleConstraintContribs*>(contrib) != nullptr;
     case AllInOneTerm::ExperimentalTorsion:
       return dynamic_cast<const ForceFields::CrystalFF::TorsionAngleContribs*>(contrib) != nullptr;
+    case AllInOneTerm::GaussianTorsion:
+#if RDKIT_ETKDG_2026_09_API
+      return dynamic_cast<const ForceFields::CrystalFF::GaussianTorsionAngleContribs*>(contrib) != nullptr;
+#else
+      return false;
+#endif
     case AllInOneTerm::Planarity:
       return dynamic_cast<const ForceFields::CrystalFF::PlanarityContribs*>(contrib) != nullptr;
   }
@@ -411,21 +435,35 @@ std::size_t keepOnlyTerm(DG::AllInOneForceContribsHost& contribs, const AllInOne
   if (term != AllInOneTerm::ExperimentalTorsion) {
     contribs.experimentalTorsionTerms = {};
   }
+  if (term != AllInOneTerm::GaussianTorsion) {
+    contribs.gaussianTorsionTerms = {};
+  }
   if (term != AllInOneTerm::Planarity) {
     contribs.planarityTerms = {};
   }
   return dg.distTerms.idx1.size() + dg.chiralTerms.idx1.size() + dg.fourthTerms.idx.size() +
          contribs.harmonicDistanceTerms.idx1.size() + contribs.linearAngleTerms.idx1.size() +
-         contribs.experimentalTorsionTerms.idx1.size() + contribs.planarityTerms.idx1.size();
+         contribs.experimentalTorsionTerms.idx1.size() + contribs.gaussianTorsionTerms.idx1.size() +
+         contribs.planarityTerms.idx1.size();
 }
 
 using KernelTestParams = std::tuple<AllInOneTerm, PrecisionMode>;
 
 class AllInOneKernelTermTest : public ::testing::TestWithParam<KernelTestParams> {};
 
+//! The Gaussian torsion term exists only in ETKDGv4 (RDKit 2026.09+); every other term uses ETKDGv3.
+RDKit::DGeomHelpers::EmbedParameters kernelTestParams(const AllInOneTerm term) {
+#if RDKIT_ETKDG_2026_09_API
+  if (term == AllInOneTerm::GaussianTorsion) {
+    return RDKit::DGeomHelpers::ETKDGv4;
+  }
+#endif
+  return RDKit::DGeomHelpers::ETKDGv3;
+}
+
 TEST_P(AllInOneKernelTermTest, MatchesRdkitInBothPhases) {
   const auto [term, precision] = GetParam();
-  const auto params            = RDKit::DGeomHelpers::ETKDGv3;
+  const auto params            = kernelTestParams(term);
 
   auto mols = sdfMolecules("MMFF94_dative.sdf", 50);
   for (auto& mol : sdfMolecules("MMFF94_hypervalent.sdf", 50)) {
@@ -466,6 +504,9 @@ INSTANTIATE_TEST_SUITE_P(AllTerms,
                                                               AllInOneTerm::HarmonicDistance,
                                                               AllInOneTerm::LinearAngle,
                                                               AllInOneTerm::ExperimentalTorsion,
+#if RDKIT_ETKDG_2026_09_API
+                                                              AllInOneTerm::GaussianTorsion,
+#endif
                                                               AllInOneTerm::Planarity),
                                             ::testing::Values(PrecisionMode::FULL, PrecisionMode::SINGLE)),
                          [](const ::testing::TestParamInfo<KernelTestParams>& info) {
@@ -473,8 +514,18 @@ INSTANTIATE_TEST_SUITE_P(AllTerms,
                                   (std::get<1>(info.param) == PrecisionMode::FULL ? "_Double" : "_Float");
                          });
 
-TEST(AllInOneKernel, MoleculesTooLargeForSharedMemoryAccumulateInGlobalMemory) {
-  const auto                                 params = RDKit::DGeomHelpers::ETKDGv3;
+//! Cosine ETKDGv3 and, on RDKit 2026.09+, Gaussian ETKDGv4.
+std::vector<RDKit::DGeomHelpers::EmbedParameters> torsionFormParams() {
+  return {
+    RDKit::DGeomHelpers::ETKDGv3
+#if RDKIT_ETKDG_2026_09_API
+      ,
+      RDKit::DGeomHelpers::ETKDGv4
+#endif
+  };
+}
+
+void expectLargeMoleculesMatch(const RDKit::DGeomHelpers::EmbedParameters& params) {
   std::vector<std::unique_ptr<RDKit::ROMol>> mols;
   for (const auto& smiles : {std::string(100, 'C') + "C#N", std::string("CC#N")}) {
     std::unique_ptr<RDKit::ROMol> mol(RDKit::SmilesToMol(smiles));
@@ -502,6 +553,13 @@ TEST(AllInOneKernel, MoleculesTooLargeForSharedMemoryAccumulateInGlobalMemory) {
                 0.0);
 }
 
+TEST(AllInOneKernel, MoleculesTooLargeForSharedMemoryAccumulateInGlobalMemory) {
+  for (const auto& params : torsionFormParams()) {
+    SCOPED_TRACE("ETversion " + std::to_string(params.ETversion));
+    expectLargeMoleculesMatch(params);
+  }
+}
+
 // ---------------------------------------------
 // Batched forcefield tests: all terms together
 // ---------------------------------------------
@@ -510,11 +568,11 @@ using ForcefieldTestParams = std::tuple<ETKDGOption, std::string, PrecisionMode>
 
 class AllInOneForcefieldTest : public ::testing::TestWithParam<ForcefieldTestParams> {};
 
-TEST_P(AllInOneForcefieldTest, BatchMatchesRdkitInBothPhases) {
-  const auto [option, fileName, precision] = GetParam();
-  const auto params                        = getETKDGOption(option);
-  const auto mols                          = sdfMolecules(fileName, 100);
-  auto       molecules                     = prepareMolecules(mols, params);
+void expectBatchMatchesRdkitInBothPhases(const RDKit::DGeomHelpers::EmbedParameters& params,
+                                         const std::string&                          fileName,
+                                         const PrecisionMode                         precision) {
+  const auto mols      = sdfMolecules(fileName, 100);
+  auto       molecules = prepareMolecules(mols, params);
 
   std::vector<DG::AllInOneForceContribsHost> contribs;
   for (const auto& molecule : molecules) {
@@ -541,6 +599,11 @@ TEST_P(AllInOneForcefieldTest, BatchMatchesRdkitInBothPhases) {
   }
 }
 
+TEST_P(AllInOneForcefieldTest, BatchMatchesRdkitInBothPhases) {
+  const auto [option, fileName, precision] = GetParam();
+  expectBatchMatchesRdkitInBothPhases(getETKDGOption(option), fileName, precision);
+}
+
 INSTANTIATE_TEST_SUITE_P(
   ETKDGOptions,
   AllInOneForcefieldTest,
@@ -552,6 +615,27 @@ INSTANTIATE_TEST_SUITE_P(
     return getETKDGOptionName(std::get<0>(info.param)) + "_" + fileName.substr(0, fileName.find('.')) +
            (std::get<2>(info.param) == PrecisionMode::FULL ? "_Double" : "_Float");
   });
+
+#if RDKIT_ETKDG_2026_09_API
+using GaussianForcefieldTestParams = std::tuple<std::string, PrecisionMode>;
+
+class AllInOneGaussianForcefieldTest : public ::testing::TestWithParam<GaussianForcefieldTestParams> {};
+
+TEST_P(AllInOneGaussianForcefieldTest, ETKDGv4BatchMatchesRdkitInBothPhases) {
+  const auto [fileName, precision] = GetParam();
+  expectBatchMatchesRdkitInBothPhases(RDKit::DGeomHelpers::ETKDGv4, fileName, precision);
+}
+
+INSTANTIATE_TEST_SUITE_P(ETKDGv4,
+                         AllInOneGaussianForcefieldTest,
+                         ::testing::Combine(::testing::Values("MMFF94_dative.sdf", "MMFF94_hypervalent.sdf"),
+                                            ::testing::Values(PrecisionMode::FULL, PrecisionMode::SINGLE)),
+                         [](const ::testing::TestParamInfo<GaussianForcefieldTestParams>& info) {
+                           const auto& fileName = std::get<0>(info.param);
+                           return fileName.substr(0, fileName.find('.')) +
+                                  (std::get<1>(info.param) == PrecisionMode::FULL ? "_Double" : "_Float");
+                         });
+#endif
 
 struct EdgeTestCase {
   std::vector<std::string> smiles;
@@ -599,10 +683,9 @@ INSTANTIATE_TEST_SUITE_P(OneTwoAtoms,
                                               EdgeTestCase{{"CC", "CN"}, {1, 1}}),
                                             ::testing::Values(PrecisionMode::FULL, PrecisionMode::SINGLE)));
 
-TEST(AllInOneForcefield, SinglePrecisionInterfaceEvaluatesNativelyAndRejectsFullPrecisionBuffers) {
-  const auto params    = RDKit::DGeomHelpers::ETKDGv3;
-  auto       mols      = coverageMolecules();
-  auto       molecules = prepareMolecules(mols, params);
+void expectSinglePrecisionInterfaceMatches(const RDKit::DGeomHelpers::EmbedParameters& params) {
+  auto mols      = coverageMolecules();
+  auto molecules = prepareMolecules(mols, params);
 
   std::vector<DG::AllInOneForceContribsHost> contribs;
   for (const auto& molecule : molecules) {
@@ -749,6 +832,13 @@ INSTANTIATE_TEST_SUITE_P(Backends,
                          [](const ::testing::TestParamInfo<nvMolKit::BfgsBackend>& info) {
                            return info.param == nvMolKit::BfgsBackend::BATCHED ? "Batched" : "PerMolecule";
                          });
+
+TEST(AllInOneForcefield, SinglePrecisionInterfaceEvaluatesNativelyAndRejectsFullPrecisionBuffers) {
+  for (const auto& params : torsionFormParams()) {
+    SCOPED_TRACE("ETversion " + std::to_string(params.ETversion));
+    expectSinglePrecisionInterfaceMatches(params);
+  }
+}
 
 }  // namespace
 

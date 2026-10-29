@@ -15,6 +15,7 @@
 
 #include <cassert>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 #include "src/forcefields/dist_geom.h"
@@ -35,6 +36,80 @@ void uploadWithPrecisionConversion(AsyncDeviceVector<ParameterScalar>& destinati
     static_assert(std::is_same_v<ParameterScalar, float>);
     destination.setFromVector(std::vector<float>(source.begin(), source.end()));
   }
+}
+
+//! Appends one molecule's Gaussian torsions, offsetting atom indices into the batch. Each table is stored once per
+//! batch: conformers of a molecule, and molecules sharing torsion patterns, reuse it through tables.
+void appendGaussianTorsionTerms(GaussianTorsionContribTerms&       destination,
+                                const GaussianTorsionContribTerms& source,
+                                const int                          atomOffset,
+                                GaussianTorsionTableIndex&         tables) {
+  // A molecule's terms share its tables, so each source table is looked up in the batch index once.
+  std::unordered_map<int, int> batchStarts;
+  for (std::size_t i = 0; i < source.idx1.size(); ++i) {
+    destination.idx1.push_back(source.idx1[i] + atomOffset);
+    destination.idx2.push_back(source.idx2[i] + atomOffset);
+    destination.idx3.push_back(source.idx3[i] + atomOffset);
+    destination.idx4.push_back(source.idx4[i] + atomOffset);
+    destination.tableSizes.push_back(source.tableSizes[i]);
+    destination.scaling.push_back(source.scaling[i]);
+
+    auto known = batchStarts.find(source.tableStarts[i]);
+    if (known == batchStarts.end()) {
+      const auto          energies    = source.energies.begin() + source.tableStarts[i];
+      const auto          derivatives = source.derivatives.begin() + source.tableStarts[i];
+      std::vector<double> key(energies, energies + source.tableSizes[i]);
+      key.insert(key.end(), derivatives, derivatives + source.tableSizes[i]);
+      const auto [entry, inserted] = tables.try_emplace(std::move(key), static_cast<int>(destination.energies.size()));
+      if (inserted) {
+        destination.energies.insert(destination.energies.end(), energies, energies + source.tableSizes[i]);
+        destination.derivatives.insert(destination.derivatives.end(), derivatives, derivatives + source.tableSizes[i]);
+      }
+      known = batchStarts.emplace(source.tableStarts[i], entry->second).first;
+    }
+    destination.tableStarts.push_back(known->second);
+  }
+}
+
+template <typename ParameterScalar>
+void uploadGaussianTorsionTerms(GaussianTorsionContribTermsDeviceT<ParameterScalar>& destination,
+                                const GaussianTorsionContribTerms&                   source) {
+  destination.idx1.setFromVector(source.idx1);
+  destination.idx2.setFromVector(source.idx2);
+  destination.idx3.setFromVector(source.idx3);
+  destination.idx4.setFromVector(source.idx4);
+  destination.tableStarts.setFromVector(source.tableStarts);
+  destination.tableSizes.setFromVector(source.tableSizes);
+  uploadWithPrecisionConversion(destination.scaling, source.scaling);
+  uploadWithPrecisionConversion(destination.energies, source.energies);
+  uploadWithPrecisionConversion(destination.derivatives, source.derivatives);
+}
+
+template <typename ParameterScalar>
+void setGaussianTorsionStreams(GaussianTorsionContribTermsDeviceT<ParameterScalar>& terms, cudaStream_t stream) {
+  terms.idx1.setStream(stream);
+  terms.idx2.setStream(stream);
+  terms.idx3.setStream(stream);
+  terms.idx4.setStream(stream);
+  terms.tableStarts.setStream(stream);
+  terms.tableSizes.setStream(stream);
+  terms.scaling.setStream(stream);
+  terms.energies.setStream(stream);
+  terms.derivatives.setStream(stream);
+}
+
+template <typename ParameterScalar>
+GaussianTorsionContribTermsDevicePtrT<ParameterScalar> toGaussianTorsionPointerStruct(
+  const GaussianTorsionContribTermsDeviceT<ParameterScalar>& src) {
+  return {src.idx1.data(),
+          src.idx2.data(),
+          src.idx3.data(),
+          src.idx4.data(),
+          src.tableStarts.data(),
+          src.tableSizes.data(),
+          src.scaling.data(),
+          src.energies.data(),
+          src.derivatives.data()};
 }
 
 }  // namespace
@@ -159,6 +234,7 @@ void preallocateEstimatedBatch3D(const Energy3DForceContribsHost& templateContri
   // Preallocate index vectors
   auto& indexHolder = molSystem.indices;
   indexHolder.experimentalTorsionTermStarts.reserve(estimatedBatchSize + 1);
+  indexHolder.gaussianTorsionTermStarts.reserve(estimatedBatchSize + 1);
   indexHolder.improperTorsionTermStarts.reserve(estimatedBatchSize + 1);
   indexHolder.dist12TermStarts.reserve(estimatedBatchSize + 1);
   indexHolder.dist13TermStarts.reserve(estimatedBatchSize + 1);
@@ -281,6 +357,8 @@ void addMoleculeToMolecularSystem3D(const Energy3DForceContribsHost& contribs,
   // Update term starts
   indexHolder.experimentalTorsionTermStarts.push_back(indexHolder.experimentalTorsionTermStarts.back() +
                                                       contribs.experimentalTorsionTerms.idx1.size());
+  indexHolder.gaussianTorsionTermStarts.push_back(indexHolder.gaussianTorsionTermStarts.back() +
+                                                  contribs.gaussianTorsionTerms.idx1.size());
   indexHolder.improperTorsionTermStarts.push_back(indexHolder.improperTorsionTermStarts.back() +
                                                   contribs.improperTorsionTerms.idx1.size());
   indexHolder.dist12TermStarts.push_back(indexHolder.dist12TermStarts.back() + contribs.dist12Terms.idx1.size());
@@ -292,6 +370,7 @@ void addMoleculeToMolecularSystem3D(const Energy3DForceContribsHost& contribs,
   // Calculate number of blocks needed
   int maxNumContribs = 0;
   maxNumContribs     = std::max<int>(maxNumContribs, contribs.experimentalTorsionTerms.idx1.size());
+  maxNumContribs     = std::max<int>(maxNumContribs, contribs.gaussianTorsionTerms.idx1.size());
   maxNumContribs     = std::max<int>(maxNumContribs, contribs.improperTorsionTerms.idx1.size());
   maxNumContribs     = std::max<int>(maxNumContribs, contribs.dist12Terms.idx1.size());
   maxNumContribs     = std::max<int>(maxNumContribs, contribs.dist13Terms.idx1.size());
@@ -339,6 +418,11 @@ void addMoleculeToMolecularSystem3D(const Energy3DForceContribsHost& contribs,
   contribHolder.experimentalTorsionTerms.signs.insert(contribHolder.experimentalTorsionTerms.signs.end(),
                                                       contribs.experimentalTorsionTerms.signs.begin(),
                                                       contribs.experimentalTorsionTerms.signs.end());
+
+  appendGaussianTorsionTerms(contribHolder.gaussianTorsionTerms,
+                             contribs.gaussianTorsionTerms,
+                             previousLastAtomIndex,
+                             molSystem.gaussianTorsionTables);
 
   // Improper torsion terms
   const size_t numImproperTerms = contribs.improperTorsionTerms.idx1.size();
@@ -572,6 +656,7 @@ void sendContribsAndIndicesToDevice3DImpl(const BatchedMolecularSystem3DHost&   
   uploadWithPrecisionConversion(deviceContribs.experimentalTorsionTerms.forceConstants,
                                 hostContribs.experimentalTorsionTerms.forceConstants);
   deviceContribs.experimentalTorsionTerms.signs.setFromVector(hostContribs.experimentalTorsionTerms.signs);
+  uploadGaussianTorsionTerms(deviceContribs.gaussianTorsionTerms, hostContribs.gaussianTorsionTerms);
 
   // Improper torsion terms
   deviceContribs.improperTorsionTerms.idx1.setFromVector(hostContribs.improperTorsionTerms.idx1);
@@ -627,6 +712,7 @@ void sendContribsAndIndicesToDevice3DImpl(const BatchedMolecularSystem3DHost&   
   deviceIndices.atomIdxToBatchIdx.setFromVector(hostIndices.atomIdxToBatchIdx);
   deviceIndices.energyBufferBlockIdxToBatchIdx.setFromVector(hostIndices.energyBufferBlockIdxToBatchIdx);
   deviceIndices.experimentalTorsionTermStarts.setFromVector(hostIndices.experimentalTorsionTermStarts);
+  deviceIndices.gaussianTorsionTermStarts.setFromVector(hostIndices.gaussianTorsionTermStarts);
   deviceIndices.improperTorsionTermStarts.setFromVector(hostIndices.improperTorsionTermStarts);
   deviceIndices.dist12TermStarts.setFromVector(hostIndices.dist12TermStarts);
   deviceIndices.dist13TermStarts.setFromVector(hostIndices.dist13TermStarts);
@@ -675,6 +761,7 @@ void setStreams3DImpl(BatchedMolecular3DDeviceBuffersT<ParameterScalar>& devBuff
   devBuffers.indices.energyBufferBlockIdxToBatchIdx.setStream(stream);
   devBuffers.indices.atomIdxToBatchIdx.setStream(stream);
   devBuffers.indices.experimentalTorsionTermStarts.setStream(stream);
+  devBuffers.indices.gaussianTorsionTermStarts.setStream(stream);
   devBuffers.indices.improperTorsionTermStarts.setStream(stream);
   devBuffers.indices.dist12TermStarts.setStream(stream);
   devBuffers.indices.dist13TermStarts.setStream(stream);
@@ -687,6 +774,7 @@ void setStreams3DImpl(BatchedMolecular3DDeviceBuffersT<ParameterScalar>& devBuff
   devBuffers.contribs.experimentalTorsionTerms.idx4.setStream(stream);
   devBuffers.contribs.experimentalTorsionTerms.forceConstants.setStream(stream);
   devBuffers.contribs.experimentalTorsionTerms.signs.setStream(stream);
+  setGaussianTorsionStreams(devBuffers.contribs.gaussianTorsionTerms, stream);
 
   devBuffers.contribs.improperTorsionTerms.idx1.setStream(stream);
   devBuffers.contribs.improperTorsionTerms.idx2.setStream(stream);
@@ -955,6 +1043,27 @@ cudaError_t computeEnergyETK(BatchedMolecular3DDeviceBuffers& molSystemDevice,
                                          stream);
   }
 
+  // Gaussian experimental torsion terms
+  const auto& gaussian = contribs.gaussianTorsionTerms;
+  if (err == cudaSuccess && (term == ETKTerm::ALL || term == ETKTerm::PLAIN || term == ETKTerm::EXPERIMANTAL_TORSION)) {
+    err = launchGaussianTorsionEnergyKernel(gaussian.idx1.size(),
+                                            gaussian.idx1.data(),
+                                            gaussian.idx2.data(),
+                                            gaussian.idx3.data(),
+                                            gaussian.idx4.data(),
+                                            gaussian.tableStarts.data(),
+                                            gaussian.tableSizes.data(),
+                                            gaussian.scaling.data(),
+                                            gaussian.energies.data(),
+                                            posData,
+                                            molSystemDevice.energyBuffer.data(),
+                                            molSystemDevice.indices.energyBufferStarts.data(),
+                                            molSystemDevice.indices.atomIdxToBatchIdx.data(),
+                                            molSystemDevice.indices.gaussianTorsionTermStarts.data(),
+                                            activeSystemMask,
+                                            stream);
+  }
+
   // Improper torsion terms
   if (err == cudaSuccess && (term == ETKTerm::ALL || term == ETKTerm::IMPPROPER_TORSION) &&
       contribs.improperTorsionTerms.idx1.size() > 0) {
@@ -1111,6 +1220,25 @@ cudaError_t computeGradientsETK(BatchedMolecular3DDeviceBuffers& molSystemDevice
                                            ctxAtomStarts,
                                            activeSystemMask,
                                            stream);
+  }
+
+  // Gaussian experimental torsion terms
+  const auto& gaussian = contribs.gaussianTorsionTerms;
+  if (err == cudaSuccess && (term == ETKTerm::ALL || term == ETKTerm::PLAIN || term == ETKTerm::EXPERIMANTAL_TORSION)) {
+    err = launchGaussianTorsionGradientKernel(gaussian.idx1.size(),
+                                              gaussian.idx1.data(),
+                                              gaussian.idx2.data(),
+                                              gaussian.idx3.data(),
+                                              gaussian.idx4.data(),
+                                              gaussian.tableStarts.data(),
+                                              gaussian.tableSizes.data(),
+                                              gaussian.scaling.data(),
+                                              gaussian.derivatives.data(),
+                                              ctxPositions,
+                                              grad,
+                                              molSystemDevice.indices.atomIdxToBatchIdx.data(),
+                                              activeSystemMask,
+                                              stream);
   }
 
   // Improper torsion terms
@@ -1373,6 +1501,7 @@ Energy3DForceContribsDevicePtrT<Scalar> toPointerStruct(const Energy3DForceContr
   dst.experimentalTorsionTerms.idx4           = src.experimentalTorsionTerms.idx4.data();
   dst.experimentalTorsionTerms.forceConstants = src.experimentalTorsionTerms.forceConstants.data();
   dst.experimentalTorsionTerms.signs          = src.experimentalTorsionTerms.signs.data();
+  dst.gaussianTorsionTerms                    = toGaussianTorsionPointerStruct(src.gaussianTorsionTerms);
 
   dst.improperTorsionTerms.idx1          = src.improperTorsionTerms.idx1.data();
   dst.improperTorsionTerms.idx2          = src.improperTorsionTerms.idx2.data();
@@ -1416,6 +1545,7 @@ inline BatchedIndices3DDevicePtr toPointerStruct(const BatchedIndices3DDevice& s
   BatchedIndices3DDevicePtr dst;
   dst.atomStarts                    = atomStarts;
   dst.experimentalTorsionTermStarts = src.experimentalTorsionTermStarts.data();
+  dst.gaussianTorsionTermStarts     = src.gaussianTorsionTermStarts.data();
   dst.improperTorsionTermStarts     = src.improperTorsionTermStarts.data();
   dst.dist12TermStarts              = src.dist12TermStarts.data();
   dst.dist13TermStarts              = src.dist13TermStarts.data();
@@ -1557,6 +1687,8 @@ void sendAllInOneSystemToDeviceImpl(const BatchedAllInOneSystemHost&            
   upload(torsionDevice.idx4, torsionHost.idx4, stream);
   upload(torsionDevice.forceConstants, torsionHost.forceConstants, stream);
   upload(torsionDevice.signs, torsionHost.signs, stream);
+  setGaussianTorsionStreams(systemDevice.gaussianTorsionTerms, stream);
+  uploadGaussianTorsionTerms(systemDevice.gaussianTorsionTerms, systemHost.gaussianTorsionTerms);
 
   const auto& planarityHost   = systemHost.planarityTerms;
   auto&       planarityDevice = systemDevice.planarityTerms;
@@ -1568,6 +1700,7 @@ void sendAllInOneSystemToDeviceImpl(const BatchedAllInOneSystemHost&            
   upload(systemDevice.harmonicDistanceTermStarts, systemHost.harmonicDistanceTermStarts, stream);
   upload(systemDevice.linearAngleTermStarts, systemHost.linearAngleTermStarts, stream);
   upload(systemDevice.experimentalTorsionTermStarts, systemHost.experimentalTorsionTermStarts, stream);
+  upload(systemDevice.gaussianTorsionTermStarts, systemHost.gaussianTorsionTermStarts, stream);
   upload(systemDevice.planarityTermStarts, systemHost.planarityTermStarts, stream);
 }
 
@@ -1599,12 +1732,14 @@ AllInOneContribsDevicePtrT<ParameterScalar> toAllInOneContribsDevicePtrImpl(
                                   torsion.idx4.data(),
                                   torsion.forceConstants.data(),
                                   torsion.signs.data()};
+  dst.gaussianTorsionTerms     = toGaussianTorsionPointerStruct(systemDevice.gaussianTorsionTerms);
   const auto& planarity        = systemDevice.planarityTerms;
   dst.planarityTerms = {planarity.idx1.data(), planarity.idx2.data(), planarity.idx3.data(), planarity.idx4.data()};
 
   dst.harmonicDistanceTermStarts    = systemDevice.harmonicDistanceTermStarts.data();
   dst.linearAngleTermStarts         = systemDevice.linearAngleTermStarts.data();
   dst.experimentalTorsionTermStarts = systemDevice.experimentalTorsionTermStarts.data();
+  dst.gaussianTorsionTermStarts     = systemDevice.gaussianTorsionTermStarts.data();
   dst.planarityTermStarts           = systemDevice.planarityTermStarts.data();
   return dst;
 }
@@ -1653,6 +1788,12 @@ void addMoleculeToAllInOneSystem(const AllInOneForceContribsHost& contribs,
   append(system.experimentalTorsionTerms.forceConstants, torsion.forceConstants);
   append(system.experimentalTorsionTerms.signs, torsion.signs);
   appendTermStart(system.experimentalTorsionTermStarts, torsion.idx1.size());
+
+  appendGaussianTorsionTerms(system.gaussianTorsionTerms,
+                             contribs.gaussianTorsionTerms,
+                             atomOffset,
+                             system.gaussianTorsionTables);
+  appendTermStart(system.gaussianTorsionTermStarts, contribs.gaussianTorsionTerms.idx1.size());
 
   const auto& planarity = contribs.planarityTerms;
   appendOffsetIndices(system.planarityTerms.idx1, planarity.idx1, atomOffset);

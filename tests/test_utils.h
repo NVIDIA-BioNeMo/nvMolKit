@@ -18,11 +18,14 @@
 
 #include <Geometry/point.h>
 #include <GraphMol/DistGeomHelpers/Embedder.h>
+#include <GraphMol/ForceFieldHelpers/CrystalFF/TorsionPreferences.h>
 #include <GraphMol/ROMol.h>
 
 #include <optional>
 #include <string>
 #include <vector>
+
+#include "versions.h"
 
 /**
  * @brief Macro to check CUDA operation success
@@ -40,7 +43,9 @@ enum class ETKDGOption {
   ETKDG,
   ETDG,
   KDG,
-  DG
+  DG,
+  //! RDKit 2026.09+ only; getETKDGOption throws on older RDKit.
+  ETKDGv4
 };
 
 /**
@@ -71,6 +76,20 @@ std::string getETKDGOptionName(ETKDGOption opt);
  * @throw std::runtime_error If the test data folder cannot be found
  */
 std::string getTestDataFolderPath();
+
+#if RDKIT_ETKDG_2026_09_API
+/**
+ * @brief Replaces the experimental torsions in details with RDKit's ETKDGv4 Gaussian torsions and lookup tables.
+ *
+ * Mirrors RDKit's ETversion 4 setup (getExperimentalTorsions with version 4, then populateRefTable) on details
+ * prepared by nvMolKit for another ETversion. RDKit scales the torsion terms by the force constants, so they are set
+ * first.
+ */
+void setGaussianTorsions(const RDKit::ROMol&                                     mol,
+                         const RDKit::DGeomHelpers::EmbedParameters&             params,
+                         const ForceFields::CrystalFF::ETKDGForceConsts::Params& forceConsts,
+                         ForceFields::CrystalFF::CrystalFFDetails&               details);
+#endif
 
 /**
  * @brief Loads molecules from a file into a vector
