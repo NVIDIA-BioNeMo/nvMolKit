@@ -113,7 +113,7 @@ target_link_libraries(
           dist_geom
           rdkit_dist_geom_flattened
           nvmolkit_versions
-          etkdg)
+          etkdg_impl)
 
 add_library(etkdg etkdg.cpp conformer/device_conformer_pruning.cpp)
 target_link_libraries(

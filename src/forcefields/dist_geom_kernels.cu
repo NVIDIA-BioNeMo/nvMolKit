@@ -923,19 +923,6 @@ cudaError_t launchAngleConstraintGradientKernel(const int      numAngle,
   return cudaGetLastError();
 }
 
-cudaError_t launchReduceEnergiesKernel(const int      numBlocks,
-                                       const double*  energyBuffer,
-                                       const int*     energyBufferBlockIdxToBatchIdx,
-                                       double*        outs,
-                                       const uint8_t* activeThisStage,
-                                       cudaStream_t   stream) {
-  reduceEnergiesKernel<<<numBlocks, blockSizeEnergyReduction, 0, stream>>>(energyBuffer,
-                                                                           energyBufferBlockIdxToBatchIdx,
-                                                                           outs,
-                                                                           activeThisStage);
-  return cudaGetLastError();
-}
-
 constexpr int blockSizePerMol = 128;
 
 template <int dimension>

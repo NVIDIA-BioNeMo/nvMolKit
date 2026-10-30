@@ -26,13 +26,14 @@
 #          SONAMEs so the globs allow the suffix.
 #        - cuda runtime (libcudart*, libcuda*) provided at runtime by the
 #          nvidia-cuda-runtime-cu12 wheel under <site-packages>/nvidia/.
-#   2. patchelf RPATH on every nvmolkit/_*.so so the dynamic linker can find
-#      those externally-shipped libs at runtime. From <site-packages>/nvmolkit/
-#      we add:
+#   2. patchelf RPATH on every nvmolkit/*.so (the _*.so modules and the
+#      internal shared libraries they link) so the dynamic linker can find
+#      nvMolKit's libraries and the externally-shipped libs at runtime. From
+#      <site-packages>/nvmolkit/ we set:
+#        - $ORIGIN                              (internal shared libraries)
+#        - $ORIGIN/../nvmolkit.libs             (libs auditwheel bundled, e.g. libgomp)
 #        - $ORIGIN/../rdkit.libs                (rdkit + boost + system libs)
 #        - $ORIGIN/../nvidia/cuda_runtime/lib   (libcudart.so.12)
-#      and preserve auditwheel's existing $ORIGIN/../nvmolkit.libs entry that
-#      points at any libs it actually bundled (e.g. libgomp).
 #
 # Usage (invoked by cibuildwheel via [tool.cibuildwheel.linux].repair-wheel-command):
 #   ./repair_wheel.sh <dest_dir> <wheel>
@@ -84,15 +85,17 @@ trap 'rm -rf "${WORK}"' EXIT
 
 unzip -q "${REPAIRED_WHEEL}" -d "${WORK}"
 
-# Each nvmolkit/_*.so resolves siblings in nvmolkit.libs/ (auditwheel's vendor
-# dir), and externally-shipped libs in rdkit.libs/ and nvidia/cuda_runtime/lib
-# under the same site-packages root. Use DT_RPATH (--force-rpath) rather than
-# DT_RUNPATH so the search applies recursively to second-level deps. The libs
+# Each nvmolkit/*.so (the _*.so modules and the internal shared libraries they
+# link) resolves internal libraries in nvmolkit/, siblings in nvmolkit.libs/
+# (auditwheel's vendor dir), and externally-shipped libs in rdkit.libs/ and
+# nvidia/cuda_runtime/lib under the same site-packages root. Use DT_RPATH
+# (--force-rpath) rather than DT_RUNPATH so the search applies recursively to
+# second-level deps. The libs
 # inside rdkit.libs/ have no rpath of their own and rely on RPATH inheritance
 # from the entry-point module to find their rdkit.libs/ siblings - rdkit's
 # own python bindings work the same way.
-NEW_RPATH="\$ORIGIN/../nvmolkit.libs:\$ORIGIN/../rdkit.libs:\$ORIGIN/../nvidia/cuda_runtime/lib"
-find "${WORK}/nvmolkit" -maxdepth 1 -name '_*.so' -type f | while read -r so; do
+NEW_RPATH="\$ORIGIN:\$ORIGIN/../nvmolkit.libs:\$ORIGIN/../rdkit.libs:\$ORIGIN/../nvidia/cuda_runtime/lib"
+find "${WORK}/nvmolkit" -maxdepth 1 -name '*.so' -type f | while read -r so; do
     patchelf --force-rpath --set-rpath "${NEW_RPATH}" "${so}"
 done
 

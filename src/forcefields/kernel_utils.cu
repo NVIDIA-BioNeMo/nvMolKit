@@ -42,5 +42,18 @@ __global__ void reduceEnergiesKernel(const double*  energyBuffer,
   }
 }
 
+cudaError_t launchReduceEnergiesKernel(const int      numBlocks,
+                                       const double*  energyBuffer,
+                                       const int*     energyBufferBlockIdxToBatchIdx,
+                                       double*        outs,
+                                       const uint8_t* activeThisStage,
+                                       cudaStream_t   stream) {
+  reduceEnergiesKernel<<<numBlocks, blockSizeEnergyReduction, 0, stream>>>(energyBuffer,
+                                                                           energyBufferBlockIdxToBatchIdx,
+                                                                           outs,
+                                                                           activeThisStage);
+  return cudaGetLastError();
+}
+
 }  // namespace FFKernelUtils
 }  // namespace nvMolKit
