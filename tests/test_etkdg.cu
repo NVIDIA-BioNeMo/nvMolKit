@@ -745,7 +745,9 @@ void testConformerEnergyComparison(const std::vector<RDKit::ROMol*>&    mols,
 
 }  // anonymous namespace
 
-class ETKDGPipelineEnergyTestFixture : public ::testing::TestWithParam<std::tuple<ETKDGOption, nvMolKit::BfgsBackend>> {
+//! Parameters: ETKDG preset, BFGS backend, and whether to use RDKit's legacy refinement (true) or all-in-one (false).
+class ETKDGPipelineEnergyTestFixture
+    : public ::testing::TestWithParam<std::tuple<ETKDGOption, nvMolKit::BfgsBackend, bool>> {
  public:
   ETKDGPipelineEnergyTestFixture() { testDataFolderPath_ = getTestDataFolderPath(); }
 
@@ -771,66 +773,75 @@ class ETKDGPipelineEnergyTestFixture : public ::testing::TestWithParam<std::tupl
   }
 
  protected:
+  //! The preset with the refinement set explicitly, since presets differ in their default.
+  static RDKit::DGeomHelpers::EmbedParameters embedParams() {
+    auto params = getETKDGOption(std::get<0>(GetParam()));
+#if RDKIT_AIO_ETKDG_API
+    params.useLegacyImplementation = std::get<2>(GetParam());
+#endif
+    return params;
+  }
+
   std::string                                testDataFolderPath_;
   std::vector<std::unique_ptr<RDKit::RWMol>> molsPtrs_;
   std::vector<RDKit::ROMol*>                 mols_;
 };
 
 TEST_P(ETKDGPipelineEnergyTestFixture, SingleMoleculeEnergyImprovement) {
-  auto                       params    = getETKDGOption(std::get<0>(GetParam()));
+  auto                       params    = embedParams();
   auto                       backend   = std::get<1>(GetParam());
   std::vector<RDKit::ROMol*> singleMol = {mols_[0]};
   testEnergyImprovement(singleMol, 1, params, backend);
 }
 
 TEST_P(ETKDGPipelineEnergyTestFixture, MultipleMoleculesEnergyImprovement) {
-  auto params  = getETKDGOption(std::get<0>(GetParam()));
+  auto params  = embedParams();
   auto backend = std::get<1>(GetParam());
   testEnergyImprovement(mols_, 1, params, backend);
 }
 
 TEST_P(ETKDGPipelineEnergyTestFixture, SingleMoleculeMultipleConformers) {
-  auto                       params    = getETKDGOption(std::get<0>(GetParam()));
+  auto                       params    = embedParams();
   auto                       backend   = std::get<1>(GetParam());
   std::vector<RDKit::ROMol*> singleMol = {mols_[0]};
   testEnergyImprovement(singleMol, 5, params, backend);
 }
 
 TEST_P(ETKDGPipelineEnergyTestFixture, MultipleMoleculesMultipleConformers) {
-  auto params  = getETKDGOption(std::get<0>(GetParam()));
+  auto params  = embedParams();
   auto backend = std::get<1>(GetParam());
   testEnergyImprovement(mols_, 3, params, backend);
 }
 
 TEST_P(ETKDGPipelineEnergyTestFixture, SingleMoleculeConformerEnergyComparison) {
-  auto                       params    = getETKDGOption(std::get<0>(GetParam()));
+  auto                       params    = embedParams();
   auto                       backend   = std::get<1>(GetParam());
   std::vector<RDKit::ROMol*> singleMol = {mols_[0]};
   testConformerEnergyComparison(singleMol, 1, params, {10, 7, 10}, backend);
 }
 
 TEST_P(ETKDGPipelineEnergyTestFixture, MultipleMoleculesConformerEnergyComparison) {
-  auto params  = getETKDGOption(std::get<0>(GetParam()));
+  auto params  = embedParams();
   auto backend = std::get<1>(GetParam());
   testConformerEnergyComparison(mols_, 1, params, {10, 7, 10}, backend);
 }
 
 TEST_P(ETKDGPipelineEnergyTestFixture, SingleMoleculeMultipleConformersEnergyComparison) {
-  auto                       params    = getETKDGOption(std::get<0>(GetParam()));
+  auto                       params    = embedParams();
   auto                       backend   = std::get<1>(GetParam());
   std::vector<RDKit::ROMol*> singleMol = {mols_[0]};
   testConformerEnergyComparison(singleMol, 10, params, {10, 7, 10}, backend);
 }
 
 TEST_P(ETKDGPipelineEnergyTestFixture, MultipleMoleculesMultipleConformersEnergyComparison) {
-  auto params  = getETKDGOption(std::get<0>(GetParam()));
+  auto params  = embedParams();
   auto backend = std::get<1>(GetParam());
   testConformerEnergyComparison(mols_, 10, params, {10, 7, 10}, backend);
 }
 
 TEST_P(ETKDGPipelineEnergyTestFixture, DefaultHardwareOptionsOpenMPMaxThreads) {
   // Test using default BatchHardwareOptions which should use omp_get_max_threads()
-  auto                                 params  = getETKDGOption(std::get<0>(GetParam()));
+  auto                                 params  = embedParams();
   auto                                 backend = std::get<1>(GetParam());
   const nvMolKit::BatchHardwareOptions defaultOptions;                   // Uses -1 values for automatic detection
   const std::vector<RDKit::ROMol*>     testMols = {mols_[0], mols_[1]};  // Use subset for efficiency
@@ -839,7 +850,7 @@ TEST_P(ETKDGPipelineEnergyTestFixture, DefaultHardwareOptionsOpenMPMaxThreads) {
 
 TEST_P(ETKDGPipelineEnergyTestFixture, SpecificGpuIds) {
   // Test using GPU ID 0 (should always be available if CUDA is working)
-  auto                           params  = getETKDGOption(std::get<0>(GetParam()));
+  auto                           params  = embedParams();
   auto                           backend = std::get<1>(GetParam());
   nvMolKit::BatchHardwareOptions customOptions;
   customOptions.preprocessingThreads = 1;
@@ -858,7 +869,7 @@ TEST_P(ETKDGPipelineEnergyTestFixture, NonZeroGPUID) {
     GTEST_SKIP() << "Test requires multiple GPUs, only " << numDevices << " available";
   }
 
-  auto                           params  = getETKDGOption(std::get<0>(GetParam()));
+  auto                           params  = embedParams();
   auto                           backend = std::get<1>(GetParam());
   nvMolKit::BatchHardwareOptions customOptions;
   customOptions.preprocessingThreads = 1;
@@ -877,7 +888,7 @@ TEST_P(ETKDGPipelineEnergyTestFixture, MultiGPUSpecificIds) {
     GTEST_SKIP() << "Test requires multiple GPUs, only " << numDevices << " available";
   }
 
-  auto                           params  = getETKDGOption(std::get<0>(GetParam()));
+  auto                           params  = embedParams();
   auto                           backend = std::get<1>(GetParam());
   nvMolKit::BatchHardwareOptions customOptions;
   customOptions.preprocessingThreads = 1;
@@ -890,22 +901,36 @@ TEST_P(ETKDGPipelineEnergyTestFixture, MultiGPUSpecificIds) {
 }
 
 // Instantiate parameterized tests for different ETKDG variants and backends
-INSTANTIATE_TEST_SUITE_P(ETKDGVariants,
-                         ETKDGPipelineEnergyTestFixture,
-                         ::testing::Combine(::testing::Values(ETKDGOption::ETKDG,
-                                                              ETKDGOption::ETKDGv2,
-                                                              ETKDGOption::srETKDGv3,
-                                                              ETKDGOption::ETKDGv3,
-                                                              ETKDGOption::KDG,
-                                                              ETKDGOption::ETDG,
-                                                              ETKDGOption::DG),
-                                            ::testing::Values(nvMolKit::BfgsBackend::BATCHED,
-                                                              nvMolKit::BfgsBackend::PER_MOLECULE)),
-                         [](const ::testing::TestParamInfo<std::tuple<ETKDGOption, nvMolKit::BfgsBackend>>& info) {
-                           std::string backend_name =
-                             (std::get<1>(info.param) == nvMolKit::BfgsBackend::BATCHED) ? "Batched" : "PerMolecule";
-                           return getETKDGOptionName(std::get<0>(info.param)) + "_" + backend_name;
-                         });
+const std::vector<ETKDGOption> kPipelineOptions = {
+  ETKDGOption::ETKDG,
+  ETKDGOption::ETKDGv2,
+  ETKDGOption::srETKDGv3,
+  ETKDGOption::ETKDGv3,
+  ETKDGOption::KDG,
+  ETKDGOption::ETDG,
+  ETKDGOption::DG,
+#if RDKIT_ETKDG_2026_09_API
+  ETKDGOption::ETKDGv4,
+#endif
+};
+
+#if RDKIT_AIO_ETKDG_API
+const std::vector<bool> kPipelineRefinements = {true, false};
+#else
+const std::vector<bool> kPipelineRefinements = {true};
+#endif
+
+INSTANTIATE_TEST_SUITE_P(
+  ETKDGVariants,
+  ETKDGPipelineEnergyTestFixture,
+  ::testing::Combine(::testing::ValuesIn(kPipelineOptions),
+                     ::testing::Values(nvMolKit::BfgsBackend::BATCHED, nvMolKit::BfgsBackend::PER_MOLECULE),
+                     ::testing::ValuesIn(kPipelineRefinements)),
+  [](const ::testing::TestParamInfo<std::tuple<ETKDGOption, nvMolKit::BfgsBackend, bool>>& info) {
+    std::string backend_name = (std::get<1>(info.param) == nvMolKit::BfgsBackend::BATCHED) ? "Batched" : "PerMolecule";
+    const std::string refinement = std::get<2>(info.param) ? "Legacy" : "AllInOne";
+    return getETKDGOptionName(std::get<0>(info.param)) + "_" + backend_name + "_" + refinement;
+  });
 
 class ETKDGBackendTestFixture : public ::testing::TestWithParam<nvMolKit::BfgsBackend> {};
 
@@ -989,11 +1014,16 @@ INSTANTIATE_TEST_SUITE_P(BfgsBackends,
 
 TEST(ETKDGParameters, RejectsUnsupportedOptions) {
   using nvMolKit::DGeomHelpers::validateSupportedEmbedParameters;
-  for (const unsigned int version : {0u, 3u, 4u}) {
+  for (const unsigned int version : {0u, 3u, 5u}) {
     auto parameters      = RDKit::DGeomHelpers::ETKDGv3;
     parameters.ETversion = version;
     EXPECT_THROW(validateSupportedEmbedParameters(parameters), ValueErrorException) << "ETversion " << version;
   }
+#if !RDKIT_ETKDG_2026_09_API
+  auto gaussian      = RDKit::DGeomHelpers::ETKDGv3;
+  gaussian.ETversion = 4;
+  EXPECT_THROW(validateSupportedEmbedParameters(gaussian), ValueErrorException);
+#endif
 #if RDKIT_ETKDG_2026_09_API
   auto mmff            = RDKit::DGeomHelpers::ETKDGv3;
   mmff.embedForceField = RDKit::DGeomHelpers::EmbedFF::MMFF;
@@ -1094,6 +1124,14 @@ INSTANTIATE_TEST_SUITE_P(Backends,
 #endif
 
 TEST(ETKDGParameters, SupportedModesAndUnsupportedOptions) {
+  auto versionFour      = RDKit::DGeomHelpers::ETKDGv3;
+  versionFour.ETversion = 4;
+#if RDKIT_ETKDG_2026_09_API
+  EXPECT_NO_THROW(nvMolKit::DGeomHelpers::validateSupportedEmbedParameters(versionFour));
+#else
+  EXPECT_THROW(nvMolKit::DGeomHelpers::validateSupportedEmbedParameters(versionFour), ValueErrorException);
+#endif
+
   for (const int version : {1, 2}) {
     auto parameters      = RDKit::DGeomHelpers::ETKDGv3;
     parameters.ETversion = version;
@@ -1103,7 +1141,7 @@ TEST(ETKDGParameters, SupportedModesAndUnsupportedOptions) {
     EXPECT_NO_THROW(nvMolKit::DGeomHelpers::validateSupportedEmbedParameters(parameters));
 #endif
   }
-  for (const int version : {-1, 0, 3, 4}) {
+  for (const int version : {-1, 0, 3, 5}) {
     auto parameters      = RDKit::DGeomHelpers::ETKDGv3;
     parameters.ETversion = version;
     EXPECT_THROW(nvMolKit::DGeomHelpers::validateSupportedEmbedParameters(parameters), ValueErrorException);
@@ -1125,3 +1163,118 @@ TEST(ETKDGParameters, SupportedModesAndUnsupportedOptions) {
   EXPECT_NO_THROW(nvMolKit::DGeomHelpers::validateSupportedEmbedParameters(parameters));
 #endif
 }
+
+#if RDKIT_ETKDG_2026_09_API
+//! prepareEmbedderArgs sets up ETKDGv4 as RDKit's initETKDG does: the refinement's Gaussian force constants first,
+//! because getExperimentalTorsions scales the torsions by them, then the torsions, then the lookup tables. The
+//! reference rebuilds the torsions from the expected constants on the prepared bounds, so a wrong constant or order
+//! changes the scalings.
+TEST(ETKDGParameters, ETKDGv4UsesRdkitGaussianForceConstantsForEachRefinement) {
+  namespace Consts = ForceFields::CrystalFF::ETKDGForceConsts;
+  std::unique_ptr<RDKit::RWMol> mol(RDKit::SmilesToMol("CC(=O)NCc1ccccc1C(C)CC"));
+  RDKit::MolOps::addHs(*mol);
+  for (const bool legacy : {true, false}) {
+    SCOPED_TRACE(legacy ? "legacy" : "all-in-one");
+    auto params                          = RDKit::DGeomHelpers::ETKDGv4;
+    params.useLegacyImplementation       = legacy;
+    const auto&                 expected = legacy ? Consts::SEQ::Gaussian : Consts::AIO::Gaussian;
+    nvMolKit::detail::EmbedArgs eargs;
+    ASSERT_TRUE(nvMolKit::DGeomHelpers::prepareEmbedderArgs(*mol, params, eargs));
+    const auto& details = eargs.etkdgDetails;
+    EXPECT_EQ(details.torsionParamKind, ForceFields::CrystalFF::TorsionParamKind::Gaussian);
+    EXPECT_EQ(details.forceConsts.kTermTorsion, expected.kTermTorsion);
+    EXPECT_EQ(details.forceConsts.etTermScaling, expected.etTermScaling);
+    EXPECT_EQ(details.forceConsts.distance, expected.distance);
+    EXPECT_EQ(details.forceConsts.kTermImproper, expected.kTermImproper);
+
+    ForceFields::CrystalFF::CrystalFFDetails reference;
+    reference.path14Configs = details.path14Configs;
+    reference.forceConsts   = expected;
+    ForceFields::CrystalFF::getExperimentalTorsions(*mol,
+                                                    reference,
+                                                    params.useExpTorsionAnglePrefs,
+                                                    params.useSmallRingTorsions,
+                                                    params.useMacrocycleTorsions,
+                                                    params.useBasicKnowledge,
+                                                    4,
+                                                    false);
+    ForceFields::CrystalFF::populateRefTable(reference);
+    ASSERT_FALSE(details.expTorsionAtoms.empty());
+    EXPECT_EQ(details.expTorsionAtoms, reference.expTorsionAtoms);
+    EXPECT_EQ(details.torsionIdx, reference.torsionIdx);
+    EXPECT_EQ(details.phiToEnergy, reference.phiToEnergy);
+    ASSERT_EQ(details.expTorsionAngles.size(), reference.expTorsionAngles.size());
+    for (std::size_t term = 0; term < details.expTorsionAngles.size(); ++term) {
+      EXPECT_EQ(std::get<3>(std::get<ForceFields::CrystalFF::GaussianExp_T>(details.expTorsionAngles[term])),
+                std::get<3>(std::get<ForceFields::CrystalFF::GaussianExp_T>(reference.expTorsionAngles[term])))
+        << "term " << term;
+    }
+  }
+}
+
+using GaussianETKDGBackendParams = std::tuple<nvMolKit::BfgsBackend, bool, nvMolKit::PrecisionMode>;
+
+class GaussianETKDGBackendTest : public ::testing::TestWithParam<GaussianETKDGBackendParams> {};
+
+//! Small molecules and one too large for the per-molecule kernel's shared memory all embed with ETKDGv4 on every
+//! backend, with either refinement, and give bonded atoms sensible distances. Batches of two conformers keep each
+//! molecule in its own batch, so HYBRID sends the small molecules to the per-molecule kernels.
+TEST_P(GaussianETKDGBackendTest, EmbedsSmallAndLargeMolecules) {
+  const auto [backend, legacy, precision] = GetParam();
+  std::vector<std::unique_ptr<RDKit::RWMol>> owners;
+  std::vector<RDKit::ROMol*>                 mols;
+  for (const auto& smiles :
+       {std::string("CCCC"), std::string("CC(=O)NCCc1ccccc1"), std::string("OCC(O)C(O)CO"), std::string(45, 'C')}) {
+    auto& mol = owners.emplace_back(RDKit::SmilesToMol(smiles));
+    ASSERT_NE(mol, nullptr);
+    RDKit::MolOps::addHs(*mol);
+    mols.push_back(mol.get());
+  }
+  ASSERT_GT(mols.back()->getNumAtoms(), 128u);
+  auto parameters                    = RDKit::DGeomHelpers::ETKDGv4;
+  parameters.useLegacyImplementation = legacy;
+  parameters.randomSeed              = 42;
+  nvMolKit::BatchHardwareOptions options;
+  options.batchSize = 2;
+  nvMolKit::embedMolecules(mols,
+                           parameters,
+                           2,
+                           -1,
+                           false,
+                           nullptr,
+                           options,
+                           backend,
+                           nvMolKit::CoordinateOutput::RDKIT_CONFORMERS,
+                           -1,
+                           precision);
+  for (std::size_t molIdx = 0; molIdx < mols.size(); ++molIdx) {
+    ASSERT_EQ(mols[molIdx]->getNumConformers(), 2u) << "molecule " << molIdx;
+    for (auto conformer = mols[molIdx]->beginConformers(); conformer != mols[molIdx]->endConformers(); ++conformer) {
+      for (const auto* bond : mols[molIdx]->bonds()) {
+        const double length =
+          ((*conformer)->getAtomPos(bond->getBeginAtomIdx()) - (*conformer)->getAtomPos(bond->getEndAtomIdx()))
+            .length();
+        EXPECT_GT(length, 0.8) << "molecule " << molIdx << " bond " << bond->getIdx();
+        EXPECT_LT(length, 1.8) << "molecule " << molIdx << " bond " << bond->getIdx();
+      }
+    }
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(Backends,
+                         GaussianETKDGBackendTest,
+                         ::testing::Combine(::testing::Values(nvMolKit::BfgsBackend::BATCHED,
+                                                              nvMolKit::BfgsBackend::PER_MOLECULE,
+                                                              nvMolKit::BfgsBackend::HYBRID),
+                                            ::testing::Values(false, true),
+                                            ::testing::Values(nvMolKit::PrecisionMode::FULL,
+                                                              nvMolKit::PrecisionMode::SINGLE)),
+                         [](const ::testing::TestParamInfo<GaussianETKDGBackendParams>& info) {
+                           const auto backend = std::get<0>(info.param);
+                           return std::string(backend == nvMolKit::BfgsBackend::BATCHED      ? "Batched" :
+                                              backend == nvMolKit::BfgsBackend::PER_MOLECULE ? "PerMolecule" :
+                                                                                               "Hybrid") +
+                                  (std::get<1>(info.param) ? "_Legacy" : "_AllInOne") +
+                                  (std::get<2>(info.param) == nvMolKit::PrecisionMode::FULL ? "_Double" : "_Float");
+                         });
+#endif

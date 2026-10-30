@@ -46,30 +46,14 @@ void          initTestComponentsCommon(const std::vector<RDKit::ROMol*>&        
     std::vector<std::unique_ptr<RDGeom::Point>> positions;
     std::unique_ptr<ForceFields::ForceField>    field;
 
-    // Setup force field and get parameters. prepareEmbedderArgs does not accept ETversion 4 yet, so ETKDGv4
-    // molecules are set up with ETversion 2 and their torsions rebuilt in RDKit's Gaussian form.
-    auto setupParams = embedParam;
-#if RDKIT_ETKDG_2026_09_API
-    if (embedParam.ETversion == 4) {
-      setupParams.ETversion               = 2;
-      setupParams.useLegacyImplementation = true;
-    }
-#endif
+    // Setup force field and get parameters
     nvMolKit::DGeomHelpers::setupRDKitFFWithPos(mols[i],
-                                                setupParams,
+                                                embedParam,
                                                 field,
                                                 eargs,
                                                 positions,
                                                 -1,  // Use default conformer
                                                 nvMolKit::DGeomHelpers::Dimensionality::DIM_4D);
-#if RDKIT_ETKDG_2026_09_API
-    if (embedParam.ETversion == 4) {
-      setGaussianTorsions(*mols[i],
-                          embedParam,
-                          ForceFields::CrystalFF::ETKDGForceConsts::SEQ::Gaussian,
-                          eargs.etkdgDetails);
-    }
-#endif
 
     // Add molecule to context with positions
     nvMolKit::DistGeom::addMoleculeToContextWithPositions(eargs.posVec,
@@ -298,6 +282,10 @@ TEST_P(ETKStageSingleMolTestFixture, MinimizeCompare) {
   const auto [etkdgOption, backend, precision] = GetParam();
   embedParam_                                  = getETKDGOption(etkdgOption);
   embedParam_.useRandomCoords                  = true;
+#if RDKIT_AIO_ETKDG_API
+  // This stage is the legacy refinement; ETKDGv4 would otherwise select the all-in-one force constants.
+  embedParam_.useLegacyImplementation = true;
+#endif
 
   // Initialize test components after setting embedParam_
   initTestComponents();
@@ -470,6 +458,10 @@ TEST_P(ETKStageMultiMolTestFixture, MinimizeCompare) {
   const auto [etkdgOption, backend, precision] = GetParam();
   embedParam_                                  = getETKDGOption(etkdgOption);
   embedParam_.useRandomCoords                  = true;
+#if RDKIT_AIO_ETKDG_API
+  // This stage is the legacy refinement; ETKDGv4 would otherwise select the all-in-one force constants.
+  embedParam_.useLegacyImplementation = true;
+#endif
 
   // Initialize test components after setting embedParam_
   initTestComponents();

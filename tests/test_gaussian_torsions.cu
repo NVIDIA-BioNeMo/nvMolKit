@@ -74,24 +74,18 @@ struct ETKMolecule {
   std::vector<double>          positions;
 };
 
-//! Prepares each molecule as RDKit's ETKDGv4 legacy embedder does. prepareEmbedderArgs does not accept ETversion 4
-//! yet, so the bounds come from ETversion 2 and the torsions are then rebuilt in the Gaussian form.
+//! Prepares each molecule's embedder state with perturbed or random coordinates.
 std::vector<ETKMolecule> prepareMolecules(const std::vector<std::unique_ptr<RDKit::ROMol>>& mols,
                                           const RDKit::DGeomHelpers::EmbedParameters&       params) {
   std::mt19937                           generator(1729);
   std::uniform_real_distribution<double> perturbation(-0.3, 0.3);
   std::uniform_real_distribution<double> randomCoordinate(-2.5, 2.5);
 
-  auto prepareParams      = params;
-  prepareParams.ETversion = 2;
   std::vector<ETKMolecule> prepared(mols.size());
   for (std::size_t molIdx = 0; molIdx < mols.size(); ++molIdx) {
     auto& mol      = *mols[molIdx];
     auto& molecule = prepared[molIdx];
-    EXPECT_TRUE(nvMolKit::DGeomHelpers::prepareEmbedderArgs(mol, prepareParams, molecule.eargs));
-    if (params.ETversion == 4) {
-      setGaussianTorsions(mol, params, CrystalFF::ETKDGForceConsts::SEQ::Gaussian, molecule.eargs.etkdgDetails);
-    }
+    EXPECT_TRUE(nvMolKit::DGeomHelpers::prepareEmbedderArgs(mol, params, molecule.eargs));
     for (unsigned int atomIdx = 0; atomIdx < mol.getNumAtoms(); ++atomIdx) {
       RDGeom::Point3D point;
       for (int dim = 0; dim < 3; ++dim) {

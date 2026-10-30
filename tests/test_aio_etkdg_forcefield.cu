@@ -66,9 +66,9 @@ std::vector<std::unique_ptr<RDKit::ROMol>> sdfMolecules(const std::string& fileN
   return mols;
 }
 
-//! Prepares each molecule with the all-in-one force constants. Coordinates start from the input conformer when there
-//! is one, are perturbed, and get a nonzero fourth dimension. prepareEmbedderArgs does not accept ETversion 4 yet, so
-//! ETKDGv4 molecules are prepared with ETversion 2 and their torsions rebuilt in RDKit's Gaussian form.
+//! Prepares each molecule for all-in-one refinement, which selects the all-in-one force constants before the torsions
+//! are built. Coordinates start from the input conformer when there is one, are perturbed, and get a nonzero fourth
+//! dimension.
 std::vector<AllInOneMolecule> prepareMolecules(const std::vector<std::unique_ptr<RDKit::ROMol>>& mols,
                                                const RDKit::DGeomHelpers::EmbedParameters&       params) {
   std::mt19937                           generator(1729);
@@ -77,22 +77,12 @@ std::vector<AllInOneMolecule> prepareMolecules(const std::vector<std::unique_ptr
 
   std::vector<AllInOneMolecule> prepared(mols.size());
   for (std::size_t molIdx = 0; molIdx < mols.size(); ++molIdx) {
-    auto& mol                             = *mols[molIdx];
-    auto& molecule                        = prepared[molIdx];
-    molecule.eargs.dim                    = 4;
-    auto prepareParams                    = params;
-    prepareParams.ETversion               = std::min(params.ETversion, 2u);
-    prepareParams.useLegacyImplementation = true;
-    EXPECT_TRUE(nvMolKit::DGeomHelpers::prepareEmbedderArgs(mol, prepareParams, molecule.eargs));
-    molecule.eargs.etkdgDetails.forceConsts = ForceFields::CrystalFF::ETKDGForceConsts::AIO::Cosine;
-#if RDKIT_ETKDG_2026_09_API
-    if (params.ETversion == 4) {
-      setGaussianTorsions(mol,
-                          params,
-                          ForceFields::CrystalFF::ETKDGForceConsts::AIO::Gaussian,
-                          molecule.eargs.etkdgDetails);
-    }
-#endif
+    auto& mol                              = *mols[molIdx];
+    auto& molecule                         = prepared[molIdx];
+    molecule.eargs.dim                     = 4;
+    auto allInOneParams                    = params;
+    allInOneParams.useLegacyImplementation = false;
+    EXPECT_TRUE(nvMolKit::DGeomHelpers::prepareEmbedderArgs(mol, allInOneParams, molecule.eargs));
     molecule.eargs.etkdgDetails.distMat = RDKit::MolOps::getDistanceMat(mol);
 
     for (unsigned int atomIdx = 0; atomIdx < mol.getNumAtoms(); ++atomIdx) {
