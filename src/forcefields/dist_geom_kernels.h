@@ -227,13 +227,6 @@ cudaError_t launchAngleConstraintGradientKernel(int            numAngle,
                                                 double         forceConstant   = defaultAngleForceConstant,
                                                 cudaStream_t   stream          = 0);
 
-cudaError_t launchReduceEnergiesKernel(int            numBlocks,
-                                       const double*  energyBuffer,
-                                       const int*     energyBufferBlockIdxToBatchIdx,
-                                       double*        outs,
-                                       const uint8_t* activeThisStage = nullptr,
-                                       cudaStream_t   stream          = 0);
-
 template <typename Scalar> struct DistViolationContribTermsDevicePtrT {
   const int*    idx1;
   const int*    idx2;

@@ -1166,12 +1166,12 @@ cudaError_t computeEnergyETK(BatchedMolecular3DDeviceBuffers& molSystemDevice,
   }
 
   if (err == cudaSuccess) {
-    return launchReduceEnergiesKernel(molSystemDevice.indices.energyBufferBlockIdxToBatchIdx.size(),
-                                      molSystemDevice.energyBuffer.data(),
-                                      molSystemDevice.indices.energyBufferBlockIdxToBatchIdx.data(),
-                                      energyOuts,
-                                      activeSystemMask,
-                                      stream);
+    return FFKernelUtils::launchReduceEnergiesKernel(molSystemDevice.indices.energyBufferBlockIdxToBatchIdx.size(),
+                                                     molSystemDevice.energyBuffer.data(),
+                                                     molSystemDevice.indices.energyBufferBlockIdxToBatchIdx.data(),
+                                                     energyOuts,
+                                                     activeSystemMask,
+                                                     stream);
   }
   return err;
 }
@@ -1408,12 +1408,12 @@ cudaError_t computePlanarEnergy(BatchedMolecular3DDeviceBuffers& molSystemDevice
   }
 
   if (err == cudaSuccess) {
-    return launchReduceEnergiesKernel(molSystemDevice.indices.energyBufferBlockIdxToBatchIdx.size(),
-                                      molSystemDevice.energyBuffer.data(),
-                                      molSystemDevice.indices.energyBufferBlockIdxToBatchIdx.data(),
-                                      energyOuts,
-                                      activeSystemMask,
-                                      stream);
+    return FFKernelUtils::launchReduceEnergiesKernel(molSystemDevice.indices.energyBufferBlockIdxToBatchIdx.size(),
+                                                     molSystemDevice.energyBuffer.data(),
+                                                     molSystemDevice.indices.energyBufferBlockIdxToBatchIdx.data(),
+                                                     energyOuts,
+                                                     activeSystemMask,
+                                                     stream);
   }
   return err;
 }
