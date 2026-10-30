@@ -26,7 +26,7 @@ target_link_libraries(
                                   molData OpenMP::OpenMP_CXX)
 
 add_executable(test_similarity test_similarity.cpp)
-target_link_libraries(test_similarity PRIVATE ${RDKit_LIBS} Similarity)
+target_link_libraries(test_similarity PRIVATE ${RDKit_LIBS} Similarity device)
 
 add_executable(test_cuda_error_check test_cuda_error_check.cpp)
 target_link_libraries(test_cuda_error_check PRIVATE cuda_error_check)
@@ -141,6 +141,8 @@ add_executable(test_mmff test_mmff.cu)
 target_link_libraries(
   test_mmff
   PRIVATE ${RDKit_LIBS}
+          device
+          ff_kernel_utils
           mmff_minimize
           rdkit_mmff_flattened
           mmff
@@ -221,6 +223,7 @@ add_executable(test_etkdg test_etkdg.cu test_etkdg_minimize.cu)
 target_link_libraries(
   test_etkdg
   PRIVATE etkdg_impl
+          device
           device_vector
           test_utils
           ${RDKit_LIBS}
@@ -266,6 +269,8 @@ add_executable(test_etkdg_coordgen test_etkdg_coordgen.cu)
 target_link_libraries(
   test_etkdg_coordgen
   PRIVATE dist_geom
+          embedder_utils
+          etkdg_impl
           rdkit_dist_geom_flattened
           test_utils
           etkdg
@@ -277,6 +282,7 @@ add_executable(test_bfgs_minimizer test_bfgs_minimizer.cu)
 target_link_libraries(
   test_bfgs_minimizer
   PRIVATE bfgs
+          device_convert
           batched_forcefield
           mmff_batched_forcefield
           rdkit_mmff_flattened
@@ -316,13 +322,25 @@ target_link_libraries(
 add_executable(test_etkdg_etk_minimize test_etkdg_etk_minimize.cu)
 target_link_libraries(
   test_etkdg_etk_minimize
-  PRIVATE etkdg_stages device_vector ${RDKit_LIBS} test_utils dist_geom
+  PRIVATE etkdg_stages
+          etkdg_impl
+          embedder_utils
+          device_vector
+          ${RDKit_LIBS}
+          test_utils
+          dist_geom
           rdkit_dist_geom_flattened)
 
 add_executable(test_etkdg_stereochem_checks test_etkdg_stereochem_checks.cu)
 target_link_libraries(
   test_etkdg_stereochem_checks
-  PRIVATE etkdg_stages device_vector ${RDKit_LIBS} test_utils dist_geom
+  PRIVATE etkdg_stages
+          etkdg_impl
+          embedder_utils
+          device_vector
+          ${RDKit_LIBS}
+          test_utils
+          dist_geom
           rdkit_dist_geom_flattened)
 
 add_executable(test_conformer_checkers test_conformer_checkers.cpp)
@@ -345,7 +363,8 @@ add_executable(test_diversity_pickers test_diversity_pickers.cu)
 target_link_libraries(test_diversity_pickers PRIVATE diversity_pickers device)
 
 add_executable(test_boolean_tree test_boolean_tree.cu)
-target_link_libraries(test_boolean_tree PRIVATE substruct_definitions device)
+target_link_libraries(test_boolean_tree PRIVATE substruct_definitions device
+                                                device_vector)
 
 add_executable(test_molecules test_molecules.cu)
 target_link_libraries(test_molecules PRIVATE molecules cuda_error_check
@@ -436,8 +455,8 @@ target_link_libraries(
                            test_utils)
 
 add_executable(test_tfd_gpu test_tfd_gpu.cpp)
-target_link_libraries(test_tfd_gpu PRIVATE ${RDKit_LIBS} tfd_gpu device_vector
-                                           test_utils)
+target_link_libraries(test_tfd_gpu PRIVATE ${RDKit_LIBS} tfd_gpu tfd_cpu
+                                           device_vector test_utils)
 
 add_executable(test_tfd test_tfd.cpp)
 target_link_libraries(test_tfd PRIVATE ${RDKit_LIBS} tfd_gpu tfd_cpu

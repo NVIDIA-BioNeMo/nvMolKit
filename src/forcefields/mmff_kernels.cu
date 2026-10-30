@@ -1049,20 +1049,6 @@ cudaError_t launchTorsionConstraintGradientKernel(const int     numConstraints,
   return cudaGetLastError();
 }
 
-cudaError_t launchReduceEnergiesKernel(const int      numBlocks,
-                                       const double*  energyBuffer,
-                                       const int*     energyBufferBlockIdxToBatchIdx,
-                                       double*        outs,
-                                       const uint8_t* activeThisStage,
-                                       cudaStream_t   stream) {
-  reduceEnergiesKernel<<<numBlocks, nvMolKit::FFKernelUtils::blockSizeEnergyReduction, 0, stream>>>(
-    energyBuffer,
-    energyBufferBlockIdxToBatchIdx,
-    outs,
-    activeThisStage);
-  return cudaGetLastError();
-}
-
 constexpr int blockSizePerMol = 128;
 
 template <bool HasConstraints, typename real, typename reduceT, typename Terms, typename storageT>

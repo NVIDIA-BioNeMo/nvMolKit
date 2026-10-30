@@ -34,6 +34,7 @@
 #include "src/embedder_utils.h"
 #include "src/forcefields/dist_geom.h"
 #include "src/forcefields/dist_geom_kernels.h"
+#include "src/forcefields/kernel_utils.cuh"
 #include "tests/test_utils.h"
 
 namespace {
@@ -756,10 +757,10 @@ std::vector<double> getEnergyTerm(nvMolKit::DistGeom::BatchedMolecularDeviceBuff
       break;
   }
   CHECK_CUDA_RETURN(
-    nvMolKit::DistGeom::launchReduceEnergiesKernel(deviceFF.indices.energyBufferBlockIdxToBatchIdx.size(),
-                                                   deviceFF.energyBuffer.data(),
-                                                   deviceFF.indices.energyBufferBlockIdxToBatchIdx.data(),
-                                                   deviceFF.energyOuts.data()));
+    nvMolKit::FFKernelUtils::launchReduceEnergiesKernel(deviceFF.indices.energyBufferBlockIdxToBatchIdx.size(),
+                                                        deviceFF.energyBuffer.data(),
+                                                        deviceFF.indices.energyBufferBlockIdxToBatchIdx.data(),
+                                                        deviceFF.energyOuts.data()));
   std::vector<double> energy(deviceFF.energyOuts.size());
   deviceFF.energyOuts.copyToHost(energy);
   return energy;
