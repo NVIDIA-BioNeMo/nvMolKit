@@ -160,3 +160,5 @@ target_link_libraries(_TFD PRIVATE ${RDKit_LIBS} tfd_gpu CUDA::cudart)
 target_include_directories(_TFD PUBLIC ${Boost_INCLUDE_DIRS}
                                        ${Python_INCLUDE_DIRS})
 installpythontarget(_TFD ./)
+
+installpythonsharedlibraries(${PROJECT_SOURCE_DIR} ./)
