@@ -79,7 +79,7 @@ def EmbedMolecules(
         - Coordinate constraints are not supported (SetCoordMap)
         - embedFragmentsSeparately is not supported. All fragments will be embedded together.
         - Eigenvalue-based initialization supports at most 256 atoms per molecule.
-        - ETKDG versions 1 through 4 are supported. ETKDGv4 requires RDKit 2026.09 or later.
+        - All RDKit embedding presets are supported. ETKDGv4 requires RDKit 2026.09 or later.
         - RDKit 2026.03.4 and later support all-in-one refinement via
           useLegacyImplementation=False.
         - On RDKit 2026.09 and later, these EmbedParameters settings raise ValueError:
