@@ -80,24 +80,6 @@ std::string getETKDGOptionName(ETKDGOption opt) {
   }
 }
 
-#if RDKIT_ETKDG_2026_09_API
-void setGaussianTorsions(const RDKit::ROMol&                                     mol,
-                         const RDKit::DGeomHelpers::EmbedParameters&             params,
-                         const ForceFields::CrystalFF::ETKDGForceConsts::Params& forceConsts,
-                         ForceFields::CrystalFF::CrystalFFDetails&               details) {
-  details.forceConsts = forceConsts;
-  ForceFields::CrystalFF::getExperimentalTorsions(mol,
-                                                  details,
-                                                  params.useExpTorsionAnglePrefs,
-                                                  params.useSmallRingTorsions,
-                                                  params.useMacrocycleTorsions,
-                                                  params.useBasicKnowledge,
-                                                  4,
-                                                  params.verbose);
-  ForceFields::CrystalFF::populateRefTable(details);
-}
-#endif
-
 std::string getTestDataFolderPath() {
   // Check for the NVMOLKIT_TESTDATA env variable
   const char* testDataEnv = std::getenv("NVMOLKIT_TESTDATA");

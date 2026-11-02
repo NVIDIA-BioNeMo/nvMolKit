@@ -308,6 +308,13 @@ void initETKDG(const ROMol*                                mol,
   etkdgDetails.forceConsts = params.useLegacyImplementation ? ForceFields::CrystalFF::ETKDGForceConsts::SEQ::Cosine :
                                                               ForceFields::CrystalFF::ETKDGForceConsts::AIO::Cosine;
 #endif
+#if RDKIT_ETKDG_2026_09_API
+  if (params.ETversion == 4) {
+    etkdgDetails.forceConsts = params.useLegacyImplementation ?
+                                 ForceFields::CrystalFF::ETKDGForceConsts::SEQ::Gaussian :
+                                 ForceFields::CrystalFF::ETKDGForceConsts::AIO::Gaussian;
+  }
+#endif
   if (params.useExpTorsionAnglePrefs || params.useBasicKnowledge) {
     ForceFields::CrystalFF::getExperimentalTorsions(*mol,
                                                     etkdgDetails,
@@ -322,6 +329,11 @@ void initETKDG(const ROMol*                                mol,
       etkdgDetails.atomNums[i] = mol->getAtomWithIdx(i)->getAtomicNum();
     }
   }
+#if RDKIT_ETKDG_2026_09_API
+  if (params.ETversion == 4) {
+    ForceFields::CrystalFF::populateRefTable(etkdgDetails);
+  }
+#endif
   etkdgDetails.boundsMatForceScaling = params.boundsMatForceScaling;
 }
 
@@ -691,10 +703,14 @@ void findDoubleBonds(const ROMol&                                               
 }  // namespace EmbeddingOps
 
 void validateSupportedEmbedParameters(const RDKit::DGeomHelpers::EmbedParameters& params) {
-  if (params.ETversion < 1 || params.ETversion > 2) {
-    throw ValueErrorException(
-      "Only version 1 and 2 of the experimental "
-      "torsion-angle preferences (ETversion) supported");
+  const bool cosine = params.ETversion == 1 || params.ETversion == 2;
+#if RDKIT_ETKDG_2026_09_API
+  const bool gaussian = params.ETversion == 4;
+#else
+  constexpr bool gaussian = false;
+#endif
+  if (!cosine && !gaussian) {
+    throw ValueErrorException("Supported ETversion values are 1 and 2, plus 4 with RDKit 2026.09 or later");
   }
 #if RDKIT_ETKDG_2026_09_API
   using RDKit::DGeomHelpers::InitialEmbeddingMode;

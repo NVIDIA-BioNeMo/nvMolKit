@@ -206,7 +206,7 @@ def use_implementation(params, implementation):
 
 
 @pytest.mark.parametrize("implementation", ["legacy", "all_in_one"])
-@pytest.mark.parametrize("etkdg_variant", ["ETKDG", "ETKDGv2", "ETKDGv3", "srETKDGv3", "KDG", "ETDG", "DG"])
+@pytest.mark.parametrize("etkdg_variant", ["ETKDG", "ETKDGv2", "ETKDGv3", "srETKDGv3", "ETKDGv4", "KDG", "ETDG", "DG"])
 def test_embed_molecules_serial_vs_rdkit(embed_test_mols, etkdg_variant, implementation, precision):
     """Test nvMolKit EmbedMolecules one molecule at a time against RDKit reference.
 
@@ -228,6 +228,10 @@ def test_embed_molecules_serial_vs_rdkit(embed_test_mols, etkdg_variant, impleme
         params = rdDistGeom.ETKDGv3()
     elif etkdg_variant == "srETKDGv3":
         params = rdDistGeom.srETKDGv3()
+    elif etkdg_variant == "ETKDGv4":
+        if not hasattr(rdDistGeom, "ETKDGv4"):
+            pytest.skip("ETKDGv4 requires RDKit 2026.09 or later")
+        params = rdDistGeom.ETKDGv4()
     elif etkdg_variant == "KDG":
         params = rdDistGeom.KDG()
     elif etkdg_variant == "ETDG":
@@ -287,7 +291,7 @@ def test_embed_molecules_serial_vs_rdkit(embed_test_mols, etkdg_variant, impleme
 
 
 @pytest.mark.parametrize("implementation", ["legacy", "all_in_one"])
-@pytest.mark.parametrize("etkdg_variant", ["ETKDG", "ETKDGv2", "ETKDGv3", "srETKDGv3", "KDG", "ETDG", "DG"])
+@pytest.mark.parametrize("etkdg_variant", ["ETKDG", "ETKDGv2", "ETKDGv3", "srETKDGv3", "ETKDGv4", "KDG", "ETDG", "DG"])
 @pytest.mark.parametrize("gpu_ids", [[], [0], [1], [0, 1]])
 def test_embed_molecules_batch_vs_rdkit(embed_test_mols, etkdg_variant, gpu_ids, implementation, precision):
     """Test nvMolKit EmbedMolecules batch mode against RDKit reference.
@@ -313,6 +317,10 @@ def test_embed_molecules_batch_vs_rdkit(embed_test_mols, etkdg_variant, gpu_ids,
         params = rdDistGeom.ETKDGv3()
     elif etkdg_variant == "srETKDGv3":
         params = rdDistGeom.srETKDGv3()
+    elif etkdg_variant == "ETKDGv4":
+        if not hasattr(rdDistGeom, "ETKDGv4"):
+            pytest.skip("ETKDGv4 requires RDKit 2026.09 or later")
+        params = rdDistGeom.ETKDGv4()
     elif etkdg_variant == "KDG":
         params = rdDistGeom.KDG()
     elif etkdg_variant == "ETDG":
@@ -596,13 +604,39 @@ def test_embed_molecules_device_output_empty_input_raises():
 @pytest.mark.parametrize("device_output", [False, True])
 @pytest.mark.parametrize("random_coordinates", [False, True])
 def test_all_in_one_embedding_geometry_and_stereochemistry(precision, device_output, random_coordinates):
-    parameters = rdDistGeom.ETKDGv3()
+    _check_embedding_geometry_and_stereochemistry(precision, device_output, random_coordinates, 3, False)
+
+
+@pytest.mark.parametrize("device_output", [False, True])
+@pytest.mark.parametrize("random_coordinates", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_gaussian_embedding_geometry_and_stereochemistry(precision, device_output, random_coordinates, legacy):
+    _check_embedding_geometry_and_stereochemistry(precision, device_output, random_coordinates, 4, legacy)
+
+
+def test_gaussian_torsions_require_rdkit_2026_09():
+    """ETversion 4 raises ValueError on RDKit releases without Gaussian torsions."""
+    if hasattr(rdDistGeom, "ETKDGv4"):
+        pytest.skip("RDKit supports ETKDGv4")
+    params = rdDistGeom.ETKDGv3()
+    params.ETversion = 4
+    with pytest.raises(ValueError):
+        embed.EmbedMolecules([Chem.AddHs(Chem.MolFromSmiles("CCO"))], params)
+
+
+def _check_embedding_geometry_and_stereochemistry(precision, device_output, random_coordinates, version, legacy):
+    if version == 4 and not hasattr(rdDistGeom, "ETKDGv4"):
+        pytest.skip("ETKDGv4 requires RDKit 2026.09 or later")
+    parameters = rdDistGeom.ETKDGv4() if version == 4 else rdDistGeom.ETKDGv3()
     if not hasattr(parameters, "useLegacyImplementation"):
         pytest.skip("All-in-one ETKDG requires RDKit 2026.03.4 or later")
-    parameters.useLegacyImplementation = False
+    parameters.useLegacyImplementation = legacy
     parameters.randomSeed = 42
     parameters.useRandomCoords = random_coordinates
-    molecules = [Chem.AddHs(Chem.MolFromSmiles(smiles)) for smiles in ["CCO", "CC#N", "C[C@H](O)F", "F/C=C/F"]]
+    molecules = [
+        Chem.AddHs(Chem.MolFromSmiles(smiles))
+        for smiles in ["CCO", "CC#N", "C[C@H](O)F", "F/C=C/F", "CCCC", "NC(=O)c1ccccc1", "C1CCCCCCCCCCC1"]
+    ]
     expected_stereochemistry = [Chem.MolToSmiles(molecule) for molecule in molecules]
     options = HardwareOptions(preprocessingThreads=2, batchesPerGpu=2, batchSize=4, gpuIds=[0])
     result = embed.EmbedMolecules(
