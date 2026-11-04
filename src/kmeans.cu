@@ -51,7 +51,6 @@ __global__ void centerNormsKernel(const float* centers, float* norms, const int 
   __shared__ typename WarpReduce::TempStorage storage[kBlockSize / 32];
   float                                       sum = 0.0F;
   for (int bit = lane; bit < numBits; bit += 32) {
-    // Round to fp16 (nearest, ties to even) and back to float, giving the value the fp16 MMA will see.
     const float value = __half2float(__float2half_rn(centers[static_cast<std::size_t>(center) * numBits + bit]));
     sum               = fmaf(value, value, sum);
   }
@@ -76,7 +75,7 @@ __global__ void packMmaCentersKernel(const float* centers,
   const int   bit    = static_cast<int>(index % paddedBits);
   const float value =
     center < numCenters && bit < numBits ? centers[static_cast<std::size_t>(center) * numBits + bit] : 0.0F;
-  packed[index] = __float2half_rn(value);  // fp16, rounded to nearest (ties to even)
+  packed[index] = __float2half_rn(value);
 }
 
 //! One warp per center: copies fingerprint row rows[center] into float centers, L2-normalized for cosine.
@@ -96,16 +95,12 @@ __global__ void centersFromRowsKernel(const std::uint32_t* fingerprints,
   for (int word = lane; word < numWords; word += 32) {
     count += __popc(row[word]);
   }
-  // Warp-wide sum that leaves the total in every lane (all lanes need it below). __shfl_xor_sync(mask, v, offset)
-  // returns v from lane (lane XOR offset); with offsets 16, 8, 4, 2, 1 each lane adds its partner's partial sum,
-  // doubling the lanes covered each step, so after five steps every lane holds the sum over all 32. The mask names all
-  // 32 lanes as participating.
-  // TODO: consolidate all-lane warp reductions. src/subgraph/warp_reduce.cuh (warpReduceAdd) does this with redux.sync
-  // on sm_80+; aap.cu and bitbirch.cu hand-roll the same loop. Move it to src/utils, add float overloads, use it here.
+  // Butterfly sum: each step adds the count from lane (lane XOR offset), so every lane ends with the warp total.
+  // TODO: use a shared all-lane reduction (warpReduceAdd in src/subgraph/warp_reduce.cuh, moved to src/utils).
   for (int offset = 16; offset > 0; offset /= 2) {
     count += __shfl_xor_sync(0xFFFFFFFFU, count, offset);
   }
-  // __frsqrt_rn: 1 / sqrt(count), correctly rounded, so a row of n bits becomes n entries of 1/sqrt(n) (unit length).
+  // Each set bit becomes 1/sqrt(count), giving the row unit length.
   const float value = normalize ? (count > 0 ? __frsqrt_rn(static_cast<float>(count)) : 0.0F) : 1.0F;
   float*      out   = centers + static_cast<std::size_t>(center) * numWords * 32;
   for (int bit = lane; bit < numWords * 32; bit += 32) {
@@ -149,8 +144,7 @@ __global__ void accumulateGlobalKernel(const std::uint32_t* fingerprints,
   atomicAdd(&sizes[label], 1U);
   auto* clusterSums = sums + static_cast<std::size_t>(label) * numWords * 32;
   for (int word = 0; word < numWords; ++word) {
-    // Visit only the set bits: __ffs returns the 1-based position of the lowest set bit (0 if none), and
-    // bits & (bits - 1) clears that lowest bit.
+    // Visit set bits only: __ffs gives the 1-based index of the lowest set bit; bits &= bits - 1 clears it.
     std::uint32_t bits = fingerprints[row * numWords + word];
     while (bits != 0U) {
       const int bit = __ffs(static_cast<int>(bits)) - 1;
@@ -416,9 +410,8 @@ void assign(const KMeansMetric     metric,
 // Lloyd driver
 // ---------------------------------------------------------------------------------------------------------------------
 
-//! State for Lloyd's k-means algorithm (S. P. Lloyd, "Least squares quantization in PCM", IEEE Trans. Inf. Theory
-//! 28(2):129-137, 1982): assignPass labels each row with its nearest center, updatePass moves each center to the mean
-//! of its rows. See kmeansFitGpu in kmeans.h.
+//! Lloyd's k-means (see kmeansFitGpu): assignPass labels rows with their nearest center, updatePass moves each center
+//! to the mean of its rows.
 class LloydState {
  public:
   LloydState(const cuda::std::span<const std::uint32_t> fingerprints,
@@ -522,8 +515,7 @@ class LloydState {
  private:
   template <bool Weighted> void accumulate() {
     using Sum  = SumType<Weighted>;
-    // Tanimoto sums are uint32 counts written in place over the float centers (same size; finalizeCentersKernel
-    // converts each count to its mean in place). Cosine sums are 64-bit and live in the byte buffer sums_.
+    // Tanimoto counts are accumulated in place in the centers buffer; cosine's 64-bit sums need sums_.
     auto* sums = Weighted ? reinterpret_cast<Sum*>(sums_.data()) : reinterpret_cast<Sum*>(centers_.data());
     cudaCheckError(cudaMemsetAsync(sums, 0, centers_.size() * sizeof(Sum), stream_));
     sizes_.zero();

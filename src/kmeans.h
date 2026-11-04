@@ -79,18 +79,12 @@ AsyncDeviceVector<float> kmeansCentersFromRows(cuda::std::span<const std::uint32
                                                cudaStream_t                         stream = nullptr);
 
 /**
- * @brief Lloyd's k-means iterations from the given initial centers (numClusters x numWords * 32 float32, device).
+ * @brief Lloyd's k-means from the given initial centers (numClusters x numWords * 32 float32, device).
  *
- * Lloyd's algorithm alternates two steps until the labels stop changing: assign every row to its nearest center, then
- * move every center to the mean of its rows. Each step can only lower the k-means objective under squared Euclidean
- * distance (the cosine metric here, which uses L2-normalized rows); for Tanimoto the mean is a heuristic center and the
- * objective is not guaranteed to decrease. Clusters left without rows are reseeded on the rows farthest from their
- * centers, as scikit-learn does.
- *
- * References:
- *  - S. P. Lloyd, "Least squares quantization in PCM", IEEE Trans. Inf. Theory 28(2):129-137, 1982.
- *    https://doi.org/10.1109/TIT.1982.1056489
- *  - scikit-learn KMeans (algorithm="lloyd"): https://scikit-learn.org/stable/modules/clustering.html#k-means
+ * Alternates assigning each row to its nearest center and moving each center to the mean of its rows. For Tanimoto the
+ * mean is a heuristic center, so the objective is not guaranteed to decrease. Empty clusters are reseeded on the rows
+ * farthest from their centers. S. P. Lloyd, "Least squares quantization in PCM", IEEE Trans. Inf. Theory 28(2), 1982,
+ * https://doi.org/10.1109/TIT.1982.1056489
  *
  * The packed matrix is never unpacked. Memory beyond the input is O(numClusters * numWords * 32) for the centers and
  * their sums plus O(numFingerprints) for labels and distances.
