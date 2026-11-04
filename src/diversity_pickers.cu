@@ -374,13 +374,7 @@ template <FingerprintSimilarityMetric Metric> class FingerprintDistanceProvider 
         numWords_(numWords),
         vectorized_(numWords % 4 == 0 && reinterpret_cast<std::uintptr_t>(fingerprints.data()) % alignof(uint4) == 0),
         bitCounts_(numItems, stream) {
-    if (numItems > 0) {
-      fingerprintBitCountsKernel<<<pickerGridSize(numItems), kPickerBlockSize, 0, stream>>>(fingerprints_.data(),
-                                                                                            bitCounts_.data(),
-                                                                                            numItems_,
-                                                                                            numWords_);
-      cudaCheckError(cudaGetLastError());
-    }
+    launchFingerprintBitCounts(fingerprints_.data(), bitCounts_.data(), numItems_, numWords_, stream);
   }
 
   int size() const { return numItems_; }
@@ -541,6 +535,21 @@ void launchFillFloats(float* values, const int numItems, const float value, cuda
     return;
   }
   fillFloatsKernel<<<pickerGridSize(numItems), kPickerBlockSize, 0, stream>>>(values, numItems, value);
+  cudaCheckError(cudaGetLastError());
+}
+
+void launchFingerprintBitCounts(const std::uint32_t* fingerprints,
+                                int*                 bitCounts,
+                                const int            numItems,
+                                const int            numWords,
+                                cudaStream_t         stream) {
+  if (numItems == 0) {
+    return;
+  }
+  fingerprintBitCountsKernel<<<pickerGridSize(numItems), kPickerBlockSize, 0, stream>>>(fingerprints,
+                                                                                        bitCounts,
+                                                                                        numItems,
+                                                                                        numWords);
   cudaCheckError(cudaGetLastError());
 }
 
