@@ -605,7 +605,7 @@ INSTANTIATE_TEST_SUITE_P(KMeans,
 class KMeansFitMetricTest : public ::testing::TestWithParam<KMeansMetric> {};
 
 // Groups of 60, 25 and 5 rows around random 40-bit prototypes in 512 bits, three bits flipped per row. MaxMin
-// initialization and Lloyd must keep the 5-row group instead of absorbing it into a large one.
+// initialization and Lloyd's k-means iterations must keep the 5-row group instead of absorbing it into a large one.
 TEST_P(KMeansFitMetricTest, RecoversUnevenPlantedGroups) {
   const KMeansMetric                 metric = GetParam();
   const nvMolKit::ScopedStream       streamOwner;
