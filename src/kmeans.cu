@@ -100,6 +100,8 @@ __global__ void centersFromRowsKernel(const std::uint32_t* fingerprints,
   // returns v from lane (lane XOR offset); with offsets 16, 8, 4, 2, 1 each lane adds its partner's partial sum,
   // doubling the lanes covered each step, so after five steps every lane holds the sum over all 32. The mask names all
   // 32 lanes as participating.
+  // TODO: consolidate all-lane warp reductions. src/subgraph/warp_reduce.cuh (warpReduceAdd) does this with redux.sync
+  // on sm_80+; aap.cu and bitbirch.cu hand-roll the same loop. Move it to src/utils, add float overloads, use it here.
   for (int offset = 16; offset > 0; offset /= 2) {
     count += __shfl_xor_sync(0xFFFFFFFFU, count, offset);
   }
