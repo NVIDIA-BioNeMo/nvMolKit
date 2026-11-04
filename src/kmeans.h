@@ -86,8 +86,8 @@ AsyncDeviceVector<float> kmeansCentersFromRows(cuda::std::span<const std::uint32
  * farthest from their centers. S. P. Lloyd, "Least squares quantization in PCM", IEEE Trans. Inf. Theory 28(2), 1982,
  * https://doi.org/10.1109/TIT.1982.1056489
  *
- * The packed matrix is never unpacked. Memory beyond the input is O(numClusters * numWords * 32) for the centers and
- * their sums plus O(numFingerprints) for labels and distances.
+ * Memory beyond the input is O(numClusters * numWords * 32) for the centers and their sums plus O(numFingerprints)
+ * for labels and distances.
  */
 KMeansFitResult kmeansFitGpu(cuda::std::span<const std::uint32_t> fingerprints,
                              int                                  numFingerprints,

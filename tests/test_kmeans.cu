@@ -541,9 +541,9 @@ class KMeansSmallPartitionTest : public ::testing::TestWithParam<SmallParams> {}
 /**
  * Eight rows in three groups of sizes 3, 3 and 2, interleaved (A B C A B C A B):
  *   A: bits 0-5, 0-4, 1-5;  B: bits 10-15, 10-14, 11-15;  C: bits 20-25, 20-24.
- * With shared bits, every row also sets bits 30 and 31, so rows of different groups are similar but still much less
- * than rows of the same group. k = 3 must give exactly this partition, and group C's center is the hand-computed mean
- * of its two rows.
+ * With shared bits, every row also sets bits 30 and 31, so rows of different groups are similar, but much less
+ * similar than rows of the same group. k = 3 must give exactly this partition, and group C's center is the
+ * hand-computed mean of its two rows.
  */
 TEST_P(KMeansSmallPartitionTest, RecoversThreeThreeTwo) {
   const auto [metric, sharedBits, init] = GetParam();
@@ -665,7 +665,7 @@ TEST_P(KMeansFitMetricTest, SingleClusterIsTheMean) {
   const nvMolKit::ScopedStream        streamOwner;
   const auto                          stream = streamOwner.stream();
   constexpr int                       words  = 1;
-  // Bit 0 in all four rows, bit 1 in two, bit 2 in one; rows have 1, 2, 2 and 3 bits.
+  // Bit 0 in all four rows, bit 1 in two, bits 2 and 3 in one each; rows have 1, 2, 2 and 3 bits.
   const std::vector<std::vector<int>> rows   = {
     {0},
     {0, 1},
@@ -747,6 +747,7 @@ TEST_P(KMeansFitMetricTest, AllRowsEmpty) {
     fitFromCenters(packed, words, centersFromRows(packed, words, {0, 1}, metric, stream), options, stream);
   EXPECT_EQ(fit.labels, std::vector<int>(6, 0));
   EXPECT_EQ(fit.inertia, 0.0);
+  EXPECT_GE(fit.reseeded, 1);
   for (const float value : fit.centers) {
     EXPECT_EQ(value, 0.0F);
   }

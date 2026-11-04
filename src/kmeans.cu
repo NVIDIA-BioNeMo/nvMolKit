@@ -96,7 +96,7 @@ __global__ void centersFromRowsKernel(const std::uint32_t* fingerprints,
     count += __popc(row[word]);
   }
   // Butterfly sum: each step adds the count from lane (lane XOR offset), so every lane ends with the warp total.
-  // TODO: use a shared all-lane reduction (warpReduceAdd in src/subgraph/warp_reduce.cuh, moved to src/utils).
+  // TODO: use a shared all-lane reduction (warpReduceAdd in src/subgraph/warp_reduce.cuh; move it to src/utils).
   for (int offset = 16; offset > 0; offset /= 2) {
     count += __shfl_xor_sync(0xFFFFFFFFU, count, offset);
   }
@@ -154,8 +154,7 @@ __global__ void accumulateGlobalKernel(const std::uint32_t* fingerprints,
   }
 }
 
-//! Centers become the means of their members. Clusters without members are set to zero here and reseeded after.
-//! sums may alias centers (unweighted counts are accumulated in place).
+//! Sets each center to the mean of its rows. Empty clusters get a zero center; the caller reseeds them.
 template <bool Weighted>
 __global__ void finalizeCentersKernel(const SumType<Weighted>* sums,
                                       const unsigned int*      sizes,
@@ -515,7 +514,6 @@ class LloydState {
  private:
   template <bool Weighted> void accumulate() {
     using Sum  = SumType<Weighted>;
-    // Tanimoto counts are accumulated in place in the centers buffer; cosine's 64-bit sums need sums_.
     auto* sums = Weighted ? reinterpret_cast<Sum*>(sums_.data()) : reinterpret_cast<Sum*>(centers_.data());
     cudaCheckError(cudaMemsetAsync(sums, 0, centers_.size() * sizeof(Sum), stream_));
     sizes_.zero();
@@ -604,7 +602,7 @@ class LloydState {
     const int              count = static_cast<int>(empty.size());
     AsyncDeviceVector<int> rows(count, stream_);
     chooseReseeds(sortedIds.data(), sortedDistances.data(), count, rows.data());
-    // Rows sharing the same centers buffer row: scatter one center row per reseeded cluster.
+    // Reseeded centers are built in a scratch buffer, then copied into their clusters' rows.
     AsyncDeviceVector<float> fresh(static_cast<std::size_t>(count) * numBits_, stream_);
     centersFromRowsKernel<<<gridFor(static_cast<std::size_t>(count) * 32), kBlockSize, 0, stream_>>>(
       fingerprints_,
@@ -753,8 +751,6 @@ KMeansFitResult kmeansFitGpu(const cuda::std::span<const std::uint32_t> fingerpr
     numIterations               = iteration;
     const double previous       = inertia;
     inertia                     = current;
-    // tol == 0 runs exactly maxIter iterations (fixed-cost timing); otherwise stop at a fixed point or when the
-    // objective improves by at most tol relative to its value.
     if (options.tol > 0.0 && (moved == 0 || previous - current <= options.tol * current)) {
       break;
     }
