@@ -33,14 +33,12 @@ enum class KMeansInit {
 };
 
 struct KMeansOptions {
-  int           numClusters = 8;
-  KMeansMetric  metric      = KMeansMetric::Tanimoto;
-  int           maxIter     = 300;
+  int          numClusters = 8;
+  KMeansMetric metric      = KMeansMetric::Tanimoto;
+  int          maxIter     = 300;
   //! Stop when the relative decrease of the objective, (previous - current) / current, is at most tol, or when no
   //! label changes. tol == 0 runs exactly maxIter iterations.
-  double        tol         = 1e-4;
-  //! Seed for empty-cluster reseeding ties and the initialization.
-  std::uint64_t seed        = 0;
+  double       tol         = 1e-4;
 };
 
 struct KMeansFitResult {

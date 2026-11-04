@@ -322,7 +322,17 @@ TEST(KMeansAssign, RejectsInvalidArguments) {
                std::invalid_argument);
 }
 
-TEST(KMeansFit, LabelsSizesAndInertiaAreConsistent) {
+//! Fit tests skip where the assignment kernel cannot run, like the assignment tests above.
+class KMeansFitTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    if (!nvMolKit::detail::mmaSupported(64)) {
+      GTEST_SKIP() << "k-means needs an sm_80 or newer GPU";
+    }
+  }
+};
+
+TEST_F(KMeansFitTest, LabelsSizesAndInertiaAreConsistent) {
   const nvMolKit::ScopedStream streamOwner;
   const auto                   stream   = streamOwner.stream();
   constexpr int                rows     = 400;
@@ -371,7 +381,7 @@ TEST(KMeansFit, LabelsSizesAndInertiaAreConsistent) {
   EXPECT_NEAR(result.inertia, inertia, 1e-3);
 }
 
-class KMeansReseedTest : public ::testing::TestWithParam<KMeansMetric> {};
+class KMeansReseedTest : public KMeansFitTest, public ::testing::WithParamInterface<KMeansMetric> {};
 
 // Four planted groups and initial centers [p0, p0, p0, p1]: the two duplicate centers lose every member, and the two
 // reseeds must land in different far groups (groups 2 and 3) for the fit to recover the planted partition.
@@ -536,7 +546,7 @@ enum class SmallInit {
 };
 
 using SmallParams = std::tuple<KMeansMetric, bool, SmallInit>;
-class KMeansSmallPartitionTest : public ::testing::TestWithParam<SmallParams> {};
+class KMeansSmallPartitionTest : public KMeansFitTest, public ::testing::WithParamInterface<SmallParams> {};
 
 /**
  * Eight rows in three groups of sizes 3, 3 and 2, interleaved (A B C A B C A B):
@@ -602,7 +612,7 @@ INSTANTIATE_TEST_SUITE_P(KMeans,
                                             ::testing::Bool(),
                                             ::testing::Values(SmallInit::OneRowPerGroup, SmallInit::MaxMin)));
 
-class KMeansFitMetricTest : public ::testing::TestWithParam<KMeansMetric> {};
+class KMeansFitMetricTest : public KMeansFitTest, public ::testing::WithParamInterface<KMeansMetric> {};
 
 // Groups of 60, 25 and 5 rows around random 40-bit prototypes in 512 bits, three bits flipped per row. MaxMin
 // initialization and Lloyd's k-means iterations must keep the 5-row group instead of absorbing it into a large one.
