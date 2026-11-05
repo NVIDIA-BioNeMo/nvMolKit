@@ -15,19 +15,17 @@
 
 // Full-warp reductions returning the aggregate to every lane.
 //
-// __reduce_*_sync requires sm_80. nvMolKit also builds for sm_70/sm_75, which
-// fall back to a butterfly shuffle producing the same values.
-//
-// cub::WarpReduce is deliberately not used here. Its sm_80+ fast path lowers to
-// these same __reduce_*_sync intrinsics, so there is nothing to gain, and it is
-// worse in two ways: its contract returns the aggregate only to lane 0, while
-// the min/max/or call sites need the all-lane broadcast that redux.sync
-// provides for free (CUB would need an extra __shfl_sync); and CUB has no
-// redux-backed OR reduction at all, so warpReduceOr would regress to a
-// five-step shuffle loop even on sm_80+.
+// cooperative_groups::reduce over a 32-thread tile lowers to __reduce_*_sync
+// (redux.sync) on sm_80+, including bitwise OR, and to a butterfly shuffle on
+// sm_70/sm_75, returning the aggregate to every lane in both cases.
+// cub::WarpReduce returns the aggregate only to lane 0 and has no redux-backed
+// OR reduction, so it is not used here.
 
 #ifndef NVMOLKIT_SUBGRAPH_WARP_REDUCE_CUH
 #define NVMOLKIT_SUBGRAPH_WARP_REDUCE_CUH
+
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
 
 #include <cstdint>
 
@@ -35,52 +33,26 @@ namespace nvMolKit {
 
 constexpr uint32_t kFullWarpMask = 0xFFFFFFFFu;
 
+namespace detail {
+__device__ __forceinline__ cooperative_groups::thread_block_tile<32> fullWarp() {
+  return cooperative_groups::tiled_partition<32>(cooperative_groups::this_thread_block());
+}
+}  // namespace detail
+
 __device__ __forceinline__ uint32_t warpReduceAdd(uint32_t value) {
-#if __CUDA_ARCH__ >= 800
-  return __reduce_add_sync(kFullWarpMask, value);
-#else
-#pragma unroll
-  for (int offset = 16; offset > 0; offset >>= 1) {
-    value += __shfl_xor_sync(kFullWarpMask, value, offset);
-  }
-  return value;
-#endif
+  return cooperative_groups::reduce(detail::fullWarp(), value, cooperative_groups::plus<uint32_t>());
 }
 
 __device__ __forceinline__ uint32_t warpReduceOr(uint32_t value) {
-#if __CUDA_ARCH__ >= 800
-  return __reduce_or_sync(kFullWarpMask, value);
-#else
-#pragma unroll
-  for (int offset = 16; offset > 0; offset >>= 1) {
-    value |= __shfl_xor_sync(kFullWarpMask, value, offset);
-  }
-  return value;
-#endif
+  return cooperative_groups::reduce(detail::fullWarp(), value, cooperative_groups::bit_or<uint32_t>());
 }
 
 __device__ __forceinline__ uint32_t warpReduceMin(uint32_t value) {
-#if __CUDA_ARCH__ >= 800
-  return __reduce_min_sync(kFullWarpMask, value);
-#else
-#pragma unroll
-  for (int offset = 16; offset > 0; offset >>= 1) {
-    value = min(value, __shfl_xor_sync(kFullWarpMask, value, offset));
-  }
-  return value;
-#endif
+  return cooperative_groups::reduce(detail::fullWarp(), value, cooperative_groups::less<uint32_t>());
 }
 
 __device__ __forceinline__ uint32_t warpReduceMax(uint32_t value) {
-#if __CUDA_ARCH__ >= 800
-  return __reduce_max_sync(kFullWarpMask, value);
-#else
-#pragma unroll
-  for (int offset = 16; offset > 0; offset >>= 1) {
-    value = max(value, __shfl_xor_sync(kFullWarpMask, value, offset));
-  }
-  return value;
-#endif
+  return cooperative_groups::reduce(detail::fullWarp(), value, cooperative_groups::greater<uint32_t>());
 }
 
 }  // namespace nvMolKit
