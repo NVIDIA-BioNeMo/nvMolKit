@@ -24,6 +24,8 @@
 #include <string>
 #include <vector>
 
+#include "versions.h"
+
 /**
  * @brief Macro to check CUDA operation success
  * @param x The CUDA operation result to check
@@ -40,7 +42,9 @@ enum class ETKDGOption {
   ETKDG,
   ETDG,
   KDG,
-  DG
+  DG,
+  //! RDKit 2026.09+ only; getETKDGOption throws on older RDKit.
+  ETKDGv4
 };
 
 /**

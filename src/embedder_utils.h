@@ -40,6 +40,7 @@
 #include <boost/dynamic_bitset.hpp>
 #include <boost/shared_ptr.hpp>
 #include <map>
+#include <memory>
 #include <utility>
 
 using namespace RDKit;
@@ -75,6 +76,8 @@ struct EmbedArgs {
   std::vector<std::pair<std::vector<unsigned int>, int>>            stereoDoubleBonds;
   std::vector<double>                                               posVec;
   MinimizeStage                                                     stage = MinimizeStage::FirstMinimize;
+  //! Owns the topological distance matrix etkdgDetails.distMat points into; clones share it.
+  std::shared_ptr<double[]>                                         topologicalDistances;
 };
 
 //! Copy prepared arguments for one conformer attempt, including owned RDKit state.
@@ -91,6 +94,24 @@ enum class Dimensionality {
   DIM_3D,  // Force 3D coordinates
   DIM_4D   // Force 4D coordinates
 };
+
+/**
+ * @brief Throws ValueErrorException for embedding parameters that nvMolKit does not implement yet
+ *
+ * Supports ETversion 1 and 2, and ETversion 4 on RDKit >= 2026.09.
+ * On RDKit >= 2026.09, unsupported options are embedForceField other than UFF, onlyInitialEmbedding and
+ * internal-coordinate initial embedding.
+ */
+void validateSupportedEmbedParameters(const RDKit::DGeomHelpers::EmbedParameters& params);
+
+/**
+ * @brief Returns the parameters nvMolKit embeds with.
+ *
+ * Random starting coordinates raise the basin threshold to 1e8 as RDKit does. On RDKit >= 2026.09, useRandomCoords
+ * selects initialEmbeddingMode=RANDOM_COORDINATE_EMBEDDING as in RDKit, and that mode also selects useRandomCoords:
+ * RDKit deprecates the flag in favor of the mode but still applies its random-coordinate settings only for the flag.
+ */
+RDKit::DGeomHelpers::EmbedParameters normalizeEmbedParameters(const RDKit::DGeomHelpers::EmbedParameters& params);
 
 /**
  * @brief Prepares embedder arguments for the ETKDG algorithm
@@ -154,6 +175,13 @@ void findDoubleBonds(const ROMol&                                               
                      std::vector<std::tuple<unsigned int, unsigned int, unsigned int>>& doubleBondEnds,
                      std::vector<std::pair<std::vector<unsigned int>, int>>&            stereoDoubleBonds,
                      const std::map<int, RDGeom::Point3D>*                              coordMap);
+
+//! \brief Fills the ETKDG experimental torsion, improper and force-constant details as nvMolKit's embedding does:
+//! the refinement's force constants first, which RDKit's torsion setup scales by, then the torsions and, for
+//! ETversion 4, the Gaussian lookup tables. On RDKit 2026.09 it must run after the topology bounds are set.
+void initETKDG(const ROMol*                                mol,
+               const RDKit::DGeomHelpers::EmbedParameters& params,
+               ForceFields::CrystalFF::CrystalFFDetails&   etkdgDetails);
 
 //! \brief Sets up topological bounds in the bounds matrix (before triangle smoothing)
 void setupTopologyBounds(const ROMol*                                mol,

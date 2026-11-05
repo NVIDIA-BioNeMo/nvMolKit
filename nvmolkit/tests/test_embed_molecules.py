@@ -194,8 +194,20 @@ def precision(request):
     return request.param
 
 
-@pytest.mark.parametrize("etkdg_variant", ["ETKDG", "ETKDGv2", "ETKDGv3", "srETKDGv3", "KDG", "ETDG", "DG"])
-def test_embed_molecules_serial_vs_rdkit(embed_test_mols, etkdg_variant, precision):
+def use_implementation(params, implementation):
+    """Select RDKit's legacy or all-in-one coordinate refinement, skipping when the RDKit build lacks all-in-one.
+
+    Both are set explicitly so the legacy case does not depend on the preset's default.
+    """
+    if hasattr(params, "useLegacyImplementation"):
+        params.useLegacyImplementation = implementation == "legacy"
+    elif implementation == "all_in_one":
+        pytest.skip("All-in-one ETKDG requires RDKit 2026.03.4 or later")
+
+
+@pytest.mark.parametrize("implementation", ["legacy", "all_in_one"])
+@pytest.mark.parametrize("etkdg_variant", ["ETKDG", "ETKDGv2", "ETKDGv3", "srETKDGv3", "ETKDGv4", "KDG", "ETDG", "DG"])
+def test_embed_molecules_serial_vs_rdkit(embed_test_mols, etkdg_variant, implementation, precision):
     """Test nvMolKit EmbedMolecules one molecule at a time against RDKit reference.
 
     This test compares the conformer generation when embedding molecules individually
@@ -216,6 +228,10 @@ def test_embed_molecules_serial_vs_rdkit(embed_test_mols, etkdg_variant, precisi
         params = rdDistGeom.ETKDGv3()
     elif etkdg_variant == "srETKDGv3":
         params = rdDistGeom.srETKDGv3()
+    elif etkdg_variant == "ETKDGv4":
+        if not hasattr(rdDistGeom, "ETKDGv4"):
+            pytest.skip("ETKDGv4 requires RDKit 2026.09 or later")
+        params = rdDistGeom.ETKDGv4()
     elif etkdg_variant == "KDG":
         params = rdDistGeom.KDG()
     elif etkdg_variant == "ETDG":
@@ -228,6 +244,7 @@ def test_embed_molecules_serial_vs_rdkit(embed_test_mols, etkdg_variant, precisi
 
     params.useRandomCoords = True  # Required for nvmolkit ETKDG
     params.randomSeed = 42  # For reproducibility
+    use_implementation(params, implementation)
 
     # Get RDKit reference conformer counts using the same parameters
     rdkit_conf_ids = embed_with_rdkit(rdkit_mols, confs_per_mol, params)
@@ -273,9 +290,10 @@ def test_embed_molecules_serial_vs_rdkit(embed_test_mols, etkdg_variant, precisi
     compare_conformers_rmsd(rdkit_mols, nvmolkit_mols, rmsd_threshold=0.2, min_match_fraction=0.5)
 
 
-@pytest.mark.parametrize("etkdg_variant", ["ETKDG", "ETKDGv2", "ETKDGv3", "srETKDGv3", "KDG", "ETDG", "DG"])
+@pytest.mark.parametrize("implementation", ["legacy", "all_in_one"])
+@pytest.mark.parametrize("etkdg_variant", ["ETKDG", "ETKDGv2", "ETKDGv3", "srETKDGv3", "ETKDGv4", "KDG", "ETDG", "DG"])
 @pytest.mark.parametrize("gpu_ids", [[], [0], [1], [0, 1]])
-def test_embed_molecules_batch_vs_rdkit(embed_test_mols, etkdg_variant, gpu_ids, precision):
+def test_embed_molecules_batch_vs_rdkit(embed_test_mols, etkdg_variant, gpu_ids, implementation, precision):
     """Test nvMolKit EmbedMolecules batch mode against RDKit reference.
 
     This test compares the conformer generation when embedding all molecules together
@@ -299,6 +317,10 @@ def test_embed_molecules_batch_vs_rdkit(embed_test_mols, etkdg_variant, gpu_ids,
         params = rdDistGeom.ETKDGv3()
     elif etkdg_variant == "srETKDGv3":
         params = rdDistGeom.srETKDGv3()
+    elif etkdg_variant == "ETKDGv4":
+        if not hasattr(rdDistGeom, "ETKDGv4"):
+            pytest.skip("ETKDGv4 requires RDKit 2026.09 or later")
+        params = rdDistGeom.ETKDGv4()
     elif etkdg_variant == "KDG":
         params = rdDistGeom.KDG()
     elif etkdg_variant == "ETDG":
@@ -311,6 +333,7 @@ def test_embed_molecules_batch_vs_rdkit(embed_test_mols, etkdg_variant, gpu_ids,
 
     params.useRandomCoords = True  # Required for nvmolkit ETKDG
     params.randomSeed = 42  # For reproducibility
+    use_implementation(params, implementation)
 
     # Get RDKit reference conformer counts using the same parameters
     rdkit_conf_ids = embed_with_rdkit(rdkit_mols, confs_per_mol, params)
@@ -451,6 +474,41 @@ def test_embed_molecules_with_hardware_options(embed_test_mols, precision):
         )
 
 
+@pytest.mark.parametrize("setting", ["ETversion", "embedForceField", "onlyInitialEmbedding", "internalCoordinates"])
+def test_embed_molecules_rejects_unsupported_parameters(setting):
+    """Settings nvMolKit does not implement raise ValueError instead of being ignored."""
+    params = rdDistGeom.ETKDGv3()
+    if setting == "ETversion":
+        params.ETversion = 3
+    elif not hasattr(rdDistGeom, "InitialEmbeddingMode"):
+        pytest.skip("this setting requires RDKit 2026.09 or later")
+    elif setting == "embedForceField":
+        params.embedForceField = rdDistGeom.EmbedFF.MMFF
+    elif setting == "onlyInitialEmbedding":
+        params.onlyInitialEmbedding = True
+    else:
+        params.initialEmbeddingMode = rdDistGeom.InitialEmbeddingMode.INTERNAL_COORDINATE_EMBEDDING
+    with pytest.raises(ValueError):
+        embed.EmbedMolecules([Chem.AddHs(Chem.MolFromSmiles("CCO"))], params)
+
+
+def test_embed_molecules_random_coordinate_mode(precision):
+    """initialEmbeddingMode=RANDOM_COORDINATE_EMBEDDING embeds as useRandomCoords=True does."""
+    if not hasattr(rdDistGeom, "InitialEmbeddingMode"):
+        pytest.skip("initialEmbeddingMode requires RDKit 2026.09 or later")
+    # Above 256 atoms only random starting coordinates are supported, so the mode must select them.
+    molecules = [Chem.AddHs(Chem.MolFromSmiles(smiles)) for smiles in ["CCO", "C[C@H](O)F", "C" * 100]]
+    assert molecules[-1].GetNumAtoms() > 256
+    params = rdDistGeom.ETKDGv3()
+    params.initialEmbeddingMode = rdDistGeom.InitialEmbeddingMode.RANDOM_COORDINATE_EMBEDDING
+    params.randomSeed = 42
+    params.maxIterations = 5
+
+    embed.EmbedMolecules(molecules, params, confsPerMolecule=2, precision=precision)
+    for molecule in molecules:
+        assert molecule.GetNumConformers() == 2
+
+
 def test_embed_molecules_allows_large_molecule_interleaved(precision):
     """Ensure a large (>256 atoms) molecule in batch is accepted and embedded."""
     small1 = Chem.AddHs(Chem.MolFromSmiles("CCCCCC"))  # 6 atoms
@@ -541,3 +599,93 @@ def test_embed_molecules_device_output_empty_input_raises():
     params.useRandomCoords = True
     with pytest.raises(ValueError, match="requires at least one molecule"):
         embed.EmbedMolecules([], params, output=CoordinateOutput.DEVICE)
+
+
+@pytest.mark.parametrize("device_output", [False, True])
+@pytest.mark.parametrize("random_coordinates", [False, True])
+def test_all_in_one_embedding_geometry_and_stereochemistry(precision, device_output, random_coordinates):
+    _check_embedding_geometry_and_stereochemistry(precision, device_output, random_coordinates, 3, False)
+
+
+@pytest.mark.parametrize("device_output", [False, True])
+@pytest.mark.parametrize("random_coordinates", [False, True])
+@pytest.mark.parametrize("legacy", [False, True])
+def test_gaussian_embedding_geometry_and_stereochemistry(precision, device_output, random_coordinates, legacy):
+    _check_embedding_geometry_and_stereochemistry(precision, device_output, random_coordinates, 4, legacy)
+
+
+def test_gaussian_torsions_require_rdkit_2026_09():
+    """ETversion 4 raises ValueError on RDKit releases without Gaussian torsions."""
+    if hasattr(rdDistGeom, "ETKDGv4"):
+        pytest.skip("RDKit supports ETKDGv4")
+    params = rdDistGeom.ETKDGv3()
+    params.ETversion = 4
+    with pytest.raises(ValueError):
+        embed.EmbedMolecules([Chem.AddHs(Chem.MolFromSmiles("CCO"))], params)
+
+
+def _check_embedding_geometry_and_stereochemistry(precision, device_output, random_coordinates, version, legacy):
+    if version == 4 and not hasattr(rdDistGeom, "ETKDGv4"):
+        pytest.skip("ETKDGv4 requires RDKit 2026.09 or later")
+    parameters = rdDistGeom.ETKDGv4() if version == 4 else rdDistGeom.ETKDGv3()
+    if not hasattr(parameters, "useLegacyImplementation"):
+        pytest.skip("All-in-one ETKDG requires RDKit 2026.03.4 or later")
+    parameters.useLegacyImplementation = legacy
+    parameters.randomSeed = 42
+    parameters.useRandomCoords = random_coordinates
+    molecules = [
+        Chem.AddHs(Chem.MolFromSmiles(smiles))
+        for smiles in ["CCO", "CC#N", "C[C@H](O)F", "F/C=C/F", "CCCC", "NC(=O)c1ccccc1", "C1CCCCCCCCCCC1"]
+    ]
+    expected_stereochemistry = [Chem.MolToSmiles(molecule) for molecule in molecules]
+    options = HardwareOptions(preprocessingThreads=2, batchesPerGpu=2, batchSize=4, gpuIds=[0])
+    result = embed.EmbedMolecules(
+        molecules,
+        parameters,
+        confsPerMolecule=2,
+        maxIterations=20,
+        hardwareOptions=options,
+        output=CoordinateOutput.DEVICE if device_output else CoordinateOutput.RDKIT_CONFORMERS,
+        precision=precision,
+    )
+    if device_output:
+        assert isinstance(result, Device3DResult)
+        assert all(molecule.GetNumConformers() == 0 for molecule in molecules)
+        coordinates = result.values.torch().cpu()
+        starts = result.atom_starts.torch().tolist()
+        molecule_indices = result.mol_indices.torch().tolist()
+        assert coordinates.shape == (starts[-1], 3)
+        conformer_indices = result.conf_indices.torch().tolist()
+        assert starts[0] == 0
+        assert len(starts) == len(molecule_indices) + 1
+        for molecule_index in range(len(molecules)):
+            assert sorted(
+                conformer_indices[index] for index, owner in enumerate(molecule_indices) if owner == molecule_index
+            ) == [0, 1]
+        assert [molecule_indices.count(index) for index in range(len(molecules))] == [2] * len(molecules)
+        conformers = []
+        for index, molecule_index in enumerate(molecule_indices):
+            conformation = Chem.Conformer(molecules[molecule_index].GetNumAtoms())
+            for atom_index, point in enumerate(coordinates[starts[index] : starts[index + 1]].tolist()):
+                conformation.SetAtomPosition(atom_index, point)
+            conformers.append((molecule_index, conformation))
+    else:
+        assert result is None
+        assert [molecule.GetNumConformers() for molecule in molecules] == [2] * len(molecules)
+        conformers = [
+            (index, conformation)
+            for index, molecule in enumerate(molecules)
+            for conformation in molecule.GetConformers()
+        ]
+    for molecule_index, conformation in conformers:
+        molecule = molecules[molecule_index]
+        positions = torch.from_numpy(conformation.GetPositions())
+        assert torch.isfinite(positions).all()
+        for bond in molecule.GetBonds():
+            length = torch.linalg.norm(positions[bond.GetBeginAtomIdx()] - positions[bond.GetEndAtomIdx()]).item()
+            assert 0.8 < length < 1.8
+        detected = Chem.Mol(molecule)
+        detected.RemoveAllConformers()
+        conformer_id = detected.AddConformer(conformation, assignId=True)
+        Chem.AssignStereochemistryFrom3D(detected, confId=conformer_id, replaceExistingTags=True)
+        assert Chem.MolToSmiles(detected) == expected_stereochemistry[molecule_index]

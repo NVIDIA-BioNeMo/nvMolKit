@@ -758,12 +758,12 @@ cudaError_t computeEnergy(BatchedMolecularDeviceBuffers& molSystemDevice,
   }
 
   if (err == cudaSuccess) {
-    return launchReduceEnergiesKernel(molSystemDevice.indices.energyBufferBlockIdxToBatchIdx.size(),
-                                      molSystemDevice.energyBuffer.data(),
-                                      molSystemDevice.indices.energyBufferBlockIdxToBatchIdx.data(),
-                                      energyOuts,
-                                      activeSystemMask,
-                                      stream);
+    return FFKernelUtils::launchReduceEnergiesKernel(molSystemDevice.indices.energyBufferBlockIdxToBatchIdx.size(),
+                                                     molSystemDevice.energyBuffer.data(),
+                                                     molSystemDevice.indices.energyBufferBlockIdxToBatchIdx.data(),
+                                                     energyOuts,
+                                                     activeSystemMask,
+                                                     stream);
   }
   return err;
 }

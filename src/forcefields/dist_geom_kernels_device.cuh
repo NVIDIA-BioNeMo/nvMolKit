@@ -559,6 +559,127 @@ static __device__ __forceinline__ void torsionAngleGrad(const DG_REAL*       pos
   atomicAdd(&grad[posIdx4 + 2], g4z);
 }
 
+//! Dihedral angle in [0, pi] as atan2(|t1 x t2|, t1 . t2) of the plane normals, which keeps its precision near 0 and pi
+//! where acos(cos(phi)) does not. A torsion is degenerate when a normal's length is zero by RDKit's isDoubleZero, as in
+//! RDKit's calcTorsionCosPhi; it then gives pi/2 like RDKit's zero cosine, and gaussianTorsionGrad skips it.
+static __device__ __forceinline__ DG_REAL
+calcTorsionPhi(const DG_REAL* pos, const int posIdx1, const int posIdx2, const int posIdx3, const int posIdx4) {
+  const DG_REAL r1x = pos[posIdx1 + 0] - pos[posIdx2 + 0];
+  const DG_REAL r1y = pos[posIdx1 + 1] - pos[posIdx2 + 1];
+  const DG_REAL r1z = pos[posIdx1 + 2] - pos[posIdx2 + 2];
+  const DG_REAL r2x = pos[posIdx3 + 0] - pos[posIdx2 + 0];
+  const DG_REAL r2y = pos[posIdx3 + 1] - pos[posIdx2 + 1];
+  const DG_REAL r2z = pos[posIdx3 + 2] - pos[posIdx2 + 2];
+  const DG_REAL r4x = pos[posIdx4 + 0] - pos[posIdx3 + 0];
+  const DG_REAL r4y = pos[posIdx4 + 1] - pos[posIdx3 + 1];
+  const DG_REAL r4z = pos[posIdx4 + 2] - pos[posIdx3 + 2];
+
+  DG_REAL t1x, t1y, t1z;
+  crossProduct(r1x, r1y, r1z, r2x, r2y, r2z, t1x, t1y, t1z);
+  DG_REAL t2x, t2y, t2z;
+  crossProduct(-r2x, -r2y, -r2z, r4x, r4y, r4z, t2x, t2y, t2z);
+  if (DG_IS_ZERO(DG_SQRT(t1x * t1x + t1y * t1y + t1z * t1z)) ||
+      DG_IS_ZERO(DG_SQRT(t2x * t2x + t2y * t2y + t2z * t2z))) {
+    return DG_REAL(M_PI / 2.0);
+  }
+  DG_REAL sx, sy, sz;
+  crossProduct(t1x, t1y, t1z, t2x, t2y, t2z, sx, sy, sz);
+  return DG_ATAN2(DG_SQRT(sx * sx + sy * sy + sz * sz), dotProduct(t1x, t1y, t1z, t2x, t2y, t2z));
+}
+
+//! Linear interpolation in a lookup table spanning dihedral angles [0, pi], as RDKit's GaussianTorsionAngleContribs.
+//! A non-finite angle selects the last cell and yields a non-finite value without reading outside the table.
+static __device__ __forceinline__ DG_REAL gaussianTorsionLookup(const DG_PARAM_REAL* table,
+                                                                const int            tableSize,
+                                                                const DG_REAL        phi) {
+  const DG_REAL normalized = phi * DG_REAL(tableSize - 1) / DG_REAL(M_PI);
+  const int     cell       = normalized < DG_REAL(tableSize - 2) ? static_cast<int>(normalized) : tableSize - 2;
+  const DG_REAL fraction   = normalized - DG_REAL(cell);
+  return table[cell] * (DG_REAL(1.0) - fraction) + table[cell + 1] * fraction;
+}
+
+static __device__ __forceinline__ DG_REAL gaussianTorsionEnergy(const DG_REAL*       pos,
+                                                                const int            idx1,
+                                                                const int            idx2,
+                                                                const int            idx3,
+                                                                const int            idx4,
+                                                                const DG_PARAM_REAL* energies,
+                                                                const int            tableSize,
+                                                                const DG_PARAM_REAL  scaling) {
+  return scaling *
+         gaussianTorsionLookup(energies, tableSize, calcTorsionPhi(pos, idx1 * 4, idx2 * 4, idx3 * 4, idx4 * 4));
+}
+
+//! Adds a Gaussian torsion's gradient, dE/dphi from the derivative table times the dihedral gradient in the
+//! Blondel-Karplus form (as in GROMACS). That form needs no division by sin(phi), which RDKit's cosine-based
+//! expression uses and which loses single precision near 0 and pi. Degenerate torsions are skipped, as in RDKit.
+static __device__ __forceinline__ void gaussianTorsionGrad(const DG_REAL*       pos,
+                                                           const int            idx1,
+                                                           const int            idx2,
+                                                           const int            idx3,
+                                                           const int            idx4,
+                                                           const DG_PARAM_REAL* derivatives,
+                                                           const int            tableSize,
+                                                           const DG_PARAM_REAL  scaling,
+                                                           DG_REAL*             grad) {
+  const int posIdx1 = idx1 * 4;
+  const int posIdx2 = idx2 * 4;
+  const int posIdx3 = idx3 * 4;
+  const int posIdx4 = idx4 * 4;
+
+  const DG_REAL rijx = pos[posIdx1 + 0] - pos[posIdx2 + 0];
+  const DG_REAL rijy = pos[posIdx1 + 1] - pos[posIdx2 + 1];
+  const DG_REAL rijz = pos[posIdx1 + 2] - pos[posIdx2 + 2];
+  const DG_REAL rkjx = pos[posIdx3 + 0] - pos[posIdx2 + 0];
+  const DG_REAL rkjy = pos[posIdx3 + 1] - pos[posIdx2 + 1];
+  const DG_REAL rkjz = pos[posIdx3 + 2] - pos[posIdx2 + 2];
+  const DG_REAL rklx = pos[posIdx3 + 0] - pos[posIdx4 + 0];
+  const DG_REAL rkly = pos[posIdx3 + 1] - pos[posIdx4 + 1];
+  const DG_REAL rklz = pos[posIdx3 + 2] - pos[posIdx4 + 2];
+
+  // Plane normals m = rij x rkj and n = rkj x rkl.
+  DG_REAL mx, my, mz;
+  crossProduct(rijx, rijy, rijz, rkjx, rkjy, rkjz, mx, my, mz);
+  DG_REAL nx, ny, nz;
+  crossProduct(rkjx, rkjy, rkjz, rklx, rkly, rklz, nx, ny, nz);
+  const DG_REAL mSquared = mx * mx + my * my + mz * mz;
+  const DG_REAL nSquared = nx * nx + ny * ny + nz * nz;
+  if (DG_IS_ZERO(DG_SQRT(mSquared)) || DG_IS_ZERO(DG_SQRT(nSquared))) {
+    return;
+  }
+
+  // Unsigned dihedral from atan2, and the sign that makes it the signed dihedral the gradient formula differentiates.
+  DG_REAL sx, sy, sz;
+  crossProduct(mx, my, mz, nx, ny, nz, sx, sy, sz);
+  const DG_REAL phi           = DG_ATAN2(DG_SQRT(sx * sx + sy * sy + sz * sz), dotProduct(mx, my, mz, nx, ny, nz));
+  const DG_REAL dE_dPhi       = scaling * gaussianTorsionLookup(derivatives, tableSize, phi);
+  const DG_REAL dE_dSignedPhi = dotProduct(rijx, rijy, rijz, nx, ny, nz) < DG_REAL(0.0) ? -dE_dPhi : dE_dPhi;
+
+  const DG_REAL rkjSquared = rkjx * rkjx + rkjy * rkjy + rkjz * rkjz;
+  const DG_REAL rkjLength  = DG_SQRT(rkjSquared);
+  const DG_REAL scaleI     = -dE_dSignedPhi * rkjLength / mSquared;
+  const DG_REAL scaleL     = dE_dSignedPhi * rkjLength / nSquared;
+  // Forces on atoms 1 and 4 (negative gradients), then the components along rkj that atoms 2 and 3 take.
+  const DG_REAL fix = scaleI * mx, fiy = scaleI * my, fiz = scaleI * mz;
+  const DG_REAL flx = scaleL * nx, fly = scaleL * ny, flz = scaleL * nz;
+  const DG_REAL p   = dotProduct(rijx, rijy, rijz, rkjx, rkjy, rkjz) / rkjSquared;
+  const DG_REAL q   = dotProduct(rklx, rkly, rklz, rkjx, rkjy, rkjz) / rkjSquared;
+  const DG_REAL svx = p * fix - q * flx, svy = p * fiy - q * fly, svz = p * fiz - q * flz;
+
+  atomicAdd(&grad[posIdx1 + 0], -fix);
+  atomicAdd(&grad[posIdx1 + 1], -fiy);
+  atomicAdd(&grad[posIdx1 + 2], -fiz);
+  atomicAdd(&grad[posIdx2 + 0], fix - svx);
+  atomicAdd(&grad[posIdx2 + 1], fiy - svy);
+  atomicAdd(&grad[posIdx2 + 2], fiz - svz);
+  atomicAdd(&grad[posIdx3 + 0], flx + svx);
+  atomicAdd(&grad[posIdx3 + 1], fly + svy);
+  atomicAdd(&grad[posIdx3 + 2], flz + svz);
+  atomicAdd(&grad[posIdx4 + 0], -flx);
+  atomicAdd(&grad[posIdx4 + 1], -fly);
+  atomicAdd(&grad[posIdx4 + 2], -flz);
+}
+
 static __device__ __forceinline__ void inversionGrad(const DG_REAL* pos,
                                                      const int      idx1,
                                                      const int      idx2,
@@ -1023,6 +1144,8 @@ static __device__ __inline__ DG_REAL molEnergyETK(const Energy3DForceContribsDev
   // Get term ranges
   const int torsionStart  = systemIndices.experimentalTorsionTermStarts[molIdx];
   const int torsionEnd    = systemIndices.experimentalTorsionTermStarts[molIdx + 1];
+  const int gaussianStart = systemIndices.gaussianTorsionTermStarts[molIdx];
+  const int gaussianEnd   = systemIndices.gaussianTorsionTermStarts[molIdx + 1];
   const int improperStart = systemIndices.improperTorsionTermStarts[molIdx];
   const int improperEnd   = systemIndices.improperTorsionTermStarts[molIdx + 1];
   const int dist12Start   = systemIndices.dist12TermStarts[molIdx];
@@ -1035,6 +1158,7 @@ static __device__ __inline__ DG_REAL molEnergyETK(const Energy3DForceContribsDev
   const int distLREnd     = systemIndices.longRangeDistTermStarts[molIdx + 1];
 
   const int numTorsion  = torsionEnd - torsionStart;
+  const int numGaussian = gaussianEnd - gaussianStart;
   const int numImproper = improperEnd - improperStart;
   const int numDist12   = dist12End - dist12Start;
   const int numDist13   = dist13End - dist13Start;
@@ -1043,6 +1167,7 @@ static __device__ __inline__ DG_REAL molEnergyETK(const Energy3DForceContribsDev
 
   // Get term data
   const auto& [t_idx1s, t_idx2s, t_idx3s, t_idx4s, t_forceConstants, t_signs] = terms.experimentalTorsionTerms;
+  const auto& gaussian                                                        = terms.gaussianTorsionTerms;
   const auto& [i_idx1s, i_idx2s, i_idx3s, i_idx4s, i_at2AtomicNum, i_isCBoundToO, i_C0, i_C1, i_C2, i_forceConstant] =
     terms.improperTorsionTerms;
   const auto& [d12_idx1s, d12_idx2s, d12_minLen, d12_maxLen, d12_forceConstant] = terms.dist12Terms;
@@ -1053,7 +1178,10 @@ static __device__ __inline__ DG_REAL molEnergyETK(const Energy3DForceContribsDev
   constexpr DG_REAL defaultAngleForceConstant = DG_REAL(1.0);
 
   // Calculate number of warps needed for each term type
-  const int warpsForTorsion  = (numTorsion + WARP_SIZE - 1) / WARP_SIZE;
+  // Cosine and Gaussian experimental torsions share the torsion chunks; a molecule has only one of the two forms.
+  const int warpsForCosine   = (numTorsion + WARP_SIZE - 1) / WARP_SIZE;
+  const int warpsForGaussian = (numGaussian + WARP_SIZE - 1) / WARP_SIZE;
+  const int warpsForTorsion  = warpsForCosine + warpsForGaussian;
   const int warpsForImproper = (numImproper + WARP_SIZE - 1) / WARP_SIZE;
   const int warpsForDist12   = (numDist12 + WARP_SIZE - 1) / WARP_SIZE;
   const int warpsForDist13   = (numDist13 + WARP_SIZE - 1) / WARP_SIZE;
@@ -1065,7 +1193,7 @@ static __device__ __inline__ DG_REAL molEnergyETK(const Energy3DForceContribsDev
   // Each warp processes chunks in round-robin fashion
   for (int chunkIdx = warpId; chunkIdx < totalWarpsNeeded; chunkIdx += numWarps) {
     // Determine which term type this chunk belongs to
-    if (chunkIdx < warpsForTorsion) {
+    if (chunkIdx < warpsForCosine) {
       // Torsion terms
       const int baseIdx = chunkIdx * WARP_SIZE;
       const int termIdx = torsionStart + baseIdx + laneId;
@@ -1081,6 +1209,20 @@ static __device__ __inline__ DG_REAL molEnergyETK(const Energy3DForceContribsDev
                                      localIdx4,
                                      &t_forceConstants[termIdx * 6],
                                      &t_signs[termIdx * 6]);
+      }
+    } else if (chunkIdx < warpsForTorsion) {
+      // Gaussian torsion terms
+      const int baseIdx = (chunkIdx - warpsForCosine) * WARP_SIZE;
+      const int termIdx = gaussianStart + baseIdx + laneId;
+      if (baseIdx + laneId < numGaussian) {
+        energy += gaussianTorsionEnergy(molCoords,
+                                        gaussian.idx1[termIdx] - atomStart,
+                                        gaussian.idx2[termIdx] - atomStart,
+                                        gaussian.idx3[termIdx] - atomStart,
+                                        gaussian.idx4[termIdx] - atomStart,
+                                        gaussian.energies + gaussian.tableStarts[termIdx],
+                                        gaussian.tableSizes[termIdx],
+                                        gaussian.scaling[termIdx]);
       }
     } else if (chunkIdx < warpsForTorsion + warpsForImproper) {
       // Improper torsion terms
@@ -1190,6 +1332,8 @@ static __device__ __inline__ void molGradETK(const Energy3DForceContribsDevicePt
   // Get term ranges
   const int torsionStart  = systemIndices.experimentalTorsionTermStarts[molIdx];
   const int torsionEnd    = systemIndices.experimentalTorsionTermStarts[molIdx + 1];
+  const int gaussianStart = systemIndices.gaussianTorsionTermStarts[molIdx];
+  const int gaussianEnd   = systemIndices.gaussianTorsionTermStarts[molIdx + 1];
   const int improperStart = systemIndices.improperTorsionTermStarts[molIdx];
   const int improperEnd   = systemIndices.improperTorsionTermStarts[molIdx + 1];
   const int dist12Start   = systemIndices.dist12TermStarts[molIdx];
@@ -1202,6 +1346,7 @@ static __device__ __inline__ void molGradETK(const Energy3DForceContribsDevicePt
   const int distLREnd     = systemIndices.longRangeDistTermStarts[molIdx + 1];
 
   const int numTorsion  = torsionEnd - torsionStart;
+  const int numGaussian = gaussianEnd - gaussianStart;
   const int numImproper = improperEnd - improperStart;
   const int numDist12   = dist12End - dist12Start;
   const int numDist13   = dist13End - dist13Start;
@@ -1210,6 +1355,7 @@ static __device__ __inline__ void molGradETK(const Energy3DForceContribsDevicePt
 
   // Get term data
   const auto& [t_idx1s, t_idx2s, t_idx3s, t_idx4s, t_forceConstants, t_signs] = terms.experimentalTorsionTerms;
+  const auto& gaussian                                                        = terms.gaussianTorsionTerms;
   const auto& [i_idx1s, i_idx2s, i_idx3s, i_idx4s, i_at2AtomicNum, i_isCBoundToO, i_C0, i_C1, i_C2, i_forceConstant] =
     terms.improperTorsionTerms;
   const auto& [d12_idx1s, d12_idx2s, d12_minLen, d12_maxLen, d12_forceConstant] = terms.dist12Terms;
@@ -1220,7 +1366,10 @@ static __device__ __inline__ void molGradETK(const Energy3DForceContribsDevicePt
   constexpr DG_REAL defaultAngleForceConstant = DG_REAL(1.0);
 
   // Calculate number of warps needed for each term type
-  const int warpsForTorsion  = (numTorsion + WARP_SIZE - 1) / WARP_SIZE;
+  // Cosine and Gaussian experimental torsions share the torsion chunks; a molecule has only one of the two forms.
+  const int warpsForCosine   = (numTorsion + WARP_SIZE - 1) / WARP_SIZE;
+  const int warpsForGaussian = (numGaussian + WARP_SIZE - 1) / WARP_SIZE;
+  const int warpsForTorsion  = warpsForCosine + warpsForGaussian;
   const int warpsForImproper = (numImproper + WARP_SIZE - 1) / WARP_SIZE;
   const int warpsForDist12   = (numDist12 + WARP_SIZE - 1) / WARP_SIZE;
   const int warpsForDist13   = (numDist13 + WARP_SIZE - 1) / WARP_SIZE;
@@ -1232,7 +1381,7 @@ static __device__ __inline__ void molGradETK(const Energy3DForceContribsDevicePt
   // Each warp processes chunks in round-robin fashion
   for (int chunkIdx = warpId; chunkIdx < totalWarpsNeeded; chunkIdx += numWarps) {
     // Determine which term type this chunk belongs to
-    if (chunkIdx < warpsForTorsion) {
+    if (chunkIdx < warpsForCosine) {
       // Torsion terms
       const int baseIdx = chunkIdx * WARP_SIZE;
       const int termIdx = torsionStart + baseIdx + laneId;
@@ -1249,6 +1398,21 @@ static __device__ __inline__ void molGradETK(const Energy3DForceContribsDevicePt
                          &t_forceConstants[termIdx * 6],
                          &t_signs[termIdx * 6],
                          grad);
+      }
+    } else if (chunkIdx < warpsForTorsion) {
+      // Gaussian torsion terms
+      const int baseIdx = (chunkIdx - warpsForCosine) * WARP_SIZE;
+      const int termIdx = gaussianStart + baseIdx + laneId;
+      if (baseIdx + laneId < numGaussian) {
+        gaussianTorsionGrad(molCoords,
+                            gaussian.idx1[termIdx] - atomStart,
+                            gaussian.idx2[termIdx] - atomStart,
+                            gaussian.idx3[termIdx] - atomStart,
+                            gaussian.idx4[termIdx] - atomStart,
+                            gaussian.derivatives + gaussian.tableStarts[termIdx],
+                            gaussian.tableSizes[termIdx],
+                            gaussian.scaling[termIdx],
+                            grad);
       }
     } else if (chunkIdx < warpsForTorsion + warpsForImproper) {
       // Improper torsion terms
@@ -1498,6 +1662,18 @@ static __device__ __inline__ DG_REAL molEnergyAIO(const AllInOneContribsDevicePt
                                  &torsion.forceConstants[i * 6],
                                  &torsion.signs[i * 6]);
   }
+  const auto& gaussian = terms.gaussianTorsionTerms;
+  for (int i = terms.gaussianTorsionTermStarts[molIdx] + tid; i < terms.gaussianTorsionTermStarts[molIdx + 1];
+       i += blockDim.x) {
+    energy += gaussianTorsionEnergy(molCoords,
+                                    gaussian.idx1[i] - atomStart,
+                                    gaussian.idx2[i] - atomStart,
+                                    gaussian.idx3[i] - atomStart,
+                                    gaussian.idx4[i] - atomStart,
+                                    gaussian.energies + gaussian.tableStarts[i],
+                                    gaussian.tableSizes[i],
+                                    gaussian.scaling[i]);
+  }
   const auto& planarity = terms.planarityTerms;
   for (int i = terms.planarityTermStarts[molIdx] + tid; i < terms.planarityTermStarts[molIdx + 1]; i += blockDim.x) {
     energy += planarityEnergy(molCoords,
@@ -1565,6 +1741,19 @@ static __device__ __inline__ void molGradAIO(const AllInOneContribsDevicePtr& te
                      &torsion.forceConstants[i * 6],
                      &torsion.signs[i * 6],
                      molGrad);
+  }
+  const auto& gaussian = terms.gaussianTorsionTerms;
+  for (int i = terms.gaussianTorsionTermStarts[molIdx] + tid; i < terms.gaussianTorsionTermStarts[molIdx + 1];
+       i += blockDim.x) {
+    gaussianTorsionGrad(molCoords,
+                        gaussian.idx1[i] - atomStart,
+                        gaussian.idx2[i] - atomStart,
+                        gaussian.idx3[i] - atomStart,
+                        gaussian.idx4[i] - atomStart,
+                        gaussian.derivatives + gaussian.tableStarts[i],
+                        gaussian.tableSizes[i],
+                        gaussian.scaling[i],
+                        molGrad);
   }
   const auto& planarity = terms.planarityTerms;
   for (int i = terms.planarityTermStarts[molIdx] + tid; i < terms.planarityTermStarts[molIdx + 1]; i += blockDim.x) {

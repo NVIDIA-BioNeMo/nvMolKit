@@ -17,6 +17,7 @@
 #define NVMOLKIT_DISTGEOM_H
 
 #include <cstdint>
+#include <map>
 #include <vector>
 
 #include "src/forcefields/batched_forcefield.h"
@@ -79,6 +80,25 @@ struct TorsionAngleContribTerms {
   std::vector<int>    signs;           // Signs for each torsion (6 values per term)
 };
 
+//! RDKit 2026.09 Gaussian experimental torsions (ETKDGv4), evaluated by interpolating energy and dE/dphi lookup tables
+//! over dihedral angles [0, pi]. Each term reads tableSizes[i] entries starting at tableStarts[i] in energies and
+//! derivatives, and scales both by scaling[i].
+struct GaussianTorsionContribTerms {
+  std::vector<int>    idx1;
+  std::vector<int>    idx2;
+  std::vector<int>    idx3;
+  std::vector<int>    idx4;
+  std::vector<int>    tableStarts;
+  std::vector<int>    tableSizes;
+  std::vector<double> scaling;
+  std::vector<double> energies;
+  std::vector<double> derivatives;
+};
+
+//! Batch-wide index of Gaussian torsion lookup tables, keyed by a table's energies followed by its derivatives, so
+//! each distinct table is stored once however many conformers or molecules use it.
+using GaussianTorsionTableIndex = std::map<std::vector<double>, int>;
+
 struct InversionContribTerms {
   std::vector<int>    idx1;           // Index of atom1
   std::vector<int>    idx2;           // Index of atom2
@@ -112,7 +132,9 @@ struct AngleConstraintContribTerms {
 
 struct Energy3DForceContribsHost {
   // Experimental torsion terms (from addExperimentalTorsionTerms)
-  TorsionAngleContribTerms experimentalTorsionTerms;
+  TorsionAngleContribTerms    experimentalTorsionTerms;
+  //! Experimental torsions in RDKit's Gaussian form (ETKDGv4); a molecule uses either these or the cosine terms.
+  GaussianTorsionContribTerms gaussianTorsionTerms;
 
   // Improper torsion terms (from addImproperTorsionTerms)
   InversionContribTerms improperTorsionTerms;
@@ -151,6 +173,7 @@ struct AllInOneForceContribsHost {
   //! Flat-bottom terms holding sp centers linear. The force constant is AllInOneForceWeights::linearAngle.
   AngleConstraintContribTerms    linearAngleTerms;
   TorsionAngleContribTerms       experimentalTorsionTerms;
+  GaussianTorsionContribTerms    gaussianTorsionTerms;
   PlanarityContribTerms          planarityTerms;
 };
 
@@ -173,6 +196,7 @@ struct BatchedIndices3DHost {
 
   // Term starts for each contribution type
   std::vector<int> experimentalTorsionTermStarts = {0};  // Start indices for experimental torsion terms
+  std::vector<int> gaussianTorsionTermStarts     = {0};  // Start indices for Gaussian experimental torsion terms
   std::vector<int> improperTorsionTermStarts     = {0};  // Start indices for improper torsion terms
   std::vector<int> dist12TermStarts              = {0};  // Start indices for 1-2 distance terms
   std::vector<int> dist13TermStarts              = {0};  // Start indices for 1-3 distance terms
@@ -192,6 +216,7 @@ struct BatchedMolecularSystemHost {
 struct BatchedMolecularSystem3DHost {
   Energy3DForceContribsHost contribs;
   BatchedIndices3DHost      indices;
+  GaussianTorsionTableIndex gaussianTorsionTables;
 };
 
 //! Flattened all-in-one ETKDG batch. Atom indices are offset into the batch, and each *TermStarts vector (size
@@ -201,11 +226,14 @@ struct BatchedAllInOneSystemHost {
   DistanceConstraintContribTerms harmonicDistanceTerms;
   AngleConstraintContribTerms    linearAngleTerms;
   TorsionAngleContribTerms       experimentalTorsionTerms;
+  GaussianTorsionContribTerms    gaussianTorsionTerms;
   PlanarityContribTerms          planarityTerms;
   std::vector<int>               harmonicDistanceTermStarts    = {0};
   std::vector<int>               linearAngleTermStarts         = {0};
   std::vector<int>               experimentalTorsionTermStarts = {0};
+  std::vector<int>               gaussianTorsionTermStarts     = {0};
   std::vector<int>               planarityTermStarts           = {0};
+  GaussianTorsionTableIndex      gaussianTorsionTables;
 };
 
 template <typename Scalar> struct DistViolationContribTermsDeviceT {
@@ -236,6 +264,18 @@ template <typename Scalar> struct TorsionAngleContribTermsDeviceT {
   nvMolKit::AsyncDeviceVector<int>    idx4;            // Index of atom4 of the torsion angle
   nvMolKit::AsyncDeviceVector<Scalar> forceConstants;  // Force constants for each torsion (6 values per term)
   nvMolKit::AsyncDeviceVector<int>    signs;           // Signs for each torsion (6 values per term)
+};
+
+template <typename Scalar> struct GaussianTorsionContribTermsDeviceT {
+  nvMolKit::AsyncDeviceVector<int>    idx1;
+  nvMolKit::AsyncDeviceVector<int>    idx2;
+  nvMolKit::AsyncDeviceVector<int>    idx3;
+  nvMolKit::AsyncDeviceVector<int>    idx4;
+  nvMolKit::AsyncDeviceVector<int>    tableStarts;
+  nvMolKit::AsyncDeviceVector<int>    tableSizes;
+  nvMolKit::AsyncDeviceVector<Scalar> scaling;
+  nvMolKit::AsyncDeviceVector<Scalar> energies;
+  nvMolKit::AsyncDeviceVector<Scalar> derivatives;
 };
 
 template <typename Scalar> struct InversionContribTermsDeviceT {
@@ -279,7 +319,8 @@ template <typename Scalar> struct EnergyForceContribsDeviceT {
 
 template <typename Scalar> struct Energy3DForceContribsDeviceT {
   // Experimental torsion terms (from addExperimentalTorsionTerms)
-  TorsionAngleContribTermsDeviceT<Scalar> experimentalTorsionTerms;
+  TorsionAngleContribTermsDeviceT<Scalar>    experimentalTorsionTerms;
+  GaussianTorsionContribTermsDeviceT<Scalar> gaussianTorsionTerms;
 
   // Improper torsion terms (from addImproperTorsionTerms)
   InversionContribTermsDeviceT<Scalar> improperTorsionTerms;
@@ -319,6 +360,7 @@ struct BatchedIndices3DDevice {
 
   // Term starts for each contribution type
   nvMolKit::AsyncDeviceVector<int> experimentalTorsionTermStarts;  // Start indices for experimental torsion terms
+  nvMolKit::AsyncDeviceVector<int> gaussianTorsionTermStarts;      // Start indices for Gaussian torsion terms
   nvMolKit::AsyncDeviceVector<int> improperTorsionTermStarts;      // Start indices for improper torsion terms
   nvMolKit::AsyncDeviceVector<int> dist12TermStarts;               // Start indices for 1-2 distance terms
   nvMolKit::AsyncDeviceVector<int> dist13TermStarts;               // Start indices for 1-3 distance terms
@@ -389,10 +431,12 @@ template <typename ParameterScalar> struct BatchedAllInOneDeviceBuffersT {
   DistanceConstraintContribTermsDeviceT<ParameterScalar> harmonicDistanceTerms;
   AngleConstraintContribTermsDeviceT<ParameterScalar>    linearAngleTerms;
   TorsionAngleContribTermsDeviceT<ParameterScalar>       experimentalTorsionTerms;
+  GaussianTorsionContribTermsDeviceT<ParameterScalar>    gaussianTorsionTerms;
   PlanarityContribTermsDevice                            planarityTerms;
   nvMolKit::AsyncDeviceVector<int>                       harmonicDistanceTermStarts;
   nvMolKit::AsyncDeviceVector<int>                       linearAngleTermStarts;
   nvMolKit::AsyncDeviceVector<int>                       experimentalTorsionTermStarts;
+  nvMolKit::AsyncDeviceVector<int>                       gaussianTorsionTermStarts;
   nvMolKit::AsyncDeviceVector<int>                       planarityTermStarts;
 };
 

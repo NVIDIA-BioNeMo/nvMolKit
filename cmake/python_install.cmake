@@ -14,8 +14,14 @@
 # the License.
 
 if(NVMOLKIT_BUILD_PYTHON_BINDINGS)
-  # Bundle libraries as static
-  set(BUILD_SHARED_LIBS OFF)
+  # Build the internal libraries as shared libraries installed next to the
+  # Python modules. Static libraries copy their objects, including each CUDA
+  # fatbin, into every module that links them.
+  set(BUILD_SHARED_LIBS ON)
+  # Load one libcudart for the modules and the libraries.
+  set(CMAKE_CUDA_RUNTIME_LIBRARY Shared)
+  set(CMAKE_INSTALL_RPATH "$ORIGIN")
+  set(CMAKE_INSTALL_RPATH_USE_LINK_PATH ON)
 
   add_custom_target(
     installPythonLibrariesTarget
@@ -31,6 +37,27 @@ if(NVMOLKIT_BUILD_PYTHON_BINDINGS)
     targetModule
     subpackage)
 
+  # Install every shared library target defined under directory into subpackage.
+  function(installPythonSharedLibraries directory subpackage)
+    get_property(
+      targets
+      DIRECTORY ${directory}
+      PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(target IN LISTS targets)
+      get_target_property(targetType ${target} TYPE)
+      if(targetType STREQUAL "SHARED_LIBRARY")
+        installpythontarget(${target} ${subpackage})
+      endif()
+    endforeach()
+    get_property(
+      subdirectories
+      DIRECTORY ${directory}
+      PROPERTY SUBDIRECTORIES)
+    foreach(subdirectory IN LISTS subdirectories)
+      installpythonsharedlibraries(${subdirectory} ${subpackage})
+    endforeach()
+  endfunction()
+
 else()
   # Dummy implementation to avoid branching in other cmake code
   function(installPythonTarget targetModule subpackage)
@@ -39,5 +66,10 @@ else()
     installPythonTarget
     targetModule
     subpackage)
+
+  # Dummy implementation to avoid branching in other cmake code
+  function(installPythonSharedLibraries directory subpackage)
+
+  endfunction()
 
 endif()

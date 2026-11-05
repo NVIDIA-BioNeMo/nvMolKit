@@ -46,6 +46,12 @@ RDKit::DGeomHelpers::EmbedParameters getETKDGOption(ETKDGOption opt) {
       params.useBasicKnowledge = false;
       return params;
     }
+    case ETKDGOption::ETKDGv4:
+#if RDKIT_ETKDG_2026_09_API
+      return RDKit::DGeomHelpers::ETKDGv4;
+#else
+      throw std::runtime_error("ETKDGv4 requires RDKit 2026.09 or later");
+#endif
     default:
       throw std::runtime_error("Unknown ETKDG option");
   }
@@ -67,6 +73,8 @@ std::string getETKDGOptionName(ETKDGOption opt) {
       return "KDG";
     case ETKDGOption::DG:
       return "DG";
+    case ETKDGOption::ETKDGv4:
+      return "ETKDGv4";
     default:
       return "Unknown";
   }

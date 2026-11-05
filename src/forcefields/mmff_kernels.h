@@ -290,24 +290,6 @@ cudaError_t launchTorsionConstraintGradientKernel(int           numConstraints,
                                                   double*       grad,
                                                   cudaStream_t  stream = 0);
 
-//! Reduce the energy buffer to the output energies.
-//!
-//! Energies written to energyBuffer are accumulated in outs, with one term in outs corresponding to each molecule in
-//! the batch.
-//!
-//! \param numBlocks Number of blocks
-//! \param energyBuffer Energy terms, guaranteed each block is only assigned to one molecule.
-//! \param energyBufferBlockIdxToBatchIdx Matching of blocks to output indices.
-//! \param outs Output energies
-//! \param stream
-//! \return
-cudaError_t launchReduceEnergiesKernel(int            numBlocks,
-                                       const double*  energyBuffer,
-                                       const int*     energyBufferBlockIdxToBatchIdx,
-                                       double*        outs,
-                                       const uint8_t* activeThisStage = nullptr,
-                                       cudaStream_t   stream          = 0);
-
 //! Pointer versions of contrib structs for kernel launches
 template <typename Scalar> struct BondStretchContribTermsDevicePtrT {
   int*    idx1 = nullptr;

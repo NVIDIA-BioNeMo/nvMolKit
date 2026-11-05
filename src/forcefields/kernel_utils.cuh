@@ -146,10 +146,23 @@ __device__ __forceinline__ void normalizeVector(double& x, double& y, double& z)
   z /= norm;
 }
 
-__global__ void reduceEnergiesKernel(const double*  energyBuffer,
-                                     const int*     energyBufferBlockIdxToBatchIdx,
-                                     double*        outs,
-                                     const uint8_t* activeThisStage = nullptr);
+//! Reduce the energy buffer to the output energies.
+//!
+//! Energies written to energyBuffer are accumulated in outs, with one term in outs corresponding to each molecule in
+//! the batch.
+//!
+//! \param numBlocks Number of blocks
+//! \param energyBuffer Energy terms, guaranteed each block is only assigned to one molecule.
+//! \param energyBufferBlockIdxToBatchIdx Matching of blocks to output indices.
+//! \param outs Output energies
+//! \param stream
+//! \return
+cudaError_t launchReduceEnergiesKernel(int            numBlocks,
+                                       const double*  energyBuffer,
+                                       const int*     energyBufferBlockIdxToBatchIdx,
+                                       double*        outs,
+                                       const uint8_t* activeThisStage = nullptr,
+                                       cudaStream_t   stream          = 0);
 
 constexpr int blockSizeEnergyReduction = 128;
 

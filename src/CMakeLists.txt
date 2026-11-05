@@ -99,7 +99,7 @@ add_library(
   etkdg_stages
   etkdg_stage_coordgen.cu etkdg_stage_distgeom_minimize.cu
   etkdg_stage_update_conformers.cu etkdg_stage_stereochem_checks.cu
-  etkdg_stage_etk_minimization.cu)
+  etkdg_stage_etk_minimization.cu etkdg_stage_aio_minimization.cu)
 target_link_libraries(
   etkdg_stages
   PUBLIC bfgs
@@ -107,12 +107,13 @@ target_link_libraries(
           device_vector
           ${RDKit_LIBS}
           dg_batched_forcefield
+          aio_etkdg_batched_forcefield
           etk_batched_forcefield
           ff_kernel_utils
           dist_geom
           rdkit_dist_geom_flattened
           nvmolkit_versions
-          etkdg)
+          etkdg_impl)
 
 add_library(etkdg etkdg.cpp conformer/device_conformer_pruning.cpp)
 target_link_libraries(
@@ -130,6 +131,7 @@ target_link_libraries(
           rdkit_dist_geom_flattened
           etkdg_impl
           etkdg_stages
+          nvmolkit_versions
           openmp_helpers
           OpenMP::OpenMP_CXX)
 
@@ -164,6 +166,13 @@ target_link_libraries(
   fingerprint_search
   PUBLIC device_vector
   PRIVATE cuda_error_check cub_helpers nvtx)
+
+add_library(kmeans kmeans.cu kmeans_mma.cu)
+target_link_libraries(
+  kmeans
+  PUBLIC device_vector
+  PRIVATE cuda_error_check diversity_pickers cccl_interface)
+target_include_directories(kmeans SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
 
 add_library(conformer_rmsd conformer_rmsd.cu)
 target_link_libraries(

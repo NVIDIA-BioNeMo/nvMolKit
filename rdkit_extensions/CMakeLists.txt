@@ -48,7 +48,7 @@ target_link_libraries(
   PUBLIC dist_geom nvmolkit_versions)
 
 add_library(rdkit_bounds_matrix bounds_matrix.cpp)
-target_link_libraries(rdkit_bounds_matrix PRIVATE ${RDKit_LIBS})
+target_link_libraries(rdkit_bounds_matrix PRIVATE ${RDKit_LIBS} nvmolkit_versions)
 
 add_library(conformer_pruning conformer_pruning.cpp)
 target_link_libraries(conformer_pruning PRIVATE ${RDKit_LIBS})

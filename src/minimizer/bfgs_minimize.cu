@@ -72,6 +72,17 @@ template <typename T> __global__ void setAllKernel(const int numElements, T valu
   }
 }
 
+//! Marks systems that have used their iteration budget as finished.
+__global__ void finishSystemsAtIterationLimitKernel(const int  numSystems,
+                                                    const int  iteration,
+                                                    const int* maxItersPerSystem,
+                                                    int16_t*   statuses) {
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (idx < numSystems && iteration >= maxItersPerSystem[idx]) {
+    statuses[idx] = 0;
+  }
+}
+
 // Specialized version for copying from uint8_t to int16_t
 __global__ void copyActiveToStatusKernel(const int numElements, const uint8_t* src, int16_t* dst) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1083,7 +1094,8 @@ template <typename EnergyEvaluator, typename GradientEvaluator>
 bool BfgsBatchMinimizerT<real>::minimizeBatched(const int         numIters,
                                                 const double      gradTol,
                                                 EnergyEvaluator   evaluateEnergy,
-                                                GradientEvaluator evaluateGradient) {
+                                                GradientEvaluator evaluateGradient,
+                                                const int*        maxItersPerSystem) {
   gradTol_                = gradTol;
   const int numSystems    = numSystems_;
   const int numStateTerms = numAtomsTotal_ * dataDim_;
@@ -1106,7 +1118,18 @@ bool BfgsBatchMinimizerT<real>::minimizeBatched(const int         numIters,
     setMaxStep();
   }
 
-  for (int currIter = 0; currIter < numIters && compactAndCountConverged() < numSystems; currIter++) {
+  for (int currIter = 0; currIter < numIters; currIter++) {
+    if (maxItersPerSystem != nullptr) {
+      constexpr int limitBlockSize = 256;
+      finishSystemsAtIterationLimitKernel<<<(numSystems + limitBlockSize - 1) / limitBlockSize,
+                                            limitBlockSize,
+                                            0,
+                                            stream_>>>(numSystems, currIter, maxItersPerSystem, statuses_.data());
+      cudaCheckError(cudaGetLastError());
+    }
+    if (compactAndCountConverged() == numSystems) {
+      break;
+    }
     {
       const ScopedNvtxRange bfgsLineSearch("BfgsBatchMinimizer::lineSearch");
       doLineSearchSetup(energyOutsDevice);
@@ -1148,7 +1171,8 @@ bool BfgsBatchMinimizerT<real>::minimize(const int                  numIters,
                                          AsyncDeviceVector<double>& positions,
                                          AsyncDeviceVector<double>& grad,
                                          AsyncDeviceVector<double>& energyOuts,
-                                         const uint8_t*             activeSystemMask) {
+                                         const uint8_t*             activeSystemMask,
+                                         const int*                 maxItersPerSystem) {
   const auto& atomStartsHost = ff.atomStartsHost();
 
   if (resolveBackend(atomStartsHost) != BfgsBackend::BATCHED) {
@@ -1170,7 +1194,8 @@ bool BfgsBatchMinimizerT<real>::minimize(const int                  numIters,
     auto evaluateGradient = [&]() {
       cudaCheckError(ff.computeGradients(gradDevice, positionsDevice, activeSystemMask, stream_));
     };
-    const bool needsAnotherCycle = minimizeBatched(numIters, gradTol, evaluateEnergy, evaluateGradient);
+    const bool needsAnotherCycle =
+      minimizeBatched(numIters, gradTol, evaluateEnergy, evaluateGradient, maxItersPerSystem);
     // stream_ is non-blocking, so callers' synchronous reads don't implicitly wait for it.
     cudaCheckError(cudaStreamSynchronize(stream_));
     return needsAnotherCycle;
@@ -1186,7 +1211,7 @@ bool BfgsBatchMinimizerT<real>::minimize(const int                  numIters,
         cudaCheckError(
           singlePrecisionForcefield->computeGradients(gradDevice, positionsDevice, activeSystemMask, stream_));
       };
-      needsAnotherCycle = minimizeBatched(numIters, gradTol, evaluateEnergy, evaluateGradient);
+      needsAnotherCycle = minimizeBatched(numIters, gradTol, evaluateEnergy, evaluateGradient, maxItersPerSystem);
     } else {
       // Forcefield only evaluates in double precision: round-trip through the caller's buffers.
       auto evaluateEnergy = [&](const real* evalPositions) {
@@ -1201,7 +1226,7 @@ bool BfgsBatchMinimizerT<real>::minimize(const int                  numIters,
         cudaCheckError(ff.computeGradients(grad.data(), positions.data(), activeSystemMask, stream_));
         cudaCheckError(detail::convertDeviceArray(gradDevice, grad.data(), grad.size(), stream_));
       };
-      needsAnotherCycle = minimizeBatched(numIters, gradTol, evaluateEnergy, evaluateGradient);
+      needsAnotherCycle = minimizeBatched(numIters, gradTol, evaluateEnergy, evaluateGradient, maxItersPerSystem);
     }
     cudaCheckError(detail::convertDeviceArray(energyOuts.data(), energyOutsDevice, energyOuts.size(), stream_));
     cudaCheckError(detail::convertDeviceArray(positions.data(), positionsDevice, positions.size(), stream_));
@@ -1392,6 +1417,74 @@ bool BfgsBatchMinimizerT<real>::minimizeWithDG(const int                     num
 
   if (err != cudaSuccess) {
     throw std::runtime_error(std::string("Per-molecule BFGS DG kernel failed: ") + cudaGetErrorString(err));
+  }
+
+  return checkConvergence(activeMolIds_, statuses_, convergenceHost_, numSystems, stream_);
+}
+
+template <typename real>
+bool BfgsBatchMinimizerT<real>::minimizeWithAIO(const int                             numIters,
+                                                const double                          gradTol,
+                                                const std::vector<int>&               atomStartsHost,
+                                                const AsyncDeviceVector<int>&         atomStarts,
+                                                AsyncDeviceVector<real>&              positions,
+                                                AIODeviceBuffers&                     systemDevice,
+                                                const DistGeom::AllInOneForceWeights& weights,
+                                                const bool                            includeTorsionTerms,
+                                                const uint8_t*                        activeThisStage,
+                                                const int*                            maxItersPerSystem) {
+  const int numSystems = atomStartsHost.size() - 1;
+
+  if (dataDim_ != 4) {
+    throw std::runtime_error("minimizeWithAIO requires BfgsBatchMinimizer to be constructed with dataDim=4");
+  }
+
+  const BfgsBackend effectiveBackend = resolveBackend(atomStartsHost);
+
+  if (effectiveBackend == BfgsBackend::BATCHED) {
+    throw std::runtime_error("Use minimize(..., BatchedForcefield&) for batched all-in-one ETKDG minimization");
+  }
+
+  initialize(atomStartsHost, atomStarts.data(), nullptr, nullptr, nullptr, effectiveBackend, activeThisStage);
+
+  const ScopedNvtxRange bfgsPerMoleculeAIO("BfgsBatchMinimizer::perMoleculeMinimizeAIO");
+
+  auto& grad       = systemDevice.distanceGeometry.grad;
+  auto& energyOuts = systemDevice.distanceGeometry.energyOuts;
+  prepareScratchBuffers(grad,
+                        lineSearchDir_,
+                        scratchPositions_,
+                        hessDGrad_,
+                        scratchGrad_,
+                        hessianPassScratch_,
+                        scratchBuffersDevice_,
+                        scratchBufferPointersHost_,
+                        stream_);
+
+  const auto terms = DistGeom::toAllInOneContribsDevicePtr(systemDevice, atomStarts.data());
+
+  const cudaError_t err = launchBfgsMinimizePerMolKernelAIO(static_cast<int>(activeMolIds_.size()),
+                                                            activeMolIdsDevice_.data(),
+                                                            maxAtomsInBatch_,
+                                                            atomStarts.data(),
+                                                            hessianStarts_.data(),
+                                                            numIters,
+                                                            gradTol,
+                                                            scaleGrads_,
+                                                            terms,
+                                                            positions.data(),
+                                                            grad.data(),
+                                                            inverseHessian_.data(),
+                                                            scratchBuffersDevice_.data(),
+                                                            energyOuts.data(),
+                                                            weights,
+                                                            includeTorsionTerms,
+                                                            maxItersPerSystem,
+                                                            statuses_.data(),
+                                                            stream_);
+
+  if (err != cudaSuccess) {
+    throw std::runtime_error(std::string("Per-molecule BFGS all-in-one kernel failed: ") + cudaGetErrorString(err));
   }
 
   return checkConvergence(activeMolIds_, statuses_, convergenceHost_, numSystems, stream_);

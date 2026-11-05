@@ -282,6 +282,10 @@ TEST_P(ETKStageSingleMolTestFixture, MinimizeCompare) {
   const auto [etkdgOption, backend, precision] = GetParam();
   embedParam_                                  = getETKDGOption(etkdgOption);
   embedParam_.useRandomCoords                  = true;
+#if RDKIT_AIO_ETKDG_API
+  // This stage is the legacy refinement; ETKDGv4 would otherwise select the all-in-one force constants.
+  embedParam_.useLegacyImplementation = true;
+#endif
 
   // Initialize test components after setting embedParam_
   initTestComponents();
@@ -411,6 +415,16 @@ INSTANTIATE_TEST_SUITE_P(ETKDGVariants,
                            return makeETKStageName(info.param);
                          });
 
+#if RDKIT_ETKDG_2026_09_API
+// ETKDGv4 with the legacy refinement minimizes its Gaussian experimental torsions in this ETK stage.
+INSTANTIATE_TEST_SUITE_P(GaussianTorsions,
+                         ETKStageSingleMolTestFixture,
+                         ::testing::ValuesIn(makeETKStageParams({ETKDGOption::ETKDGv4})),
+                         [](const ::testing::TestParamInfo<ETKStageTestParam>& info) {
+                           return makeETKStageName(info.param);
+                         });
+#endif
+
 class ETKStageMultiMolTestFixture : public ::testing::TestWithParam<ETKStageTestParam> {
  public:
   ETKStageMultiMolTestFixture() { testDataFolderPath_ = getTestDataFolderPath(); }
@@ -444,6 +458,10 @@ TEST_P(ETKStageMultiMolTestFixture, MinimizeCompare) {
   const auto [etkdgOption, backend, precision] = GetParam();
   embedParam_                                  = getETKDGOption(etkdgOption);
   embedParam_.useRandomCoords                  = true;
+#if RDKIT_AIO_ETKDG_API
+  // This stage is the legacy refinement; ETKDGv4 would otherwise select the all-in-one force constants.
+  embedParam_.useLegacyImplementation = true;
+#endif
 
   // Initialize test components after setting embedParam_
   initTestComponents();
@@ -535,3 +553,12 @@ INSTANTIATE_TEST_SUITE_P(ETKDGVariants,
                          [](const ::testing::TestParamInfo<ETKStageTestParam>& info) {
                            return makeETKStageName(info.param);
                          });
+
+#if RDKIT_ETKDG_2026_09_API
+INSTANTIATE_TEST_SUITE_P(GaussianTorsions,
+                         ETKStageMultiMolTestFixture,
+                         ::testing::ValuesIn(makeETKStageParams({ETKDGOption::ETKDGv4})),
+                         [](const ::testing::TestParamInfo<ETKStageTestParam>& info) {
+                           return makeETKStageName(info.param);
+                         });
+#endif

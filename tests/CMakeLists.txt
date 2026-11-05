@@ -26,7 +26,7 @@ target_link_libraries(
                                   molData OpenMP::OpenMP_CXX)
 
 add_executable(test_similarity test_similarity.cpp)
-target_link_libraries(test_similarity PRIVATE ${RDKit_LIBS} Similarity)
+target_link_libraries(test_similarity PRIVATE ${RDKit_LIBS} Similarity device)
 
 add_executable(test_cuda_error_check test_cuda_error_check.cpp)
 target_link_libraries(test_cuda_error_check PRIVATE cuda_error_check)
@@ -120,8 +120,10 @@ target_link_libraries(test_openmp_helpers PRIVATE openmp_helpers
 
 add_library(test_utils test_utils.cpp)
 target_link_libraries(
-  test_utils PRIVATE ${RDKit_LIBS} GTest::gtest GTest::gtest_main GTest::gmock
-                     GTest::gmock_main)
+  test_utils
+  PUBLIC nvmolkit_versions
+  PRIVATE ${RDKit_LIBS} GTest::gtest GTest::gtest_main GTest::gmock
+          GTest::gmock_main)
 
 add_executable(smarts_filter smarts_filter.cpp)
 target_link_libraries(smarts_filter PRIVATE molecules molData ${RDKit_LIBS})
@@ -141,6 +143,8 @@ add_executable(test_mmff test_mmff.cu)
 target_link_libraries(
   test_mmff
   PRIVATE ${RDKit_LIBS}
+          device
+          ff_kernel_utils
           mmff_minimize
           rdkit_mmff_flattened
           mmff
@@ -194,7 +198,8 @@ target_link_libraries(
           ff_utils
           ff_kernel_utils
           test_utils
-          embedder_utils)
+          embedder_utils
+          nvmolkit_versions)
 
 add_executable(test_aio_etkdg_forcefield test_aio_etkdg_forcefield.cu)
 target_link_libraries(
@@ -202,6 +207,19 @@ target_link_libraries(
   PRIVATE ${RDKit_LIBS}
           rdkit_dist_geom_flattened
           aio_etkdg_batched_forcefield
+          bfgs
+          dist_geom
+          device_vector
+          test_utils
+          embedder_utils
+          nvmolkit_versions)
+
+add_executable(test_gaussian_torsions test_gaussian_torsions.cu)
+target_link_libraries(
+  test_gaussian_torsions
+  PRIVATE ${RDKit_LIBS}
+          rdkit_dist_geom_flattened
+          etk_batched_forcefield
           dist_geom
           device_vector
           test_utils
@@ -210,13 +228,14 @@ target_link_libraries(
 
 add_executable(test_rdkit_bounds_matrix test_rdkit_bounds_matrix.cpp)
 target_link_libraries(
-  test_rdkit_bounds_matrix PRIVATE rdkit_bounds_matrix symmetricEigenSolver
-                                   ${RDKit_LIBS})
+  test_rdkit_bounds_matrix
+  PRIVATE rdkit_bounds_matrix symmetricEigenSolver embedder_utils ${RDKit_LIBS}
+          nvmolkit_versions)
 
 add_executable(test_triangle_smooth test_triangle_smooth.cu)
 target_link_libraries(
-  test_triangle_smooth PRIVATE triangle_smooth device_vector ${RDKit_LIBS}
-                               test_utils)
+  test_triangle_smooth PRIVATE triangle_smooth device_vector embedder_utils
+                               ${RDKit_LIBS} test_utils)
 
 add_executable(test_coordgen test_coordgen.cu)
 target_link_libraries(
@@ -233,6 +252,8 @@ add_executable(test_etkdg test_etkdg.cu test_etkdg_minimize.cu)
 target_link_libraries(
   test_etkdg
   PRIVATE etkdg_impl
+          device
+          nvmolkit_versions
           device_vector
           test_utils
           ${RDKit_LIBS}
@@ -240,7 +261,8 @@ target_link_libraries(
           etkdg_stages
           etkdg
           embedder_utils
-          conformer_pruning)
+          conformer_pruning
+          nvmolkit_versions)
 
 add_executable(test_etkdg_device_output test_etkdg_device_output.cu)
 target_link_libraries(
@@ -278,6 +300,8 @@ add_executable(test_etkdg_coordgen test_etkdg_coordgen.cu)
 target_link_libraries(
   test_etkdg_coordgen
   PRIVATE dist_geom
+          embedder_utils
+          etkdg_impl
           rdkit_dist_geom_flattened
           test_utils
           etkdg
@@ -289,6 +313,7 @@ add_executable(test_bfgs_minimizer test_bfgs_minimizer.cu)
 target_link_libraries(
   test_bfgs_minimizer
   PRIVATE bfgs
+          device_convert
           batched_forcefield
           mmff_batched_forcefield
           rdkit_mmff_flattened
@@ -328,14 +353,28 @@ target_link_libraries(
 add_executable(test_etkdg_etk_minimize test_etkdg_etk_minimize.cu)
 target_link_libraries(
   test_etkdg_etk_minimize
-  PRIVATE etkdg_stages device_vector ${RDKit_LIBS} test_utils dist_geom
+  PRIVATE etkdg_stages
+          etkdg_impl
+          embedder_utils
+          device_vector
+          ${RDKit_LIBS}
+          test_utils
+          dist_geom
           rdkit_dist_geom_flattened)
 
 add_executable(test_etkdg_stereochem_checks test_etkdg_stereochem_checks.cu)
 target_link_libraries(
   test_etkdg_stereochem_checks
-  PRIVATE etkdg_stages device_vector ${RDKit_LIBS} test_utils dist_geom
-          rdkit_dist_geom_flattened)
+  PRIVATE etkdg_stages
+          etkdg_impl
+          embedder_utils
+          device
+          device_vector
+          ${RDKit_LIBS}
+          test_utils
+          dist_geom
+          rdkit_dist_geom_flattened
+          nvmolkit_versions)
 
 add_executable(test_conformer_checkers test_conformer_checkers.cpp)
 target_link_libraries(test_conformer_checkers PRIVATE ${RDKit_LIBS}
@@ -364,8 +403,12 @@ add_executable(test_aap_threads test_aap_threads.cpp)
 add_executable(test_diversity_pickers test_diversity_pickers.cu)
 target_link_libraries(test_diversity_pickers PRIVATE diversity_pickers device)
 
+add_executable(test_kmeans test_kmeans.cu)
+target_link_libraries(test_kmeans PRIVATE kmeans device)
+
 add_executable(test_boolean_tree test_boolean_tree.cu)
-target_link_libraries(test_boolean_tree PRIVATE substruct_definitions device)
+target_link_libraries(test_boolean_tree PRIVATE substruct_definitions device
+                                                device_vector)
 
 add_executable(test_molecules test_molecules.cu)
 target_link_libraries(test_molecules PRIVATE molecules cuda_error_check
@@ -461,8 +504,8 @@ target_link_libraries(
                            test_utils)
 
 add_executable(test_tfd_gpu test_tfd_gpu.cpp)
-target_link_libraries(test_tfd_gpu PRIVATE ${RDKit_LIBS} tfd_gpu device_vector
-                                           test_utils)
+target_link_libraries(test_tfd_gpu PRIVATE ${RDKit_LIBS} tfd_gpu tfd_cpu
+                                           device_vector test_utils)
 
 add_executable(test_tfd test_tfd.cpp)
 target_link_libraries(test_tfd PRIVATE ${RDKit_LIBS} tfd_gpu tfd_cpu
@@ -478,6 +521,7 @@ set(TEST_LIST
     test_butina
     test_fingerprint_search
     test_diversity_pickers
+    test_kmeans
     test_bfgs_hessian
     test_tfd_cpu
     test_tfd_kernels
@@ -493,6 +537,7 @@ set(TEST_LIST
     test_device_vector
     test_distgeom_kernels
     test_aio_etkdg_forcefield
+    test_gaussian_torsions
     test_etkdg
     test_etkdg_device_output
     test_ff_device_output

@@ -22,7 +22,7 @@ if(NVMOLKIT_BUILD_TESTS OR NVMOLKIT_BUILD_BENCHMARKS)
     substruct_validation
     PUBLIC ${RDKit_LIBS} substructure_search substruct_definitions
            cuda_error_check flatBitVect)
-endif()
 
-add_library(conformer_checkers conformer_checkers.cpp)
-target_link_libraries(conformer_checkers PRIVATE ${RDKit_LIBS})
+  add_library(conformer_checkers conformer_checkers.cpp)
+  target_link_libraries(conformer_checkers PRIVATE ${RDKit_LIBS})
+endif()

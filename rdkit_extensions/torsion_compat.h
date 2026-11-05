@@ -18,12 +18,12 @@ inline const CosineTorsionParameters& getCosineTorsionParameters(const CosineTor
 }
 
 // RDKit 2026.09 wraps the existing cosine parameters and new Gaussian
-// parameters in a variant. nvMolKit supports the cosine form (ETversion 1/2).
+// parameters in a variant. Gaussian torsions are packed separately.
 template <typename... Alternatives>
 const CosineTorsionParameters& getCosineTorsionParameters(const std::variant<Alternatives...>& parameters) {
   const auto* cosine = std::get_if<CosineTorsionParameters>(&parameters);
   if (cosine == nullptr) {
-    throw std::invalid_argument("Gaussian experimental torsion parameters are not supported by nvMolKit");
+    throw std::invalid_argument("Expected cosine experimental torsion parameters");
   }
   return *cosine;
 }

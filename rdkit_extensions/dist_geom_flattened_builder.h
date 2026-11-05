@@ -28,6 +28,12 @@ nvMolKit::DistGeom::Energy3DForceContribsHost construct3DForceFieldContribs(
   int                                               dim,
   bool                                              useBasicKnowledge = true);
 
+//! Builds the terms of RDKit's DistGeom::construct3DImproperForceField: improper torsion terms with force scaling 10
+//! and 179-180 degree angle terms for linear centers. The angle force constant, also 10, is left to the caller.
+nvMolKit::DistGeom::Energy3DForceContribsHost constructImproperCheckContribs(
+  const ::ForceFields::CrystalFF::CrystalFFDetails& etkdgDetails,
+  unsigned int                                      numAtoms);
+
 #if RDKIT_AIO_ETKDG_API
 //! Builds one molecule's terms of RDKit's all-in-one ETKDG force field, as DistGeom::constructAllInOneForceField
 //! followed by DistGeom::addTorsionTerms. Force constants come from etkdgDetails.forceConsts, the 1-2/1-3 pairs from

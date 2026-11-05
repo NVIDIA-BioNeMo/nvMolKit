@@ -45,8 +45,10 @@
 
 #include <boost/dynamic_bitset.hpp>
 #include <iomanip>
+#include <numeric>
 #include <typeinfo>
 
+#include "rdkit_extensions/topology_bounds_compat.h"
 #include "versions.h"
 
 using namespace RDKit;
@@ -72,14 +74,15 @@ namespace detail {
 EmbedArgs cloneEmbedArgs(const EmbedArgs& source) {
 #if RDKIT_VERSION_MAJOR > 2026 || (RDKIT_VERSION_MAJOR == 2026 && RDKIT_VERSION_MINOR >= 9)
   EmbedArgs result;
-  result.dim                = source.dim;
-  result.mmat               = source.mmat;
-  result.chiralCenters      = source.chiralCenters;
-  result.tetrahedralCarbons = source.tetrahedralCarbons;
-  result.doubleBondEnds     = source.doubleBondEnds;
-  result.stereoDoubleBonds  = source.stereoDoubleBonds;
-  result.posVec             = source.posVec;
-  result.stage              = source.stage;
+  result.dim                  = source.dim;
+  result.mmat                 = source.mmat;
+  result.chiralCenters        = source.chiralCenters;
+  result.tetrahedralCarbons   = source.tetrahedralCarbons;
+  result.doubleBondEnds       = source.doubleBondEnds;
+  result.stereoDoubleBonds    = source.stereoDoubleBonds;
+  result.posVec               = source.posVec;
+  result.stage                = source.stage;
+  result.topologicalDistances = source.topologicalDistances;
 
   const auto& original         = source.etkdgDetails;
   auto&       copied           = result.etkdgDetails;
@@ -273,18 +276,8 @@ void setupTopologyBounds(const ROMol*                                mol,
                          const RDKit::DGeomHelpers::EmbedParameters& params,
                          ForceFields::CrystalFF::CrystalFFDetails&   etkdgDetails) {
   PRECONDITION(mol, "bad molecule");
-  if (params.useExpTorsionAnglePrefs || params.useBasicKnowledge) {
-    RDKit::DGeomHelpers::setTopolBounds(*mol,
-                                        mmat,
-                                        etkdgDetails.bonds,
-                                        etkdgDetails.angles,
-                                        true,
-                                        false,
-                                        params.useMacrocycle14config,
-                                        params.forceTransAmides);
-  } else {
-    RDKit::DGeomHelpers::setTopolBounds(*mol, mmat, true, false, params.useMacrocycle14config, params.forceTransAmides);
-  }
+  const bool collectEtkdgTerms = params.useExpTorsionAnglePrefs || params.useBasicKnowledge;
+  detail::setEmbedderTopolBounds(*mol, mmat, params, collectEtkdgTerms ? &etkdgDetails : nullptr, false, true);
   // Note: coordMap handling removed as per user request
 }
 
@@ -293,7 +286,7 @@ void setupRelaxedBounds(const ROMol*                                mol,
                         const RDKit::DGeomHelpers::EmbedParameters& params) {
   // Re-compute the bounds matrix without 15 bounds and with VDW scaling
   RDKit::DGeomHelpers::initBoundsMat(mmat);
-  RDKit::DGeomHelpers::setTopolBounds(*mol, mmat, false, true, params.useMacrocycle14config, params.forceTransAmides);
+  detail::setEmbedderTopolBounds(*mol, mmat, params, nullptr, true, false);
   // Note: coordMap handling removed as per user request
 }
 
@@ -302,7 +295,7 @@ void setupIgnoredSmoothingBounds(const ROMol*                                mol
                                  const RDKit::DGeomHelpers::EmbedParameters& params) {
   // Proceed with the more relaxed bounds matrix when ignoring smoothing failures
   RDKit::DGeomHelpers::initBoundsMat(mmat);
-  RDKit::DGeomHelpers::setTopolBounds(*mol, mmat, false, true, params.useMacrocycle14config, params.forceTransAmides);
+  detail::setEmbedderTopolBounds(*mol, mmat, params, nullptr, true, false);
   // Note: coordMap handling removed as per user request
 }
 
@@ -311,6 +304,17 @@ void initETKDG(const ROMol*                                mol,
                ForceFields::CrystalFF::CrystalFFDetails&   etkdgDetails) {
   PRECONDITION(mol, "bad molecule");
   const unsigned int nAtoms = mol->getNumAtoms();
+#if RDKIT_AIO_ETKDG_API
+  etkdgDetails.forceConsts = params.useLegacyImplementation ? ForceFields::CrystalFF::ETKDGForceConsts::SEQ::Cosine :
+                                                              ForceFields::CrystalFF::ETKDGForceConsts::AIO::Cosine;
+#endif
+#if RDKIT_ETKDG_2026_09_API
+  if (params.ETversion == 4) {
+    etkdgDetails.forceConsts = params.useLegacyImplementation ?
+                                 ForceFields::CrystalFF::ETKDGForceConsts::SEQ::Gaussian :
+                                 ForceFields::CrystalFF::ETKDGForceConsts::AIO::Gaussian;
+  }
+#endif
   if (params.useExpTorsionAnglePrefs || params.useBasicKnowledge) {
     ForceFields::CrystalFF::getExperimentalTorsions(*mol,
                                                     etkdgDetails,
@@ -325,6 +329,11 @@ void initETKDG(const ROMol*                                mol,
       etkdgDetails.atomNums[i] = mol->getAtomWithIdx(i)->getAtomicNum();
     }
   }
+#if RDKIT_ETKDG_2026_09_API
+  if (params.ETversion == 4) {
+    ForceFields::CrystalFF::populateRefTable(etkdgDetails);
+  }
+#endif
   etkdgDetails.boundsMatForceScaling = params.boundsMatForceScaling;
 }
 
@@ -334,18 +343,8 @@ bool setupInitialBoundsMatrix(const ROMol*                                mol,
                               const RDKit::DGeomHelpers::EmbedParameters& params,
                               ForceFields::CrystalFF::CrystalFFDetails&   etkdgDetails) {
   PRECONDITION(mol, "bad molecule");
-  if (params.useExpTorsionAnglePrefs || params.useBasicKnowledge) {
-    RDKit::DGeomHelpers::setTopolBounds(*mol,
-                                        mmat,
-                                        etkdgDetails.bonds,
-                                        etkdgDetails.angles,
-                                        true,
-                                        false,
-                                        params.useMacrocycle14config,
-                                        params.forceTransAmides);
-  } else {
-    RDKit::DGeomHelpers::setTopolBounds(*mol, mmat, true, false, params.useMacrocycle14config, params.forceTransAmides);
-  }
+  const bool collectEtkdgTerms = params.useExpTorsionAnglePrefs || params.useBasicKnowledge;
+  detail::setEmbedderTopolBounds(*mol, mmat, params, collectEtkdgTerms ? &etkdgDetails : nullptr, false, true);
   constexpr double kCoordMapTolerance = 0.05;
   double           tol                = 0.0;
   if (coordMap != nullptr) {
@@ -356,7 +355,7 @@ bool setupInitialBoundsMatrix(const ROMol*                                mol,
     // ok this bound matrix failed to triangle smooth - re-compute the
     // bounds matrix without 15 bounds and with VDW scaling
     RDKit::DGeomHelpers::initBoundsMat(mmat);
-    RDKit::DGeomHelpers::setTopolBounds(*mol, mmat, false, true, params.useMacrocycle14config, params.forceTransAmides);
+    detail::setEmbedderTopolBounds(*mol, mmat, params, nullptr, true, false);
 
     if (coordMap != nullptr) {
       adjustBoundsMatFromCoordMap(mmat, coordMap);
@@ -368,12 +367,7 @@ bool setupInitialBoundsMatrix(const ROMol*                                mol,
       if (params.ignoreSmoothingFailures) {
         // proceed anyway with the more relaxed bounds matrix
         RDKit::DGeomHelpers::initBoundsMat(mmat);
-        RDKit::DGeomHelpers::setTopolBounds(*mol,
-                                            mmat,
-                                            false,
-                                            true,
-                                            params.useMacrocycle14config,
-                                            params.forceTransAmides);
+        detail::setEmbedderTopolBounds(*mol, mmat, params, nullptr, true, false);
 
         if (coordMap != nullptr) {
           adjustBoundsMatFromCoordMap(mmat, coordMap);
@@ -708,6 +702,47 @@ void findDoubleBonds(const ROMol&                                               
 
 }  // namespace EmbeddingOps
 
+void validateSupportedEmbedParameters(const RDKit::DGeomHelpers::EmbedParameters& params) {
+  const bool cosine = params.ETversion == 1 || params.ETversion == 2;
+#if RDKIT_ETKDG_2026_09_API
+  const bool gaussian = params.ETversion == 4;
+#else
+  constexpr bool gaussian = false;
+#endif
+  if (!cosine && !gaussian) {
+    throw ValueErrorException("Supported ETversion values are 1 and 2, plus 4 with RDKit 2026.09 or later");
+  }
+#if RDKIT_ETKDG_2026_09_API
+  using RDKit::DGeomHelpers::InitialEmbeddingMode;
+  if (params.embedForceField != RDKit::DGeomHelpers::EmbedFF::UFF) {
+    throw ValueErrorException("Only embedForceField=UFF is supported");
+  }
+  if (params.onlyInitialEmbedding) {
+    throw ValueErrorException("onlyInitialEmbedding is not supported");
+  }
+  if (params.initialEmbeddingMode == InitialEmbeddingMode::INTERNAL_COORDINATE_EMBEDDING) {
+    throw ValueErrorException("Internal-coordinate initial embedding is not supported");
+  }
+#endif
+}
+
+RDKit::DGeomHelpers::EmbedParameters normalizeEmbedParameters(const RDKit::DGeomHelpers::EmbedParameters& params) {
+  constexpr double randomCoordsBasinThresh = 1e8;
+  auto             normalized              = params;
+#if RDKIT_ETKDG_2026_09_API
+  // RDKit sets the mode from the flag; nvMolKit also sets the flag from the mode.
+  if (normalized.useRandomCoords ||
+      normalized.initialEmbeddingMode == RDKit::DGeomHelpers::InitialEmbeddingMode::RANDOM_COORDINATE_EMBEDDING) {
+    normalized.useRandomCoords      = true;
+    normalized.initialEmbeddingMode = RDKit::DGeomHelpers::InitialEmbeddingMode::RANDOM_COORDINATE_EMBEDDING;
+  }
+#endif
+  if (normalized.useRandomCoords) {
+    normalized.basinThresh = randomCoordsBasinThresh;
+  }
+  return normalized;
+}
+
 // Prepares ETKDG parameters and initializes necessary data structures
 // Returns true if successful, false if bounds matrix setup failed
 bool prepareEmbedderArgs(ROMol&                                      mol,
@@ -718,11 +753,7 @@ bool prepareEmbedderArgs(ROMol&                                      mol,
     throw ValueErrorException("molecule has no atoms");
   }
 
-  if (params.ETversion < 1 || params.ETversion > 2) {
-    throw ValueErrorException(
-      "Only version 1 and 2 of the experimental "
-      "torsion-angle preferences (ETversion) supported");
-  }
+  validateSupportedEmbedParameters(params);
 
   if (MolOps::needsHs(mol)) {
     BOOST_LOG(rdWarningLog) << "Molecule does not have explicit Hs. Consider calling AddHs()\n";
@@ -731,8 +762,10 @@ bool prepareEmbedderArgs(ROMol&                                      mol,
   const std::map<int, RDGeom::Point3D>* coordMap = params.coordMap;
   const unsigned int                    nAtoms   = mol.getNumAtoms();
 
+#if !RDKIT_ETKDG_2026_09_API
   // Initialize ETKDG details
   EmbeddingOps::initETKDG(&mol, params, eargs.etkdgDetails);
+#endif
 
   // Create and initialize the distance bounds matrix
   eargs.mmat = std::make_unique<DistGeom::BoundsMatrix>(nAtoms);
@@ -744,6 +777,22 @@ bool prepareEmbedderArgs(ROMol&                                      mol,
       return false;
     }
   }
+
+#if RDKIT_ETKDG_2026_09_API
+  // RDKit 2026.09 builds the torsion terms after the bounds, which record the forced amide/ester configurations.
+  EmbeddingOps::initETKDG(&mol, params, eargs.etkdgDetails);
+#endif
+#if RDKIT_AIO_ETKDG_API
+  if (!params.useLegacyImplementation) {
+    // The all-in-one force field uses it to find 1-2 and 1-3 pairs. The uncached overload gives eargs its own copy;
+    // the matrix cached on the molecule can be replaced while conformer arguments still point at it.
+    std::vector<int> atoms(nAtoms);
+    std::iota(atoms.begin(), atoms.end(), 0);
+    const std::vector<const Bond*> bonds(mol.bonds().begin(), mol.bonds().end());
+    eargs.topologicalDistances.reset(MolOps::getDistanceMat(mol, atoms, bonds));
+    eargs.etkdgDetails.distMat = eargs.topologicalDistances.get();
+  }
+#endif
 
   // Find chiral centers
   MolOps::assignStereochemistry(mol);
@@ -758,12 +807,6 @@ std::unique_ptr<ForceFields::ForceField> generateRDKitFF(ROMol&                 
                                                          detail::EmbedArgs&                           eargs,
                                                          std::vector<std::unique_ptr<RDGeom::Point>>& positions,
                                                          const Dimensionality                         dimensionality) {
-  if (params.ETversion < 1 || params.ETversion > 2) {
-    throw ValueErrorException(
-      "Only version 1 and 2 of the experimental "
-      "torsion-angle preferences (ETversion) supported");
-  }
-
   if (!prepareEmbedderArgs(mol, params, eargs, true)) {
     return nullptr;
   }

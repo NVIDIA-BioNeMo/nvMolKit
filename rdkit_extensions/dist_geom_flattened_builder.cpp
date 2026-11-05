@@ -125,10 +125,50 @@ void addFourthDimContribs(nvMolKit::DistGeom::EnergyForceContribsHost& contribs,
   }
 }
 
+#if RDKIT_ETKDG_2026_09_API
+//! Adds one Gaussian torsion, copying its lookup tables into the molecule's tables the first time they are used.
+void addGaussianTorsionTerm(nvMolKit::DistGeom::GaussianTorsionContribTerms&  terms,
+                            std::vector<int>&                                 tableOffsets,
+                            const ::ForceFields::CrystalFF::CrystalFFDetails& etkdgDetails,
+                            const unsigned int                                torsionIdx,
+                            const int                                         atomIdx1,
+                            const int                                         atomIdx2,
+                            const int                                         atomIdx3,
+                            const int                                         atomIdx4) {
+  const std::size_t table = etkdgDetails.torsionIdx[torsionIdx];
+  URANGE_CHECK(table, etkdgDetails.phiToEnergy.size());
+  URANGE_CHECK(table, etkdgDetails.phiToGrad.size());
+  const auto& energies    = etkdgDetails.phiToEnergy[table];
+  const auto& derivatives = etkdgDetails.phiToGrad[table];
+  PRECONDITION(energies.size() >= 2 && energies.size() == derivatives.size(),
+               "Gaussian torsion lookup tables need matching sizes of at least 2");
+  if (tableOffsets[table] < 0) {
+    tableOffsets[table] = static_cast<int>(terms.energies.size());
+    terms.energies.insert(terms.energies.end(), energies.begin(), energies.end());
+    terms.derivatives.insert(terms.derivatives.end(), derivatives.begin(), derivatives.end());
+  }
+  terms.idx1.push_back(atomIdx1);
+  terms.idx2.push_back(atomIdx2);
+  terms.idx3.push_back(atomIdx3);
+  terms.idx4.push_back(atomIdx4);
+  terms.tableStarts.push_back(tableOffsets[table]);
+  terms.tableSizes.push_back(static_cast<int>(energies.size()));
+  terms.scaling.push_back(
+    std::get<3>(std::get<::ForceFields::CrystalFF::GaussianExp_T>(etkdgDetails.expTorsionAngles[torsionIdx])));
+}
+#endif
+
 void addExperimentalTorsionTerms(nvMolKit::DistGeom::Energy3DForceContribsHost&    contribs,
                                  const ::ForceFields::CrystalFF::CrystalFFDetails& etkdgDetails,
                                  unsigned int                                      numAtoms,
                                  boost::dynamic_bitset<>&                          atomPairs) {
+#if RDKIT_ETKDG_2026_09_API
+  // RDKit 2026.09 keeps only the first experimental torsion about each central bond.
+  boost::dynamic_bitset<> doneBonds(numAtoms * numAtoms);
+  // ETKDGv4 molecules use Gaussian torsions with lookup tables instead of the cosine series.
+  const bool              gaussian = etkdgDetails.torsionParamKind == ::ForceFields::CrystalFF::TorsionParamKind::Gaussian;
+  std::vector<int>        gaussianTableOffsets(gaussian ? etkdgDetails.phiToEnergy.size() : 0, -1);
+#endif
   // Process each experimental torsion term
   for (unsigned int torsionIdx = 0; torsionIdx < etkdgDetails.expTorsionAtoms.size(); ++torsionIdx) {
     const int atomIdx1 = etkdgDetails.expTorsionAtoms[torsionIdx][0];
@@ -145,12 +185,34 @@ void addExperimentalTorsionTerms(nvMolKit::DistGeom::Energy3DForceContribsHost& 
     URANGE_CHECK(static_cast<unsigned int>(atomIdx3), numAtoms);
     URANGE_CHECK(static_cast<unsigned int>(atomIdx4), numAtoms);
 
+#if RDKIT_ETKDG_2026_09_API
+    const unsigned int bondIdx = atomIdx2 < atomIdx3 ? atomIdx2 * numAtoms + atomIdx3 : atomIdx3 * numAtoms + atomIdx2;
+    if (doneBonds[bondIdx]) {
+      continue;
+    }
+    doneBonds[bondIdx] = true;
+#endif
+
     // Update atomPairs (similar to RDKit's atomPairs logic)
     if (atomIdx1 < atomIdx4) {
       atomPairs[atomIdx1 * numAtoms + atomIdx4] = true;
     } else {
       atomPairs[atomIdx4 * numAtoms + atomIdx1] = true;
     }
+
+#if RDKIT_ETKDG_2026_09_API
+    if (gaussian) {
+      addGaussianTorsionTerm(contribs.gaussianTorsionTerms,
+                             gaussianTableOffsets,
+                             etkdgDetails,
+                             torsionIdx,
+                             atomIdx1,
+                             atomIdx2,
+                             atomIdx3,
+                             atomIdx4);
+      continue;
+    }
+#endif
 
     // Add the torsion contribution
     contribs.experimentalTorsionTerms.idx1.push_back(atomIdx1);
@@ -493,6 +555,25 @@ nvMolKit::DistGeom::EnergyForceContribsHost constructForceFieldContribs(
   return contribs;
 }
 
+nvMolKit::DistGeom::Energy3DForceContribsHost constructImproperCheckContribs(
+  const ::ForceFields::CrystalFF::CrystalFFDetails& etkdgDetails,
+  const unsigned int                                numAtoms) {
+  nvMolKit::DistGeom::Energy3DForceContribsHost contribs;
+  boost::dynamic_bitset<>                       isImproperConstrained(numAtoms);
+  addImproperTorsionTerms(contribs, etkdgDetails, numAtoms, IMPROPER_TORSION_FORCE_SCALING, isImproperConstrained);
+  for (const auto& angle : etkdgDetails.angles) {
+    if (angle[3]) {
+      addAngleConstraintContrib(contribs.angle13Terms,
+                                angle[0],
+                                angle[1],
+                                angle[2],
+                                TRIPLE_BOND_MIN_ANGLE,
+                                TRIPLE_BOND_MAX_ANGLE);
+    }
+  }
+  return contribs;
+}
+
 #if RDKIT_AIO_ETKDG_API
 nvMolKit::DistGeom::AllInOneForceContribsHost constructAllInOneForceFieldContribs(
   const int                                         dim,
@@ -564,6 +645,7 @@ nvMolKit::DistGeom::AllInOneForceContribsHost constructAllInOneForceFieldContrib
     Energy3DForceContribsHost torsionContribs;
     addExperimentalTorsionTerms(torsionContribs, etkdgDetails, numAtoms, atomPairs);
     contribs.experimentalTorsionTerms = std::move(torsionContribs.experimentalTorsionTerms);
+    contribs.gaussianTorsionTerms     = std::move(torsionContribs.gaussianTorsionTerms);
   }
 
   return contribs;

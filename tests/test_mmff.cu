@@ -275,10 +275,11 @@ double getEnergyTerm(BatchedMolecularDeviceBuffers& deviceFF, const FFTerm& term
                                             deviceFF.indices.torsionConstraintTermStarts.data()));
       break;
   }
-  CHECK_CUDA_RETURN(launchReduceEnergiesKernel(deviceFF.indices.energyBufferBlockIdxToBatchIdx.size(),
-                                               deviceFF.energyBuffer.data(),
-                                               deviceFF.indices.energyBufferBlockIdxToBatchIdx.data(),
-                                               deviceFF.energyOuts.data()));
+  CHECK_CUDA_RETURN(
+    nvMolKit::FFKernelUtils::launchReduceEnergiesKernel(deviceFF.indices.energyBufferBlockIdxToBatchIdx.size(),
+                                                        deviceFF.energyBuffer.data(),
+                                                        deviceFF.indices.energyBufferBlockIdxToBatchIdx.data(),
+                                                        deviceFF.energyOuts.data()));
   double energy;
   CHECK_CUDA_RETURN(cudaMemcpy(&energy, deviceFF.energyOuts.data() + 0, sizeof(double), cudaMemcpyDeviceToHost));
   return energy;
