@@ -21,6 +21,7 @@
 #include <cub/device/device_radix_sort.cuh>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 #include "src/fingerprint_search.h"
 #include "src/fingerprint_similarity_device.cuh"
