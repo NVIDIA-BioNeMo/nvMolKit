@@ -99,17 +99,7 @@ __device__ __forceinline__ void updateIncumbentCooperative(const GroupT&  group,
   if (groupRank == 0) {
     const unsigned int candidateScore =
       (static_cast<unsigned int>(candidate.seed.numBonds) << 16) | static_cast<unsigned int>(candidate.seed.numAtoms);
-    unsigned int prev = *bestScore;
-    bool         won  = false;
-    while (candidateScore > prev) {
-      const unsigned int seen = atomicCAS(bestScore, prev, candidateScore);
-      if (seen == prev) {
-        won = true;
-        break;
-      }
-      prev = seen;
-    }
-    if (won) {
+    if (atomicMax(bestScore, candidateScore) < candidateScore) {
       while (atomicCAS(bestCopyLock, 0, 1) != 0) {
       }
       locked     = 1;
