@@ -24,6 +24,7 @@
 #include "src/substruct/molecules.h"
 #include "src/substruct/molecules_device.cuh"
 #include "src/substruct/substruct_debug.h"
+#include "src/utils/cccl_compat.h"
 
 namespace nvMolKit {
 
@@ -130,7 +131,7 @@ __device__ void populateLabelMatrix(const TargetMoleculeView&                   
     }
     block.sync();
 
-    const int warpsNeeded = (numPairs + 31) / 32;
+    const int warpsNeeded = compat::ceil_div(numPairs, 32);
 
     for (int chunkIdx = warpId; chunkIdx < warpsNeeded; chunkIdx += numWarps) {
       const int pairIdx = chunkIdx * 32 + laneId;

@@ -46,6 +46,7 @@
 #include "src/forcefields/mmff_kernels.h"
 #include "src/forcefields/mmff_kernels_device_dispatch.cuh"
 #include "src/minimizer/mmff_minimize.h"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/device.h"
 #include "tests/test_utils.h"
 using namespace nvMolKit::MMFF;
@@ -2392,7 +2393,10 @@ TEST_P(MMFFTorsionEnergy, MatchesTrigonometricReference) {
   nvMolKit::AsyncDeviceVector<double>      full(cases.size());
   nvMolKit::AsyncDeviceVector<float>       single(cases.size());
   inputs.setFromVector(cases);
-  torsionEnergyCases<<<(cases.size() + 127) / 128, 128>>>(inputs.data(), cases.size(), full.data(), single.data());
+  torsionEnergyCases<<<nvMolKit::compat::ceil_div(cases.size(), 128), 128>>>(inputs.data(),
+                                                                             cases.size(),
+                                                                             full.data(),
+                                                                             single.data());
   ASSERT_EQ(cudaGetLastError(), cudaSuccess);
   std::vector<double> fullValues(cases.size());
   std::vector<float>  singleValues(cases.size());

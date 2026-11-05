@@ -20,6 +20,7 @@
 
 #include "src/butina.h"
 #include "src/butina_common.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/conditional_loop_graph.cuh"
 #include "src/utils/cub_helpers.cuh"
 #include "src/utils/host_vector.h"
@@ -380,7 +381,7 @@ void renumberClustersBySize(const cuda::std::span<int> clusters,
   clusterSizes.zero();
 
   constexpr int blockSize         = 256;
-  const int     numBlocksRenumber = (numClusters + blockSize - 1) / blockSize;
+  const int     numBlocksRenumber = compat::ceil_div(numClusters, blockSize);
 
   // Count cluster sizes
   countClusterSizesKernel<<<numBlocksRenumber, blockSize, 0, stream>>>(clusters, toSpan(clusterSizes));
@@ -431,7 +432,7 @@ void renumberClustersBySize(const cuda::std::span<int> clusters,
   cudaCheckError(cudaGetLastError());
 
   // Apply new indices to all points
-  const int numBlocks = (numPoints + blockSize - 1) / blockSize;
+  const int numBlocks = compat::ceil_div(numPoints, blockSize);
   applyNewIndices<<<numBlocks, blockSize, 0, stream>>>(clusters, remap);
   cudaCheckError(cudaGetLastError());
 
@@ -466,7 +467,7 @@ void sortFixedOrderCandidates(const cuda::std::span<const int> hitCounts,
   constexpr int blockSize = 256;
 
   // make enough blocks so that we have enough threads for radix sort
-  const int numBlocks = (numPoints + blockSize - 1) / blockSize;
+  const int numBlocks = compat::ceil_div(numPoints, blockSize);
   setupFixedOrderSortKeysKernel<<<numBlocks, blockSize, 0, stream>>>(hitCounts, sortKeys);
   cudaCheckError(cudaGetLastError());
 
@@ -653,7 +654,7 @@ __global__ void pruneNeighborlistKernel(const cuda::std::span<int> clusters,
                                         const cuda::std::span<int> clusterSizes,
                                         const cuda::std::span<int> neighborList) {
   constexpr int kWarpSize       = 32;
-  constexpr int kItemsPerThread = (NeighborlistMaxSize + kWarpSize - 1) / kWarpSize;
+  constexpr int kItemsPerThread = compat::ceil_div(NeighborlistMaxSize, kWarpSize);
   static_assert(NeighborlistMaxSize <= 128, "NeighborlistMaxSize must be <= 128");
   static_assert(NeighborlistMaxSize % 8 == 0, "NeighborlistMaxSize must be multiple of 8");
 
@@ -762,7 +763,7 @@ void innerButinaLoopWithPruning(const cuda::std::span<int> clusters,
                                 const cuda::std::span<int> neighborList,
                                 cudaStream_t               stream) {
   const int numPoints       = static_cast<int>(clusters.size());
-  const int numBlocksAssign = (numPoints + kTilesPerBlockAssign - 1) / kTilesPerBlockAssign;
+  const int numBlocksAssign = compat::ceil_div(numPoints, kTilesPerBlockAssign);
   attemptAssignClustersFromNeighborlist<NeighborlistMaxSize>
     <<<numBlocksAssign, blockSizeAssign, 0, stream>>>(clusters,
                                                       clusterSizesSpan,
@@ -775,7 +776,7 @@ void innerButinaLoopWithPruning(const cuda::std::span<int> clusters,
   // Prune assigned neighbors from all neighborlists and update counts
   constexpr int kWarpsPerBlock  = 4;
   constexpr int kPruneBlockSize = kWarpsPerBlock * 32;
-  const int     numBlocksPrune  = (numPoints + kWarpsPerBlock - 1) / kWarpsPerBlock;
+  const int     numBlocksPrune  = compat::ceil_div(numPoints, kWarpsPerBlock);
   pruneNeighborlistKernel<NeighborlistMaxSize>
     <<<numBlocksPrune, kPruneBlockSize, 0, stream>>>(clusters, clusterSizesSpan, neighborList);
   cudaCheckError(cudaGetLastError());
@@ -824,7 +825,7 @@ int butinaGpuNoReorderingImpl(const cuda::std::span<const uint8_t> hitMatrix,
   const AsyncDevicePtr<int> activeCluster(-1, stream);
   const AsyncDevicePtr<int> keepGoing(1, stream);
 
-  const int                  rowScanBlocks = (numPoints + blockSizeCount - 1) / blockSizeCount;
+  const int                  rowScanBlocks = compat::ceil_div(numPoints, blockSizeCount);
   ScopedNvtxRange            buildRange("Build no-reordering Butina graph");
   const ConditionalLoopGraph graph([&](cudaStream_t captureStream, cudaGraphConditionalHandle handle) {
     prepareFixedOrderCandidateKernel<<<1, fixedOrderPrepareBlockSize, 0, captureStream>>>(toSpan(sortedKeys),

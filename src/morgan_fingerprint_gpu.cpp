@@ -30,6 +30,7 @@
 #include "src/morgan_fingerprint_common.h"
 #include "src/morgan_fingerprint_cpu.h"
 #include "src/morgan_fingerprint_kernels.h"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/host_vector.h"
 #include "src/utils/nvtx.h"
 #include "src/utils/openmp_helpers.h"
@@ -386,9 +387,9 @@ AsyncDeviceVector<FlatBitVect<fpSize>> computeFingerprintsCuImpl(const std::vect
   WorkBag      work64(std::move(buckets.work64));
   WorkBag      work128(std::move(buckets.work128));
   WorkBag      workLarge(std::move(buckets.workLarge));
-  const size_t numThreads32    = (work32.size() + dispatchChunkSize - 1) / dispatchChunkSize;
-  const size_t numThreads64    = (work64.size() + dispatchChunkSize - 1) / dispatchChunkSize;
-  const size_t numThreads128   = (work128.size() + dispatchChunkSize - 1) / dispatchChunkSize;
+  const size_t numThreads32    = compat::ceil_div(work32.size(), dispatchChunkSize);
+  const size_t numThreads64    = compat::ceil_div(work64.size(), dispatchChunkSize);
+  const size_t numThreads128   = compat::ceil_div(work128.size(), dispatchChunkSize);
   size_t       numThreadsTotal = numThreads32 + numThreads64 + numThreads128;
   // Large molecules are drained from the shared workLarge queue inside the worker
   // loop below, which only runs numThreadsTotal iterations. When every molecule is

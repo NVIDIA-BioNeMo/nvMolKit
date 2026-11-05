@@ -16,6 +16,7 @@
 #include <cub/device/device_reduce.cuh>
 
 #include "src/etkdg_impl.h"
+#include "src/utils/cccl_compat.h"
 
 __global__ void collectAndFilterFailuresKernel(const int      numTerms,
                                                const uint8_t* stageFailed,
@@ -77,7 +78,7 @@ constexpr int kBlockSize = 256;
 
 void launchCollectAndFilterFailuresKernel(ETKDGContext& context, const int stageId, cudaStream_t stream) {
   const int numTerms = context.nTotalSystems;
-  int       gridSize = (numTerms + kBlockSize - 1) / kBlockSize;
+  int       gridSize = compat::ceil_div(numTerms, kBlockSize);
   collectAndFilterFailuresKernel<<<gridSize, kBlockSize, 0, stream>>>(numTerms,
                                                                       context.failedThisStage.data(),
                                                                       context.activeThisStage.data(),
@@ -87,7 +88,7 @@ void launchCollectAndFilterFailuresKernel(ETKDGContext& context, const int stage
 
 int launchGetFinishedKernels(ETKDGContext& context, const int iteration, int* finishedCountHost, cudaStream_t stream) {
   const int numTerms = context.nTotalSystems;
-  int       gridSize = (numTerms + kBlockSize - 1) / kBlockSize;
+  int       gridSize = compat::ceil_div(numTerms, kBlockSize);
   context.countFinishedThisIteration.memSet(0);
   getFinishedKernels<<<gridSize, kBlockSize, 0, stream>>>(numTerms,
                                                           iteration,
@@ -106,7 +107,7 @@ int launchGetFinishedKernels(ETKDGContext& context, const int iteration, int* fi
 
 void launchSetRunFilterForIterationKernel(ETKDGContext& context, cudaStream_t stream) {
   const int numTerms = context.nTotalSystems;
-  int       gridSize = (numTerms + kBlockSize - 1) / kBlockSize;
+  int       gridSize = compat::ceil_div(numTerms, kBlockSize);
   setRunFilterForIterationKernel<<<gridSize, kBlockSize, 0, stream>>>(numTerms,
                                                                       context.activeThisStage.data(),
                                                                       context.finishedOnIteration.data());

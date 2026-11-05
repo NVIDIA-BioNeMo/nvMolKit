@@ -48,6 +48,7 @@
 #include "src/subgraph/class_adjacency.cuh"
 #include "src/subgraph/target_mask.cuh"
 #include "src/subgraph/warp_dfs.cuh"
+#include "src/utils/cccl_compat.h"
 
 namespace mcs {
 namespace fmcs {
@@ -212,7 +213,7 @@ template <int maxAtoms, int maxBonds> struct FmcsPairShared {
   using BondMask = FmcsTargetMask<maxBonds>;
 
   static constexpr int kNumGroups = Config::numGroups;
-  static constexpr int kAtomRegs  = (maxAtoms + 31) / 32;
+  static constexpr int kAtomRegs  = nvMolKit::compat::ceil_div(maxAtoms, 32);
 
   // --- per-group hot state (16B-aligned members first) ---
   QueuedT current[kNumGroups];

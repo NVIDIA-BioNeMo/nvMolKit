@@ -19,6 +19,8 @@
 #include <cstdint>
 #include <type_traits>
 
+#include "src/utils/cccl_compat.h"
+
 namespace mcs {
 
 /// Bitset word type: uint32_t for maxSize <= 32, uint64_t otherwise.
@@ -48,8 +50,8 @@ template <int maxAtoms, int maxBonds> struct Seed {
   using bond_word_type                  = BitWord<maxBonds>;
   static constexpr int kAtomBitsPerWord = sizeof(atom_word_type) * 8;
   static constexpr int kBondBitsPerWord = sizeof(bond_word_type) * 8;
-  static constexpr int kAtomWords       = (maxAtoms + kAtomBitsPerWord - 1) / kAtomBitsPerWord;
-  static constexpr int kBondWords       = (maxBonds + kBondBitsPerWord - 1) / kBondBitsPerWord;
+  static constexpr int kAtomWords       = nvMolKit::compat::ceil_div(maxAtoms, kAtomBitsPerWord);
+  static constexpr int kBondWords       = nvMolKit::compat::ceil_div(maxBonds, kBondBitsPerWord);
 
   atom_word_type atoms[kAtomWords]          = {};
   bond_word_type bonds[kBondWords]          = {};
@@ -93,8 +95,8 @@ template <int maxAtoms, int maxBonds, int maxTargetAtoms, int maxTargetBonds> st
   using target_bond_word                      = BitWord<maxTargetBonds>;
   static constexpr int kTargetAtomBitsPerWord = sizeof(target_atom_word) * 8;
   static constexpr int kTargetBondBitsPerWord = sizeof(target_bond_word) * 8;
-  static constexpr int kTargetAtomWords       = (maxTargetAtoms + kTargetAtomBitsPerWord - 1) / kTargetAtomBitsPerWord;
-  static constexpr int kTargetBondWords       = (maxTargetBonds + kTargetBondBitsPerWord - 1) / kTargetBondBitsPerWord;
+  static constexpr int kTargetAtomWords       = nvMolKit::compat::ceil_div(maxTargetAtoms, kTargetAtomBitsPerWord);
+  static constexpr int kTargetBondWords       = nvMolKit::compat::ceil_div(maxTargetBonds, kTargetBondBitsPerWord);
 
   /// queryAtomIdx -> targetAtomIdx, 0xFF for unmapped.  Query-indexed so the
   /// map does not have to be rebuilt when the seed's atom list grows.

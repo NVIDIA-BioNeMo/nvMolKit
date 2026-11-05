@@ -39,6 +39,7 @@
 #include "src/substruct/packed_bonds.h"
 #include "src/substruct/substruct_debug.h"
 #include "src/substruct/substruct_types.h"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/nvtx.h"
 #include "src/utils/openmp_helpers.h"
 #include "src/utils/rdkit_compat.h"
@@ -2191,8 +2192,8 @@ MoleculesHost buildQueryBatchParallel(const std::vector<const RDKit::ROMol*>& mo
   for (int i = 0; i < numMols; ++i) {
     totalAtoms += molecules[i]->getNumAtoms();
   }
-  const size_t atomsPerThread = (totalAtoms + numThreads - 1) / numThreads;
-  const size_t molsPerThread  = (numMols + numThreads - 1) / numThreads;
+  const size_t atomsPerThread = compat::ceil_div(totalAtoms, numThreads);
+  const size_t molsPerThread  = compat::ceil_div(numMols, numThreads);
 
   std::vector<MoleculesHost> threadBatches(numThreads);
 

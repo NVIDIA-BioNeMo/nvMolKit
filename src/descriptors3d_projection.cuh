@@ -9,6 +9,7 @@
 
 #include "src/descriptors3d.h"
 #include "src/descriptors3d_kernel.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/symmetric_eigenvalues_3x3.cuh"
 
@@ -632,7 +633,7 @@ void launchProjectionProperties(const DeviceCoordView&        coordinates,
     return;
   }
   if (whimOutput == nullptr) {
-    const int numBlocks = (numConformers + kConformersPerBlock - 1) / kConformersPerBlock;
+    const int numBlocks = compat::ceil_div(numConformers, kConformersPerBlock);
     projection3DKernel<Real, false><<<numBlocks, kBlockSize, 0, stream>>>(coordinates,
                                                                           inputs,
                                                                           0,
@@ -653,7 +654,7 @@ void launchProjectionProperties(const DeviceCoordView&        coordinates,
   AsyncDeviceVector<int4> scratch(chunkSize * bytesPerConformer / sizeof(int4), stream);
   for (int begin = 0; begin < numConformers; begin += static_cast<int>(chunkSize)) {
     const int end       = std::min(numConformers, begin + static_cast<int>(chunkSize));
-    const int numBlocks = (end - begin + kConformersPerBlock - 1) / kConformersPerBlock;
+    const int numBlocks = compat::ceil_div(end - begin, kConformersPerBlock);
     projection3DKernel<Real, true><<<numBlocks, kBlockSize, 0, stream>>>(coordinates,
                                                                          inputs,
                                                                          begin,

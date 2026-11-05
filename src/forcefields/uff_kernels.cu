@@ -18,6 +18,7 @@
 #include "src/forcefields/kernel_utils.cuh"
 #include "src/forcefields/uff_kernels.h"
 #include "src/forcefields/uff_kernels_device_dispatch.cuh"
+#include "src/utils/cccl_compat.h"
 
 using namespace nvMolKit::UFF::fp64;
 
@@ -346,7 +347,7 @@ cudaError_t launchBondStretchEnergyKernel(int           numBonds,
                                           const int*    termBatchStarts,
                                           cudaStream_t  stream) {
   constexpr int blockSize = 256;
-  const int     numBlocks = (numBonds + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numBonds, blockSize);
   bondStretchEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numBonds,
                                                                idx1,
                                                                idx2,
@@ -369,7 +370,7 @@ cudaError_t launchBondStretchGradientKernel(int           numBonds,
                                             double*       grad,
                                             cudaStream_t  stream) {
   constexpr int blockSize = 256;
-  const int     numBlocks = (numBonds + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numBonds, blockSize);
   bondStretchGradKernel<<<numBlocks, blockSize, 0, stream>>>(numBonds, idx1, idx2, restLen, forceConstant, pos, grad);
   return cudaGetLastError();
 }
@@ -391,7 +392,7 @@ cudaError_t launchAngleBendEnergyKernel(int            numAngles,
                                         const int*     termBatchStarts,
                                         cudaStream_t   stream) {
   constexpr int blockSize = 256;
-  const int     numBlocks = (numAngles + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numAngles, blockSize);
   angleBendEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numAngles,
                                                              idx1,
                                                              idx2,
@@ -424,7 +425,7 @@ cudaError_t launchAngleBendGradientKernel(int            numAngles,
                                           double*        grad,
                                           cudaStream_t   stream) {
   constexpr int blockSize = 256;
-  const int     numBlocks = (numAngles + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numAngles, blockSize);
   angleBendGradKernel<<<numBlocks, blockSize, 0, stream>>>(numAngles,
                                                            idx1,
                                                            idx2,
@@ -455,7 +456,7 @@ cudaError_t launchTorsionEnergyKernel(int            numTorsions,
                                       const int*     termBatchStarts,
                                       cudaStream_t   stream) {
   constexpr int blockSize = 256;
-  const int     numBlocks = (numTorsions + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numTorsions, blockSize);
   torsionEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numTorsions,
                                                            idx1,
                                                            idx2,
@@ -484,7 +485,7 @@ cudaError_t launchTorsionGradientKernel(int            numTorsions,
                                         double*        grad,
                                         cudaStream_t   stream) {
   constexpr int blockSize = 256;
-  const int     numBlocks = (numTorsions + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numTorsions, blockSize);
   torsionGradKernel<<<numBlocks, blockSize, 0, stream>>>(numTorsions,
                                                          idx1,
                                                          idx2,
@@ -514,7 +515,7 @@ cudaError_t launchInversionEnergyKernel(int           numInversions,
                                         const int*    termBatchStarts,
                                         cudaStream_t  stream) {
   constexpr int blockSize = 256;
-  const int     numBlocks = (numInversions + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numInversions, blockSize);
   inversionEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numInversions,
                                                              idx1,
                                                              idx2,
@@ -546,7 +547,7 @@ cudaError_t launchInversionGradientKernel(int           numInversions,
                                           cudaStream_t  stream) {
   (void)C0;
   constexpr int blockSize = 256;
-  const int     numBlocks = (numInversions + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numInversions, blockSize);
   inversionGradKernel<<<numBlocks, blockSize, 0, stream>>>(numInversions,
                                                            idx1,
                                                            idx2,
@@ -573,7 +574,7 @@ cudaError_t launchVdwEnergyKernel(int           numVdws,
                                   const int*    termBatchStarts,
                                   cudaStream_t  stream) {
   constexpr int blockSize = 256;
-  const int     numBlocks = (numVdws + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numVdws, blockSize);
   vdwEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numVdws,
                                                        idx1,
                                                        idx2,
@@ -598,7 +599,7 @@ cudaError_t launchVdwGradientKernel(int           numVdws,
                                     double*       grad,
                                     cudaStream_t  stream) {
   constexpr int blockSize = 256;
-  const int     numBlocks = (numVdws + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numVdws, blockSize);
   vdwGradKernel<<<numBlocks, blockSize, 0, stream>>>(numVdws, idx1, idx2, x_ij, wellDepth, threshold, pos, grad);
   return cudaGetLastError();
 }

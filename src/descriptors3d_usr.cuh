@@ -8,6 +8,7 @@
 
 #include "src/descriptors3d.h"
 #include "src/descriptors3d_kernel.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
 
@@ -227,7 +228,7 @@ void launchUsrProperties(const DeviceCoordView&        coordinates,
   if (numConformers == 0 || (usrOutput == nullptr && usrcatOutput == nullptr)) {
     return;
   }
-  const int               numBlocks = (numConformers + kConformersPerBlock - 1) / kConformersPerBlock;
+  const int               numBlocks = compat::ceil_div(numConformers, kConformersPerBlock);
   AsyncDeviceVector<Real> centered(static_cast<size_t>(coordinates.numAtoms) * 3, stream);
   if (usrcatOutput != nullptr) {
     usr3DKernel<Real, true>

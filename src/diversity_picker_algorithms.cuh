@@ -17,6 +17,7 @@
 
 #include "src/clustering_result.h"
 #include "src/diversity_pickers.h"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/conditional_loop_graph.cuh"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
@@ -45,7 +46,7 @@ constexpr int kPickerBlockSize = 256;
 constexpr int kMaxLeaderWindow = 32;
 
 inline int pickerGridSize(const int numItems) {
-  return (numItems + kPickerBlockSize - 1) / kPickerBlockSize;
+  return compat::ceil_div(numItems, kPickerBlockSize);
 }
 
 //! Records which window members are within the cutoff of each active candidate.

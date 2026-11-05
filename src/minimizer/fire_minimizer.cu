@@ -27,6 +27,7 @@
 #include "src/forcefields/mmff_kernels.h"
 #include "src/minimizer/fire_minimize_permol_kernels.h"
 #include "src/minimizer/fire_minimizer.h"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/device_convert.cuh"
 #include "src/utils/nvtx.h"
 
@@ -58,7 +59,7 @@ template <typename T> void setAll(AsyncDeviceVector<T>& vec, const T& value) {
     return;
   }
   constexpr int blockSize = 128;
-  const int     numBlocks = (numElements + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numElements, blockSize);
   setAllKernel<<<numBlocks, blockSize, 0, vec.stream()>>>(numElements, value, vec.data());
   cudaCheckError(cudaGetLastError());
 }

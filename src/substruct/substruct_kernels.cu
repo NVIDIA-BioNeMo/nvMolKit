@@ -24,6 +24,7 @@
 #include "src/substruct/substruct_launch_config.h"
 #include "src/substruct/substruct_search_internal.h"
 #include "src/substruct/substruct_types.h"
+#include "src/utils/cccl_compat.h"
 namespace nvMolKit {
 
 namespace {
@@ -368,7 +369,7 @@ __global__ void substructMatchKernelT(TargetMoleculesDeviceView                 
   const int numQueryAtoms  = query.numAtoms;
 
   const int       totalTargetBytes = numTargetAtoms * sizeof(TargetAtomBonds);
-  const int       totalTargetWords = (totalTargetBytes + 3) / 4;
+  const int       totalTargetWords = compat::ceil_div(totalTargetBytes, 4);
   const uint32_t* targetBondsSrc   = reinterpret_cast<const uint32_t*>(target.targetAtomBonds);
   uint32_t*       targetBondsDst   = reinterpret_cast<uint32_t*>(sharedTargetBonds);
   for (int i = tid; i < totalTargetWords; i += numThreads) {
@@ -570,7 +571,7 @@ __global__ void substructPaintKernelT(TargetMoleculesDeviceView     targets,
   const int numPatternAtoms = pattern.numAtoms;
 
   const int       totalTargetBytes = numTargetAtoms * sizeof(TargetAtomBonds);
-  const int       totalTargetWords = (totalTargetBytes + 3) / 4;
+  const int       totalTargetWords = compat::ceil_div(totalTargetBytes, 4);
   const uint32_t* targetBondsSrc   = reinterpret_cast<const uint32_t*>(target.targetAtomBonds);
   uint32_t*       targetBondsDst   = reinterpret_cast<uint32_t*>(sharedTargetBonds);
   for (int i = tid; i < totalTargetWords; i += numThreads) {
@@ -1173,7 +1174,7 @@ void launchSubstructPaintKernelForConfig(SubstructAlgorithm         algorithm,
     case SubstructAlgorithm::DFS: {
       // numBlocks is the pair count from the caller's one-block-per-pair view;
       // DFS packs eight pairs into each CTA instead.
-      const int dfsBlocks = (numBlocks + dfs::kWarpsPerBlock - 1) / dfs::kWarpsPerBlock;
+      const int dfsBlocks = compat::ceil_div(numBlocks, dfs::kWarpsPerBlock);
       substructDfsPaintKernelT<MaxTargetAtoms, MaxQueryAtoms>
         <<<dfsBlocks, dfs::kBlockSize, 0, stream>>>(targets,
                                                     patterns,
@@ -1319,7 +1320,7 @@ void launchMatchKernelForConfig(SubstructAlgorithm            algorithm,
                                               timings);
       break;
     case SubstructAlgorithm::DFS: {
-      const int dfsBlocks = (numPairs + dfs::kWarpsPerBlock - 1) / dfs::kWarpsPerBlock;
+      const int dfsBlocks = compat::ceil_div(numPairs, dfs::kWarpsPerBlock);
       if (miniBatchResults.countOnly()) {
         substructDfsMatchKernelT<MaxTargetAtoms, MaxQueryAtoms, dfs::DfsOutputMode::Count>
           <<<dfsBlocks, dfs::kBlockSize, 0, stream>>>(targets,

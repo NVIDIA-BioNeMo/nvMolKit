@@ -24,6 +24,7 @@
 #include "src/forcefields/dg_batched_forcefield.h"
 #include "src/forcefields/dist_geom.h"
 #include "src/forcefields/kernel_utils.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/device_convert.cuh"
 #include "src/utils/nvtx.h"
 
@@ -69,7 +70,7 @@ void checkMinimizedEnergies(const AsyncDeviceVector<Scalar>& energyOuts,
   if (molNum == 0) {
     return;
   }
-  const int gridSize = (molNum + kBlockSize - 1) / kBlockSize;
+  const int gridSize = compat::ceil_div(molNum, kBlockSize);
   checkMinimizedEnergiesKernel<<<gridSize, kBlockSize, 0, stream>>>(molNum,
                                                                     energyOuts.data(),
                                                                     atomStarts.data(),

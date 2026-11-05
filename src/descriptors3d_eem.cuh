@@ -11,6 +11,7 @@
 
 #include "src/descriptors3d.h"
 #include "src/descriptors3d_kernel.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
 
@@ -368,7 +369,7 @@ void launchEemCharges(const DeviceCoordView&        coordinates,
   AsyncDeviceVector<int> maxSolvedAtoms(1, stream);
   cudaCheckError(cudaMemsetAsync(maxSolvedAtoms.data(), 0, sizeof(int), stream));
   constexpr int kMaxAtomsBlock = 256;
-  eemMaxSolvedAtomsKernel<<<std::min((coordinates.numConformers + kMaxAtomsBlock - 1) / kMaxAtomsBlock, numSms * 4),
+  eemMaxSolvedAtomsKernel<<<std::min(compat::ceil_div(coordinates.numConformers, kMaxAtomsBlock), numSms * 4),
                             kMaxAtomsBlock,
                             0,
                             stream>>>(coordinates, eemAtomLimit(inputs), maxSolvedAtoms.data());

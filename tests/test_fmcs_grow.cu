@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "src/mcs/fmcs_cuda/fmcs_grow.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/device_vector.h"
 
 namespace {
@@ -336,8 +337,8 @@ struct PruneOut {
 };
 
 __global__ void pruneStage1Driver(const NewBond* hostBonds, int nBonds, PruneOut* out) {
-  __shared__ std::uint64_t parentStorage[(sizeof(QueuedT) + sizeof(std::uint64_t) - 1) / sizeof(std::uint64_t)];
-  __shared__ std::uint64_t workspaceStorage[(sizeof(QueuedT) + sizeof(std::uint64_t) - 1) / sizeof(std::uint64_t)];
+  __shared__ std::uint64_t parentStorage[nvMolKit::compat::ceil_div(sizeof(QueuedT), sizeof(std::uint64_t))];
+  __shared__ std::uint64_t workspaceStorage[nvMolKit::compat::ceil_div(sizeof(QueuedT), sizeof(std::uint64_t))];
   __shared__ NewBond       bonds[kMaxNewBondsPrune];
   __shared__ int           matchAttempts;
   __shared__ int           survivorIdx;

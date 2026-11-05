@@ -20,6 +20,7 @@
 #include "src/load_store.cuh"
 #include "src/similarity_kernels.h"
 #include "src/similarity_op.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/device_vector.h"
 
 namespace nvMolKit {
@@ -448,8 +449,8 @@ void launchTanimotoTensorKernel(const cuda::std::span<const std::uint32_t> bitsO
   constexpr unsigned int kBlockTileSizeX = static_cast<unsigned int>(BLOCK_TILE_SIZE_X);
   constexpr unsigned int kBlockTileSizeY = static_cast<unsigned int>(BLOCK_TILE_SIZE_Y);
   const dim3             blockDim{kThreadsPerBlock, 1U, 1U};
-  const dim3             gridDim{(static_cast<unsigned int>(n) + kBlockTileSizeX - 1U) / kBlockTileSizeX,
-                     (static_cast<unsigned int>(m) + kBlockTileSizeY - 1U) / kBlockTileSizeY,
+  const dim3             gridDim{compat::ceil_div(static_cast<unsigned int>(n), kBlockTileSizeX),
+                     compat::ceil_div(static_cast<unsigned int>(m), kBlockTileSizeY),
                      1U};
   tanimotoCrossSimilarityKernel<std::uint32_t,
                                 BLOCK_TILE_SIZE_X,
