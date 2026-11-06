@@ -45,8 +45,20 @@ __device__ __forceinline__ bool fingerprintsWithinThreshold(const std::uint32_t*
     return false;
   }
   int intersection = 0;
-  for (int word = 0; word < numWords; ++word) {
-    intersection += __popc(lhs[word] & rhs[word]);
+  if (numWords % 4 == 0 && (reinterpret_cast<std::uintptr_t>(lhs) | reinterpret_cast<std::uintptr_t>(rhs)) % 16 == 0) {
+    // Aligned rows are read in 16-byte vectors, several in flight per thread.
+    const auto* lhs4 = reinterpret_cast<const uint4*>(lhs);
+    const auto* rhs4 = reinterpret_cast<const uint4*>(rhs);
+#pragma unroll 4
+    for (int word = 0; word < numWords / 4; ++word) {
+      const uint4 a = __ldg(lhs4 + word);
+      const uint4 b = __ldg(rhs4 + word);
+      intersection += __popc(a.x & b.x) + __popc(a.y & b.y) + __popc(a.z & b.z) + __popc(a.w & b.w);
+    }
+  } else {
+    for (int word = 0; word < numWords; ++word) {
+      intersection += __popc(lhs[word] & rhs[word]);
+    }
   }
 
   return detail::fingerprintSimilarityAtLeast<Metric>(intersection, lhsBitCount, rhsBitCount, threshold);
