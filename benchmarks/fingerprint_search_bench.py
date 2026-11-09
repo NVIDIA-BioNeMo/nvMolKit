@@ -30,6 +30,7 @@ from bench_utils import (
     TimingResult,
     add_backend_selection_args,
     add_rdkit_max_seconds_arg,
+    available_cpu_count,
     load_smiles,
     print_csv_rows,
     process_map_bounded,
@@ -163,8 +164,8 @@ def run(
     rdkit_fpgen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=fp_size)
     nvmolkit_fpgen = MorganFingerprintGenerator(radius=radius, fpSize=fp_size)
     if not no_rdkit:
-        rdkit_library_all = [rdkit_fpgen.GetFingerprint(mol) for mol in library_mols]
-        rdkit_queries = [rdkit_fpgen.GetFingerprint(mol) for mol in query_mols]
+        rdkit_library_all = list(rdkit_fpgen.GetFingerprints(library_mols, numThreads=available_cpu_count()))
+        rdkit_queries = list(rdkit_fpgen.GetFingerprints(query_mols, numThreads=available_cpu_count()))
     if not no_nvmolkit:
         library_all = torch.as_tensor(nvmolkit_fpgen.GetFingerprints(library_mols), device="cuda")
         queries = torch.as_tensor(nvmolkit_fpgen.GetFingerprints(query_mols), device="cuda")
