@@ -24,8 +24,9 @@ currently unsupported RDKit fMCS features.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 from rdkit.Chem import Mol
@@ -164,7 +165,7 @@ class MCSConfig:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "MCSConfig":
+    def from_dict(cls, data: dict[str, Any]) -> MCSConfig:
         """Create an :class:`MCSConfig` from a dictionary produced by :meth:`to_dict`."""
         known = {
             "batchSize",

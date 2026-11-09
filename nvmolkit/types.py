@@ -15,8 +15,9 @@
 
 """Types facilitating GPU-accelerated operations."""
 
+from collections.abc import Iterable
 from enum import Enum
-from typing import Any, Iterable, List, NamedTuple, Optional
+from typing import Any, NamedTuple
 
 import numpy as np
 import torch
@@ -263,7 +264,7 @@ class HardwareOptions:
         self._native.batchesPerGpu = value
 
     @property
-    def gpuIds(self) -> List[int]:
+    def gpuIds(self) -> list[int]:
         """GPU device IDs to target. Empty list uses all available GPUs."""
         return list(self._native.gpuIds)
 
@@ -313,7 +314,7 @@ class AsyncGpuResult:
     this result is async, and the data cannot be accessed without a sync, such as ``torch.cuda.synchronize()``.
     """
 
-    def __init__(self, obj, gpu_id: Optional[int] = None):
+    def __init__(self, obj, gpu_id: int | None = None):
         """Internal construction of the AsyncGpuResult object.
 
         Args:
@@ -470,8 +471,8 @@ class Device3DResult:
         conf_indices: AsyncGpuResult,
         gpu_id: int,
         n_mols: int,
-        energies: Optional[AsyncGpuResult] = None,
-        converged: Optional[AsyncGpuResult] = None,
+        energies: AsyncGpuResult | None = None,
+        converged: AsyncGpuResult | None = None,
     ) -> None:
         """Create a device result from GPU-resident CSR-style buffers."""
         self.values = values
@@ -488,7 +489,7 @@ class Device3DResult:
         """Total number of conformers represented in this result."""
         return int(self.atom_starts.torch().numel()) - 1
 
-    def per_molecule(self) -> List[List["torch.Tensor"]]:
+    def per_molecule(self) -> list[list["torch.Tensor"]]:
         """Return a nested list of per-molecule, per-conformer atom-vector views.
 
         The outer list has length :attr:`n_mols` and is indexed by input molecule index.
@@ -500,7 +501,7 @@ class Device3DResult:
         values = self.values.torch()
         atom_starts = self.atom_starts.torch().tolist()
         mol_indices = self.mol_indices.torch().tolist()
-        result: List[List[torch.Tensor]] = [[] for _ in range(self.n_mols)]
+        result: list[list[torch.Tensor]] = [[] for _ in range(self.n_mols)]
         for conf_idx, mol_idx in enumerate(mol_indices):
             start = atom_starts[conf_idx]
             stop = atom_starts[conf_idx + 1]
@@ -556,7 +557,7 @@ def _atom_row_index(
     mol_indices: AsyncGpuResult,
     conf_indices: AsyncGpuResult,
     n_mols: int,
-    n_rows: Optional[int] = None,
+    n_rows: int | None = None,
 ) -> _AtomRowIndex:
     """Map each conformer's ``atom_starts`` range to padded ``(n_mols, max_confs, max_atoms)`` slots.
 

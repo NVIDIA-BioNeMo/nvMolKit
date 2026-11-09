@@ -17,7 +17,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Iterable, Optional
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Any
 
 from rdkit.Chem import Mol
 
@@ -72,20 +73,20 @@ def _clone_mols(mols: list[Mol]) -> list[Mol]:
 
 def tune_embed_molecules(
     molecules: list[Mol],
-    params: "EmbedParameters",
+    params: EmbedParameters,
     *,
     confsPerMolecule: int = 1,
     maxIterations: int = -1,
-    gpuIds: Optional[Iterable[int]] = None,
-    calibration_set: Optional[Iterable[int]] = None,
+    gpuIds: Iterable[int] | None = None,
+    calibration_set: Iterable[int] | None = None,
     calibration_fraction: float = 0.1,
     calibration_max_size: int = 2000,
     target_seconds_per_trial: float = 10.0,
     n_trials: int = 30,
-    search_space_overrides: Optional[dict[str, Any]] = None,
-    cpu_budget: Optional[int] = None,
+    search_space_overrides: dict[str, Any] | None = None,
+    cpu_budget: int | None = None,
     sampler: Any = None,
-    seed: Optional[int] = None,
+    seed: int | None = None,
     verbose: bool = False,
 ) -> TuneResult:
     """Tune :class:`HardwareOptions` for :func:`EmbedMolecules` on this hardware.

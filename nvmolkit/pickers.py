@@ -8,7 +8,7 @@ Each picker has a matrix form that takes a precomputed distance matrix and a
 """
 
 import operator
-from typing import Sequence
+from collections.abc import Sequence
 
 import numpy as np
 import torch

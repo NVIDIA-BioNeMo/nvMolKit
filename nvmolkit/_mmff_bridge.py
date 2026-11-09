@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from rdkit.ForceField.rdForceField import MMFFMolProperties as RDKitMMFFMolProperties
 
 
-def default_rdkit_mmff_properties(mol: "Mol"):
+def default_rdkit_mmff_properties(mol: Mol):
     """Create default RDKit MMFF properties for ``mol``."""
     properties = rdForceFieldHelpers.MMFFGetMoleculeProperties(mol)
     if properties is None:
@@ -46,7 +46,7 @@ def default_rdkit_mmff_properties(mol: "Mol"):
 
 
 def make_internal_mmff_properties(
-    properties: "RDKitMMFFMolProperties",
+    properties: RDKitMMFFMolProperties,
     *,
     non_bonded_threshold: float,
     ignore_interfrag_interactions: bool,

@@ -25,7 +25,8 @@ native forcefield with each trial's hardware settings.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable, Optional, Union
+from collections.abc import Callable, Iterable
+from typing import Any
 
 from rdkit.Chem import Mol
 
@@ -50,7 +51,7 @@ from nvmolkit.autotune._ff_common import (
 from nvmolkit.batchedForcefield import MMFFBatchedForcefield, UFFBatchedForcefield
 from nvmolkit.types import HardwareOptions
 
-BatchedForcefield = Union[MMFFBatchedForcefield, UFFBatchedForcefield]
+BatchedForcefield = MMFFBatchedForcefield | UFFBatchedForcefield
 ForcefieldFactory = Callable[[list[Mol], HardwareOptions], BatchedForcefield]
 
 
@@ -58,18 +59,18 @@ def tune_batched_forcefield(
     molecules: list[Mol],
     factory: ForcefieldFactory,
     *,
-    maxIters: Optional[int] = None,
-    forceTol: Optional[float] = None,
-    gpuIds: Optional[Iterable[int]] = None,
-    calibration_set: Optional[Iterable[int]] = None,
+    maxIters: int | None = None,
+    forceTol: float | None = None,
+    gpuIds: Iterable[int] | None = None,
+    calibration_set: Iterable[int] | None = None,
     calibration_fraction: float = 0.1,
     calibration_max_size: int = 2000,
     target_seconds_per_trial: float = 10.0,
     n_trials: int = 30,
-    search_space_overrides: Optional[dict[str, Any]] = None,
-    cpu_budget: Optional[int] = None,
+    search_space_overrides: dict[str, Any] | None = None,
+    cpu_budget: int | None = None,
     sampler: Any = None,
-    seed: Optional[int] = None,
+    seed: int | None = None,
     verbose: bool = False,
 ) -> TuneResult:
     """Tune :class:`HardwareOptions` for a batched-forcefield workflow.

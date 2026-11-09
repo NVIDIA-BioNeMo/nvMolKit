@@ -28,8 +28,9 @@ from __future__ import annotations
 import importlib.util
 import math
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any
 
 import torch
 
@@ -166,7 +167,7 @@ def _run_warmup(
 def run_study(
     *,
     default_runner: Callable[[CalibrationState], int],
-    trial_runner: Callable[["object", CalibrationState], int],
+    trial_runner: Callable[[object, CalibrationState], int],
     build_config: Callable[[dict[str, Any]], Any],
     initial_state: CalibrationState,
     n_trials: int = 30,
@@ -174,10 +175,10 @@ def run_study(
     max_calibration_shrinks: int = 3,
     calibration_shrink_factor: float = 0.5,
     min_calibration_size: int = 1,
-    sampler: Optional[Any] = None,
+    sampler: Any | None = None,
     direction: str = "maximize",
     verbose: bool = False,
-    seed: Optional[int] = None,
+    seed: int | None = None,
 ) -> TuneResult:
     """Run a tuning study against a user-provided trial runner.
 
@@ -264,7 +265,7 @@ def run_study(
     )
 
 
-def resolve_search_space(defaults: dict[str, Any], overrides: Optional[dict[str, Any]]) -> dict[str, Any]:
+def resolve_search_space(defaults: dict[str, Any], overrides: dict[str, Any] | None) -> dict[str, Any]:
     """Merge user search-space overrides into the wrapper defaults.
 
     Each value is either a tuple ``(low, high)`` (passed to ``suggest_int``) or

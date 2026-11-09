@@ -17,7 +17,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Optional, Sequence
+from collections.abc import Iterable, Sequence
+from typing import Any
 
 from rdkit.Chem import Mol
 
@@ -81,16 +82,16 @@ def tune_mcs(
     atom_ring_matches_ring_only: bool | None = None,
     bond_ring_matches_ring_only: bool | None = None,
     timeout_seconds: int = 0,
-    gpuIds: Optional[Iterable[int]] = None,
-    calibration_set: Optional[Iterable[int]] = None,
+    gpuIds: Iterable[int] | None = None,
+    calibration_set: Iterable[int] | None = None,
     calibration_fraction: float = 0.1,
     calibration_max_size: int = 2000,
     target_seconds_per_trial: float = 10.0,
     n_trials: int = 30,
-    search_space_overrides: Optional[dict[str, Any]] = None,
-    cpu_budget: Optional[int] = None,
+    search_space_overrides: dict[str, Any] | None = None,
+    cpu_budget: int | None = None,
     sampler: Any = None,
-    seed: Optional[int] = None,
+    seed: int | None = None,
     verbose: bool = False,
 ) -> TuneResult:
     """Tune :class:`MCSConfig` for an explicit-pair, GPU-required MCS workload.

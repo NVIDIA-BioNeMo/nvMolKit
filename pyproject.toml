@@ -141,7 +141,7 @@ markers = [
 
 [tool.ruff]
 line-length = 119
-include = ["nvmolkit/**/*.py", "benchmarks/**/*.py", "setup.py"]
+include = ["nvmolkit/**/*.py", "nvmolkit/**/*.pyi", "benchmarks/**/*.py", "setup.py"]
 
 [tool.ruff.lint]
 ignore = [
@@ -171,6 +171,7 @@ select = [
     "RET",   # Return statement checks
     "RUF",   # Ruff-specific checks
     "SIM",   # Simplification checks
+    "UP",    # Pyupgrade: modern syntax for the supported Python versions
     "W",     # Pycodestyle warnings
 ]
 

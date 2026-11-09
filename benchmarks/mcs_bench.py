@@ -25,9 +25,9 @@ import argparse
 import gc
 import random
 import sys
+from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Callable
 
 import nvtx
 import pandas as pd

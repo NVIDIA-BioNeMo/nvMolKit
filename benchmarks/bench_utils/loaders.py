@@ -23,10 +23,11 @@ source contains more entries than requested.
 import csv
 import pickle
 import random
+from collections.abc import Callable, Iterable, Iterator
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from functools import partial
 from math import ceil
-from typing import Any, Callable, Iterable, Iterator, TypeVar
+from typing import Any, TypeVar
 
 from rdkit import Chem, RDLogger
 from tqdm.auto import tqdm
@@ -146,7 +147,7 @@ def _parse_smiles(smi: str, sanitize: bool) -> Chem.Mol | None:
 
 def _iter_smiles_tokens(filepath: str, sanitize: bool) -> Iterator[str]:
     """Yield SMILES tokens from a file, dropping a parse-failing first line as a header."""
-    with open(filepath, "r") as fh:
+    with open(filepath) as fh:
         first_data_seen = False
         for line in fh:
             stripped = line.strip()
@@ -233,7 +234,7 @@ def load_csv(
     properties = property_columns or []
     read_limit = _buffered_count(max_count)
     rng = random.Random(seed)
-    with open(filepath, "r", newline="") as fh:
+    with open(filepath, newline="") as fh:
         reader = csv.DictReader(fh)
         if reader.fieldnames is None:
             raise ValueError(f"CSV has no header: {filepath}")
@@ -289,7 +290,7 @@ def load_smarts(filepath: str) -> tuple[list[Chem.Mol], list[str]]:
     smarts_list: list[str] = []
     parse_failures = 0
 
-    with open(filepath, "r") as fh:
+    with open(filepath) as fh:
         for line in fh:
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):

@@ -29,8 +29,9 @@ Execution can be tuned with :class:`SubstructSearchConfig`.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 from rdkit.Chem import Mol
@@ -175,7 +176,7 @@ class SubstructSearchConfig:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "SubstructSearchConfig":
+    def from_dict(cls, data: dict[str, Any]) -> SubstructSearchConfig:
         """Create a :class:`SubstructSearchConfig` from a dictionary produced by :meth:`to_dict`."""
         known = {"batchSize", "workerThreads", "preprocessingThreads", "maxMatches", "uniquify", "gpuIds", "algorithm"}
         unknown = set(data) - known
