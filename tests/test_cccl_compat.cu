@@ -51,6 +51,101 @@ __global__ void ceilDivKernel(const int* dividends, const int* divisors, const i
   }
 }
 
+template <typename A, typename B>
+__global__ void mixedCeilDivKernel(const A*       dividends,
+                                   const B*       divisors,
+                                   const int      count,
+                                   std::uint64_t* compat,
+                                   std::uint64_t* fallback) {
+  const int idx = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (idx < count) {
+    compat[idx]   = static_cast<std::uint64_t>(ceil_div(dividends[idx], divisors[idx]));
+    fallback[idx] = static_cast<std::uint64_t>(ceilDivFallback(dividends[idx], divisors[idx]));
+  }
+}
+
+template <typename A, typename B> std::uint64_t referenceCeilDiv(const A a, const B b) {
+  const auto dividend = static_cast<std::uint64_t>(a);
+  const auto divisor  = static_cast<std::uint64_t>(b);
+  return dividend / divisor + (dividend % divisor != 0 ? 1 : 0);
+}
+
+constexpr std::size_t kTwo31  = std::size_t{1} << 31;
+constexpr std::size_t kTwo32  = std::size_t{1} << 32;
+constexpr std::size_t kTwo40  = std::size_t{1} << 40;
+constexpr int         kMaxInt = std::numeric_limits<int>::max();
+
+//! Dividends wider than any int, as in the size_t-by-int launch and batch counts.
+const std::vector<std::size_t>   kWideDividends   = {0,
+                                                     1,
+                                                     255,
+                                                     256,
+                                                     257,
+                                                     kTwo31 - 1,
+                                                     kTwo31,
+                                                     kTwo32 - 1,
+                                                     kTwo32,
+                                                     kTwo32 + 1,
+                                                     5'000'000'001,
+                                                     kTwo40 + 1,
+                                                     std::numeric_limits<std::size_t>::max()};
+const std::vector<int>           kIntDivisors     = {1, 2, 3, 7, 32, 256, 1000, kMaxInt};
+//! Divisors wider than the int dividends they divide.
+const std::vector<int>           kIntDividends    = {0, 1, 7, 255, 256, 257, kMaxInt};
+const std::vector<std::size_t>   kWideDivisors    = {1, 3, 256, kTwo31, kTwo32 + 5, kTwo40};
+const std::vector<std::uint32_t> kUint32Dividends = {0U,
+                                                     1U,
+                                                     std::numeric_limits<std::uint32_t>::max() - 1U,
+                                                     std::numeric_limits<std::uint32_t>::max()};
+
+template <typename A, typename B> void expectHostMatchesReference(const std::vector<A>& as, const std::vector<B>& bs) {
+  for (const A a : as) {
+    for (const B b : bs) {
+      const std::uint64_t expected = referenceCeilDiv(a, b);
+      ASSERT_EQ(static_cast<std::uint64_t>(ceil_div(a, b)), expected) << a << " / " << b;
+      ASSERT_EQ(static_cast<std::uint64_t>(ceilDivFallback(a, b)), expected) << a << " / " << b;
+    }
+  }
+}
+
+template <typename A, typename B>
+void expectDeviceMatchesReference(const std::vector<A>& as, const std::vector<B>& bs) {
+  std::vector<A> dividends;
+  std::vector<B> divisors;
+  for (const A a : as) {
+    for (const B b : bs) {
+      dividends.push_back(a);
+      divisors.push_back(b);
+    }
+  }
+  const int count = static_cast<int>(dividends.size());
+
+  nvMolKit::AsyncDeviceVector<A>             deviceDividends(count);
+  nvMolKit::AsyncDeviceVector<B>             deviceDivisors(count);
+  nvMolKit::AsyncDeviceVector<std::uint64_t> deviceCompat(count);
+  nvMolKit::AsyncDeviceVector<std::uint64_t> deviceFallback(count);
+  deviceDividends.copyFromHost(dividends);
+  deviceDivisors.copyFromHost(divisors);
+  constexpr int kBlockSize = 256;
+  mixedCeilDivKernel<<<ceil_div(count, kBlockSize), kBlockSize>>>(deviceDividends.data(),
+                                                                  deviceDivisors.data(),
+                                                                  count,
+                                                                  deviceCompat.data(),
+                                                                  deviceFallback.data());
+  cudaCheckError(cudaGetLastError());
+
+  std::vector<std::uint64_t> compat(count);
+  std::vector<std::uint64_t> fallback(count);
+  deviceCompat.copyToHost(compat);
+  deviceFallback.copyToHost(fallback);
+  cudaCheckError(cudaDeviceSynchronize());
+  for (int i = 0; i < count; ++i) {
+    const std::uint64_t expected = referenceCeilDiv(dividends[i], divisors[i]);
+    ASSERT_EQ(compat[i], expected) << dividends[i] << " / " << divisors[i];
+    ASSERT_EQ(fallback[i], expected) << dividends[i] << " / " << divisors[i];
+  }
+}
+
 }  // namespace
 
 TEST(CcclCompat, CeilDivMatchesReferenceOnHost) {
@@ -70,6 +165,18 @@ TEST(CcclCompat, CeilDivDoesNotOverflowNearTypeMax) {
   constexpr int kIntMax = std::numeric_limits<int>::max();
   EXPECT_EQ(ceil_div(kIntMax, 256), kIntMax / 256 + 1);
   EXPECT_EQ(ceilDivFallback(kIntMax, 256), kIntMax / 256 + 1);
+}
+
+TEST(CcclCompat, CeilDivMixedTypesMatchReferenceOnHost) {
+  expectHostMatchesReference(kWideDividends, kIntDivisors);
+  expectHostMatchesReference(kIntDividends, kWideDivisors);
+  expectHostMatchesReference(kUint32Dividends, kIntDivisors);
+}
+
+TEST(CcclCompat, CeilDivMixedTypesMatchReferenceOnDevice) {
+  expectDeviceMatchesReference(kWideDividends, kIntDivisors);
+  expectDeviceMatchesReference(kIntDividends, kWideDivisors);
+  expectDeviceMatchesReference(kUint32Dividends, kIntDivisors);
 }
 
 TEST(CcclCompat, CeilDivMatchesReferenceOnDevice) {
