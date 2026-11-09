@@ -338,14 +338,14 @@ std::size_t mmaSharedBytes(const int paddedBits, const int stages) {
 }
 
 /**
- * True when the kernel image loaded for the current device was compiled for sm_80 or newer. A build that targets only
- * older GPUs contains just the pre-sm_80 stub, and a newer device JIT-compiles that stub from its PTX, so the device's
- * compute capability alone does not show that the kernel works.
+ * Attributes of the kernel image loaded for the current device. ptxVersion shows whether it was compiled for sm_80 or
+ * newer: a build that targets only older GPUs contains just the pre-sm_80 stub, and a newer device JIT-compiles that
+ * stub from its PTX, so the device's compute capability alone does not show that the kernel works.
  */
-bool mmaKernelCompiled() {
+cudaFuncAttributes mmaKernelAttributes() {
   cudaFuncAttributes attributes{};
   cudaCheckError(cudaFuncGetAttributes(&attributes, mmaAssignKernel<KMeansMetric::Tanimoto, 2>));
-  return attributes.ptxVersion >= 80;
+  return attributes;
 }
 
 //! Most pipeline stages whose shared memory fits the current device, or 0 when not even two fit, the device is
@@ -357,11 +357,12 @@ int mmaStages(const int paddedBits) {
   cudaCheckError(cudaGetDevice(&device));
   cudaCheckError(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
   cudaCheckError(cudaDeviceGetAttribute(&limit, cudaDevAttrMaxSharedMemoryPerBlockOptin, device));
-  if (major < 8 || !mmaKernelCompiled()) {
+  const cudaFuncAttributes attributes = mmaKernelAttributes();
+  if (major < 8 || attributes.ptxVersion < 80) {
     return 0;
   }
-  // Leave room for the kernel's static shared memory.
-  const std::size_t available = static_cast<std::size_t>(limit) - 1024;
+  // The opt-in limit covers static plus dynamic shared memory; every instantiation has the same static footprint.
+  const std::size_t available = static_cast<std::size_t>(limit) - attributes.sharedSizeBytes;
   for (int stages = kMmaMaxStages; stages >= 2; --stages) {
     if (mmaSharedBytes(paddedBits, stages) <= available) {
       return stages;
