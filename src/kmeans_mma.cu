@@ -67,7 +67,8 @@ __device__ __forceinline__ unsigned bitsToHalf2(const unsigned x) {
   return ((x & 1U) | ((x << 15) & 0x10000U)) * 0x3C00U;
 }
 
-//! Running best of one row. Tanimoto keeps the fraction dot / denominator to avoid a division per candidate.
+//! Running best of one row. Tanimoto keeps the fraction dot / denominator to avoid a division per candidate. The first
+//! offer is always taken, so non-finite (NaN or fp16-overflowed) centers still yield an in-range label.
 template <KMeansMetric Metric> struct RunningBest {
   float value       = -INFINITY;
   float denominator = 1.0F;
@@ -84,14 +85,14 @@ template <KMeansMetric Metric> struct RunningBest {
         numerator   = 1.0F;
         denominator = 1.0F;
       }
-      if (numerator * this->denominator > value * denominator) {
+      if (index == 0x7FFFFFFF || numerator * this->denominator > value * denominator) {
         value             = numerator;
         this->denominator = denominator;
         index             = col;
       }
     } else {
       const float score = scorer.score(dot, norm);
-      if (score > value) {
+      if (index == 0x7FFFFFFF || score > value) {
         value = score;
         index = col;
       }
@@ -338,14 +339,14 @@ std::size_t mmaSharedBytes(const int paddedBits, const int stages) {
 }
 
 /**
- * True when the kernel image loaded for the current device was compiled for sm_80 or newer. A build that targets only
- * older GPUs contains just the pre-sm_80 stub, and a newer device JIT-compiles that stub from its PTX, so the device's
- * compute capability alone does not show that the kernel works.
+ * Attributes of the kernel image loaded for the current device. ptxVersion shows whether it was compiled for sm_80 or
+ * newer: a build that targets only older GPUs contains just the pre-sm_80 stub, and a newer device JIT-compiles that
+ * stub from its PTX, so the device's compute capability alone does not show that the kernel works.
  */
-bool mmaKernelCompiled() {
+cudaFuncAttributes mmaKernelAttributes() {
   cudaFuncAttributes attributes{};
   cudaCheckError(cudaFuncGetAttributes(&attributes, mmaAssignKernel<KMeansMetric::Tanimoto, 2>));
-  return attributes.ptxVersion >= 80;
+  return attributes;
 }
 
 //! Most pipeline stages whose shared memory fits the current device, or 0 when not even two fit, the device is
@@ -357,11 +358,12 @@ int mmaStages(const int paddedBits) {
   cudaCheckError(cudaGetDevice(&device));
   cudaCheckError(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device));
   cudaCheckError(cudaDeviceGetAttribute(&limit, cudaDevAttrMaxSharedMemoryPerBlockOptin, device));
-  if (major < 8 || !mmaKernelCompiled()) {
+  const cudaFuncAttributes attributes = mmaKernelAttributes();
+  if (major < 8 || attributes.ptxVersion < 80) {
     return 0;
   }
-  // Leave room for the kernel's static shared memory.
-  const std::size_t available = static_cast<std::size_t>(limit) - 1024;
+  // The opt-in limit covers static plus dynamic shared memory; every instantiation has the same static footprint.
+  const std::size_t available = static_cast<std::size_t>(limit) - attributes.sharedSizeBytes;
   for (int stages = kMmaMaxStages; stages >= 2; --stages) {
     if (mmaSharedBytes(paddedBits, stages) <= available) {
       return stages;
