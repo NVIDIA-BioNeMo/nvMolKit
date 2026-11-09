@@ -107,3 +107,26 @@ the fused clustering functions (see :doc:`clustering`).
         Chem.MolFromSmiles("CCCN"),
         metric=AAPMetric(max_path_length=7),
     )
+
+Nearest-neighbor search
+-----------------------
+
+When only the most similar library entries per query are needed, ``FingerprintSearchIndex`` returns the top k
+without building the query x library similarity matrix, so the output is O(queries x k) regardless of library size.
+The library is copied to the GPU once and can be searched repeatedly.
+
+.. code-block:: python
+
+    from nvmolkit.fingerprints import MorganFingerprintGenerator
+    from nvmolkit.similarity import FingerprintSearchIndex
+
+    gen = MorganFingerprintGenerator(radius=2, fpSize=2048)
+    index = FingerprintSearchIndex(gen.GetFingerprints(library_mols), metric="tanimoto")
+
+    scores, indices = index.search(gen.GetFingerprints(query_mols), k=10)  # each (n_queries, 10)
+    scores, indices = index.search(gen.GetFingerprints(query_mols), k=1000, threshold=0.7)
+    neighbor_scores, neighbors = index.search(None, k=10)  # library against itself, self matches excluded
+
+Results are exact and ordered by descending similarity, then ascending library index. Queries with fewer than k hits
+above the threshold are padded with NaN scores and -1 indices. Library rows whose popcount rules out a hit are skipped;
+this helps most with small k and high thresholds.
