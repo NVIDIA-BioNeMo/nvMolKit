@@ -67,7 +67,8 @@ __device__ __forceinline__ unsigned bitsToHalf2(const unsigned x) {
   return ((x & 1U) | ((x << 15) & 0x10000U)) * 0x3C00U;
 }
 
-//! Running best of one row. Tanimoto keeps the fraction dot / denominator to avoid a division per candidate.
+//! Running best of one row. Tanimoto keeps the fraction dot / denominator to avoid a division per candidate. The first
+//! offer is always taken, so non-finite (NaN or fp16-overflowed) centers still yield an in-range label.
 template <KMeansMetric Metric> struct RunningBest {
   float value       = -INFINITY;
   float denominator = 1.0F;
@@ -84,14 +85,14 @@ template <KMeansMetric Metric> struct RunningBest {
         numerator   = 1.0F;
         denominator = 1.0F;
       }
-      if (numerator * this->denominator > value * denominator) {
+      if (index == 0x7FFFFFFF || numerator * this->denominator > value * denominator) {
         value             = numerator;
         this->denominator = denominator;
         index             = col;
       }
     } else {
       const float score = scorer.score(dot, norm);
-      if (score > value) {
+      if (index == 0x7FFFFFFF || score > value) {
         value = score;
         index = col;
       }

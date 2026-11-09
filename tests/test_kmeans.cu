@@ -830,6 +830,31 @@ TEST_P(KMeansFitMetricTest, IsDeterministic) {
   EXPECT_EQ(first.iterations, second.iterations);
 }
 
+// Caller centers that are NaN or overflow fp16 give meaningless clusters, but every label must stay in range so the
+// update pass does not index past the cluster buffers.
+TEST_P(KMeansFitMetricTest, NonFiniteCentersGiveInRangeLabels) {
+  const KMeansMetric           metric = GetParam();
+  const nvMolKit::ScopedStream streamOwner;
+  const auto                   stream   = streamOwner.stream();
+  constexpr int                rows     = 300;
+  constexpr int                words    = 2;
+  constexpr int                clusters = 2;
+  const auto                   packed   = randomFingerprints(rows, words, 0.2, 4);
+  std::vector<float>           initial(static_cast<std::size_t>(clusters) * words * 32);
+  std::fill(initial.begin(), initial.begin() + words * 32, NAN);
+  std::fill(initial.begin() + words * 32, initial.end(), 1.0e5F);
+  nvMolKit::KMeansOptions options;
+  options.numClusters = clusters;
+  options.metric      = metric;
+  options.maxIter     = 2;
+  const auto fit      = fitFromCenters(packed, words, initial, options, stream);
+  ASSERT_EQ(fit.labels.size(), static_cast<std::size_t>(rows));
+  for (const int label : fit.labels) {
+    EXPECT_GE(label, 0);
+    EXPECT_LT(label, clusters);
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(KMeans, KMeansFitMetricTest, ::testing::Values(KMeansMetric::Cosine, KMeansMetric::Tanimoto));
 
 TEST(KMeansFit, RejectsInvalidArguments) {
