@@ -506,7 +506,9 @@ def kmeans(
             Euclidean distance between L2-normalized bits.
         init: ``"k-means++"``, ``"random"`` (distinct fingerprints chosen
             uniformly), ``"maxmin"`` (MaxMin picks), or initial centers of
-            shape ``(n_clusters, num_words * 32)``.
+            shape ``(n_clusters, num_words * 32)`` in the space of
+            :attr:`KMeansResult.centers` (for ``metric="cosine"``, the space
+            of L2-normalized bits).
         n_init: Number of initializations; the run with the lowest inertia is
             kept. Ignored when ``init`` is an array of centers.
         max_iter: Maximum number of iterations per initialization.
@@ -554,9 +556,6 @@ def kmeans(
             given_centers = _as_cuda_tensor("init", init, stream=active_stream).to(torch.float32).contiguous()
             if given_centers.shape != (n_clusters, num_bits):
                 raise ValueError(f"init must have shape {(n_clusters, num_bits)}, got {tuple(given_centers.shape)}")
-            if metric == "cosine":
-                norms = given_centers.norm(dim=1, keepdim=True).clamp_min(torch.finfo(torch.float32).tiny)
-                given_centers = given_centers / norms
             n_init = 1
         elif init not in _KMEANS_INITS:
             raise ValueError(f"init must be one of {list(_KMEANS_INITS)} or an array, got {init!r}")
