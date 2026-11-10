@@ -3,8 +3,8 @@
 Clustering and diversity selection
 ==================================
 
-:mod:`nvmolkit.clustering` provides Butina, directed sphere exclusion (DISE) and k-means
-clustering, and :mod:`nvmolkit.pickers` provides Leader and MaxMin selection.
+:mod:`nvmolkit.clustering` provides Butina and directed sphere exclusion (DISE) clustering, and
+:mod:`nvmolkit.pickers` provides Leader and MaxMin selection.
 
 Matrix and fused forms
 ----------------------
@@ -84,15 +84,6 @@ example, ``AAPMetric(max_path_length=8)``.
     leaders = fused_leader(fingerprints, 0.6, metric="tanimoto", output=OutputMode.RDKIT)
     picks, last_distance = fused_maxmin(fingerprints, 3, metric="tanimoto", seed=23, output=OutputMode.RDKIT)
     aap_leaders = fused_leader(molecules, 0.8, metric=AAPMetric(max_path_length=8), output=OutputMode.RDKIT)
-
-k-means
--------
-
-:func:`~nvmolkit.clustering.kmeans` partitions packed fingerprints into
-``n_clusters`` clusters with Lloyd's algorithm. It takes fingerprints rather
-than a distance matrix, accepts ``metric="tanimoto"`` or ``"cosine"``, and
-returns a :class:`~nvmolkit.clustering.KMeansResult` of labels and centers on
-the GPU. It needs a GPU of compute capability 8.0 or newer.
 
 Output modes
 ------------
