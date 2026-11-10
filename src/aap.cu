@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cooperative_groups.h>
+#include <cooperative_groups/reduce.h>
 #include <GraphMol/Atom.h>
 #include <GraphMol/Bond.h>
 #include <GraphMol/ROMol.h>
@@ -422,17 +424,14 @@ __global__ void compactCandidatesKernel(const int numItems, const Op op, int* ca
 }
 
 __device__ __forceinline__ float warpMax(float value) {
-  for (int offset = 16; offset > 0; offset /= 2) {
-    value = fmaxf(value, __shfl_xor_sync(0xffffffffU, value, offset));
-  }
-  return value;
+  const auto warp = cooperative_groups::tiled_partition<32>(cooperative_groups::this_thread_block());
+  // fmaxf rather than cooperative_groups::greater so a NaN lane does not win the reduction.
+  return cooperative_groups::reduce(warp, value, [](const float a, const float b) { return fmaxf(a, b); });
 }
 
 __device__ __forceinline__ float warpSum(float value) {
-  for (int offset = 16; offset > 0; offset /= 2) {
-    value += __shfl_xor_sync(0xffffffffU, value, offset);
-  }
-  return value;
+  const auto warp = cooperative_groups::tiled_partition<32>(cooperative_groups::this_thread_block());
+  return cooperative_groups::reduce(warp, value, cooperative_groups::plus<float>());
 }
 
 //! Subtracts the log-sum-exp of each row (or column) of the square transport plan, one warp per line.
