@@ -508,7 +508,9 @@ def kmeans(
             uniformly), ``"maxmin"`` (MaxMin picks), or initial centers of
             shape ``(n_clusters, num_words * 32)`` in the space of
             :attr:`KMeansResult.centers` (for ``metric="cosine"``, the space
-            of L2-normalized bits).
+            of L2-normalized bits). ``"k-means++"`` is exact for
+            ``n_clusters`` up to 65; above that, it draws the centers in 64
+            batches, which approximates k-means++.
         n_init: Number of initializations; the run with the lowest inertia is
             kept. Ignored when ``init`` is an array of centers.
         max_iter: Maximum number of iterations per initialization.
