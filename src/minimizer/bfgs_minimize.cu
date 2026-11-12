@@ -1122,11 +1122,11 @@ bool BfgsBatchMinimizerT<real>::minimizeBatched(const int         numIters,
   for (int currIter = 0; currIter < numIters; currIter++) {
     if (maxItersPerSystem != nullptr) {
       constexpr int limitBlockSize = 256;
-      finishSystemsAtIterationLimitKernel<<<compat::ceil_div(numSystems, limitBlockSize), limitBlockSize, 0, stream_>>>(
-        numSystems,
-        currIter,
-        maxItersPerSystem,
-        statuses_.data());
+      const int     limitBlocks    = compat::ceil_div(numSystems, limitBlockSize);
+      finishSystemsAtIterationLimitKernel<<<limitBlocks, limitBlockSize, 0, stream_>>>(numSystems,
+                                                                                       currIter,
+                                                                                       maxItersPerSystem,
+                                                                                       statuses_.data());
       cudaCheckError(cudaGetLastError());
     }
     if (compactAndCountConverged() == numSystems) {

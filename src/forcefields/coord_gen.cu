@@ -287,11 +287,11 @@ class InitialCoordinateGenerator::Impl {
     passFail_.resize(batchSize);
     eigensolverActive_.resize(batchSize);
     constexpr int maskBlockSize = 128;
-    combineActiveAndValidKernel<<<compat::ceil_div(batchSize, maskBlockSize), maskBlockSize, 0, stream_>>>(
-      batchSize,
-      active,
-      validDistanceMatricesDevice_.data(),
-      eigensolverActive_.data());
+    const int     maskBlocks    = compat::ceil_div(batchSize, maskBlockSize);
+    combineActiveAndValidKernel<<<maskBlocks, maskBlockSize, 0, stream_>>>(batchSize,
+                                                                           active,
+                                                                           validDistanceMatricesDevice_.data(),
+                                                                           eigensolverActive_.data());
     cudaCheckError(cudaGetLastError());
     BatchedEigenSolverOptions solverOptions;
     solverOptions.active           = eigensolverActive_.data();

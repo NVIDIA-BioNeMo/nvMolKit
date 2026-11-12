@@ -213,7 +213,7 @@ template <int maxAtoms, int maxBonds> struct FmcsPairShared {
   using BondMask = FmcsTargetMask<maxBonds>;
 
   static constexpr int kNumGroups = Config::numGroups;
-  static constexpr int kAtomRegs  = nvMolKit::compat::ceil_div(maxAtoms, 32);
+  static constexpr int kAtomRegs  = nvMolKit::compat::ceil_div(maxAtoms, kFmcsGroupSize);
 
   // --- per-group hot state (16B-aligned members first) ---
   QueuedT current[kNumGroups];
@@ -472,7 +472,7 @@ __device__ __forceinline__ void seedComputeRemainingSizeCooperative(const GroupT
     candAcc.clear();
 #pragma unroll
     for (int r = 0; r < kAtomRegs; ++r) {
-      const int a = lane + r * 32;
+      const int a = lane + r * kFmcsGroupSize;
       if (a < maxAtoms && front.test(a)) {
         const int b0 = S.qRow[a], b1 = S.qRow[a + 1];
         for (int e = b0; e < b1; ++e) {
@@ -558,7 +558,7 @@ __device__ int prepareSeedSearchCooperative(const GroupT&                       
 #pragma unroll
   for (int r = 0; r < kAtomRegs; ++r) {
     neighborReg[r].clear();
-    const int a = lane + r * 32;
+    const int a = lane + r * kFmcsGroupSize;
     if (a < qNA) {
       const bool inSeed = wordsTest(seed.atoms, a);
       S.orderPos[g][a]  = kUnmappedTargetIdx;
@@ -598,7 +598,7 @@ __device__ int prepareSeedSearchCooperative(const GroupT&                       
     unsigned bestKey = 0;
 #pragma unroll
     for (int r = 0; r < kAtomRegs; ++r) {
-      const int a = lane + r * 32;
+      const int a = lane + r * kFmcsGroupSize;
       if (a < qNA && unordered.test(a)) {
         AtomMask mapped = neighborReg[r];
         mapped.andEq(ordered);
