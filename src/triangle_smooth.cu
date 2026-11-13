@@ -18,6 +18,7 @@
 #include <cmath>
 
 #include "src/triangle_smooth.h"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 
 namespace nvMolKit {
@@ -166,7 +167,7 @@ void triangleSmoothBoundsBatch(DeviceBoundsMatrixBatch& deviceMatrixBatch,
   // Configure 1D grid and block dimensions
   const unsigned int blockSize    = 256;  // Optimal block size for most GPUs
   const unsigned int totalThreads = static_cast<unsigned int>(deviceMatrixBatch.totalElements());
-  const unsigned int numBlocks    = (totalThreads + blockSize - 1) / blockSize;
+  const unsigned int numBlocks    = compat::ceil_div(totalThreads, blockSize);
 
   // Main triangle smoothing loop over k (up to maximum matrix size)
   for (unsigned int k = 0; k < maxNpt; k++) {

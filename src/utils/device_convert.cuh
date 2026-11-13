@@ -6,6 +6,8 @@
 
 #include <cuda_runtime.h>
 
+#include "src/utils/cccl_compat.h"
+
 namespace nvMolKit::detail {
 
 template <typename To, typename From>
@@ -22,7 +24,7 @@ cudaError_t convertDeviceArray(To* dst, const From* src, const int count, cudaSt
     return cudaSuccess;
   }
   constexpr int blockSize = 256;
-  convertDeviceArrayKernel<<<(count + blockSize - 1) / blockSize, blockSize, 0, stream>>>(dst, src, count);
+  convertDeviceArrayKernel<<<compat::ceil_div(count, blockSize), blockSize, 0, stream>>>(dst, src, count);
   return cudaGetLastError();
 }
 

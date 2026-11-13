@@ -975,9 +975,9 @@ static __device__ __inline__ DG_REAL molEnergyDG(const EnergyForceContribsDevice
   const int numFourth = fourthEnd - fourthStart;
 
   // Calculate number of warps needed for each term type
-  const int warpsForDist     = (numDist + WARP_SIZE - 1) / WARP_SIZE;
-  const int warpsForChiral   = (numChiral + WARP_SIZE - 1) / WARP_SIZE;
-  const int warpsForFourth   = (numFourth + WARP_SIZE - 1) / WARP_SIZE;
+  const int warpsForDist     = nvMolKit::compat::ceil_div(numDist, WARP_SIZE);
+  const int warpsForChiral   = nvMolKit::compat::ceil_div(numChiral, WARP_SIZE);
+  const int warpsForFourth   = nvMolKit::compat::ceil_div(numFourth, WARP_SIZE);
   const int totalWarpsNeeded = warpsForDist + warpsForChiral + warpsForFourth;
 
   // Each warp processes chunks in round-robin fashion
@@ -1068,9 +1068,9 @@ static __device__ __inline__ void molGradDG(const EnergyForceContribsDevicePtr& 
   const int numFourth = fourthEnd - fourthStart;
 
   // Calculate number of warps needed for each term type
-  const int warpsForDist     = (numDist + WARP_SIZE - 1) / WARP_SIZE;
-  const int warpsForChiral   = (numChiral + WARP_SIZE - 1) / WARP_SIZE;
-  const int warpsForFourth   = (numFourth + WARP_SIZE - 1) / WARP_SIZE;
+  const int warpsForDist     = nvMolKit::compat::ceil_div(numDist, WARP_SIZE);
+  const int warpsForChiral   = nvMolKit::compat::ceil_div(numChiral, WARP_SIZE);
+  const int warpsForFourth   = nvMolKit::compat::ceil_div(numFourth, WARP_SIZE);
   const int totalWarpsNeeded = warpsForDist + warpsForChiral + warpsForFourth;
 
   // Each warp processes chunks in round-robin fashion
@@ -1179,14 +1179,14 @@ static __device__ __inline__ DG_REAL molEnergyETK(const Energy3DForceContribsDev
 
   // Calculate number of warps needed for each term type
   // Cosine and Gaussian experimental torsions share the torsion chunks; a molecule has only one of the two forms.
-  const int warpsForCosine   = (numTorsion + WARP_SIZE - 1) / WARP_SIZE;
-  const int warpsForGaussian = (numGaussian + WARP_SIZE - 1) / WARP_SIZE;
+  const int warpsForCosine   = nvMolKit::compat::ceil_div(numTorsion, WARP_SIZE);
+  const int warpsForGaussian = nvMolKit::compat::ceil_div(numGaussian, WARP_SIZE);
   const int warpsForTorsion  = warpsForCosine + warpsForGaussian;
-  const int warpsForImproper = (numImproper + WARP_SIZE - 1) / WARP_SIZE;
-  const int warpsForDist12   = (numDist12 + WARP_SIZE - 1) / WARP_SIZE;
-  const int warpsForDist13   = (numDist13 + WARP_SIZE - 1) / WARP_SIZE;
-  const int warpsForAngle13  = (numAngle13 + WARP_SIZE - 1) / WARP_SIZE;
-  const int warpsForDistLR   = (numDistLR + WARP_SIZE - 1) / WARP_SIZE;
+  const int warpsForImproper = nvMolKit::compat::ceil_div(numImproper, WARP_SIZE);
+  const int warpsForDist12   = nvMolKit::compat::ceil_div(numDist12, WARP_SIZE);
+  const int warpsForDist13   = nvMolKit::compat::ceil_div(numDist13, WARP_SIZE);
+  const int warpsForAngle13  = nvMolKit::compat::ceil_div(numAngle13, WARP_SIZE);
+  const int warpsForDistLR   = nvMolKit::compat::ceil_div(numDistLR, WARP_SIZE);
   const int totalWarpsNeeded =
     warpsForTorsion + warpsForImproper + warpsForDist12 + warpsForDist13 + warpsForAngle13 + warpsForDistLR;
 
@@ -1367,14 +1367,14 @@ static __device__ __inline__ void molGradETK(const Energy3DForceContribsDevicePt
 
   // Calculate number of warps needed for each term type
   // Cosine and Gaussian experimental torsions share the torsion chunks; a molecule has only one of the two forms.
-  const int warpsForCosine   = (numTorsion + WARP_SIZE - 1) / WARP_SIZE;
-  const int warpsForGaussian = (numGaussian + WARP_SIZE - 1) / WARP_SIZE;
+  const int warpsForCosine   = nvMolKit::compat::ceil_div(numTorsion, WARP_SIZE);
+  const int warpsForGaussian = nvMolKit::compat::ceil_div(numGaussian, WARP_SIZE);
   const int warpsForTorsion  = warpsForCosine + warpsForGaussian;
-  const int warpsForImproper = (numImproper + WARP_SIZE - 1) / WARP_SIZE;
-  const int warpsForDist12   = (numDist12 + WARP_SIZE - 1) / WARP_SIZE;
-  const int warpsForDist13   = (numDist13 + WARP_SIZE - 1) / WARP_SIZE;
-  const int warpsForAngle13  = (numAngle13 + WARP_SIZE - 1) / WARP_SIZE;
-  const int warpsForDistLR   = (numDistLR + WARP_SIZE - 1) / WARP_SIZE;
+  const int warpsForImproper = nvMolKit::compat::ceil_div(numImproper, WARP_SIZE);
+  const int warpsForDist12   = nvMolKit::compat::ceil_div(numDist12, WARP_SIZE);
+  const int warpsForDist13   = nvMolKit::compat::ceil_div(numDist13, WARP_SIZE);
+  const int warpsForAngle13  = nvMolKit::compat::ceil_div(numAngle13, WARP_SIZE);
+  const int warpsForDistLR   = nvMolKit::compat::ceil_div(numDistLR, WARP_SIZE);
   const int totalWarpsNeeded =
     warpsForTorsion + warpsForImproper + warpsForDist12 + warpsForDist13 + warpsForAngle13 + warpsForDistLR;
 

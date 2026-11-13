@@ -32,6 +32,8 @@
 #include <functional>
 #include <stdexcept>
 
+#include "src/utils/cccl_compat.h"
+
 namespace nvMolKit {
 
 namespace detail {
@@ -42,7 +44,7 @@ template <std::size_t NBits> struct FlatBitVectStorage {
   constexpr static std::size_t kNBits        = NBits;
   constexpr static std::size_t kStorageBytes = sizeof(StorageType);
   constexpr static std::size_t kStorageBits  = kStorageBytes * 8;
-  constexpr static std::size_t kStorageCount = (NBits + kStorageBits - 1) / kStorageBits;
+  constexpr static std::size_t kStorageCount = compat::ceil_div(NBits, kStorageBits);
   StorageType                  bits[kStorageCount];
 
   static_assert(kNBits > 0, "kNBits must be greater than 0");

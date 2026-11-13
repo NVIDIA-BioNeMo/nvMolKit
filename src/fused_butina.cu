@@ -14,6 +14,7 @@
 #include "src/butina.h"
 #include "src/butina_common.cuh"
 #include "src/fingerprint_similarity_device.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/conditional_loop_graph.cuh"
 #include "src/utils/cub_helpers.cuh"
 #include "src/utils/cuda_error_check.h"
@@ -98,7 +99,7 @@ __global__ void initialNeighborCountKernel(const cuda::std::span<const std::uint
                                            float                                      threshold,
                                            int                                        rowTileOffset) {
   const int n                 = static_cast<int>(neighborCounts.size());
-  const int numTiles          = (n + kInitialTileSize - 1) / kInitialTileSize;
+  const int numTiles          = compat::ceil_div(n, kInitialTileSize);
   const int firstRowTile      = rowTileOffset + static_cast<int>(blockIdx.y);
   const int secondRowTile     = numTiles - 1 - firstRowTile;
   const int firstRowTileCount = numTiles - firstRowTile;
@@ -454,7 +455,7 @@ ButinaResult fusedButinaGpuImpl(cuda::std::span<const std::uint32_t> fingerprint
   ScopedNvtxRange setupRange("Fused Butina Setup");
 
   // All (non scalar) buffers are O(N). Fingerprints remain in caller-owned storage and no pairwise matrix is allocated.
-  const int              numIterationBlocks = (n + kIterationBlockSize - 1) / kIterationBlockSize;
+  const int              numIterationBlocks = compat::ceil_div(n, kIterationBlockSize);
   AsyncDeviceVector<int> bitCounts(n, stream);
   AsyncDeviceVector<int> sortedBitCounts(n, stream);
   AsyncDeviceVector<int> originalIndices(n, stream);
@@ -482,7 +483,7 @@ ButinaResult fusedButinaGpuImpl(cuda::std::span<const std::uint32_t> fingerprint
   cudaCheckError(cudaMemsetAsync(clusterIdsSpan.data(), 0xff, clusterIdsSpan.size_bytes(), stream));
 
   // Setup runs once before the graph: cache bit counts, compute initial degrees, and choose the first centroid.
-  fingerprintBitCountKernel<<<(n + kIterationBlockSize - 1) / kIterationBlockSize, kIterationBlockSize, 0, stream>>>(
+  fingerprintBitCountKernel<<<compat::ceil_div(n, kIterationBlockSize), kIterationBlockSize, 0, stream>>>(
     fingerprints,
     bitCountsSpan,
     originalIndicesSpan,
@@ -513,7 +514,7 @@ ButinaResult fusedButinaGpuImpl(cuda::std::span<const std::uint32_t> fingerprint
                                                  sizeof(int) * 8,
                                                  stream));
   cudaCheckError(cudaMemsetAsync(neighborCountsSpan.data(), 0, neighborCountsSpan.size_bytes(), stream));
-  const int numInitialTiles    = (n + kInitialTileSize - 1) / kInitialTileSize;
+  const int numInitialTiles    = compat::ceil_div(n, kInitialTileSize);
   const int numInitialRowTiles = (numInitialTiles + 1) / 2;
   for (int rowTileOffset = 0; rowTileOffset < numInitialRowTiles; rowTileOffset += kMaxGridDimensionY) {
     const int numRowsInBatch = std::min(kMaxGridDimensionY, numInitialRowTiles - rowTileOffset);

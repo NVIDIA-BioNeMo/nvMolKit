@@ -10,6 +10,7 @@
 #include "src/descriptors3d.h"
 #include "src/descriptors3d_kernel.cuh"
 #include "src/descriptors3d_topology.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
 
@@ -20,14 +21,14 @@ constexpr int kNumPairwiseChannels = kNumAtomPropertyChannels + 1;
 constexpr int kNumRdfRadii         = kNumRdfProperties / kNumPairwiseChannels;
 constexpr int kNumMorseScatterings = kNumMorseProperties / kNumPairwiseChannels;
 //! Bins per property owned by each lane of a bin group: lane l owns bins l, l + kGroupSize, ...
-constexpr int kPairwiseBinsPerLane = (kNumMorseScatterings + kGroupSize - 1) / kGroupSize;
+constexpr int kPairwiseBinsPerLane = compat::ceil_div(kNumMorseScatterings, kGroupSize);
 //! One warp per conformer: its kGroupSize-lane groups walk interleaved rows of the atom-pair triangle.
 constexpr int kPairStreams         = kWarpSize / kGroupSize;
 static_assert(kNumRdfRadii <= kPairwiseBinsPerLane * kGroupSize);
 //! AUTOCORR3D adds RDKit's relative covalent radius after the pairwise channels (u, m, v, e, p, i, s, r).
 constexpr int kNumAutocorrChannels = kNumPairwiseChannels + 1;
 constexpr int kNumAutocorrLags     = kNumAutocorr3DProperties / kNumAutocorrChannels;
-constexpr int kAutocorrLagsPerLane = (kNumAutocorrLags + kGroupSize - 1) / kGroupSize;
+constexpr int kAutocorrLagsPerLane = compat::ceil_div(kNumAutocorrLags, kGroupSize);
 
 //! Pairwise properties served by one kernel instantiation; unrequested ones compile out.
 enum PairwiseSet : unsigned {
@@ -397,7 +398,7 @@ void launchPairwiseSet(const DeviceCoordView&        coordinates,
                        const BondDistanceTable&      bondTable,
                        const PairwiseOutputs<Real>&  outputs,
                        const cudaStream_t            stream) {
-  const int numBlocks = (coordinates.numConformers + kWarpsPerBlock - 1) / kWarpsPerBlock;
+  const int numBlocks = compat::ceil_div(coordinates.numConformers, kWarpsPerBlock);
   pairwise3DKernel<Real, kSet><<<numBlocks, kBlockSize, 0, stream>>>(coordinates,
                                                                      inputs,
                                                                      scratch,

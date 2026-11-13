@@ -20,6 +20,7 @@
 #include "src/forcefields/kernel_utils.cuh"
 #include "src/forcefields/mmff.h"
 #include "src/forcefields/mmff_kernels.h"
+#include "src/utils/cccl_compat.h"
 
 namespace nvMolKit {
 namespace MMFF {
@@ -914,7 +915,7 @@ cudaError_t computeGradients(BatchedMolecularDeviceBuffers& molSystemDevice,
   if (err == cudaSuccess && activeSystemMask != nullptr && molSystemDevice.indices.atomIdxToBatchIdx.size() > 0) {
     constexpr int blockSize = 256;
     const int     numTerms  = molSystemDevice.indices.atomIdxToBatchIdx.size() * 3;
-    const int     numBlocks = (numTerms + blockSize - 1) / blockSize;
+    const int     numBlocks = compat::ceil_div(numTerms, blockSize);
     // TODO: Thread activeSystemMask through the MMFF term kernels so inactive
     // systems can be skipped before gradient accumulation; energy kernels
     // should follow the same early-filter path instead of relying on late

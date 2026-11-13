@@ -24,6 +24,7 @@
 #include <vector>
 
 #include "src/mcs/mcs_common/mcs_types.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/device_vector.h"
 
 namespace mcs {
@@ -39,7 +40,7 @@ struct MatchTableHost {
   int                   wordsPerRow = 0;
   std::vector<uint32_t> data;
 
-  static int computeWordsPerRow(int nCols) { return (nCols + 31) / 32; }
+  static int computeWordsPerRow(int nCols) { return nvMolKit::compat::ceil_div(nCols, 32); }
 
   void resize(int rows, int cols) {
     nRows       = rows;

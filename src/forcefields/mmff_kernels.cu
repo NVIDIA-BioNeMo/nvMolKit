@@ -18,6 +18,7 @@
 #include "src/forcefields/kernel_utils.cuh"
 #include "src/forcefields/mmff_kernels.h"
 #include "src/forcefields/mmff_kernels_device_dispatch.cuh"
+#include "src/utils/cccl_compat.h"
 
 using namespace nvMolKit::MMFF::fp64;
 
@@ -491,7 +492,7 @@ cudaError_t launchBondStretchEnergyKernel(const int     numBonds,
                                           cudaStream_t  stream) {
   assert(numBonds > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numBonds + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numBonds, blockSize);
   bondStretchEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numBonds,
                                                                idx1,
                                                                idx2,
@@ -515,7 +516,7 @@ cudaError_t launchBondStretchGradientKernel(const int     numBonds,
                                             cudaStream_t  stream) {
   assert(numBonds > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numBonds + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numBonds, blockSize);
   bondStretchGradKernel<<<numBlocks, blockSize, 0, stream>>>(numBonds, idx1, idx2, r0, kb, pos, grad);
 
   return cudaGetLastError();
@@ -536,7 +537,7 @@ cudaError_t launchAngleBendEnergyKernel(const int      numAngles,
                                         cudaStream_t   stream) {
   assert(numAngles > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numAngles + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numAngles, blockSize);
   angleBendEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numAngles,
                                                              idx1,
                                                              idx2,
@@ -564,7 +565,7 @@ cudaError_t launchAngleBendGradientKernel(const int      numAngles,
                                           cudaStream_t   stream) {
   assert(numAngles > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numAngles + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numAngles, blockSize);
   angleBendGradientKernel<<<numBlocks, blockSize, 0, stream>>>(numAngles,
                                                                idx1,
                                                                idx2,
@@ -595,7 +596,7 @@ cudaError_t launchBendStretchEnergyKernel(const int     numAngles,
                                           cudaStream_t  stream) {
   assert(numAngles > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numAngles + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numAngles, blockSize);
   bendStretchEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numAngles,
                                                                idx1,
                                                                idx2,
@@ -627,7 +628,7 @@ cudaError_t launchBendStretchGradientKernel(const int     numAngles,
                                             cudaStream_t  stream) {
   assert(numAngles > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numAngles + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numAngles, blockSize);
   bendStretchGradKernel<<<numBlocks, blockSize, 0, stream>>>(numAngles,
                                                              idx1,
                                                              idx2,
@@ -656,7 +657,7 @@ cudaError_t launchOopBendEnergyKernel(const int     numOopBends,
                                       cudaStream_t  stream) {
   assert(numOopBends > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numOopBends + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numOopBends, blockSize);
   oopBendEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numOopBends,
                                                            idx1,
                                                            idx2,
@@ -682,7 +683,7 @@ cudaError_t launchOopBendGradientKernel(const int     numOopBends,
                                         cudaStream_t  stream) {
   assert(numOopBends > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numOopBends + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numOopBends, blockSize);
   oopBendGradKernel<<<numBlocks, blockSize, 0, stream>>>(numOopBends, idx1, idx2, idx3, idx4, koop, pos, grad);
   return cudaGetLastError();
 }
@@ -703,7 +704,7 @@ cudaError_t launchTorsionEnergyKernel(const int     numTorsions,
                                       cudaStream_t  stream) {
   assert(numTorsions > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numTorsions + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numTorsions, blockSize);
   torsionEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numTorsions,
                                                            idx1,
                                                            idx2,
@@ -733,7 +734,7 @@ cudaError_t launchTorsionGradientKernel(const int     numTorsions,
                                         cudaStream_t  stream) {
   assert(numTorsions > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numTorsions + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numTorsions, blockSize);
   torsionGradKernel<<<numBlocks, blockSize, 0, stream>>>(numTorsions, idx1, idx2, idx3, idx4, V1, V2, V3, pos, grad);
   return cudaGetLastError();
 }
@@ -751,7 +752,7 @@ cudaError_t launchVdwEnergyKernel(const int     numVdws,
                                   cudaStream_t  stream) {
   assert(numVdws > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numVdws + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numVdws, blockSize);
   vdwEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numVdws,
                                                        idx1,
                                                        idx2,
@@ -775,7 +776,7 @@ cudaError_t launchVdwGradientKernel(const int     numVdws,
                                     cudaStream_t  stream) {
   assert(numVdws > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numVdws + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numVdws, blockSize);
   vdwGradKernel<<<numBlocks, blockSize, 0, stream>>>(numVdws, idx1, idx2, R_ij_star, wellDepth, pos, grad);
   return cudaGetLastError();
 }
@@ -794,7 +795,7 @@ cudaError_t launchEleEnergyKernel(const int      numEles,
                                   cudaStream_t   stream) {
   assert(numEles > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numEles + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numEles, blockSize);
   eleEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numEles,
                                                        idx1,
                                                        idx2,
@@ -820,7 +821,7 @@ cudaError_t launchEleGradientKernel(const int      numEles,
                                     cudaStream_t   stream) {
   assert(numEles > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numEles + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numEles, blockSize);
   eleGradKernel<<<numBlocks, blockSize, 0, stream>>>(numEles, idx1, idx2, chargeTerm, dielModel, is1_4, pos, grad);
   return cudaGetLastError();
 }
@@ -839,7 +840,7 @@ cudaError_t launchDistanceConstraintEnergyKernel(const int     numConstraints,
                                                  cudaStream_t  stream) {
   assert(numConstraints > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numConstraints + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numConstraints, blockSize);
   distanceConstraintEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numConstraints,
                                                                       idx1,
                                                                       idx2,
@@ -865,7 +866,7 @@ cudaError_t launchDistanceConstraintGradientKernel(const int     numConstraints,
                                                    cudaStream_t  stream) {
   assert(numConstraints > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numConstraints + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numConstraints, blockSize);
   distanceConstraintGradKernel<<<numBlocks, blockSize, 0, stream>>>(numConstraints,
                                                                     idx1,
                                                                     idx2,
@@ -892,7 +893,7 @@ cudaError_t launchPositionConstraintEnergyKernel(const int     numConstraints,
                                                  cudaStream_t  stream) {
   assert(numConstraints > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numConstraints + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numConstraints, blockSize);
   positionConstraintEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numConstraints,
                                                                       idx,
                                                                       refX,
@@ -920,7 +921,7 @@ cudaError_t launchPositionConstraintGradientKernel(const int     numConstraints,
                                                    cudaStream_t  stream) {
   assert(numConstraints > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numConstraints + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numConstraints, blockSize);
   positionConstraintGradKernel<<<numBlocks, blockSize, 0, stream>>>(numConstraints,
                                                                     idx,
                                                                     refX,
@@ -948,7 +949,7 @@ cudaError_t launchAngleConstraintEnergyKernel(const int     numConstraints,
                                               cudaStream_t  stream) {
   assert(numConstraints > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numConstraints + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numConstraints, blockSize);
   angleConstraintEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numConstraints,
                                                                    idx1,
                                                                    idx2,
@@ -976,7 +977,7 @@ cudaError_t launchAngleConstraintGradientKernel(const int     numConstraints,
                                                 cudaStream_t  stream) {
   assert(numConstraints > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numConstraints + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numConstraints, blockSize);
   angleConstraintGradKernel<<<numBlocks, blockSize, 0, stream>>>(numConstraints,
                                                                  idx1,
                                                                  idx2,
@@ -1005,7 +1006,7 @@ cudaError_t launchTorsionConstraintEnergyKernel(const int     numConstraints,
                                                 cudaStream_t  stream) {
   assert(numConstraints > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numConstraints + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numConstraints, blockSize);
   torsionConstraintEnergyKernel<<<numBlocks, blockSize, 0, stream>>>(numConstraints,
                                                                      idx1,
                                                                      idx2,
@@ -1035,7 +1036,7 @@ cudaError_t launchTorsionConstraintGradientKernel(const int     numConstraints,
                                                   cudaStream_t  stream) {
   assert(numConstraints > 0);
   constexpr int blockSize = 256;
-  const int     numBlocks = (numConstraints + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(numConstraints, blockSize);
   torsionConstraintGradKernel<<<numBlocks, blockSize, 0, stream>>>(numConstraints,
                                                                    idx1,
                                                                    idx2,

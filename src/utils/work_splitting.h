@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,10 +18,12 @@
 
 #include <cstddef>
 
+#include "src/utils/cccl_compat.h"
+
 namespace nvMolKit {
 
 size_t computeElementsPerThread(const size_t numElements, const size_t numThreads) {
-  return (numElements + numThreads - 1) / numThreads;
+  return compat::ceil_div(numElements, numThreads);
 }
 
 }  // namespace nvMolKit

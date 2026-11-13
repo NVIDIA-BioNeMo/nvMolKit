@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "src/utils/cccl_compat.h"
 #include "src/utils/device.h"
 #include "src/utils/device_vector.h"
 #include "src/utils/host_vector.h"
@@ -30,7 +31,7 @@ std::vector<std::uint64_t> packPatternFingerprintsWordMajor(const std::vector<co
 
 //! Number of 32-target words in each bit slice of a set of count targets.
 inline std::size_t patternSliceWords(std::size_t count) {
-  return (count + 31) / 32;
+  return compat::ceil_div(count, 32);
 }
 
 /**

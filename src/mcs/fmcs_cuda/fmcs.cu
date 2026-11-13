@@ -33,6 +33,7 @@
 #include "src/mcs/fmcs_cuda/fmcs_kernel.cuh"
 #include "src/mcs/fmcs_cuda/fmcs_match_tables.cuh"
 #include "src/mcs/fmcs_cuda/fmcs_policy.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/device.h"
 #include "src/utils/device_vector.h"
 #include "src/utils/gpu_executor_ring.h"
@@ -700,7 +701,7 @@ std::vector<MCSResult> runBatch(const std::vector<InputT>& a,
   size_t       numChunks = 0;
   for (const auto& indices : tierIndices) {
     if (!indices.empty()) {
-      numChunks += (indices.size() + chunkSize - 1) / chunkSize;
+      numChunks += nvMolKit::compat::ceil_div(indices.size(), chunkSize);
     }
   }
 

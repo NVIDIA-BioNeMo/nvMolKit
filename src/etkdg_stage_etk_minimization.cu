@@ -20,6 +20,7 @@
 #include "src/etkdg_stage_etk_minimization.h"
 #include "src/forcefields/etk_batched_forcefield.h"
 #include "src/minimizer/bfgs_minimize.h"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/device_convert.cuh"
 
 namespace nvMolKit {
@@ -95,11 +96,11 @@ void runPlanarToleranceCheck(const AsyncDeviceVector<Scalar>& planarEnergies,
                              const ETKDGContext&              ctx,
                              cudaStream_t                     stream) {
   const int numSystems = ctx.systemHost.atomStarts.size() - 1;
-  planarToleranceCheck<<<(numSystems + 255) / 256, 256, 0, stream>>>(numSystems,
-                                                                     planarEnergies.data(),
-                                                                     numImpropers,
-                                                                     ctx.activeThisStage.data(),
-                                                                     ctx.failedThisStage.data());
+  planarToleranceCheck<<<compat::ceil_div(numSystems, 256), 256, 0, stream>>>(numSystems,
+                                                                              planarEnergies.data(),
+                                                                              numImpropers,
+                                                                              ctx.activeThisStage.data(),
+                                                                              ctx.failedThisStage.data());
   cudaCheckError(cudaGetLastError());
 }
 
@@ -185,16 +186,17 @@ void ETKMinimizationStageT<real>::setReferenceValues(const ETKDGContext&        
   const int numTerms13 = contribs.dist13Terms.idx1.size();
 
   if (numTerms12 > 0) {
-    updateReferencePositionsKernel<<<(numTerms12 + 255) / 256, 256, 0, stream_>>>(numTerms12,
-                                                                                  ctx.systemDevice.positions.data(),
-                                                                                  contribs.dist12Terms.idx1.data(),
-                                                                                  contribs.dist12Terms.idx2.data(),
-                                                                                  contribs.dist12Terms.minLen.data(),
-                                                                                  contribs.dist12Terms.maxLen.data());
+    updateReferencePositionsKernel<<<compat::ceil_div(numTerms12, 256), 256, 0, stream_>>>(
+      numTerms12,
+      ctx.systemDevice.positions.data(),
+      contribs.dist12Terms.idx1.data(),
+      contribs.dist12Terms.idx2.data(),
+      contribs.dist12Terms.minLen.data(),
+      contribs.dist12Terms.maxLen.data());
     cudaCheckError(cudaGetLastError());
   }
   if (numTerms13 > 0) {
-    updateReferencePositionsKernel<<<(numTerms13 + 255) / 256, 256, 0, stream_>>>(
+    updateReferencePositionsKernel<<<compat::ceil_div(numTerms13, 256), 256, 0, stream_>>>(
       numTerms13,
       ctx.systemDevice.positions.data(),
       contribs.dist13Terms.idx1.data(),

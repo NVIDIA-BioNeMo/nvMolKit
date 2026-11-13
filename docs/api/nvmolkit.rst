@@ -39,6 +39,12 @@ Similarity Calculations
    similarity.CosineMetric
    similarity.AAPMetric
 
+.. autosummary::
+   :toctree: generated/
+   :template: class_template.rst
+
+   similarity.FingerprintSearchIndex
+
 
 ETKDG Conformer Generation
 --------------------------

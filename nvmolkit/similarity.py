@@ -27,7 +27,7 @@ import torch
 
 from nvmolkit import _clustering, _DataStructs
 from nvmolkit._fingerprint_inputs import _prepare_packed_fingerprints
-from nvmolkit.types import ArrayInput, AsyncGpuResult, _resolve_cuda_stream
+from nvmolkit.types import ArrayInput, AsyncGpuResult, _resolve_cuda_stream, _validate_cuda_stream
 
 
 @dataclass(frozen=True)
@@ -298,3 +298,115 @@ def crossCosineSimilarityMemoryConstrained(
         return _DataStructs.CrossCosineSimilarityCPURawBuffers(
             bits_one.__cuda_array_interface__, bits_two.__cuda_array_interface__, active_stream.cuda_stream
         )
+
+
+# --------------------------------
+# Nearest-neighbor search
+# --------------------------------
+
+
+class FingerprintSearchIndex:
+    """Exact top-k similarity search over a fixed library of fingerprints on the GPU.
+
+    The library is copied to the GPU once, sorted by popcount, and can then be searched repeatedly. A search returns
+    the k most similar library fingerprints for each query without materializing the query x library similarity
+    matrix. Library rows that cannot enter a query's current top k are skipped using the popcount bound on
+    similarity, so the cost falls as k shrinks or the threshold rises.
+
+    Results are exact: hits are ordered by descending similarity, then ascending library index, and equal a
+    brute-force search with the same ordering. Similarities are computed in double precision exactly as
+    :func:`crossTanimotoSimilarity` and :func:`crossCosineSimilarity` compute them.
+
+    Example:
+        >>> index = FingerprintSearchIndex(library_fps)
+        >>> scores, indices = index.search(query_fps, k=10)
+        >>> neighbor_scores, neighbors = index.search(None, k=10)  # library against itself
+
+    Args:
+        fingerprints: Packed fingerprints with shape (n, n_words), as produced by nvMolKit fingerprint generators.
+            A torch Tensor, numpy.ndarray, or AsyncGpuResult. CPU inputs are copied to CUDA.
+        metric: ``"tanimoto"`` or ``"cosine"``.
+        stream: CUDA stream to build the index on. If None, uses the current stream. Construction synchronizes this
+            stream, after which the input fingerprints are no longer referenced.
+    """
+
+    def __init__(
+        self,
+        fingerprints: ArrayInput,
+        metric: str = "tanimoto",
+        stream: torch.cuda.Stream | None = None,
+    ) -> None:
+        """Build the index from library fingerprints."""
+        (bits,), active_stream = _prepare_packed_fingerprints(("fingerprints", fingerprints), stream=stream)
+        self._device = bits.device
+        with torch.cuda.device(self._device), torch.cuda.stream(active_stream):
+            self._index = _DataStructs.FingerprintSearchIndex(
+                bits.__cuda_array_interface__, metric, active_stream.cuda_stream
+            )
+        self._metric = metric
+
+    def __len__(self) -> int:
+        """Return the number of library fingerprints."""
+        return self._index.size()
+
+    @property
+    def metric(self) -> str:
+        """Return the similarity metric of this index."""
+        return self._metric
+
+    def search(
+        self,
+        queries: ArrayInput | None,
+        k: int,
+        threshold: float = 0.0,
+        prune: bool = True,
+        stream: torch.cuda.Stream | None = None,
+    ) -> tuple[AsyncGpuResult, AsyncGpuResult]:
+        """Return the k most similar library fingerprints for each query.
+
+        Args:
+            queries: Packed query fingerprints with shape (m, n_words), matching the library width. If None, the
+                library is searched against itself and each fingerprint's match with itself is excluded; other
+                library entries with identical fingerprints are still returned.
+            k: Maximum number of hits per query.
+            threshold: Only hits with similarity >= threshold are returned. Must be in [0, 1].
+            prune: Skip library rows that cannot enter the top k. Disabling it scans every library row and returns
+                identical results; it exists for measuring the effect of pruning.
+            stream: CUDA stream on the index's device. If None, uses that device's current stream.
+
+        Returns:
+            A ``(scores, indices)`` pair of AsyncGpuResults, each with shape (m, k). ``scores`` is float64 and
+            ``indices`` is int64 library row indices. Row i lists hits for query i (library fingerprint i when
+            ``queries`` is None), best first. Queries with fewer than k hits are padded with NaN scores and -1
+            indices.
+        """
+        if isinstance(k, bool) or not isinstance(k, int) or k <= 0:
+            raise ValueError(f"k must be a positive integer, got {k!r}")
+        if not 0.0 <= threshold <= 1.0:
+            raise ValueError(f"threshold must be in [0, 1], got {threshold!r}")
+
+        _validate_cuda_stream(stream)
+        active_stream = stream if stream is not None else torch.cuda.current_stream(self._device)
+        if active_stream.device != self._device:
+            raise ValueError(f"stream is on {active_stream.device}, but the index is on {self._device}")
+
+        with torch.cuda.device(self._device), torch.cuda.stream(active_stream):
+            if queries is None:
+                scores, indices = self._index.searchSelf(k, float(threshold), bool(prune), active_stream.cuda_stream)
+            else:
+                (bits,), _ = _prepare_packed_fingerprints(("queries", queries), stream=active_stream)
+                if bits.device != self._device:
+                    raise ValueError(f"queries are on {bits.device}, but the index is on {self._device}")
+                if bits.shape[1] != self._index.numWords():
+                    raise ValueError(
+                        f"queries have {bits.shape[1]} words per fingerprint, "
+                        f"but the index has {self._index.numWords()}"
+                    )
+                # Keep the caller's query memory from being reused by another stream before the search finishes.
+                bits.record_stream(active_stream)
+                scores, indices = self._index.search(
+                    bits.__cuda_array_interface__, k, float(threshold), bool(prune), active_stream.cuda_stream
+                )
+
+        gpu_id = self._device.index
+        return AsyncGpuResult(scores, gpu_id=gpu_id), AsyncGpuResult(indices, gpu_id=gpu_id)

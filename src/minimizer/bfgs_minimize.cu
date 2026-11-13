@@ -26,6 +26,7 @@
 #include "src/minimizer/bfgs_hessian.h"
 #include "src/minimizer/bfgs_minimize.h"
 #include "src/minimizer/bfgs_minimize_permol_kernels.h"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cub_helpers.cuh"
 #include "src/utils/device_convert.cuh"
 #include "src/utils/device_vector.h"
@@ -98,7 +99,7 @@ template <typename T> void setAll(AsyncDeviceVector<T>& vec, const T& value) {
     return;
   }
   const int blockSize = 128;
-  const int numBlocks = (numElements + blockSize - 1) / blockSize;
+  const int numBlocks = compat::ceil_div(numElements, blockSize);
   setAllKernel<<<numBlocks, blockSize, 0, stream>>>(numElements, value, vec.data());
   cudaCheckError(cudaGetLastError());
 }
@@ -208,7 +209,7 @@ __global__ void setLineStatusAndEnergyFromGlobalKernel(const int numSystems,
 }
 
 template <typename real> void BfgsBatchMinimizerT<real>::doLineSearchSetup(const real* srcEnergies) {
-  const int     numblocks      = (numSystems_ + 128 - 1) / 128;
+  const int     numblocks      = compat::ceil_div(numSystems_, 128);
   constexpr int blockSizeSetup = 128;
   setLineStatusAndEnergyFromGlobalKernel<real><<<numblocks, 128, 0, stream_>>>(numSystems_,
                                                                                statuses_.data(),
@@ -349,7 +350,7 @@ __global__ void lineSearchPostEnergyKernel(const int       numSystems,
 }
 
 template <typename real> void BfgsBatchMinimizerT<real>::doLineSearchPostEnergy(const int iter) {
-  const int numBlocks = (numSystems_ + 127) / 128;
+  const int numBlocks = compat::ceil_div(numSystems_, 128);
   lineSearchPostEnergyKernel<real, real><<<numBlocks, 128, 0, stream_>>>(numSystems_,
                                                                          iter == 0,
                                                                          lineSearchStoredEnergy_.data(),
@@ -496,7 +497,7 @@ void BfgsBatchMinimizerT<real>::initialize(const std::vector<int>& atomStartsHos
   if (activeThisStage) {
     // Copy activeThisStage to statuses_ with type conversion
     const int blockSize = 128;
-    const int numBlocks = (numSystems + blockSize - 1) / blockSize;
+    const int numBlocks = compat::ceil_div(numSystems, blockSize);
     copyActiveToStatusKernel<<<numBlocks, blockSize, 0, stream_>>>(numSystems, activeThisStage, statuses_.data());
   } else {
     // Default initialization to all 1s
@@ -1112,7 +1113,7 @@ bool BfgsBatchMinimizerT<real>::minimizeBatched(const int         numIters,
 
     collectDebugData();
     constexpr int copyBlockSize = 128;
-    const int     copyBlocks    = (numStateTerms + copyBlockSize - 1) / copyBlockSize;
+    const int     copyBlocks    = compat::ceil_div(numStateTerms, copyBlockSize);
     copyAndNegate<<<copyBlocks, copyBlockSize, 0, stream_>>>(numStateTerms, gradDevice, lineSearchDir_.data());
     cudaCheckError(cudaGetLastError());
     setMaxStep();
@@ -1121,10 +1122,11 @@ bool BfgsBatchMinimizerT<real>::minimizeBatched(const int         numIters,
   for (int currIter = 0; currIter < numIters; currIter++) {
     if (maxItersPerSystem != nullptr) {
       constexpr int limitBlockSize = 256;
-      finishSystemsAtIterationLimitKernel<<<(numSystems + limitBlockSize - 1) / limitBlockSize,
-                                            limitBlockSize,
-                                            0,
-                                            stream_>>>(numSystems, currIter, maxItersPerSystem, statuses_.data());
+      const int     limitBlocks    = compat::ceil_div(numSystems, limitBlockSize);
+      finishSystemsAtIterationLimitKernel<<<limitBlocks, limitBlockSize, 0, stream_>>>(numSystems,
+                                                                                       currIter,
+                                                                                       maxItersPerSystem,
+                                                                                       statuses_.data());
       cudaCheckError(cudaGetLastError());
     }
     if (compactAndCountConverged() == numSystems) {
@@ -1502,7 +1504,7 @@ void copyAndInvertImpl(const AsyncDeviceVector<sourceT>& src, AsyncDeviceVector<
                              std::to_string(numElements) + " vs " + std::to_string(dst.size()));
   }
   const int blockSize = 128;
-  const int numBlocks = (numElements + blockSize - 1) / blockSize;
+  const int numBlocks = compat::ceil_div(numElements, blockSize);
   copyAndNegate<<<numBlocks, blockSize, 0, stream>>>(numElements, src.data(), dst.data());
   cudaCheckError(cudaGetLastError());
 }

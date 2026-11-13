@@ -34,6 +34,10 @@ target_link_libraries(test_cuda_error_check PRIVATE cuda_error_check)
 add_executable(test_device test_device.cpp)
 target_link_libraries(test_device PRIVATE device cuda_error_check CUDA::cudart)
 
+add_executable(test_cccl_compat test_cccl_compat.cu)
+target_link_libraries(test_cccl_compat PRIVATE device_vector cuda_error_check
+                                               cccl_interface CUDA::cudart)
+
 add_executable(test_p2p test_p2p.cpp)
 target_link_libraries(test_p2p PRIVATE p2p device device_vector
                                        cuda_error_check CUDA::cudart)
@@ -532,6 +536,7 @@ set(TEST_LIST
     test_coordgen
     test_p2p
     test_cuda_error_check
+    test_cccl_compat
     test_device
     test_device_timings
     test_device_vector

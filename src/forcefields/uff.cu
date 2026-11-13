@@ -19,6 +19,7 @@
 
 #include "src/forcefields/kernel_utils.cuh"
 #include "src/forcefields/uff.h"
+#include "src/utils/cccl_compat.h"
 
 namespace nvMolKit {
 namespace UFF {
@@ -378,8 +379,7 @@ void addMoleculeToBatch(const EnergyForceContribsHost& contribs,
   maxNumContribs     = std::max<int>(maxNumContribs, contribs.angleConstraintTerms.idx1.size());
   maxNumContribs     = std::max<int>(maxNumContribs, contribs.torsionConstraintTerms.idx1.size());
 
-  const int numBlocksNeeded =
-    (maxNumContribs + FFKernelUtils::blockSizeEnergyReduction - 1) / FFKernelUtils::blockSizeEnergyReduction;
+  const int numBlocksNeeded  = compat::ceil_div(maxNumContribs, FFKernelUtils::blockSizeEnergyReduction);
   const int numThreadsNeeded = numBlocksNeeded * FFKernelUtils::blockSizeEnergyReduction;
   indices.energyBufferStarts.push_back(indices.energyBufferStarts.back() + numThreadsNeeded);
   for (int i = 0; i < numBlocksNeeded; ++i) {
@@ -788,7 +788,7 @@ cudaError_t computeGradients(BatchedMolecularDeviceBuffers& molSystemDevice,
   if (err == cudaSuccess && activeSystemMask != nullptr && molSystemDevice.indices.atomIdxToBatchIdx.size() > 0) {
     constexpr int blockSize = 256;
     const int     numTerms  = molSystemDevice.indices.atomIdxToBatchIdx.size() * 3;
-    const int     numBlocks = (numTerms + blockSize - 1) / blockSize;
+    const int     numBlocks = compat::ceil_div(numTerms, blockSize);
     zeroInactiveGradientEntries<<<numBlocks, blockSize, 0, stream>>>(molSystemDevice.indices.atomIdxToBatchIdx.data(),
                                                                      activeSystemMask,
                                                                      molSystemDevice.indices.atomIdxToBatchIdx.size(),

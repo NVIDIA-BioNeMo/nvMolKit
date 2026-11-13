@@ -23,6 +23,7 @@ namespace cg = cooperative_groups;
 
 #include "src/data_structures/flat_bit_vect.h"
 #include "src/morgan_fingerprint_kernels.h"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
 
@@ -439,7 +440,7 @@ void launchMorganFingerprintKernelBatch(const MorganGPUBuffersBatch&            
                                         const int                               nMolecules,
                                         cudaStream_t                            stream) {
   const int    tilesPerBlock = kBlockSize / maxAtoms;
-  const int    numBlocks     = (nMolecules + tilesPerBlock - 1) / tilesPerBlock;  // ceil division
+  const int    numBlocks     = compat::ceil_div(nMolecules, tilesPerBlock);  // ceil division
   const size_t atomCount     = static_cast<size_t>(maxAtoms) * nMolecules;
   const size_t bondCount     = atomCount * bondStride;
   const size_t scratchCount  = atomCount * (maxRadius + 1);

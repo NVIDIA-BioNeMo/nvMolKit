@@ -15,6 +15,7 @@
 
 #include "src/tfd/tfd_detail.h"
 #include "src/tfd/tfd_kernels.h"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 
 namespace nvMolKit {
@@ -185,7 +186,7 @@ void launchDihedralKernel(int                  totalWorkItems,
     return;
   }
 
-  int gridSize = (totalWorkItems + kTFDBlockSize - 1) / kTFDBlockSize;
+  int gridSize = compat::ceil_div(totalWorkItems, kTFDBlockSize);
 
   dihedralKernel<<<gridSize, kTFDBlockSize, 0, stream>>>(totalWorkItems,
                                                          positions,

@@ -29,6 +29,7 @@
 #include "src/mcs/fmcs_cuda/fmcs_match.cuh"
 #include "src/mcs/fmcs_cuda/fmcs_match_tables.cuh"
 #include "src/mcs/fmcs_cuda/fmcs_seed.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/device_vector.h"
 
 namespace {
@@ -69,8 +70,8 @@ struct ManagedMatchTables {
   void allocate(int qAtoms, int tAtoms, int qBonds, int tBonds) {
     qNumAtoms                 = qAtoms;
     qNumBonds                 = qBonds;
-    const int atomWordsPerRow = (tAtoms + 31) / 32;
-    const int bondWordsPerRow = (tBonds + 31) / 32;
+    const int atomWordsPerRow = nvMolKit::compat::ceil_div(tAtoms, 32);
+    const int bondWordsPerRow = nvMolKit::compat::ceil_div(tBonds, 32);
     atomHost.assign(qAtoms * atomWordsPerRow, 0);
     bondHost.assign(qBonds * bondWordsPerRow, 0);
     dev_.atoms = MatchTableDevice{nullptr, qAtoms, tAtoms, atomWordsPerRow};

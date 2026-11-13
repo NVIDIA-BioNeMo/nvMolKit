@@ -881,7 +881,7 @@ std::vector<std::uint32_t> packedRow(const std::vector<std::uint32_t>& packed, c
   return {begin, begin + words};
 }
 
-class KMeansPlusPlusTest : public ::testing::TestWithParam<KMeansMetric> {};
+class KMeansPlusPlusTest : public KMeansFitTest, public ::testing::WithParamInterface<KMeansMetric> {};
 
 TEST_P(KMeansPlusPlusTest, PicksDistinctRows) {
   const nvMolKit::ScopedStream streamOwner;
@@ -900,6 +900,7 @@ TEST_P(KMeansPlusPlusTest, PicksDistinctRows) {
 
 TEST_P(KMeansPlusPlusTest, PicksEveryDistinctFingerprintBeforeDuplicates) {
   // 40 rows repeated 5 times: once every distinct fingerprint is chosen, the remaining rows all have zero D^2 weight.
+  // 60 clusters draw one center per round; a larger batch could draw two copies of an unchosen fingerprint together.
   const nvMolKit::ScopedStream streamOwner;
   const auto                   stream   = streamOwner.stream();
   const auto                   distinct = randomFingerprints(40, 4, 0.3, 3);
@@ -911,8 +912,8 @@ TEST_P(KMeansPlusPlusTest, PicksEveryDistinctFingerprintBeforeDuplicates) {
   for (int row = 0; row < 40; ++row) {
     inputFingerprints.insert(packedRow(distinct, 4, row));
   }
-  const auto rows = initRows(packed, 4, 120, GetParam(), nvMolKit::KMeansInit::KMeansPlusPlus, 0, stream);
-  EXPECT_EQ(std::set<int>(rows.begin(), rows.end()).size(), 120U);
+  const auto rows = initRows(packed, 4, 60, GetParam(), nvMolKit::KMeansInit::KMeansPlusPlus, 0, stream);
+  EXPECT_EQ(std::set<int>(rows.begin(), rows.end()).size(), 60U);
   std::set<std::vector<std::uint32_t>> firstPicks;
   for (std::size_t pick = 0; pick < inputFingerprints.size(); ++pick) {
     firstPicks.insert(packedRow(packed, 4, rows[pick]));

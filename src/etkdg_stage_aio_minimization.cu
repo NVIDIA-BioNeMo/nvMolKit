@@ -8,6 +8,7 @@
 #include "src/forcefields/aio_etkdg_batched_forcefield.h"
 #include "src/forcefields/dist_geom_kernels.h"
 #include "src/forcefields/dist_geom_kernels_device_dispatch.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_convert.cuh"
 
@@ -95,7 +96,7 @@ __global__ void checkKTotalEnergyKernel(const int      numSystems,
 }
 
 int numBlocks(const int numItems) {
-  return (numItems + kBlockSize - 1) / kBlockSize;
+  return compat::ceil_div(numItems, kBlockSize);
 }
 
 }  // namespace

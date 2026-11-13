@@ -26,6 +26,7 @@
 #include "src/substruct/molecules.h"
 #include "src/substruct/molecules_device.cuh"
 #include "src/substruct/packed_bonds_device.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device.h"
 #include "src/utils/rdkit_compat.h"
@@ -577,7 +578,7 @@ TEST(MoleculesLargeBatchTest, ManyMoleculesWork) {
   device.copyFromHost(batch);
 
   AsyncDeviceVector<int> resultsDev(numMols, stream.stream());
-  const int              numBlocks = (numMols + 255) / 256;
+  const int              numBlocks = nvMolKit::compat::ceil_div(numMols, 256);
   readNumAtomsKernel<<<numBlocks, 256, 0, stream.stream()>>>(device.view<MoleculeType::Target>(),
                                                              resultsDev.data(),
                                                              numMols);

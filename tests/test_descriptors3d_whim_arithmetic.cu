@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "src/descriptors3d_projection.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
 
@@ -125,9 +126,10 @@ TEST(WhimArithmetic, ThousandthsToUnitsMatchesDivisionForRepresentativeInt32) {
   AsyncDeviceVector<unsigned long long> mismatches(1);
   mismatches.zero();
   const int count = static_cast<int>(values.size());
-  countSampledDivisionMismatches<<<(count + 255) / 256, 256, 0, mismatches.stream()>>>(deviceValues.data(),
-                                                                                       count,
-                                                                                       mismatches.data());
+  countSampledDivisionMismatches<<<nvMolKit::compat::ceil_div(count, 256), 256, 0, mismatches.stream()>>>(
+    deviceValues.data(),
+    count,
+    mismatches.data());
   cudaCheckError(cudaGetLastError());
   EXPECT_EQ(downloadCounts(mismatches)[0], 0u);
 }
@@ -158,9 +160,9 @@ TEST(WhimArithmetic, RoundWhimThousandthsMatchesDivision) {
   AsyncDeviceVector<unsigned long long> mismatches(1);
   mismatches.zero();
   const int count = static_cast<int>(values.size());
-  countRoundingMismatches<<<(count + 255) / 256, 256, 0, mismatches.stream()>>>(deviceValues.data(),
-                                                                                count,
-                                                                                mismatches.data());
+  countRoundingMismatches<<<nvMolKit::compat::ceil_div(count, 256), 256, 0, mismatches.stream()>>>(deviceValues.data(),
+                                                                                                   count,
+                                                                                                   mismatches.data());
   cudaCheckError(cudaGetLastError());
   EXPECT_EQ(downloadCounts(mismatches)[0], 0u);
 }
@@ -201,11 +203,12 @@ TEST(WhimArithmetic, ThresholdComparisonsMatchRdkitExpressions) {
     SCOPED_TRACE("threshold " + std::to_string(value));
     AsyncDeviceVector<unsigned long long> mismatches(3);
     mismatches.zero();
-    countThresholdMismatches<<<(count + 255) / 256, 256, 0, mismatches.stream()>>>(WhimThreshold::make(value),
-                                                                                   deviceA.data(),
-                                                                                   deviceB.data(),
-                                                                                   count,
-                                                                                   mismatches.data());
+    countThresholdMismatches<<<nvMolKit::compat::ceil_div(count, 256), 256, 0, mismatches.stream()>>>(
+      WhimThreshold::make(value),
+      deviceA.data(),
+      deviceB.data(),
+      count,
+      mismatches.data());
     cudaCheckError(cudaGetLastError());
     const auto counts = downloadCounts(mismatches);
     EXPECT_EQ(counts[0], 0u) << "mirrored()";
