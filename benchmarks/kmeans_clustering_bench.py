@@ -36,6 +36,9 @@ DEFAULT_N_CLUSTERS = [100, 1_000]
 #: Initializations both backends implement.
 CUML_INITS = ("k-means++", "random")
 
+#: Rows unpacked at a time; bounds the int64 shift/mask temporaries to a few hundred MiB.
+_UNPACK_BATCH_ROWS = 32_768
+
 
 def _load_cuml(enabled: bool) -> tuple[ModuleType | None, str, str]:
     if not enabled:
@@ -150,8 +153,14 @@ def _cluster_distribution(sizes: np.ndarray, num_fingerprints: int) -> dict[str,
 
 
 def _normalized_bits(fingerprints: torch.Tensor) -> torch.Tensor:
-    bits = unpack_fingerprint(fingerprints).to(torch.float32)
-    return bits / bits.sum(dim=1, keepdim=True).sqrt().clamp_min(1.0)
+    """Unpack to float32 bits and L2-normalize, in row batches so temporaries stay bounded."""
+    out = torch.empty(
+        (fingerprints.shape[0], fingerprints.shape[1] * 32), dtype=torch.float32, device=fingerprints.device
+    )
+    for start in range(0, fingerprints.shape[0], _UNPACK_BATCH_ROWS):
+        batch = unpack_fingerprint(fingerprints[start : start + _UNPACK_BATCH_ROWS]).to(torch.float32)
+        out[start : start + batch.shape[0]] = batch / batch.sum(dim=1, keepdim=True).sqrt().clamp_min(1.0)
+    return out
 
 
 def _timing_fields(timing) -> dict[str, float | int]:
@@ -293,6 +302,13 @@ def main() -> None:
                 }
                 configuration_rows = []
 
+                def record(row, size=size, configuration_rows=configuration_rows):
+                    row["fingerprints_per_second"] = throughput_per_s(size, row["time_ms"])
+                    row["vs_cuml_throughput_ratio"] = "N/A"
+                    configuration_rows.append(row)
+                    results.append(row)
+                    write_csv_rows(results, args.output)
+
                 if not args.no_nvmolkit:
                     for metric in args.metrics:
                         print(
@@ -319,7 +335,7 @@ def main() -> None:
                             f"({n_iter} iterations)",
                             flush=True,
                         )
-                        configuration_rows.append(
+                        record(
                             {
                                 "method": "nvmolkit",
                                 "metric": metric,
@@ -352,7 +368,7 @@ def main() -> None:
                         f"({n_iter} iterations)",
                         flush=True,
                     )
-                    configuration_rows.append(
+                    record(
                         {
                             "method": "cuml",
                             "metric": "cosine",
@@ -366,23 +382,13 @@ def main() -> None:
                     )
 
                 cuml_throughput = next(
-                    (
-                        throughput_per_s(size, result_row["time_ms"])
-                        for result_row in configuration_rows
-                        if result_row["method"] == "cuml"
-                    ),
+                    (row["fingerprints_per_second"] for row in configuration_rows if row["method"] == "cuml"),
                     math.nan,
                 )
-                for result_row in configuration_rows:
-                    throughput = throughput_per_s(size, result_row["time_ms"])
-                    result_row["fingerprints_per_second"] = throughput
-                    result_row["vs_cuml_throughput_ratio"] = (
-                        throughput / cuml_throughput
-                        if result_row["method"] == "nvmolkit" and math.isfinite(cuml_throughput)
-                        else "N/A"
-                    )
-
-                results.extend(configuration_rows)
+                if math.isfinite(cuml_throughput):
+                    for row in configuration_rows:
+                        if row["method"] == "nvmolkit":
+                            row["vs_cuml_throughput_ratio"] = row["fingerprints_per_second"] / cuml_throughput
                 write_csv_rows(results, args.output)
             del normalized_bits
     except Exception:
