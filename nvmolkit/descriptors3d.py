@@ -9,10 +9,9 @@ Coordinates may come from RDKit conformers or directly from a
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
-from typing import Sequence
 
 import torch
 

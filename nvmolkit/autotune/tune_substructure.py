@@ -23,7 +23,8 @@ second.
 
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable, Optional, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from typing import Any
 
 from rdkit.Chem import Mol
 
@@ -80,7 +81,7 @@ def _default_substruct_search_space(num_gpus: int, cpus: int) -> dict:
     }
 
 
-def _spec_low_high(spec: Any) -> tuple[Optional[int], Optional[int]]:
+def _spec_low_high(spec: Any) -> tuple[int | None, int | None]:
     """Return ``(low, high)`` for a numeric range spec, or ``(None, None)``."""
     if isinstance(spec, tuple) and len(spec) >= 2 and isinstance(spec[0], int) and isinstance(spec[1], int):
         return int(spec[0]), int(spec[1])
@@ -118,17 +119,17 @@ def tune_substructure(
     api: Callable = hasSubstructMatch,
     maxMatches: int = 0,
     uniquify: bool = False,
-    gpuIds: Optional[Iterable[int]] = None,
+    gpuIds: Iterable[int] | None = None,
     algorithm: str = "gsi",
-    calibration_set: Optional[Iterable[int]] = None,
+    calibration_set: Iterable[int] | None = None,
     calibration_fraction: float = 0.1,
     calibration_max_size: int = 50_000,
     target_seconds_per_trial: float = 10.0,
     n_trials: int = 30,
-    search_space_overrides: Optional[dict[str, Any]] = None,
-    cpu_budget: Optional[int] = None,
+    search_space_overrides: dict[str, Any] | None = None,
+    cpu_budget: int | None = None,
     sampler: Any = None,
-    seed: Optional[int] = None,
+    seed: int | None = None,
     verbose: bool = False,
 ) -> TuneResult:
     """Tune :class:`SubstructSearchConfig` for a substructure-search workflow.

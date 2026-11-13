@@ -35,7 +35,6 @@ import argparse
 import os
 import pickle
 import sys
-from typing import List
 
 import pandas as pd
 import torch
@@ -59,11 +58,11 @@ import nvmolkit.tfd as nvmol_tfd
 
 
 def generate_conformers_batch(
-    mols: List[Chem.Mol],
+    mols: list[Chem.Mol],
     num_confs: int,
     seed: int = 42,
     num_workers: int = 0,
-) -> List[Chem.Mol]:
+) -> list[Chem.Mol]:
     """Generate ``num_confs`` conformers per mol via embed-once-then-perturb.
 
     Wraps the shared :func:`bench_utils.embed_and_jitter` with TFD-specific
@@ -86,12 +85,12 @@ def generate_conformers_batch(
 
 
 def prepare_molecules(
-    input_mols: List[Chem.Mol],
+    input_mols: list[Chem.Mol],
     num_confs: int,
     max_mols: int = 100,
     num_workers: int = 0,
     seed: int = 42,
-) -> List[Chem.Mol]:
+) -> list[Chem.Mol]:
     """Prepare molecules with conformers from the explicitly supplied inputs.
 
     Args:
@@ -104,7 +103,7 @@ def prepare_molecules(
     Returns:
         List of molecules with conformers
     """
-    candidates: List[Chem.Mol] = []
+    candidates: list[Chem.Mol] = []
     for mol in input_mols:
         if mol is None or mol.GetNumAtoms() < 4:
             continue
@@ -121,7 +120,7 @@ def bench_rdkit_single(mol: Chem.Mol) -> None:
 
 
 def bench_rdkit_batch(
-    mols: List[Chem.Mol],
+    mols: list[Chem.Mol],
     runs: int = 3,
     warmups: int = 1,
     max_seconds: float = 0.0,
@@ -157,19 +156,19 @@ def bench_nvmol_gpu_single(mol: Chem.Mol) -> None:
     torch.cuda.synchronize()
 
 
-def bench_nvmol_gpu_list(mols: List[Chem.Mol]) -> None:
+def bench_nvmol_gpu_list(mols: list[Chem.Mol]) -> None:
     """Benchmark nvMolKit GPU TFD returning Python lists."""
     nvmol_tfd.GetTFDMatrices(mols, useWeights=True, maxDev="equal", return_type="list")
     torch.cuda.synchronize()
 
 
-def bench_nvmol_gpu_numpy(mols: List[Chem.Mol]) -> None:
+def bench_nvmol_gpu_numpy(mols: list[Chem.Mol]) -> None:
     """Benchmark nvMolKit GPU TFD returning numpy arrays."""
     nvmol_tfd.GetTFDMatrices(mols, useWeights=True, maxDev="equal", return_type="numpy")
     torch.cuda.synchronize()
 
 
-def bench_nvmol_gpu_tensor(mols: List[Chem.Mol]) -> None:
+def bench_nvmol_gpu_tensor(mols: list[Chem.Mol]) -> None:
     """Benchmark nvMolKit GPU TFD returning GPU tensors (no D2H)."""
     nvmol_tfd.GetTFDMatrices(mols, useWeights=True, maxDev="equal", return_type="tensor")
     torch.cuda.synchronize()
@@ -190,7 +189,7 @@ def verify_correctness(mol: Chem.Mol, tolerance: float = 0.01) -> bool:
     return all(abs(rd - nv) <= tolerance for rd, nv in zip(rdkit_result, nvmol_result, strict=True))
 
 
-def load_pkl_files(pkl_paths: List[str]) -> List[Chem.Mol]:
+def load_pkl_files(pkl_paths: list[str]) -> list[Chem.Mol]:
     """Load and concatenate molecules from one or more pickle files.
 
     Each pickle file must contain a list of RDKit Mol objects with conformers
@@ -206,13 +205,13 @@ def load_pkl_files(pkl_paths: List[str]) -> List[Chem.Mol]:
 
 
 def run_benchmarks(
-    input_mols: List[Chem.Mol] | None = None,
+    input_mols: list[Chem.Mol] | None = None,
     skip_rdkit: bool = False,
     skip_nvmolkit: bool = False,
     output_file: str = "tfd_results.csv",
-    mol_counts: List[int] | None = None,
-    conformer_counts: List[int] | None = None,
-    preloaded_mols: List[Chem.Mol] | None = None,
+    mol_counts: list[int] | None = None,
+    conformer_counts: list[int] | None = None,
+    preloaded_mols: list[Chem.Mol] | None = None,
     num_workers: int = 0,
     runs: int = 3,
     warmups: int = 1,
@@ -263,7 +262,7 @@ def run_benchmarks(
     print(f"Conformer counts: {conformer_counts}")
     print("=" * 70)
 
-    prepared_max: List[Chem.Mol] | None = None
+    prepared_max: list[Chem.Mol] | None = None
     if preloaded_mols is None:
         max_confs = max(conformer_counts)
         print(f"\n--- Preparing molecules once with {max_confs} conformers ---")

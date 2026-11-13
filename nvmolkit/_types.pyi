@@ -1,7 +1,6 @@
 class PrecisionMode:
-    FULL: "PrecisionMode"
-    SINGLE: "PrecisionMode"
-
+    FULL: PrecisionMode
+    SINGLE: PrecisionMode
 
 class FireOptions:
     dtInit: float

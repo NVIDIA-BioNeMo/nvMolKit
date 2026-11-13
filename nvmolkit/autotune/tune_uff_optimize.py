@@ -17,8 +17,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any, Iterable, Optional
+from collections.abc import Iterable, Sequence
+from typing import Any
 
 from rdkit.Chem import Mol
 
@@ -52,16 +52,16 @@ def tune_uff_optimize(
     ignoreInterfragInteractions: bool | Sequence[bool] = True,
     minimizerKind: str = "BFGS",
     fireOptions: FireOptions | None = None,
-    gpuIds: Optional[Iterable[int]] = None,
-    calibration_set: Optional[Iterable[int]] = None,
+    gpuIds: Iterable[int] | None = None,
+    calibration_set: Iterable[int] | None = None,
     calibration_fraction: float = 0.1,
     calibration_max_size: int = 2000,
     target_seconds_per_trial: float = 10.0,
     n_trials: int = 30,
-    search_space_overrides: Optional[dict[str, Any]] = None,
-    cpu_budget: Optional[int] = None,
+    search_space_overrides: dict[str, Any] | None = None,
+    cpu_budget: int | None = None,
     sampler: Any = None,
-    seed: Optional[int] = None,
+    seed: int | None = None,
     verbose: bool = False,
 ) -> TuneResult:
     """Tune :class:`HardwareOptions` for :func:`UFFOptimizeMoleculesConfs`.

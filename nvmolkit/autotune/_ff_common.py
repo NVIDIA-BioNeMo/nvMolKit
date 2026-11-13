@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 from rdkit.Chem import Mol
 
@@ -44,7 +44,7 @@ def total_conformers(mols: list[Mol]) -> int:
     return sum(mol.GetNumConformers() for mol in mols)
 
 
-def coerce_gpu_ids(gpuIds: Optional[Iterable[int]]) -> list[int]:
+def coerce_gpu_ids(gpuIds: Iterable[int] | None) -> list[int]:
     """Normalize a user-provided GPU id selection to a fixed list."""
     return list(gpuIds) if gpuIds is not None else []
 
@@ -60,7 +60,7 @@ def cpu_count() -> int:
     return max(1, os.cpu_count() or 1)
 
 
-def _physical_cpu_count_from_proc() -> Optional[int]:
+def _physical_cpu_count_from_proc() -> int | None:
     """Return the number of distinct physical cores from ``/proc/cpuinfo``."""
     try:
         with open("/proc/cpuinfo") as cpuinfo:
@@ -74,7 +74,7 @@ def _physical_cpu_count_from_proc() -> Optional[int]:
     return len(set(zip(physical_ids, core_ids)))
 
 
-def resolve_cpu_budget(cpu_budget: Optional[int]) -> int:
+def resolve_cpu_budget(cpu_budget: int | None) -> int:
     """Return the effective CPU budget for autotune search ranges.
 
     ``cpu_budget`` lets callers cap total CPU usage explicitly (useful for

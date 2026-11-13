@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import random
-from typing import Iterable, Optional, Sequence
+from collections.abc import Iterable, Sequence
 
 
 def auto_subsample(
@@ -46,7 +46,7 @@ def auto_subsample(
 
 
 def normalize_calibration_set(
-    calibration_set: Optional[Iterable[int]],
+    calibration_set: Iterable[int] | None,
     workload_size: int,
     *,
     fraction: float = 0.1,

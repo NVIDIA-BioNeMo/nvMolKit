@@ -189,7 +189,7 @@ def test_save_load_hardware_options_roundtrip(tmp_path):
     options = HardwareOptions(batchSize=128, batchesPerGpu=2, gpuIds=[0])
     path = tmp_path / "opts.json"
     autotune.save(options, path)
-    with open(path, "r", encoding="utf-8") as fh:
+    with open(path, encoding="utf-8") as fh:
         payload = json.load(fh)
     assert payload["_nvmolkit_config_type"] == "HardwareOptions"
 

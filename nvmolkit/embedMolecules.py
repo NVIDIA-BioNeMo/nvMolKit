@@ -18,7 +18,7 @@
 This module provides GPU-accelerated implementations of ETKDG (Experimental-Torsion-Knowledge Distance-Geometry) conformer generation for multiple molecules using CUDA and OpenMP.
 """
 
-from typing import TYPE_CHECKING, Literal, Optional, overload
+from typing import TYPE_CHECKING, Literal, overload
 
 if TYPE_CHECKING:
     from rdkit.Chem import Mol
@@ -39,7 +39,7 @@ def EmbedMolecules(
     params: "EmbedParameters",
     confsPerMolecule: int = 1,
     maxIterations: int = -1,
-    hardwareOptions: Optional[HardwareOptions] = None,
+    hardwareOptions: HardwareOptions | None = None,
     output: Literal[CoordinateOutput.RDKIT_CONFORMERS] = CoordinateOutput.RDKIT_CONFORMERS,
     targetGpu: int = -1,
     precision: PrecisionMode = PrecisionMode.FULL,
@@ -50,7 +50,7 @@ def EmbedMolecules(
     params: "EmbedParameters",
     confsPerMolecule: int = 1,
     maxIterations: int = -1,
-    hardwareOptions: Optional[HardwareOptions] = None,
+    hardwareOptions: HardwareOptions | None = None,
     *,
     output: Literal[CoordinateOutput.DEVICE],
     targetGpu: int = -1,
@@ -61,7 +61,7 @@ def EmbedMolecules(
     params: "EmbedParameters",
     confsPerMolecule: int = 1,
     maxIterations: int = -1,
-    hardwareOptions: Optional[HardwareOptions] = None,
+    hardwareOptions: HardwareOptions | None = None,
     output: CoordinateOutput = CoordinateOutput.RDKIT_CONFORMERS,
     targetGpu: int = -1,
     precision: PrecisionMode = PrecisionMode.FULL,

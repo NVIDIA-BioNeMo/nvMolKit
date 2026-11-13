@@ -1,24 +1,23 @@
-from typing import Any, List
+from typing import Any
 
 from rdkit.Chem import Mol
 
 from nvmolkit._embedMolecules import BatchHardwareOptions
 
 def UFFOptimizeMoleculesConfs(
-    molecules: List[Mol],
+    molecules: list[Mol],
     maxIters: int,
-    vdwThresholds: List[float],
-    ignoreInterfragInteractions: List[bool],
+    vdwThresholds: list[float],
+    ignoreInterfragInteractions: list[bool],
     hardwareOptions: BatchHardwareOptions,
     minimizerKind: str = "BFGS",
     fireOptions: object = ...,
-) -> List[List[float]]: ...
-
+) -> list[list[float]]: ...
 def UFFOptimizeMoleculesConfsDevice(
-    molecules: List[Mol],
+    molecules: list[Mol],
     maxIters: int = 1000,
-    vdwThresholds: List[float] = ...,
-    ignoreInterfragInteractions: List[bool] = ...,
+    vdwThresholds: list[float] = ...,
+    ignoreInterfragInteractions: list[bool] = ...,
     hardwareOptions: BatchHardwareOptions = ...,
     targetGpu: int = -1,
     minimizerKind: str = "BFGS",

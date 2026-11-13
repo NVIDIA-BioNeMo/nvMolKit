@@ -17,8 +17,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Iterable, Optional
+from collections.abc import Iterable, Sequence
+from typing import TYPE_CHECKING, Any
 
 from rdkit.Chem import Mol
 
@@ -51,22 +51,22 @@ def tune_mmff_optimize(
     molecules: list[Mol],
     *,
     maxIters: int = 200,
-    properties: "MMFFMolProperties | Sequence[MMFFMolProperties | None] | None" = None,
+    properties: MMFFMolProperties | Sequence[MMFFMolProperties | None] | None = None,
     nonBondedThreshold: float | Sequence[float] = 100.0,
     ignoreInterfragInteractions: bool | Sequence[bool] = True,
     backend: str = "HYBRID",
     minimizerKind: str = "BFGS",
     fireOptions: FireOptions | None = None,
-    gpuIds: Optional[Iterable[int]] = None,
-    calibration_set: Optional[Iterable[int]] = None,
+    gpuIds: Iterable[int] | None = None,
+    calibration_set: Iterable[int] | None = None,
     calibration_fraction: float = 0.1,
     calibration_max_size: int = 2000,
     target_seconds_per_trial: float = 10.0,
     n_trials: int = 30,
-    search_space_overrides: Optional[dict[str, Any]] = None,
-    cpu_budget: Optional[int] = None,
+    search_space_overrides: dict[str, Any] | None = None,
+    cpu_budget: int | None = None,
     sampler: Any = None,
-    seed: Optional[int] = None,
+    seed: int | None = None,
     verbose: bool = False,
 ) -> TuneResult:
     """Tune :class:`HardwareOptions` for :func:`MMFFOptimizeMoleculesConfs`.
