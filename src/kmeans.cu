@@ -22,6 +22,7 @@
 #include "src/fingerprint_similarity_device.cuh"
 #include "src/kmeans.h"
 #include "src/kmeans_kernels.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cub_helpers.cuh"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/nvtx.h"
@@ -33,7 +34,7 @@ namespace {
 constexpr int kBlockSize = 256;
 
 int gridFor(const std::size_t count, const int blockSize = kBlockSize) {
-  return static_cast<int>((count + blockSize - 1) / blockSize);
+  return static_cast<int>(compat::ceil_div(count, blockSize));
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -308,8 +309,8 @@ class PreparedCenters {
   PreparedCenters(const int numClusters, const int numWords, cudaStream_t stream)
       : numClusters_(numClusters),
         numBits_(numWords * 32),
-        paddedCenters_((numClusters + kMmaBlockCenters - 1) / kMmaBlockCenters * kMmaBlockCenters),
-        paddedBits_((numBits_ + kMmaStageBits - 1) / kMmaStageBits * kMmaStageBits),
+        paddedCenters_(compat::ceil_div(numClusters, kMmaBlockCenters) * kMmaBlockCenters),
+        paddedBits_(compat::ceil_div(numBits_, kMmaStageBits) * kMmaStageBits),
         packed_(static_cast<std::size_t>(paddedCenters_) * paddedBits_, stream),
         norms_(numClusters, stream) {}
 

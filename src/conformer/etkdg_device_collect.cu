@@ -20,6 +20,7 @@
 #include <stdexcept>
 
 #include "src/conformer/etkdg_device_collect.h"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device.h"
 
@@ -148,7 +149,7 @@ void appendActive(const AsyncDeviceVector<double>&  srcPositions,
   atomCountsDev.copyFromHost(atomCountsHost);
 
   constexpr int kThreadsPerBlock = 64;
-  const int     blocksPerConf    = (maxAtoms + kThreadsPerBlock - 1) / kThreadsPerBlock;
+  const int     blocksPerConf    = compat::ceil_div(maxAtoms, kThreadsPerBlock);
   const dim3    blocks(static_cast<unsigned>(blocksPerConf), static_cast<unsigned>(numActive));
   const dim3    threads(kThreadsPerBlock);
   packKernel4DTo3D<<<blocks, threads, 0, collector.stream>>>(srcPositions.data(),

@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 #include "src/substruct/pattern_screen.h"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cub_helpers.cuh"
 #include "src/utils/cuda_error_check.h"
 
@@ -148,7 +149,7 @@ void PatternScreenWorkspace::screen(const std::uint32_t*      bitSlices,
                                    stream));
   }
   const std::size_t sliceWords = patternSliceWords(static_cast<std::size_t>(numTargets));
-  const auto        blocks     = static_cast<unsigned int>((sliceWords + kScreenBlockSize - 1) / kScreenBlockSize);
+  const auto        blocks     = static_cast<unsigned int>(compat::ceil_div(sliceWords, kScreenBlockSize));
   intersectPatternSlicesKernel<<<blocks, kScreenBlockSize, 0, stream>>>(bitSlices,
                                                                         sliceWords,
                                                                         numTargets,

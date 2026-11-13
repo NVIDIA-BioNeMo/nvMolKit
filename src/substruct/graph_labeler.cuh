@@ -24,6 +24,7 @@
 #include "src/substruct/molecules.h"
 #include "src/substruct/molecules_device.cuh"
 #include "src/substruct/substruct_debug.h"
+#include "src/utils/cccl_compat.h"
 
 namespace nvMolKit {
 
@@ -79,13 +80,14 @@ __device__ void populateLabelMatrix(const TargetMoleculeView&                   
                                     const uint32_t*                                 pairRecursiveBits = nullptr) {
   namespace cg = cooperative_groups;
 
-  auto      block      = cg::this_thread_block();
-  auto      tile32     = cg::tiled_partition<32>(block);
-  const int tid        = block.thread_rank();
-  const int numThreads = block.size();
-  const int laneId     = tile32.thread_rank();
-  const int warpId     = tile32.meta_group_rank();
-  const int numWarps   = tile32.meta_group_size();
+  auto          block      = cg::this_thread_block();
+  constexpr int kTileSize  = 32;
+  auto          tile32     = cg::tiled_partition<kTileSize>(block);
+  const int     tid        = block.thread_rank();
+  const int     numThreads = block.size();
+  const int     laneId     = tile32.thread_rank();
+  const int     warpId     = tile32.meta_group_rank();
+  const int     numWarps   = tile32.meta_group_size();
 
   const int numQueryAtoms  = query.numAtoms;
   const int numTargetAtoms = target.numAtoms;
@@ -130,10 +132,10 @@ __device__ void populateLabelMatrix(const TargetMoleculeView&                   
     }
     block.sync();
 
-    const int warpsNeeded = (numPairs + 31) / 32;
+    const int warpsNeeded = compat::ceil_div(numPairs, kTileSize);
 
     for (int chunkIdx = warpId; chunkIdx < warpsNeeded; chunkIdx += numWarps) {
-      const int pairIdx = chunkIdx * 32 + laneId;
+      const int pairIdx = chunkIdx * kTileSize + laneId;
 
       const bool validPair = (pairIdx < numPairs);
 

@@ -7,6 +7,7 @@
 
 #include "src/forcefields/dist_geom_kernels.h"
 #include "src/forcefields/kernel_utils.cuh"
+#include "src/utils/cccl_compat.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846

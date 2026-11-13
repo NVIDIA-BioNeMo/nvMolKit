@@ -16,6 +16,7 @@
 #include "src/descriptors3d_projection.cuh"
 #include "src/descriptors3d_topology.cuh"
 #include "src/descriptors3d_usr.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 
 namespace nvMolKit {
@@ -297,7 +298,7 @@ void launchMomentProperties(const DeviceCoordView& coordinates,
     return;
   }
   prepareStages(work, separateSpherocityState);
-  const int numBlocks = (coordinates.numConformers + kConformersPerBlock - 1) / kConformersPerBlock;
+  const int numBlocks = compat::ceil_div(coordinates.numConformers, kConformersPerBlock);
   if (separateSpherocityState) {
     property3DKernel<Real, true>
       <<<numBlocks, kBlockSize, 0, stream>>>(coordinates, atomWeights, moleculeAtomStarts, work);

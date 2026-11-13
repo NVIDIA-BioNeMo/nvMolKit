@@ -18,6 +18,7 @@
 #include "src/bitbirch.h"
 #include "src/bitbirch_common.cuh"
 #include "src/bitbirch_internal.h"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cub_helpers.cuh"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/host_vector.h"
@@ -1082,7 +1083,7 @@ __global__ void splitPairsKernel(const Tree          tree,
   extern __shared__ uint4 dynamicShared[];
   __shared__ Scratch      scratch;
   const int               size     = tree.branchingFactor + 1;
-  const int               numTiles = (size + TileSize - 1) / TileSize;
+  const int               numTiles = compat::ceil_div(size, TileSize);
   const int               perLeaf  = numTiles * (numTiles + 1) / 2;
   const long long         total    = static_cast<long long>(*splitCount) * perLeaf;
   for (long long work = blockIdx.x; work < total; work += gridDim.x) {
@@ -1180,7 +1181,7 @@ __device__ __forceinline__ void splitLeaf(const Tree&    tree,
     node                        = parent;
     // Seeds of the overflowing parent, searched by this block alone.
     const int          size     = tree.nodeSize[node];
-    const int          numTiles = (size + TileSize - 1) / TileSize;
+    const int          numTiles = compat::ceil_div(size, TileSize);
     const int*         entries  = entriesOf(tree, node);
     unsigned long long best     = ULLONG_MAX;
     for (int work = 0; work < numTiles * (numTiles + 1) / 2; ++work) {
@@ -1743,11 +1744,11 @@ class TreeBuilder {
     AsyncDeviceVector<int> sortedLeafEntries(numClusters, stream_);
     AsyncDeviceVector<int> cursor(1, stream_);
     cudaCheckError(cudaMemsetAsync(cursor.data(), 0, sizeof(int), stream_));
-    collectLeavesKernel<<<(numEntries + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream_>>>(tree_,
-                                                                                                numEntries,
-                                                                                                firstRows.data(),
-                                                                                                leafEntries.data(),
-                                                                                                cursor.data());
+    collectLeavesKernel<<<compat::ceil_div(numEntries, kBlockSize), kBlockSize, 0, stream_>>>(tree_,
+                                                                                              numEntries,
+                                                                                              firstRows.data(),
+                                                                                              leafEntries.data(),
+                                                                                              cursor.data());
     cudaCheckError(cudaGetLastError());
     // First rows are distinct, so sorting by them numbers clusters by earliest member.
     std::size_t bytes = 0;
@@ -1778,14 +1779,14 @@ class TreeBuilder {
     }
     const int         width = options_.returnCentroids ? numWords_ : 1;
     const std::size_t items = static_cast<std::size_t>(numClusters) * width;
-    numberClustersKernel<<<static_cast<unsigned>((items + kBlockSize - 1) / kBlockSize), kBlockSize, 0, stream_>>>(
+    numberClustersKernel<<<static_cast<unsigned>(compat::ceil_div(items, kBlockSize)), kBlockSize, 0, stream_>>>(
       tree_,
       numClusters,
       width,
       sortedLeafEntries.data(),
       options_.returnCentroids ? result.centroids.data() : nullptr);
     cudaCheckError(cudaGetLastError());
-    labelRowsKernel<<<(numRows_ + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream_>>>(tree_, numRows_);
+    labelRowsKernel<<<compat::ceil_div(numRows_, kBlockSize), kBlockSize, 0, stream_>>>(tree_, numRows_);
     cudaCheckError(cudaGetLastError());
     cudaCheckError(cudaStreamSynchronize(stream_));
     return result;

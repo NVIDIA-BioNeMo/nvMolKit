@@ -11,6 +11,7 @@
 #include "src/descriptors3d_kernel.cuh"
 #include "src/descriptors3d_projection.cuh"
 #include "src/descriptors3d_topology.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
 #include "src/utils/symmetric_eigenvalues_3x3.cuh"
@@ -791,7 +792,7 @@ void launchGetawayProperties(const DeviceCoordView&        coordinates,
   AsyncDeviceVector<int64_t> keys(numAtoms * 2, stream);
   AsyncDeviceVector<Real>    iterates(numAtoms * 2, stream);
   AsyncDeviceVector<uint8_t> depths(numAtoms * kGetawayPairStreams, stream);
-  const int                  numBlocks = (numConformers + kWarpsPerBlock - 1) / kWarpsPerBlock;
+  const int                  numBlocks = compat::ceil_div(numConformers, kWarpsPerBlock);
   getaway3DKernel<Real><<<numBlocks, kBlockSize, 0, stream>>>(coordinates,
                                                               inputs,
                                                               static_cast<int>(options.precision),

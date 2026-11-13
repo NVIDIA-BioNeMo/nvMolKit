@@ -35,6 +35,7 @@
 #include "src/etkdg_stage_etk_minimization.h"
 #include "src/etkdg_stage_stereochem_checks.h"
 #include "src/etkdg_stage_update_conformers.h"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/device.h"
 #include "src/utils/host_vector.h"
 #include "src/utils/nvtx.h"
@@ -133,7 +134,7 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
 
   // Calculate actual batches needed and clamp batchesPerGpu if necessary
   const int actualBatchesNeeded =
-    batchSize > 0 ? (static_cast<int>(mols.size()) * confsPerMolecule + batchSize - 1) / batchSize : 1;
+    batchSize > 0 ? compat::ceil_div(static_cast<int>(mols.size()) * confsPerMolecule, batchSize) : 1;
   const int     effectivebatchesPerGpu = std::min(batchesPerGpu, actualBatchesNeeded);
   constexpr int dim                    = 4;  // ETKDG always uses 4D coordinates
 #if RDKIT_AIO_ETKDG_API

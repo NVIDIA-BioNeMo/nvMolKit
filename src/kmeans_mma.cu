@@ -18,6 +18,7 @@
 #include <stdexcept>
 
 #include "src/kmeans_kernels.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 
 namespace nvMolKit::detail {
@@ -145,7 +146,7 @@ __global__ void __launch_bounds__(kMmaThreads, 1) mmaAssignKernel(const AssignAr
   }
 
   const int stagesPerTile = paddedBits / kMmaStageBits;
-  const int numTiles      = (args.numClusters + kMmaBlockCenters - 1) / kMmaBlockCenters;
+  const int numTiles      = compat::ceil_div(args.numClusters, kMmaBlockCenters);
   const int numStages     = numTiles * stagesPerTile;
 
   auto loadStage = [&](const int stage) {
@@ -394,7 +395,7 @@ template <KMeansMetric Metric> void launchMmaAssign(const AssignArgs& args, cons
                                                 mmaAssignKernel<Metric, 2>;
   cudaCheckError(
     cudaFuncSetAttribute(kernel, cudaFuncAttributeMaxDynamicSharedMemorySize, static_cast<int>(sharedBytes)));
-  const int blocks = (args.numRows + kMmaRows - 1) / kMmaRows;
+  const int blocks = compat::ceil_div(args.numRows, kMmaRows);
   kernel<<<blocks, kMmaThreads, sharedBytes, stream>>>(args, paddedBits);
   cudaCheckError(cudaGetLastError());
 }

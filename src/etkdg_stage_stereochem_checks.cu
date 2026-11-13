@@ -17,6 +17,7 @@
 
 #include "src/etkdg_stage_stereochem_checks.h"
 #include "src/forcefields/kernel_utils.cuh"
+#include "src/utils/cccl_compat.h"
 #include "versions.h"
 namespace nvMolKit {
 namespace detail {
@@ -558,7 +559,7 @@ void ETKDGTetrahedralCheckStage::execute(ETKDGContext& ctx) {
   }
 
   constexpr int blockSize = 128;
-  const int     numBlocks = (idx0.size() + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(idx0.size(), blockSize);
   tetrahedralCheckKernel</*doVolumeTest=*/true><<<numBlocks, blockSize, 0, stream_>>>(idx0.size(),
                                                                                       dim_,
                                                                                       ctx.systemDevice.positions.data(),
@@ -592,7 +593,7 @@ void ETKDGFirstChiralCenterCheckStage::execute(ETKDGContext& ctx) {
   }
 
   constexpr int blockSize = 128;
-  const int     numBlocks = (idx0.size() + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(idx0.size(), blockSize);
   firstChiralCheckKernel<<<numBlocks, blockSize, 0, stream_>>>(idx0.size(),
                                                                dim_,
                                                                ctx.systemDevice.positions.data(),
@@ -626,7 +627,7 @@ void ETKDGChiralCenterVolumeCheckStage::execute(ETKDGContext& ctx) {
   }
 
   constexpr int blockSize = 128;
-  const int     numBlocks = (idx0.size() + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(idx0.size(), blockSize);
   tetrahedralCheckKernel</*doVolumeTest=*/false>
     <<<numBlocks, blockSize, 0, stream_>>>(idx0.size(),
                                            dim_,
@@ -716,7 +717,7 @@ void ETKDGChiralDistMatrixCheckStage::execute(ETKDGContext& ctx) {
   }
 
   constexpr int blockSize = 128;
-  const int     numBlocks = (idx0.size() + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(idx0.size(), blockSize);
   chiralDistMatrixCheck<<<numBlocks, blockSize, 0, stream_>>>(idx0.size(),
                                                               dim_,
                                                               ctx.systemDevice.positions.data(),
@@ -753,7 +754,7 @@ void ETKDGDoubleBondStereoCheckStage::execute(ETKDGContext& ctx) {
   }
 
   constexpr int blockSize = 128;
-  const int     numBlocks = (idx0.size() + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(idx0.size(), blockSize);
   doubleBondStereoKernel<<<numBlocks, blockSize, 0, stream_>>>(idx0.size(),
                                                                dim_,
                                                                ctx.systemDevice.positions.data(),
@@ -823,7 +824,7 @@ void ETKDGDoubleBondGeometryCheckStage::execute(ETKDGContext& ctx) {
   }
 
   constexpr int blockSize = 128;
-  const int     numBlocks = (idx0.size() + blockSize - 1) / blockSize;
+  const int     numBlocks = compat::ceil_div(idx0.size(), blockSize);
   doubleBondGeometryKernel<<<numBlocks, blockSize, 0, stream_>>>(idx0.size(),
                                                                  dim_,
                                                                  linearTol_,

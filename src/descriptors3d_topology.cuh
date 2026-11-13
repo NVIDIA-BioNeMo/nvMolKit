@@ -10,6 +10,7 @@
 
 #include "src/descriptors3d.h"
 #include "src/descriptors3d_kernel.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
 
@@ -129,9 +130,9 @@ inline void buildBondDistanceTable(const DeviceCoordView&        coordinates,
   const int64_t capacity = std::min<int64_t>(kBondTableBudgetBytes, pairs);
 
   storage.starts = AsyncDeviceVector<int64_t>(static_cast<size_t>(nMols) + 1, stream);
-  moleculePairCountsKernel<<<(nMols + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(inputs.moleculeAtomStarts,
-                                                                                             nMols,
-                                                                                             storage.starts.data());
+  moleculePairCountsKernel<<<compat::ceil_div(nMols, kBlockSize), kBlockSize, 0, stream>>>(inputs.moleculeAtomStarts,
+                                                                                           nMols,
+                                                                                           storage.starts.data());
   cudaCheckError(cudaGetLastError());
   size_t tempBytes = 0;
   cudaCheckError(cub::DeviceScan::InclusiveSum(nullptr,
@@ -149,7 +150,7 @@ inline void buildBondDistanceTable(const DeviceCoordView&        coordinates,
                                                stream));
 
   storage.distances        = AsyncDeviceVector<uint8_t>(static_cast<size_t>(capacity), stream);
-  const int    numBlocks   = (nMols + kWarpsPerBlock - 1) / kWarpsPerBlock;
+  const int    numBlocks   = compat::ceil_div(nMols, kWarpsPerBlock);
   const size_t sharedBytes = static_cast<size_t>(kWarpsPerBlock) * kGroupsPerWarp * maxAtoms;
   bondDistanceTableKernel<<<numBlocks, kBlockSize, sharedBytes, stream>>>(inputs.moleculeAtomStarts,
                                                                           inputs.bondNeighborStarts,

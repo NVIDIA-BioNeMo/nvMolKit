@@ -26,6 +26,7 @@
 #include "rdkit_extensions/bounds_matrix.h"
 #include "src/forcefields/coord_gen.h"
 #include "src/symmetric_eigensolver.h"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/device_vector.h"
 
 namespace nvMolKit {
@@ -286,11 +287,11 @@ class InitialCoordinateGenerator::Impl {
     passFail_.resize(batchSize);
     eigensolverActive_.resize(batchSize);
     constexpr int maskBlockSize = 128;
-    combineActiveAndValidKernel<<<(batchSize + maskBlockSize - 1) / maskBlockSize, maskBlockSize, 0, stream_>>>(
-      batchSize,
-      active,
-      validDistanceMatricesDevice_.data(),
-      eigensolverActive_.data());
+    const int     maskBlocks    = compat::ceil_div(batchSize, maskBlockSize);
+    combineActiveAndValidKernel<<<maskBlocks, maskBlockSize, 0, stream_>>>(batchSize,
+                                                                           active,
+                                                                           validDistanceMatricesDevice_.data(),
+                                                                           eigensolverActive_.data());
     cudaCheckError(cudaGetLastError());
     BatchedEigenSolverOptions solverOptions;
     solverOptions.active           = eigensolverActive_.data();
@@ -307,7 +308,7 @@ class InitialCoordinateGenerator::Impl {
                   solverOptions);
 
     const int blockSize       = 128;
-    const int numBlocksFinish = (batchSize + blockSize - 1) / blockSize;
+    const int numBlocksFinish = compat::ceil_div(batchSize, blockSize);
     finalizeEigenvaluesKernel<<<numBlocksFinish, blockSize, 0, stream_>>>(batchSize,
                                                                           coordinateDim,
                                                                           eigenvaluesDevice_.data(),
@@ -322,7 +323,7 @@ class InitialCoordinateGenerator::Impl {
     cudaCheckError(cudaGetLastError());
     // Project eigenvalues
     const int numThreads = maxDimension_ * batchSize;
-    const int numBlocks  = (numThreads + blockSize - 1) / blockSize;
+    const int numBlocks  = compat::ceil_div(numThreads, blockSize);
     projectDistancesToPositions<<<numBlocks, blockSize, 0, stream_>>>(maxDimension_,
                                                                       batchSize,
                                                                       coordinateDim,

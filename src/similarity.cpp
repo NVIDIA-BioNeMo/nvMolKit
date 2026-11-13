@@ -18,6 +18,7 @@
 #include <omp.h>
 
 #include "src/similarity_kernels.h"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/device.h"
 #include "src/utils/device_vector.h"
 #include "src/utils/host_vector.h"
@@ -155,7 +156,7 @@ std::vector<double> crossSimilarityImpl(const cuda::std::span<const std::uint32_
 
   std::vector<double> res(nFps1 * nFps2);
 
-  const size_t                    nBatches = (nFps1 + batchSizeA - 1) / batchSizeA;
+  const size_t                    nBatches = compat::ceil_div(nFps1, batchSizeA);
   detail::OpenMPExceptionRegistry exceptionHandler;
 #pragma omp parallel for num_threads(2) schedule(dynamic) default(shared)
   for (size_t batchIdx = 0; batchIdx < nBatches; ++batchIdx) {

@@ -25,6 +25,7 @@
 
 #include "src/fingerprint_search.h"
 #include "src/fingerprint_similarity_device.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
 #include "src/utils/nvtx.h"
@@ -407,7 +408,7 @@ template <FingerprintSimilarityMetric Metric> void launchSearch(const SearchPara
                                         cudaFuncAttributeMaxDynamicSharedMemorySize,
                                         static_cast<int>(dynamicSmem)));
   }
-  const int numBlocks = (params.numQueries + kQueriesPerBlock - 1) / kQueriesPerBlock;
+  const int numBlocks = compat::ceil_div(params.numQueries, kQueriesPerBlock);
   fingerprintTopKKernel<Metric><<<numBlocks, kSearchBlockSize, dynamicSmem, stream>>>(params);
   cudaCheckError(cudaGetLastError());
 }
@@ -426,12 +427,11 @@ void sortRowsByBitCount(const std::uint32_t*    fingerprints,
   if (numRows == 0) {
     return;
   }
-  fingerprintBitCountKernel<<<(numRows + kSetupBlockSize - 1) / kSetupBlockSize, kSetupBlockSize, 0, stream>>>(
-    fingerprints,
-    numRows,
-    numWords,
-    counts.data(),
-    rows.data());
+  fingerprintBitCountKernel<<<compat::ceil_div(numRows, kSetupBlockSize), kSetupBlockSize, 0, stream>>>(fingerprints,
+                                                                                                        numRows,
+                                                                                                        numWords,
+                                                                                                        counts.data(),
+                                                                                                        rows.data());
   cudaCheckError(cudaGetLastError());
 
   // Popcounts never exceed the fingerprint width, so only the low bits need sorting. The sort is stable, so equal
@@ -596,9 +596,8 @@ FingerprintSearchResult FingerprintSearchIndex::searchSelf(const int    k,
 
   // The sorted library is already in popcount order: query i reads sorted row i and writes its original row.
   AsyncDeviceVector<int> identity(numFingerprints_, stream);
-  iotaKernel<<<(numFingerprints_ + kSetupBlockSize - 1) / kSetupBlockSize, kSetupBlockSize, 0, stream>>>(
-    identity.data(),
-    numFingerprints_);
+  iotaKernel<<<compat::ceil_div(numFingerprints_, kSetupBlockSize), kSetupBlockSize, 0, stream>>>(identity.data(),
+                                                                                                  numFingerprints_);
   cudaCheckError(cudaGetLastError());
 
   SearchParams params{sortedBits_.data(),

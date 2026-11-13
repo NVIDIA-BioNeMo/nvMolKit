@@ -18,6 +18,7 @@
 #include <GraphMol/ForceFieldHelpers/CrystalFF/TorsionPreferences.h>
 
 #include "src/etkdg_stage_coordgen.h"
+#include "src/utils/cccl_compat.h"
 
 namespace nvMolKit {
 
@@ -70,7 +71,7 @@ void ETKDGCoordGenStage::execute(ETKDGContext& ctx) {
   coordGenerator_.computeInitialCoordinates(deviceCoords, deviceAtomStarts, coordinateDim_, ctx.activeThisStage.data());
   const auto*   passedThisStageLocal = coordGenerator_.getPassFail();
   constexpr int blockSize            = 128;
-  const int     numBlocks            = (numSystems + blockSize - 1) / blockSize;
+  const int     numBlocks            = compat::ceil_div(numSystems, blockSize);
   updateFailedStageKernel<<<numBlocks, blockSize, 0, stream_>>>(numSystems,
                                                                 ctx.failedThisStage.data(),
                                                                 passedThisStageLocal,

@@ -9,6 +9,7 @@
 
 #include "src/descriptors3d.h"
 #include "src/descriptors3d_kernel.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
 
@@ -715,7 +716,7 @@ void launchDclvKernel(const DeviceCoordView&        coordinates,
                       Real*                         centered,
                       const DclvOutputs<Real>&      outputs,
                       const cudaStream_t            stream) {
-  const int numBlocks = (coordinates.numConformers + kWarpsPerBlock - 1) / kWarpsPerBlock;
+  const int numBlocks = compat::ceil_div(coordinates.numConformers, kWarpsPerBlock);
   dclv3DKernel<Real, kProbe, kVdw><<<numBlocks, kBlockSize, 0, stream>>>(coordinates,
                                                                          inputs,
                                                                          static_cast<Real>(options.probeRadius),

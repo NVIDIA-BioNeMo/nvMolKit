@@ -23,6 +23,7 @@
 #include "src/aap.h"
 #include "src/aap_threads.h"
 #include "src/diversity_picker_algorithms.cuh"
+#include "src/utils/cccl_compat.h"
 #include "src/utils/cuda_error_check.h"
 #include "src/utils/device_vector.h"
 #include "src/utils/host_vector.h"
@@ -601,7 +602,7 @@ class AapDistanceProvider {
     }
     resetCountKernel<<<1, 1, 0, stream>>>(candidateCount_.data());
     cudaCheckError(cudaGetLastError());
-    compactCandidatesKernel<<<(numItems_ + kThreads - 1) / kThreads, kThreads, 0, stream>>>(numItems_,
+    compactCandidatesKernel<<<compat::ceil_div(numItems_, kThreads), kThreads, 0, stream>>>(numItems_,
                                                                                             op,
                                                                                             candidates_.data(),
                                                                                             candidateCount_.data());
