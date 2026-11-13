@@ -19,7 +19,8 @@ import torch
 from rdkit.ML.Cluster.Butina import ClusterData
 
 import nvmolkit.clustering as clustering
-from nvmolkit.clustering import ClusterDeviceResult, OutputMode, bitbirch, butina, fused_butina
+from nvmolkit.clustering import ClusterDeviceResult, OutputMode, bitbirch, butina, fused_butina, kmeans
+from nvmolkit.fingerprints import pack_fingerprint, unpack_fingerprint
 from nvmolkit.similarity import AAPMetric, CosineMetric, TanimotoMetric
 from nvmolkit.types import AsyncGpuResult
 
@@ -649,3 +650,133 @@ def test_bitbirch_rejects_zero_word_fingerprints():
     x = torch.empty((4, 0), dtype=torch.uint32, device="cuda")
     with pytest.raises(ValueError, match="at least one fingerprint word"):
         bitbirch(x, threshold=0.5)
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# k-means
+# ----------------------------------------------------------------------------------------------------------------------
+
+_KMEANS_METRICS = ("cosine", "tanimoto")
+requires_kmeans_gpu = pytest.mark.skipif(
+    torch.cuda.get_device_capability() < (8, 0), reason="k-means needs a GPU of compute capability 8.0 or newer"
+)
+
+
+def _planted_fingerprints(
+    num_clusters, members_per_cluster, *, num_words=64, prototype_bits=60, flipped_bits=4, seed=0
+):
+    """Packed fingerprints drawn around random prototypes, each member differing from its prototype in a few bits."""
+    generator = torch.Generator().manual_seed(seed)
+    num_bits = num_words * 32
+    prototypes = torch.zeros((num_clusters, num_bits), dtype=torch.bool)
+    for cluster in range(num_clusters):
+        prototypes[cluster, torch.randperm(num_bits, generator=generator)[:prototype_bits]] = True
+    truth = torch.arange(num_clusters).repeat_interleave(members_per_cluster)
+    bits = prototypes[truth].clone()
+    for row in range(bits.shape[0]):
+        flips = torch.randperm(num_bits, generator=generator)[:flipped_bits]
+        bits[row, flips] = ~bits[row, flips]
+    order = torch.randperm(bits.shape[0], generator=generator)
+    return pack_fingerprint(bits[order]).cuda(), truth[order].numpy()
+
+
+def _assert_same_partition(labels, truth):
+    pairs = set(zip(labels.tolist(), truth.tolist()))
+    assert len(pairs) == len(set(truth.tolist())) == len(set(labels.tolist()))
+
+
+def _random_packed(num_rows, num_words, density, seed):
+    generator = torch.Generator().manual_seed(seed)
+    return pack_fingerprint(torch.rand((num_rows, num_words * 32), generator=generator) < density).cuda()
+
+
+@requires_kmeans_gpu
+@pytest.mark.parametrize("metric", _KMEANS_METRICS)
+@pytest.mark.parametrize("init", ["k-means++", "maxmin"])
+def test_kmeans_recovers_planted_clusters(metric, init):
+    fingerprints, truth = _planted_fingerprints(8, 50)
+    result = kmeans(fingerprints, 8, metric=metric, init=init, n_init=3, random_state=3)
+    labels = result.labels.numpy()
+    assert result.labels.torch().dtype == torch.int32
+    assert result.centers.torch().shape == (8, 2048)
+    assert result.cluster_sizes.torch().dtype == torch.int64
+    np.testing.assert_array_equal(result.cluster_sizes.numpy(), np.bincount(labels, minlength=8))
+    _assert_same_partition(labels, truth)
+
+
+@requires_kmeans_gpu
+@pytest.mark.parametrize("init", ["random", "maxmin", "k-means++"])
+def test_kmeans_init_picks_distinct_rows(init):
+    fingerprints = _random_packed(300, 4, 0.2, seed=7)
+    for num_clusters in (1, 2, 50, 300):
+        result = kmeans(fingerprints, num_clusters, init=init, max_iter=0, random_state=123)
+        centers = result.centers.torch()
+        assert centers.unique(dim=0).shape[0] == num_clusters
+        assert bool(((centers == 0) | (centers == 1)).all())
+
+
+@requires_kmeans_gpu
+def test_kmeans_explicit_init_centers():
+    fingerprints, truth = _planted_fingerprints(3, 20)
+    prototypes = unpack_fingerprint(fingerprints)[[int(np.flatnonzero(truth == c)[0]) for c in range(3)]].float()
+    result = kmeans(fingerprints, 3, init=prototypes)
+    _assert_same_partition(result.labels.numpy(), truth)
+
+
+@requires_kmeans_gpu
+@pytest.mark.parametrize("metric", _KMEANS_METRICS)
+def test_kmeans_returned_centers_round_trip_as_init(metric):
+    # Cosine centers here are far from unit length; rescaling them would move a few labels.
+    fingerprints = _random_packed(500, 8, 0.05, seed=0)
+    result = kmeans(fingerprints, 5, metric=metric, random_state=0)
+    again = kmeans(fingerprints, 5, metric=metric, init=result.centers.torch(), max_iter=0)
+    np.testing.assert_array_equal(again.labels.numpy(), result.labels.numpy())
+
+
+@requires_kmeans_gpu
+def test_kmeans_fit_size_labels_every_row():
+    fingerprints, truth = _planted_fingerprints(6, 40)
+    result = kmeans(fingerprints, 6, fit_size=100, n_init=3, random_state=1)
+    assert result.labels.numpy().shape == (240,)
+    _assert_same_partition(result.labels.numpy(), truth)
+
+
+@requires_kmeans_gpu
+def test_kmeans_is_reproducible_with_random_state():
+    fingerprints = _random_packed(2000, 32, 0.05, seed=9)
+    runs = [kmeans(fingerprints, 40, random_state=4) for _ in range(2)]
+    np.testing.assert_array_equal(runs[0].labels.numpy(), runs[1].labels.numpy())
+    assert runs[0].inertia == runs[1].inertia
+
+
+@requires_kmeans_gpu
+def test_kmeans_accepts_host_int32_input():
+    fingerprints, truth = _planted_fingerprints(3, 20)
+    result = kmeans(fingerprints.cpu().view(torch.int32).numpy(), 3, random_state=0)
+    _assert_same_partition(result.labels.numpy(), truth)
+
+
+@requires_kmeans_gpu
+def test_kmeans_zero_tol_runs_exactly_max_iter():
+    fingerprints = _random_packed(500, 8, 0.1, seed=4)
+    assert kmeans(fingerprints, 10, max_iter=7, tol=0, random_state=0).n_iter == 7
+
+
+@requires_kmeans_gpu
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"n_clusters": 0}, "n_clusters must be positive"),
+        ({"n_clusters": 11}, "must not exceed the number of fingerprints"),
+        ({"n_clusters": 2, "metric": "dice"}, "metric must be one of"),
+        ({"n_clusters": 2, "init": "k-means||"}, "init must be one of"),
+        ({"n_clusters": 2, "init": torch.zeros((3, 2048))}, "init must have shape"),
+        ({"n_clusters": 2, "n_init": 0}, "n_init must be positive"),
+        ({"n_clusters": 2, "tol": -1.0}, "must be non-negative"),
+        ({"n_clusters": 4, "fit_size": 3}, "fit_size must be at least"),
+    ],
+)
+def test_kmeans_rejects_invalid_arguments(kwargs, message):
+    fingerprints, _ = _planted_fingerprints(2, 5)
+    with pytest.raises(ValueError, match=message):
+        kmeans(fingerprints, **kwargs)

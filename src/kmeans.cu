@@ -640,6 +640,180 @@ class LloydState {
   AsyncDevicePtr<int>             changed_;
 };
 
+// ---------------------------------------------------------------------------------------------------------------------
+// k-means++ initialization
+// ---------------------------------------------------------------------------------------------------------------------
+
+//! Rounds of k-means++ sampling; each draws a batch of centers, so numClusters - 1 <= kKMeansPlusPlusRounds is exact.
+constexpr int kKMeansPlusPlusRounds = 64;
+
+__device__ __forceinline__ std::uint64_t splitMix64(std::uint64_t value) {
+  value += 0x9E3779B97F4A7C15ULL;
+  value = (value ^ (value >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  value = (value ^ (value >> 27)) * 0x94D049BB133111EBULL;
+  return value ^ (value >> 31);
+}
+
+/**
+ * Lowers each row's D^2 weight to its distance from the newest batch of centers, then writes the row's
+ * Efraimidis-Spirakis key log(u) / D^2: taking the largest keys draws rows without replacement with probability
+ * proportional to D^2. Rows with zero weight (copies of chosen rows) rank after every positive weight in random order,
+ * and chosen rows rank last.
+ */
+__global__ void kmeansPlusPlusKeysKernel(const float*        distances,
+                                         const std::uint8_t* chosen,
+                                         const int           numRows,
+                                         const bool          squareDistance,
+                                         const std::uint64_t seed,
+                                         const int           round,
+                                         float*              weights,
+                                         float*              keys,
+                                         int*                ids) {
+  const int row = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (row >= numRows) {
+    return;
+  }
+  float distance = fmaxf(distances[row], 0.0F);
+  if (squareDistance) {
+    distance *= distance;
+  }
+  const float weight = fminf(weights[row], distance);
+  weights[row]       = weight;
+  ids[row]           = row;
+  if (chosen[row] != 0) {
+    keys[row] = -INFINITY;
+    return;
+  }
+  const std::uint64_t counter = (static_cast<std::uint64_t>(round) << 32) | static_cast<std::uint32_t>(row);
+  const double        u       = static_cast<double>((splitMix64(seed ^ splitMix64(counter)) >> 11) + 1) * 0x1.0p-53;
+  keys[row] = weight > 0.0F ? static_cast<float>(fmax(log(u) / weight, -1e34)) : static_cast<float>(-1e35 * (2.0 - u));
+}
+
+__global__ void markChosenKernel(const int* rows, const int count, std::uint8_t* chosen) {
+  const int index = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (index < count) {
+    chosen[rows[index]] = 1;
+  }
+}
+
+/**
+ * k-means++ seeding (D^2 sampling) batched into at most kKMeansPlusPlusRounds rounds. The first center is a uniform
+ * row; each round then draws ceil(remaining / rounds left) distinct rows with probability proportional to D^2 and
+ * lowers every row's D with one assignment pass against only the new batch. D^2 is the squared Euclidean distance on
+ * normalized bits for cosine and (1 - T)^2 for Tanimoto. Arthur and Vassilvitskii, "k-means++: the advantages of
+ * careful seeding", SODA 2007.
+ */
+AsyncDeviceVector<int> kmeansPlusPlusRows(const std::uint32_t* fingerprints,
+                                          const int            numRows,
+                                          const int            numWords,
+                                          const int            numClusters,
+                                          const KMeansMetric   metric,
+                                          const std::uint64_t  seed,
+                                          cudaStream_t         stream) {
+  AsyncDeviceVector<int> rows(numClusters, stream);
+  std::mt19937_64        generator(seed);
+  const int              first = static_cast<int>(generator() % static_cast<std::uint64_t>(numRows));
+  cudaCheckError(cudaMemcpyAsync(rows.data(), &first, sizeof(int), cudaMemcpyHostToDevice, stream));
+  int remaining = numClusters - 1;
+  if (remaining == 0) {
+    cudaCheckError(cudaStreamSynchronize(stream));
+    return rows;
+  }
+
+  const int                       rounds   = std::min(kKMeansPlusPlusRounds, remaining);
+  const int                       maxBatch = std::max(1, (remaining + rounds - 1) / rounds);
+  const bool                      cosine   = metric == KMeansMetric::Cosine;
+  AsyncDeviceVector<int>          rowCounts(numRows, stream);
+  AsyncDeviceVector<int>          labels(numRows, stream);
+  AsyncDeviceVector<float>        distances(numRows, stream);
+  AsyncDeviceVector<float>        weights(numRows, stream);
+  AsyncDeviceVector<float>        keys(numRows, stream);
+  AsyncDeviceVector<float>        sortedKeys(numRows, stream);
+  AsyncDeviceVector<int>          ids(numRows, stream);
+  AsyncDeviceVector<int>          sortedIds(numRows, stream);
+  AsyncDeviceVector<std::uint8_t> chosen(numRows, stream);
+  AsyncDeviceVector<float>        centers(static_cast<std::size_t>(maxBatch) * numWords * 32, stream);
+  AsyncDevicePtr<int>             changed(0, stream);
+  launchFingerprintBitCounts(fingerprints, rowCounts.data(), numRows, numWords, stream);
+  cudaCheckError(cudaMemsetAsync(labels.data(), 0xFF, sizeof(int) * numRows, stream));
+  // 0x7F7F7F7F is about 3.4e38, larger than any distance.
+  cudaCheckError(cudaMemsetAsync(weights.data(), 0x7F, sizeof(float) * numRows, stream));
+  cudaCheckError(cudaMemsetAsync(chosen.data(), 0, numRows, stream));
+  markChosenKernel<<<1, 32, 0, stream>>>(rows.data(), 1, chosen.data());
+  cudaCheckError(cudaGetLastError());
+
+  std::size_t sortBytes = 0;
+  cudaCheckError(cub::DeviceRadixSort::SortPairsDescending(nullptr,
+                                                           sortBytes,
+                                                           keys.data(),
+                                                           sortedKeys.data(),
+                                                           ids.data(),
+                                                           sortedIds.data(),
+                                                           numRows,
+                                                           0,
+                                                           32,
+                                                           stream));
+  AsyncDeviceVector<std::uint8_t> sortTemp(sortBytes, stream);
+
+  int picked     = 1;
+  int batchStart = 0;
+  int batchSize  = 1;
+  for (int round = 0; round < rounds; ++round) {
+    centersFromRowsKernel<<<gridFor(static_cast<std::size_t>(batchSize) * 32), kBlockSize, 0, stream>>>(
+      fingerprints,
+      rows.data() + batchStart,
+      centers.data(),
+      batchSize,
+      numWords,
+      cosine);
+    cudaCheckError(cudaGetLastError());
+    PreparedCenters prepared(batchSize, numWords, stream);
+    prepared.update(centers.data(), stream);
+    assign(metric,
+           fingerprints,
+           rowCounts.data(),
+           numRows,
+           numWords,
+           prepared,
+           batchSize,
+           labels.data(),
+           distances.data(),
+           changed.data(),
+           stream);
+    kmeansPlusPlusKeysKernel<<<gridFor(numRows), kBlockSize, 0, stream>>>(distances.data(),
+                                                                          chosen.data(),
+                                                                          numRows,
+                                                                          !cosine,
+                                                                          seed,
+                                                                          round,
+                                                                          weights.data(),
+                                                                          keys.data(),
+                                                                          ids.data());
+    cudaCheckError(cudaGetLastError());
+    cudaCheckError(cub::DeviceRadixSort::SortPairsDescending(sortTemp.data(),
+                                                             sortBytes,
+                                                             keys.data(),
+                                                             sortedKeys.data(),
+                                                             ids.data(),
+                                                             sortedIds.data(),
+                                                             numRows,
+                                                             0,
+                                                             32,
+                                                             stream));
+    const int count = (remaining + (rounds - round) - 1) / (rounds - round);
+    cudaCheckError(
+      cudaMemcpyAsync(rows.data() + picked, sortedIds.data(), sizeof(int) * count, cudaMemcpyDeviceToDevice, stream));
+    markChosenKernel<<<gridFor(count), kBlockSize, 0, stream>>>(rows.data() + picked, count, chosen.data());
+    cudaCheckError(cudaGetLastError());
+    batchStart = picked;
+    batchSize  = count;
+    picked += count;
+    remaining -= count;
+  }
+  cudaCheckError(cudaStreamSynchronize(stream));
+  return rows;
+}
+
 }  // namespace
 }  // namespace detail
 
@@ -679,6 +853,14 @@ AsyncDeviceVector<int> kmeansInitGpu(const cuda::std::span<const std::uint32_t> 
       }
       return std::move(picks.indices);
     }
+    case KMeansInit::KMeansPlusPlus:
+      return detail::kmeansPlusPlusRows(fingerprints.data(),
+                                        numFingerprints,
+                                        numWords,
+                                        numClusters,
+                                        metric,
+                                        seed,
+                                        stream);
   }
   throw std::invalid_argument("Unsupported k-means initialization");
 }

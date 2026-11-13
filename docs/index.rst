@@ -186,6 +186,8 @@ nvMolKit currently supports the following features:
 
 * **BitBIRCH clustering**: GPU-accelerated clustering of binary fingerprints, with optional cluster centroids
 
+* **k-means clustering**: GPU-accelerated k-means clustering of binary fingerprints with Tanimoto or cosine similarity
+
 * **Substructure Search**: GPU-accelerated substructure matching against batches of molecules
     * Supports SMILES and recursive SMARTS-based query molecules via RDKit
     * ``SubstructLibrary`` keeps target molecules on one or more GPUs for repeated queries, as a GPU counterpart to RDKit's ``SubstructLibrary``

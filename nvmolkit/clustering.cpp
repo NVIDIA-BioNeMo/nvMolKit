@@ -30,6 +30,7 @@
 #include "src/bitbirch.h"
 #include "src/butina.h"
 #include "src/diversity_pickers.h"
+#include "src/kmeans.h"
 #include "src/utils/device.h"
 
 namespace {
@@ -186,6 +187,41 @@ boost::python::object bitBirch(const boost::python::dict& fingerprints,
       nvMolKit::makePyArray(result.centroids, boost::python::make_tuple(result.numClusters, result.numWords)));
   }
   return boost::python::make_tuple(labels, centroids);
+}
+
+nvMolKit::KMeansMetric parseKMeansMetric(const std::string& metric) {
+  if (metric == "cosine") {
+    return nvMolKit::KMeansMetric::Cosine;
+  }
+  if (metric == "tanimoto") {
+    return nvMolKit::KMeansMetric::Tanimoto;
+  }
+  throw std::invalid_argument("metric must be one of ['tanimoto', 'cosine']");
+}
+
+nvMolKit::KMeansInit parseKMeansInit(const std::string& init) {
+  if (init == "random") {
+    return nvMolKit::KMeansInit::Random;
+  }
+  if (init == "maxmin") {
+    return nvMolKit::KMeansInit::MaxMin;
+  }
+  if (init == "k-means++") {
+    return nvMolKit::KMeansInit::KMeansPlusPlus;
+  }
+  throw std::invalid_argument("init must be one of ['k-means++', 'random', 'maxmin']");
+}
+
+//! Device pointer of a float32 (numClusters, numBits) center matrix.
+const float* parseCenters(const boost::python::dict& centers, const int numClusters, const int numBits) {
+  boost::python::tuple shape = boost::python::extract<boost::python::tuple>(centers["shape"]);
+  boost::python::tuple data  = boost::python::extract<boost::python::tuple>(centers["data"]);
+  const std::string    type  = boost::python::extract<std::string>(centers["typestr"]);
+  if (type != "<f4" || boost::python::len(shape) != 2 || boost::python::extract<int>(shape[0])() != numClusters ||
+      boost::python::extract<int>(shape[1])() != numBits) {
+    throw std::invalid_argument("centers must be a float32 matrix of shape (n_clusters, num_words * 32)");
+  }
+  return reinterpret_cast<const float*>(static_cast<std::size_t>(boost::python::extract<std::size_t>(data[0])));
 }
 
 }  // namespace
@@ -573,4 +609,93 @@ BOOST_PYTHON_MODULE(_clustering) {
      boost::python::arg("return_centroids") = false,
      boost::python::arg("metric")           = "tanimoto",
      boost::python::arg("stream")           = 0));
+  boost::python::def(
+    "kmeans_fit",
+    +[](const boost::python::dict&   fingerprints,
+        const boost::python::object& centers,
+        const std::string&           init,
+        const int                    numClusters,
+        const std::string&           metric,
+        const int                    maxIter,
+        const double                 tol,
+        const std::uint64_t          seed,
+        const std::uintptr_t         streamPtr) {
+      const auto              stream = requireStream(streamPtr);
+      const auto              input  = parseFingerprints(fingerprints);
+      nvMolKit::KMeansOptions options;
+      options.numClusters = numClusters;
+      options.metric      = parseKMeansMetric(metric);
+      options.maxIter     = maxIter;
+      options.tol         = tol;
+      nvMolKit::AsyncDeviceVector<float> initial;
+      if (centers.is_none()) {
+        // Initialize here so the fit adopts the initial centers instead of copying them (k x bits x 4 bytes).
+        const auto rows = nvMolKit::kmeansInitGpu(input.fingerprints,
+                                                  input.numItems,
+                                                  input.numWords,
+                                                  numClusters,
+                                                  options.metric,
+                                                  parseKMeansInit(init),
+                                                  seed,
+                                                  stream);
+        initial = nvMolKit::kmeansCentersFromRows(input.fingerprints, input.numWords, rows, options.metric, stream);
+      } else {
+        const float* given =
+          parseCenters(boost::python::extract<boost::python::dict>(centers)(), numClusters, input.numWords * 32);
+        initial =
+          nvMolKit::AsyncDeviceVector<float>(static_cast<std::size_t>(numClusters) * input.numWords * 32, stream);
+        nvMolKit::checkReturnCode<true>(
+          cudaMemcpyAsync(initial.data(), given, sizeof(float) * initial.size(), cudaMemcpyDeviceToDevice, stream),
+          __FILE__,
+          __LINE__);
+      }
+      auto result =
+        nvMolKit::kmeansFitGpu(input.fingerprints, input.numItems, input.numWords, std::move(initial), options, stream);
+      return boost::python::make_tuple(
+        toOwnedPyArray(nvMolKit::makePyArray(result.labels)),
+        toOwnedPyArray(
+          nvMolKit::makePyArray(result.centers, boost::python::make_tuple(numClusters, input.numWords * 32))),
+        toOwnedPyArray(nvMolKit::makePyArray(result.clusterSizes, "i8", boost::python::make_tuple(numClusters))),
+        result.inertia,
+        result.numIterations,
+        result.reseeded);
+    },
+    (boost::python::arg("fingerprints"),
+     boost::python::arg("centers"),
+     boost::python::arg("init"),
+     boost::python::arg("n_clusters"),
+     boost::python::arg("metric"),
+     boost::python::arg("max_iter"),
+     boost::python::arg("tol"),
+     boost::python::arg("seed"),
+     boost::python::arg("stream")));
+
+  boost::python::def(
+    "kmeans_assign",
+    +[](const boost::python::dict& fingerprints,
+        const boost::python::dict& centers,
+        const int                  numClusters,
+        const std::string&         metric,
+        const std::uintptr_t       streamPtr) {
+      const auto                         stream = requireStream(streamPtr);
+      const auto                         input  = parseFingerprints(fingerprints);
+      nvMolKit::AsyncDeviceVector<int>   labels(input.numItems, stream);
+      nvMolKit::AsyncDeviceVector<float> distances(input.numItems, stream);
+      nvMolKit::kmeansAssignGpu(input.fingerprints,
+                                input.numItems,
+                                input.numWords,
+                                parseCenters(centers, numClusters, input.numWords * 32),
+                                numClusters,
+                                parseKMeansMetric(metric),
+                                labels.data(),
+                                distances.data(),
+                                stream);
+      return boost::python::make_tuple(toOwnedPyArray(nvMolKit::makePyArray(labels)),
+                                       toOwnedPyArray(nvMolKit::makePyArray(distances)));
+    },
+    (boost::python::arg("fingerprints"),
+     boost::python::arg("centers"),
+     boost::python::arg("n_clusters"),
+     boost::python::arg("metric"),
+     boost::python::arg("stream")));
 }

@@ -857,6 +857,99 @@ TEST_P(KMeansFitMetricTest, NonFiniteCentersGiveInRangeLabels) {
 
 INSTANTIATE_TEST_SUITE_P(KMeans, KMeansFitMetricTest, ::testing::Values(KMeansMetric::Cosine, KMeansMetric::Tanimoto));
 
+std::vector<int> initRows(const std::vector<std::uint32_t>& packed,
+                          const int                         words,
+                          const int                         clusters,
+                          const KMeansMetric                metric,
+                          const nvMolKit::KMeansInit        init,
+                          const std::uint64_t               seed,
+                          cudaStream_t                      stream) {
+  auto device = upload(packed, stream);
+  return download(nvMolKit::kmeansInitGpu({device.data(), device.size()},
+                                          static_cast<int>(packed.size() / words),
+                                          words,
+                                          clusters,
+                                          metric,
+                                          init,
+                                          seed,
+                                          stream),
+                  stream);
+}
+
+std::vector<std::uint32_t> packedRow(const std::vector<std::uint32_t>& packed, const int words, const int row) {
+  const auto begin = packed.begin() + static_cast<std::ptrdiff_t>(row) * words;
+  return {begin, begin + words};
+}
+
+class KMeansPlusPlusTest : public KMeansFitTest, public ::testing::WithParamInterface<KMeansMetric> {};
+
+TEST_P(KMeansPlusPlusTest, PicksDistinctRows) {
+  const nvMolKit::ScopedStream streamOwner;
+  const auto                   stream = streamOwner.stream();
+  const auto                   packed = randomFingerprints(300, 4, 0.2, 7);
+  // 50 and 300 clusters draw more than one center per round.
+  for (const int clusters : {1, 2, 50, 300}) {
+    const auto rows = initRows(packed, 4, clusters, GetParam(), nvMolKit::KMeansInit::KMeansPlusPlus, 123, stream);
+    ASSERT_EQ(rows.size(), static_cast<std::size_t>(clusters));
+    EXPECT_EQ(std::set<int>(rows.begin(), rows.end()).size(), rows.size()) << clusters << " clusters";
+    for (const int row : rows) {
+      ASSERT_TRUE(row >= 0 && row < 300) << row;
+    }
+  }
+}
+
+TEST_P(KMeansPlusPlusTest, PicksEveryDistinctFingerprintBeforeDuplicates) {
+  // 40 rows repeated 5 times: once every distinct fingerprint is chosen, the remaining rows all have zero D^2 weight.
+  // 60 clusters draw one center per round; a larger batch could draw two copies of an unchosen fingerprint together.
+  const nvMolKit::ScopedStream streamOwner;
+  const auto                   stream   = streamOwner.stream();
+  const auto                   distinct = randomFingerprints(40, 4, 0.3, 3);
+  std::vector<std::uint32_t>   packed;
+  for (int copy = 0; copy < 5; ++copy) {
+    packed.insert(packed.end(), distinct.begin(), distinct.end());
+  }
+  std::set<std::vector<std::uint32_t>> inputFingerprints;
+  for (int row = 0; row < 40; ++row) {
+    inputFingerprints.insert(packedRow(distinct, 4, row));
+  }
+  const auto rows = initRows(packed, 4, 60, GetParam(), nvMolKit::KMeansInit::KMeansPlusPlus, 0, stream);
+  EXPECT_EQ(std::set<int>(rows.begin(), rows.end()).size(), 60U);
+  std::set<std::vector<std::uint32_t>> firstPicks;
+  for (std::size_t pick = 0; pick < inputFingerprints.size(); ++pick) {
+    firstPicks.insert(packedRow(packed, 4, rows[pick]));
+  }
+  EXPECT_EQ(firstPicks, inputFingerprints);
+}
+
+TEST_P(KMeansPlusPlusTest, SeedsFarGroupsSeparately) {
+  // Two groups of 100 rows that share no bits, each row differing from its group's 60 bits in one extra bit. Uniform
+  // seeding would put both centers in one group half the time; D^2 sampling almost never does.
+  const nvMolKit::ScopedStream  streamOwner;
+  const auto                    stream = streamOwner.stream();
+  std::vector<std::vector<int>> bits(200);
+  for (int row = 0; row < 200; ++row) {
+    const int base = row < 100 ? 0 : 100;
+    bits[row]      = bitRange(base, base + 59);
+    bits[row].push_back(base + 60 + row % 30);
+  }
+  const auto packed = packRows(bits, 8);
+  for (std::uint64_t seed = 0; seed < 10; ++seed) {
+    const auto rows = initRows(packed, 8, 2, GetParam(), nvMolKit::KMeansInit::KMeansPlusPlus, seed, stream);
+    EXPECT_NE(rows[0] < 100, rows[1] < 100) << "seed " << seed;
+  }
+}
+
+TEST_P(KMeansPlusPlusTest, IsDeterministic) {
+  const nvMolKit::ScopedStream streamOwner;
+  const auto                   stream = streamOwner.stream();
+  const auto                   packed = randomFingerprints(2000, 8, 0.1, 9);
+  const auto first  = initRows(packed, 8, 200, GetParam(), nvMolKit::KMeansInit::KMeansPlusPlus, 4, stream);
+  const auto second = initRows(packed, 8, 200, GetParam(), nvMolKit::KMeansInit::KMeansPlusPlus, 4, stream);
+  EXPECT_EQ(first, second);
+}
+
+INSTANTIATE_TEST_SUITE_P(KMeans, KMeansPlusPlusTest, ::testing::Values(KMeansMetric::Cosine, KMeansMetric::Tanimoto));
+
 TEST(KMeansFit, RejectsInvalidArguments) {
   const nvMolKit::ScopedStream streamOwner;
   const auto                   stream = streamOwner.stream();

@@ -26,10 +26,12 @@ enum class KMeansMetric {
   Tanimoto
 };
 
-//! k-means++ seeding is batched on top of kmeansAssignGpu in the Python layer.
 enum class KMeansInit {
   Random,  //!< numClusters distinct rows chosen uniformly.
   MaxMin,  //!< Fused MaxMin picks (Tanimoto distance, or cosine distance for the cosine metric).
+  //! k-means++ D^2 sampling in at most 64 rounds, each drawing a batch of distinct rows; exact k-means++ when
+  //! numClusters <= 65.
+  KMeansPlusPlus,
 };
 
 struct KMeansOptions {

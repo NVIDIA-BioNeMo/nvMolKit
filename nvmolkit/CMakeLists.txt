@@ -106,6 +106,7 @@ target_link_libraries(
          butina
          aap
          diversity_pickers
+         kmeans
          device)
 target_link_libraries(_clustering PRIVATE ${RDKit_LIBS})
 target_include_directories(_clustering PUBLIC ${Boost_INCLUDE_DIRS}
