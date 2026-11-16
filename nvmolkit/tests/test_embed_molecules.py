@@ -509,6 +509,27 @@ def test_embed_molecules_random_coordinate_mode(precision):
         assert molecule.GetNumConformers() == 2
 
 
+def test_embed_molecules_random_coords_follow_seed():
+    """With useRandomCoords, a seed reproduces its conformers, and attempts and seeds start differently."""
+    mol = Chem.AddHs(Chem.MolFromSmiles("CCCCOC(=O)CCN"))
+    confs_by_seed = {}
+    for seed in (0, 42):
+        params = rdDistGeom.ETKDGv3()
+        params.randomSeed = seed
+        params.useRandomCoords = True
+        first, second = Chem.Mol(mol), Chem.Mol(mol)
+        embed.EmbedMolecules([first], params, confsPerMolecule=2)
+        embed.EmbedMolecules([second], params, confsPerMolecule=2)
+        first_confs = [conf.GetPositions() for conf in first.GetConformers()]
+        second_confs = [conf.GetPositions() for conf in second.GetConformers()]
+        # Runs differ only by small minimizer variation; distinct attempts give distinct conformers.
+        for a, b in zip(first_confs, second_confs):
+            assert abs(a - b).max() < 0.5
+        assert abs(first_confs[0] - first_confs[1]).max() > 0.5
+        confs_by_seed[seed] = first_confs
+    assert abs(confs_by_seed[0][0] - confs_by_seed[42][0]).max() > 0.5
+
+
 def test_embed_molecules_allows_large_molecule_interleaved(precision):
     """Ensure a large (>256 atoms) molecule in batch is accepted and embedded."""
     small1 = Chem.AddHs(Chem.MolFromSmiles("CCCCCC"))  # 6 atoms

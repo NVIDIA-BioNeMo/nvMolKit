@@ -16,6 +16,9 @@
 #include <DistGeom/BoundsMatrix.h>
 #include <DistGeom/DistGeomUtils.h>
 #include <GraphMol/ForceFieldHelpers/CrystalFF/TorsionPreferences.h>
+#include <RDGeneral/utils.h>
+
+#include <random>
 
 #include "src/etkdg_stage_coordgen.h"
 #include "src/utils/cccl_compat.h"
@@ -84,13 +87,16 @@ ETKDGCoordGenRDKitStage::ETKDGCoordGenRDKitStage(const RDKit::DGeomHelpers::Embe
                                                  const std::vector<EmbedArgs>&               eargs,
                                                  PinnedHostVector<double>&                   positionsScratch,
                                                  PinnedHostVector<uint8_t>&                  activeScratch,
+                                                 std::vector<int>                            attemptIds,
                                                  cudaStream_t                                stream)
     : params_(params),
       mols_(mols),
       eargs_(eargs),
       positionsScratch_(positionsScratch),
       activeScratch_(activeScratch),
-      stream_(stream) {}
+      stream_(stream),
+      attemptIds_(std::move(attemptIds)),
+      baseSeed_(params.randomSeed >= 0 ? static_cast<unsigned int>(params.randomSeed) : std::random_device{}()) {}
 
 void ETKDGCoordGenRDKitStage::execute(ETKDGContext& ctx) {
   const int numSystems = ctx.nTotalSystems;
@@ -109,8 +115,6 @@ void ETKDGCoordGenRDKitStage::execute(ETKDGContext& ctx) {
 
   ctx.activeThisStage.copyToHost(activeScratch_.data(), requiredActiveSize);
 
-  auto& rng = getDoubleRandomSource();
-
   double boxSize;
   if (params_.boxSizeMult > 0) {
     boxSize = 5. * params_.boxSizeMult;
@@ -118,11 +122,19 @@ void ETKDGCoordGenRDKitStage::execute(ETKDGContext& ctx) {
     boxSize = -1 * params_.boxSizeMult;
   }
   cudaCheckError(cudaStreamSynchronize(stream_));  // for status check
+  RDKit::uniform_double distribution(0.0, 1.0);
   // First pass: Generate coordinates for each active molecule
   for (size_t molIdx = 0; molIdx < ctx.systemHost.atomStarts.size() - 1; ++molIdx) {
     if (!activeScratch_[molIdx]) {
       continue;
     }
+    // One generator per attempt, so coordinates follow the seed regardless of batching and threads. Seeding through a
+    // seed sequence keeps every (seed, attempt) pair distinct; minstd_rand seeded directly maps 0 and 1 to one state.
+    const unsigned int attemptId =
+      attemptIds_.empty() ? static_cast<unsigned int>(molIdx) : static_cast<unsigned int>(attemptIds_[molIdx]);
+    std::seed_seq             seeds{baseSeed_, attemptId};
+    RDKit::rng_type           generator(seeds);
+    RDKit::double_source_type rng(generator, distribution);
     for (size_t atomIdx = 0; atomIdx < mols_[molIdx]->getNumAtoms(); ++atomIdx) {
       for (int dim = 0; dim < eargs_[molIdx].dim; ++dim) {
         // Generate random position

@@ -53,7 +53,8 @@ class ETKDGCoordGenRDKitStage final : public ETKDGStage {
                           const std::vector<EmbedArgs>&               eargs,
                           PinnedHostVector<double>&                   positionsScratch,
                           PinnedHostVector<uint8_t>&                  activeScratch,
-                          cudaStream_t                                stream = nullptr);
+                          std::vector<int>                            attemptIds = {},
+                          cudaStream_t                                stream     = nullptr);
   ~ETKDGCoordGenRDKitStage() override = default;
 
   void        execute(ETKDGContext& ctx) override;
@@ -66,6 +67,8 @@ class ETKDGCoordGenRDKitStage final : public ETKDGStage {
   PinnedHostVector<double>&                   positionsScratch_;
   PinnedHostVector<uint8_t>&                  activeScratch_;
   cudaStream_t                                stream_;
+  std::vector<int>                            attemptIds_;
+  unsigned int                                baseSeed_;
 };
 
 }  // namespace detail
