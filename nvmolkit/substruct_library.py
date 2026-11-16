@@ -143,15 +143,18 @@ class SubstructLibrary:
                 )
             previous.shutdown(wait=False)
 
-    def _submit(self, function: Callable[..., _T], *args: Any) -> Future[_T]:
+    def _submit(self, function: Callable[..., _T], query: Mol, *args: Any) -> Future[_T]:
+        # The search runs on another thread after this returns, so it gets its own copy of the query.
+        ownQuery = Mol(query) if isinstance(query, Mol) else query
         with self._executorLock:
-            return self._executor.submit(function, *args)
+            return self._executor.submit(function, ownQuery, *args)
 
     def getMatches(self, query: Mol, maxResults: int = -1) -> Future[list[int]]:
         """Start a query and return a future for the indices of matching molecules, without waiting.
 
         Args:
             query: Query molecule, typically from ``Chem.MolFromSmarts`` or ``Chem.MolFromSmiles``.
+                It is copied before this returns, so the caller may keep using it.
             maxResults: Return at most this many indices, keeping the lowest. -1 (default) returns all.
 
         Returns:
