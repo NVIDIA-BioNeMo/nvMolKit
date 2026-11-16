@@ -13,8 +13,8 @@ nvMolKit 0.8.0 adds BitBIRCH clustering, k-means clustering, and exact top-k nea
 
 ### Features
 - BitBIRCH clustering of fingerprints with `nvmolkit.clustering.bitbirch`, with optional cluster centroids ([#321](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/321))
-- k-means clustering of fingerprints with `nvmolkit.clustering.kmeans`, under Tanimoto or cosine similarity, with k-means++, random, MaxMin, or user-supplied initialization, and optional fitting on a random sample. Requires a GPU of compute capability 8.0 or newer ([#381](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/381))
-- Exact top-k fingerprint similarity search with `nvmolkit.similarity.FingerprintSearchIndex`. The library is copied to the GPU once and searched repeatedly, for queries or against itself, without forming the query x library similarity matrix ([#383](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/383), [#392](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/392))
+- k-means clustering of fingerprints with `nvmolkit.clustering.kmeans`, under Tanimoto or cosine similarity. Requires a GPU of compute capability 8.0 or newer ([#381](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/381))
+- Exact top-k fingerprint similarity search with `nvmolkit.similarity.FingerprintSearchIndex`, without forming the full similarity matrix ([#383](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/383), [#392](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/392))
 - ETKDGv4 support in `EmbedMolecules`, including its Gaussian experimental torsions. Requires RDKit 2026.09 or later ([#365](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/365), [#366](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/366))
 - RDKit's all-in-one ETKDG refinement (`useLegacyImplementation=False`) in `EmbedMolecules`, on RDKit 2026.03.4 and later ([#287](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/287))
 - DCLV 3D descriptors in `Calc3DProperties`: surface area, polar surface area, volume, van der Waals volume, polar volume, compactness, and packing density, matching RDKit's `DoubleCubicLatticeVolume` ([#373](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/373))

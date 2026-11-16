@@ -115,20 +115,9 @@ BitBIRCH and k-means
 --------------------
 
 :func:`~nvmolkit.clustering.bitbirch` and :func:`~nvmolkit.clustering.kmeans`
-cluster packed ``int32`` or ``uint32`` fingerprints of shape ``(N, num_words)``
-directly. Neither forms a distance matrix, and neither takes the ``metric=`` or
-``output=`` arguments described above.
-
-:func:`~nvmolkit.clustering.bitbirch` merges fingerprints into clusters whose
-iSIM Tanimoto similarity stays at or above ``threshold``, so the number of
-clusters follows from the data. It returns one cluster ID per fingerprint, and
-the packed majority centroid of each cluster with ``return_centroids=True``.
-
-:func:`~nvmolkit.clustering.kmeans` partitions the fingerprints into
-``n_clusters`` clusters under Tanimoto or cosine similarity and returns a
-:class:`~nvmolkit.clustering.KMeansResult`. For large libraries, ``fit_size``
-fits the centers on a random sample and then labels every fingerprint against
-them. k-means requires a GPU of compute capability 8.0 or newer.
+cluster fingerprints directly, without a distance matrix. BitBIRCH takes a
+similarity ``threshold`` and finds the number of clusters itself; k-means takes
+the number of clusters.
 
 .. code-block:: python
 
