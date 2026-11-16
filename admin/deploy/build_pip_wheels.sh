@@ -15,8 +15,9 @@
 # limitations under the License.
 #
 # Drive cibuildwheel to produce nvMolKit manylinux_2_28 x86_64 wheels for the
-# Python interpreters declared in pyproject.toml's [tool.cibuildwheel].build
-# list. CIBW_BUILD on the command line can narrow the matrix.
+# Python interpreters listed for the RDKit version in
+# admin/distribute/rdkit_build_matrix.yaml. CIBW_BUILD on the command line can
+# narrow the matrix.
 #
 # Usage:
 #   ./build_pip_wheels.sh <rdkit_version> [output_dir]
@@ -65,6 +66,29 @@ if ! command -v cibuildwheel >/dev/null 2>&1; then
     echo "       Activate a conda env that provides it (e.g." >&2
     echo "       'conda activate nvmolkit_pip_build') before running." >&2
     exit 1
+fi
+
+# Default to the Python versions listed for this RDKit version; not every RDKit
+# version has a wheel for every interpreter in pyproject.toml's build list.
+if [ -z "${CIBW_BUILD:-}" ]; then
+    PYTHON_VERSIONS=$(awk -v rdkit="\"${RDKIT_VERSION}\":" '
+        /^"/ { inEntry = ($1 == rdkit) }
+        inEntry && /^[[:space:]]+python_versions:/ {
+            sub(/.*\[/, "")
+            sub(/\].*/, "")
+            gsub(/[",]/, "")
+            print
+        }
+    ' admin/distribute/rdkit_build_matrix.yaml)
+    if [ -z "${PYTHON_VERSIONS}" ]; then
+        echo "Error: rdkit ${RDKIT_VERSION} not found in admin/distribute/rdkit_build_matrix.yaml" >&2
+        exit 1
+    fi
+    CIBW_BUILD=""
+    for py in ${PYTHON_VERSIONS}; do
+        CIBW_BUILD+="cp${py//./}-manylinux_x86_64 "
+    done
+    export CIBW_BUILD
 fi
 
 # Persistent caches across cibuildwheel invocations:

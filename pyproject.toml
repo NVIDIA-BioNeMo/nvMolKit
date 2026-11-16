@@ -38,7 +38,7 @@ keywords = [
     "molecules",
     "pytorch",
 ]
-requires-python = ">=3.11,<3.15"
+requires-python = ">=3.11,<3.16"
 
 dependencies = [
     "numpy>=1.23",
@@ -56,6 +56,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
     "Programming Language :: C++",
     "Topic :: Scientific/Engineering :: Chemistry",
 ]
@@ -86,7 +87,9 @@ autotune = [
 ]
 
 # cibuildwheel orchestration for the pip wheel pipeline. The CI workflow sets
-# RDKIT_VERSION to a value present in admin/distribute/rdkit_build_matrix.yaml.
+# RDKIT_VERSION to a value present in admin/distribute/rdkit_build_matrix.yaml,
+# and CIBW_BUILD to one of that entry's python_versions; not every RDKit
+# version has a wheel for every interpreter in the build list below.
 # before-build clones rdkit-pypi at the matching tag, reproduces its build to
 # obtain headers + boost, and stages those plus pip-installed rdkit's libs at
 # stable paths read via NVMOLKIT_BUILD_AGAINST_PIP_* env vars by setup.py.
@@ -97,6 +100,7 @@ build = [
     "cp312-manylinux_x86_64",
     "cp313-manylinux_x86_64",
     "cp314-manylinux_x86_64",
+    "cp315-manylinux_x86_64",
 ]
 # Use the "build" frontend instead of "pip": it surfaces setup.py / scikit-build
 # stdout/stderr cleanly. The default "pip" frontend captures backend output and

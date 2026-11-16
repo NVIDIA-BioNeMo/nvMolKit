@@ -54,7 +54,7 @@ elif command -v conda >/dev/null 2>&1; then
 else
     echo "Error: 'conda' not found on PATH and CONDA_EXE not set." >&2
     echo "       This script needs conda to provide cpython interpreters" >&2
-    echo "       for testing wheels (3.11, 3.12, 3.13, 3.14)." >&2
+    echo "       for testing wheels (3.11, 3.12, 3.13, 3.14, 3.15)." >&2
     exit 2
 fi
 
