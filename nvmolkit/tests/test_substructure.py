@@ -1393,3 +1393,16 @@ def test_targets_outside_packed_limits_match_like_rdkit(algorithm):
 
     expected = [[target.HasSubstructMatch(query) for query in queries] for target in targets]
     assert results.astype(bool).tolist() == expected
+
+
+@pytest.mark.parametrize("oversized", ["C" * 65, "[$(" + "C" * 65 + ")]"], ids=["query", "recursive_pattern"])
+def test_query_over_atom_limit_is_rejected(oversized):
+    """Queries and recursive patterns hold at most 64 atoms; larger ones raise instead of returning no matches."""
+    targets = [Chem.MolFromSmiles("C" * 100)]
+    largest = Chem.MolFromSmarts("C" * 64)
+
+    counts = countSubstructMatches(targets, [largest])
+    assert counts.tolist() == [[len(targets[0].GetSubstructMatches(largest, uniquify=False))]]
+
+    with pytest.raises(RuntimeError, match="exceeds the maximum of 64"):
+        countSubstructMatches(targets, [largest, Chem.MolFromSmarts(oversized)])

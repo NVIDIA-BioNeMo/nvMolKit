@@ -1079,12 +1079,12 @@ TEST(MoleculesSizeLimitTest, TargetMoleculeExceeding128AtomsThrows) {
   EXPECT_THROW(nvMolKit::addToBatch(mol.get(), batch), std::runtime_error);
 }
 
-TEST(MoleculesSizeLimitTest, QueryMoleculeExceeding128AtomsThrows) {
-  // 129-carbon chain as SMARTS: exceeds 128 atom limit
-  std::string longChain(129, 'C');
+TEST(MoleculesSizeLimitTest, QueryMoleculeExceeding64AtomsThrows) {
+  // 65-carbon chain as SMARTS: exceeds 64 atom query limit
+  std::string longChain(65, 'C');
   auto        mol = std::unique_ptr<RDKit::ROMol>(RDKit::SmartsToMol(longChain));
   ASSERT_NE(mol, nullptr);
-  ASSERT_GT(mol->getNumAtoms(), 128u);
+  ASSERT_GT(mol->getNumAtoms(), 64u);
 
   MoleculesHost batch;
   EXPECT_THROW(nvMolKit::addQueryToBatch(mol.get(), batch), std::runtime_error);
@@ -1103,17 +1103,17 @@ TEST(MoleculesSizeLimitTest, TargetMoleculeAt128AtomsSucceeds) {
   EXPECT_EQ(batch.totalAtoms(), 128);
 }
 
-TEST(MoleculesSizeLimitTest, QueryMoleculeAt128AtomsSucceeds) {
-  // Exactly 128 carbons as SMARTS: should succeed
-  std::string chain128(128, 'C');
-  auto        mol = std::unique_ptr<RDKit::ROMol>(RDKit::SmartsToMol(chain128));
+TEST(MoleculesSizeLimitTest, QueryMoleculeAt64AtomsSucceeds) {
+  // Exactly 64 carbons as SMARTS: should succeed
+  std::string chain64(64, 'C');
+  auto        mol = std::unique_ptr<RDKit::ROMol>(RDKit::SmartsToMol(chain64));
   ASSERT_NE(mol, nullptr);
-  ASSERT_EQ(mol->getNumAtoms(), 128u);
+  ASSERT_EQ(mol->getNumAtoms(), 64u);
 
   MoleculesHost batch;
   EXPECT_NO_THROW(nvMolKit::addQueryToBatch(mol.get(), batch));
   EXPECT_EQ(batch.numMolecules(), 1);
-  EXPECT_EQ(batch.totalAtoms(), 128);
+  EXPECT_EQ(batch.totalAtoms(), 64);
 }
 
 TEST(MoleculesHostTest, ParallelTargetPackingPropagatesPackingErrors) {
