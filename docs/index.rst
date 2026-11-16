@@ -110,7 +110,8 @@ reported by ``nvidia-smi`` and that has a matching PyTorch build on conda-forge.
 Pip Installation
 ^^^^^^^^^^^^^^^^
 
-Published binary wheels are available for CPython 3.11-3.14. The nvMolKit pip
+Published binary wheels are available for CPython 3.11-3.15. Python 3.15 wheels
+require RDKit 2026.09.2 or later. The nvMolKit pip
 wheels are built with CUDA Toolkit 12.9 and depend on CUDA 12 runtime packages.
 For pip environments, install a PyTorch CUDA 12 wheel supported by your driver
 before installing nvMolKit. For example, with PyTorch's CUDA 12.8 backend:
@@ -122,7 +123,8 @@ before installing nvMolKit. For example, with PyTorch's CUDA 12.8 backend:
     python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 
 Replace ``cu128`` with another CUDA 12 backend from the PyTorch install page if
-that is compatible with your driver.
+that is compatible with your driver. PyTorch has no Python 3.15 wheels for ``cu128``; on
+Python 3.15, use ``cu126`` or ``cu129``.
 
 The wheel published to PyPI is built against a single RDKit release per
 nvMolKit version (RDKit 2026.03.6 for nvMolKit v0.7.0), due to versioning
