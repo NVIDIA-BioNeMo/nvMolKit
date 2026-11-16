@@ -1597,9 +1597,9 @@ void populateQueryAtomBonds(const RDKit::ROMol* mol, MoleculesHost& batch) {
 
 void addQueryToBatch(const RDKit::ROMol* mol, MoleculesHost& batch) {
   ScopedNvtxRange range("addQueryToBatch");
-  if (mol->getNumAtoms() > kMaxTargetAtoms) {
+  if (mol->getNumAtoms() > kMaxQueryAtoms) {
     throw std::runtime_error("Query molecule has " + std::to_string(mol->getNumAtoms()) +
-                             " atoms, which exceeds the maximum of " + std::to_string(kMaxTargetAtoms));
+                             " atoms, which exceeds the maximum of " + std::to_string(kMaxQueryAtoms));
   }
 
   std::vector<int> fragMapping;
@@ -1677,9 +1677,9 @@ void addQueryToBatch(const RDKit::ROMol* mol, MoleculesHost& batch) {
 }
 
 void addQueryToBatch(const RDKit::ROMol* mol, MoleculesHost& batch, const std::vector<int>& childPatternIds) {
-  if (mol->getNumAtoms() > kMaxTargetAtoms) {
+  if (mol->getNumAtoms() > kMaxQueryAtoms) {
     throw std::runtime_error("Query molecule has " + std::to_string(mol->getNumAtoms()) +
-                             " atoms, which exceeds the maximum of " + std::to_string(kMaxTargetAtoms));
+                             " atoms, which exceeds the maximum of " + std::to_string(kMaxQueryAtoms));
   }
 
   std::vector<int> fragMapping;
