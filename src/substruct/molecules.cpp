@@ -1376,175 +1376,72 @@ void populateQueryAtomDataPacked(const RDKit::Atom* atom, AtomDataPacked& packed
   populatePacked(query);
 }
 
+//! Match-mask bits for one bond type in both ring states. AROMATIC and ONEANDAHALF share a packed representation.
+uint32_t bondTypeMatchBits(const int bondType) {
+  if (bondType < 0 || bondType > 15) {
+    return 0;  // No packed target bond has this type.
+  }
+  uint32_t types = 1u << bondType;
+  if (bondType == 7 || bondType == 12) {
+    types = (1u << 7) | (1u << 12);
+  }
+  return types | (types << 16);
+}
+
 /**
- * @brief Extract bond query flags from an RDKit bond query.
+ * @brief Evaluate a bond query tree into a match mask.
  *
- * Handles ring bond constraints (!@ and @) by examining the bond's query.
+ * The mask has the layout of buildQueryBondMatchMask: bit t for a non-ring bond of type t,
+ * bit 16 + t for a ring bond of type t.
  */
-void extractBondQueryFlags(const RDKit::Bond* bond, BondQueryData& queryData) {
-  queryData.bondType   = bond->getBondType();
-  queryData.queryFlags = BondQueryNone;
+uint32_t evaluateBondQuery(const RDKit::Bond::QUERYBOND_QUERY* query) {
+  constexpr uint32_t kAnyBond  = 0xFFFFFFFFu;
+  constexpr uint32_t kRingBond = 0xFFFF0000u;
 
-  if (!bond->hasQuery()) {
-    return;
+  const std::string& desc = query->getDescription();
+  uint32_t           mask = 0;
+  if (desc == "BondAnd") {
+    mask = kAnyBond;
+    for (auto it = query->beginChildren(); it != query->endChildren(); ++it) {
+      mask &= evaluateBondQuery((*it).get());
+    }
+  } else if (desc == "BondOr") {
+    for (auto it = query->beginChildren(); it != query->endChildren(); ++it) {
+      mask |= evaluateBondQuery((*it).get());
+    }
+  } else if (desc == "BondNull") {
+    mask = kAnyBond;
+  } else if (desc == "BondIsInRing" || desc == "BondInRing") {
+    mask = kRingBond;
+  } else if (desc == "BondOrder") {
+    mask = bondTypeMatchBits(static_cast<const RDKit::BOND_EQUALS_QUERY*>(query)->getVal());
+  } else if (desc == "SingleBond") {
+    mask = bondTypeMatchBits(1);
+  } else if (desc == "DoubleBond") {
+    mask = bondTypeMatchBits(2);
+  } else if (desc == "TripleBond") {
+    mask = bondTypeMatchBits(3);
+  } else if (desc == "BondIsAromatic") {
+    mask = bondTypeMatchBits(12);
+  } else if (desc == "SingleOrAromaticBond") {
+    mask = bondTypeMatchBits(1) | bondTypeMatchBits(12);
+  } else if (desc == "DoubleOrAromaticBond") {
+    mask = bondTypeMatchBits(2) | bondTypeMatchBits(12);
+  } else if (desc == "SingleOrDoubleBond") {
+    mask = bondTypeMatchBits(1) | bondTypeMatchBits(2);
+  } else if (desc == "SingleOrDoubleOrAromaticBond") {
+    mask = bondTypeMatchBits(1) | bondTypeMatchBits(2) | bondTypeMatchBits(12);
+  } else {
+    throw std::runtime_error("Unsupported SMARTS bond query: " + desc);
   }
+  return query->getNegation() ? ~mask : mask;
+}
 
-  const auto* query = bond->getQuery();
-  if (query == nullptr) {
-    return;
+uint32_t queryBondMatchMask(const RDKit::Bond* bond) {
+  if (bond->hasQuery() && bond->getQuery() != nullptr) {
+    return evaluateBondQuery(bond->getQuery());
   }
-
-  // Recursive function to process bond query tree
-  std::function<void(const RDKit::Bond::QUERYBOND_QUERY*)> processQuery;
-  processQuery = [&](const RDKit::Bond::QUERYBOND_QUERY* q) {
-    const std::string& desc      = q->getDescription();
-    const bool         isNegated = q->getNegation();
-
-    if (desc == "BondAnd") {
-      // Check for impossible constraints like single AND aromatic
-      // Must track both positive and negated constraints:
-      //   -:  (single AND aromatic) -> impossible
-      //   -!: (single AND NOT aromatic) -> valid
-      //   !-: (NOT single AND aromatic) -> valid
-      bool hasPositiveSingle   = false;
-      bool hasPositiveDouble   = false;
-      bool hasPositiveTriple   = false;
-      bool hasPositiveAromatic = false;
-      for (auto it = q->beginChildren(); it != q->endChildren(); ++it) {
-        const std::string childDesc    = (*it)->getDescription();
-        const bool        childNegated = (*it)->getNegation();
-        if (childDesc == "BondOrder") {
-          const auto* eqQuery  = static_cast<const RDKit::BOND_EQUALS_QUERY*>((*it).get());
-          int         bondType = eqQuery->getVal();
-          // Only count positive (non-negated) bond order constraints
-          if (!childNegated) {
-            if (bondType == 1) {
-              hasPositiveSingle = true;
-            } else if (bondType == 2) {
-              hasPositiveDouble = true;
-            } else if (bondType == 3) {
-              hasPositiveTriple = true;
-            } else if (bondType == 7 || bondType == 12) {
-              hasPositiveAromatic = true;
-            }
-          }
-        } else if (childDesc == "BondIsAromatic") {
-          // Only count positive (non-negated) aromatic constraint
-          // !: (NOT aromatic) is valid with single/double/triple
-          if (!childNegated) {
-            hasPositiveAromatic = true;
-          }
-        }
-      }
-      // Conflicting constraints: positive non-aromatic bond type AND positive aromatic requirement
-      // Examples that ARE impossible: -: (single AND aromatic)
-      // Examples that are valid: -!: (single AND NOT aromatic), !-: (NOT single AND aromatic)
-      if (hasPositiveAromatic && (hasPositiveSingle || hasPositiveDouble || hasPositiveTriple)) {
-        queryData.queryFlags |= BondQueryNeverMatches;
-        return;
-      }
-      // Process children normally for other BondAnd patterns (e.g., ring constraints)
-      for (auto it = q->beginChildren(); it != q->endChildren(); ++it) {
-        processQuery((*it).get());
-      }
-      return;
-    }
-
-    if (desc == "BondOr") {
-      // Collect all allowed bond types from the OR pattern (recursive for nested BondOr)
-      std::function<uint16_t(const RDKit::Bond::QUERYBOND_QUERY*)> collectBondMask;
-      collectBondMask = [&](const RDKit::Bond::QUERYBOND_QUERY* orQuery) -> uint16_t {
-        uint16_t mask = 0;
-        for (auto it = orQuery->beginChildren(); it != orQuery->endChildren(); ++it) {
-          const std::string childDesc = (*it)->getDescription();
-          if (childDesc == "BondOr") {
-            mask |= collectBondMask((*it).get());
-          } else if (childDesc == "BondOrder") {
-            const auto* eqQuery  = static_cast<const RDKit::BOND_EQUALS_QUERY*>((*it).get());
-            int         bondType = eqQuery->getVal();
-            if (bondType >= 0 && bondType < 16) {
-              mask |= (1u << bondType);
-              if (bondType == 7 || bondType == 12) {
-                mask |= (1u << 7) | (1u << 12);
-              }
-            }
-          } else if (childDesc == "BondIsAromatic") {
-            mask |= (1u << 7) | (1u << 12);
-          } else if (childDesc == "DoubleOrAromaticBond") {
-            mask |= (1u << 2) | (1u << 7) | (1u << 12);
-          } else if (childDesc == "SingleOrAromaticBond") {
-            mask |= (1u << 1) | (1u << 7) | (1u << 12);
-          } else if (childDesc == "TripleBond") {
-            mask |= (1u << 3);
-          } else if (childDesc == "DoubleBond") {
-            mask |= (1u << 2);
-          } else if (childDesc == "SingleBond") {
-            mask |= (1u << 1);
-          }
-        }
-        return mask;
-      };
-
-      uint16_t bondMask = collectBondMask(q);
-
-      if (bondMask != 0) {
-        queryData.queryFlags |= BondQueryUseBondMask;
-        queryData.allowedBondTypes = bondMask;
-        return;
-      }
-
-      // Fall through to process children normally for other BondOr patterns
-      for (auto it = q->beginChildren(); it != q->endChildren(); ++it) {
-        processQuery((*it).get());
-      }
-      return;
-    }
-
-    if (desc == "BondIsInRing" || desc == "BondInRing") {
-      if (isNegated) {
-        queryData.queryFlags |= BondQueryNotRingBond;
-      } else {
-        queryData.queryFlags |= BondQueryIsRingBond;
-      }
-    } else if (desc == "SingleOrAromaticBond") {
-      queryData.queryFlags |= BondQueryUseBondMask;
-      queryData.allowedBondTypes = (1u << 1) | (1u << 7) | (1u << 12);  // single, oneandahalf, aromatic
-    } else if (desc == "DoubleOrAromaticBond") {
-      queryData.queryFlags |= BondQueryUseBondMask;
-      queryData.allowedBondTypes = (1u << 2) | (1u << 7) | (1u << 12);  // double, oneandahalf, aromatic
-    } else if (desc == "BondIsAromatic") {
-      queryData.queryFlags |= BondQueryUseBondMask;
-      queryData.allowedBondTypes = (1u << 7) | (1u << 12);  // oneandahalf, aromatic
-    } else if (desc == "BondOrder") {
-      const auto* eqQuery  = static_cast<const RDKit::BOND_EQUALS_QUERY*>(q);
-      int         bondType = eqQuery->getVal();
-      queryData.bondType   = bondType;
-      // Also set up mask for consistency with edge consistency checker
-      if (bondType >= 0 && bondType < 16) {
-        queryData.queryFlags |= BondQueryUseBondMask;
-        if (isNegated) {
-          // NOT this bond type - allow all common types except this one
-          // Common bond types: single(1), double(2), triple(3), aromatic(7,12)
-          uint16_t allCommonTypes = (1u << 1) | (1u << 2) | (1u << 3) | (1u << 7) | (1u << 12);
-          uint16_t excludeMask    = (1u << bondType);
-          if (bondType == 7 || bondType == 12) {
-            excludeMask = (1u << 7) | (1u << 12);  // Exclude both aromatic representations
-          }
-          queryData.allowedBondTypes = allCommonTypes & ~excludeMask;
-        } else {
-          queryData.allowedBondTypes = (1u << bondType);
-          // Aromatic bonds can be stored as type 7 or 12
-          if (bondType == 7 || bondType == 12) {
-            queryData.allowedBondTypes |= (1u << 7) | (1u << 12);
-          }
-        }
-      }
-    } else if (desc == "BondNull") {
-      queryData.bondType = 0;  // Any bond - don't set mask, bondTypeMatches handles type 0
-    }
-  };
-
-  processQuery(query);
+  return buildQueryBondMatchMask(static_cast<uint8_t>(bond->getBondType()), BondQueryNone, 0);
 }
 
 /**
@@ -1567,22 +1464,17 @@ void populateQueryAtomBonds(const RDKit::ROMol* mol, MoleculesHost& batch) {
       const auto* bond        = (*mol)[*beg];
       const int   otherAtomId = bond->getOtherAtomIdx(atomIdx);
 
-      BondQueryData bqd;
-      extractBondQueryFlags(bond, bqd);
+      qab.neighborIdx[qab.degree] = static_cast<uint8_t>(otherAtomId);
+      qab.matchMask[qab.degree]   = queryBondMatchMask(bond);
 
       if constexpr (kDebugBoolTreeBuild) {
-        printf("[BondQuery] atom %d bond %d (%d-%d): queryType=%d, flags=0x%x, allowedTypes=0x%x\n",
+        printf("[BondQuery] atom %d bond %d (%d-%d): matchMask=0x%08x\n",
                atomIdx,
                qab.degree,
                bond->getBeginAtomIdx(),
                bond->getEndAtomIdx(),
-               bqd.bondType,
-               bqd.queryFlags,
-               bqd.allowedBondTypes);
+               qab.matchMask[qab.degree]);
       }
-
-      qab.neighborIdx[qab.degree] = static_cast<uint8_t>(otherAtomId);
-      qab.matchMask[qab.degree]   = buildQueryBondMatchMask(bqd.bondType, bqd.queryFlags, bqd.allowedBondTypes);
       ++qab.degree;
       ++beg;
     }

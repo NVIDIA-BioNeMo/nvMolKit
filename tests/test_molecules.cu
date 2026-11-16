@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include <gmock/gmock.h>
+#include <GraphMol/QueryOps.h>
 #include <GraphMol/ROMol.h>
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
@@ -1114,6 +1115,15 @@ TEST(MoleculesSizeLimitTest, QueryMoleculeAt64AtomsSucceeds) {
   EXPECT_NO_THROW(nvMolKit::addQueryToBatch(mol.get(), batch));
   EXPECT_EQ(batch.numMolecules(), 1);
   EXPECT_EQ(batch.totalAtoms(), 64);
+}
+
+TEST(MoleculesBondQueryTest, UnsupportedBondQueryThrows) {
+  auto mol = std::unique_ptr<RDKit::RWMol>(RDKit::SmartsToMol("CC"));
+  ASSERT_NE(mol, nullptr);
+  mol->getBondWithIdx(0)->setQuery(RDKit::makeBondMinRingSizeQuery(5));
+
+  MoleculesHost batch;
+  EXPECT_THROW(nvMolKit::addQueryToBatch(mol.get(), batch), std::runtime_error);
 }
 
 TEST(MoleculesHostTest, ParallelTargetPackingPropagatesPackingErrors) {

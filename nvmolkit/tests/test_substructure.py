@@ -1406,3 +1406,71 @@ def test_query_over_atom_limit_is_rejected(oversized):
 
     with pytest.raises(RuntimeError, match="exceeds the maximum of 64"):
         countSubstructMatches(targets, [largest, Chem.MolFromSmarts(oversized)])
+
+
+_BOND_QUERY_TARGETS = [
+    "CC",
+    "C=C",
+    "C#C",
+    "CC#C",
+    "C1CC1",
+    "C1=CC1",
+    "c1ccccc1",
+    "CC=CC#CC",
+    "C1CCC=CC1",
+    "O=Cc1ccccc1",
+]
+
+
+@pytest.mark.parametrize("algorithm", ["gsi", "dfs"])
+def test_bond_query_expressions_match_like_rdkit(algorithm):
+    """AND-ed, OR-ed and negated bond primitives, with and without ring terms, give RDKit's match counts."""
+    smarts = [
+        "C-!:C",
+        "C!-!:C",
+        "C!-;!=C",
+        "C!@;!=;!#C",
+        "C-!@C",
+        "C=,#C",
+        "C-@,=C",
+        "C@,=C",
+        "[#6]=,:@[#6]",
+        "C!-,=C",
+        "C!-,!=C",
+        "C!@,!-C",
+        "C=;@,!@C",
+        "C!~C",
+    ]
+    targets = [Chem.MolFromSmiles(smiles) for smiles in _BOND_QUERY_TARGETS]
+    queries = [Chem.MolFromSmarts(pattern) for pattern in smarts]
+
+    counts = countSubstructMatches(targets, queries, config=SubstructSearchConfig(algorithm=algorithm))
+
+    expected = [[len(target.GetSubstructMatches(query, uniquify=False)) for query in queries] for target in targets]
+    assert counts.tolist() == expected
+
+
+def test_single_or_double_bond_queries_match_like_rdkit():
+    """Bond queries that do not come from SMARTS: MDL 'single or double' and the conjugated five-ring adjustment."""
+    single_or_double = Chem.MolFromMolBlock(
+        """
+  RDKit
+
+  2  1  0  0  0  0            999 V2000
+    0.0000    0.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
+    1.0000    0.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
+  1  2  5  0  0  0  0
+M  END
+""",
+        sanitize=False,
+    )
+    params = Chem.AdjustQueryParameters.NoAdjustments()
+    params.adjustConjugatedFiveRings = True
+    five_ring = Chem.AdjustQueryProperties(Chem.MolFromSmiles("C1=CC=CN1"), params)
+    queries = [single_or_double, five_ring]
+    targets = [Chem.MolFromSmiles(smiles) for smiles in [*_BOND_QUERY_TARGETS, "c1cc[nH]c1", "C1=CCNC1", "C1CCNC1"]]
+
+    counts = countSubstructMatches(targets, queries)
+
+    expected = [[len(target.GetSubstructMatches(query, uniquify=False)) for query in queries] for target in targets]
+    assert counts.tolist() == expected
