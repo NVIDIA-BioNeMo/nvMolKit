@@ -4,20 +4,22 @@
 
 ### Summary
 
-nvMolKit 0.8.0 adds three GPU fingerprint-analysis capabilities: BitBIRCH clustering, k-means clustering, and exact top-k nearest-neighbor search with `FingerprintSearchIndex`. ETKDG conformer generation now matches RDKit 2026.09, including the ETKDGv4 preset and RDKit's all-in-one refinement, and the 3D descriptor API gains DCLV surface and volume properties and EEM partial charges. This release supports RDKit 2025.09.6, 2026.03.1 through 2026.03.6, and 2026.09.2. RDKit 2026.09.1 is not supported, because its installed development headers are incomplete ([rdkit/rdkit#9700](https://github.com/rdkit/rdkit/pull/9700)).
+nvMolKit 0.8.0 adds BitBIRCH clustering, k-means clustering, and exact top-k nearest-neighbor search over fingerprints with `FingerprintSearchIndex`. It also adds support for RDKit 2026.09 in ETKDG conformer generation, including the ETKDGv4 preset and RDKit's all-in-one refinement, and adds DCLV surface and volume properties and EEM partial charges to the 3D descriptor API. This release supports RDKit 2025.09.6, 2026.03.1 through 2026.03.6, and 2026.09.2. It does not support RDKit 2026.09.1, whose installed development headers are incomplete ([rdkit/rdkit#9700](https://github.com/rdkit/rdkit/pull/9700)).
 
 ### Contributors
+- Bradley Worley (@geekysuavo)
+- Eva Xue (@evasnow1992)
 - Kevin Boyd (@scal444)
 
 ### Features
-- BitBIRCH clustering of packed binary fingerprints with `nvmolkit.clustering.bitbirch`, with optional cluster centroids ([#321](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/321))
-- k-means clustering of packed binary fingerprints with `nvmolkit.clustering.kmeans`, under Tanimoto or cosine similarity, with k-means++, random, MaxMin, or user-supplied initialization, and optional fitting on a random sample. Requires a GPU of compute capability 8.0 or newer ([#381](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/381))
+- BitBIRCH clustering of fingerprints with `nvmolkit.clustering.bitbirch`, with optional cluster centroids ([#321](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/321))
+- k-means clustering of fingerprints with `nvmolkit.clustering.kmeans`, under Tanimoto or cosine similarity, with k-means++, random, MaxMin, or user-supplied initialization, and optional fitting on a random sample. Requires a GPU of compute capability 8.0 or newer ([#381](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/381))
 - Exact top-k fingerprint similarity search with `nvmolkit.similarity.FingerprintSearchIndex`. The library is copied to the GPU once and searched repeatedly, for queries or against itself, without forming the query x library similarity matrix ([#383](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/383), [#392](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/392))
 - ETKDGv4 support in `EmbedMolecules`, including its Gaussian experimental torsions. Requires RDKit 2026.09 or later ([#365](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/365), [#366](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/366))
 - RDKit's all-in-one ETKDG refinement (`useLegacyImplementation=False`) in `EmbedMolecules`, on RDKit 2026.03.4 and later ([#287](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/287))
 - DCLV 3D descriptors in `Calc3DProperties`: surface area, polar surface area, volume, van der Waals volume, polar volume, compactness, and packing density, matching RDKit's `DoubleCubicLatticeVolume` ([#373](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/373))
 - EEM partial charges in `Calc3DProperties` (`Property3D.EEM_CHARGES`), matching RDKit's `CalcEEMcharges` ([#376](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/376))
-- RDKit 2026.09 support. ETKDG setup follows RDKit 2026.09 where its behavior changed, including the torsion terms for forced amide and ester configurations and one experimental torsion per central bond ([#364](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/364), [#384](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/384))
+- RDKit 2026.09 support, including its changes to ETKDG setup ([#364](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/364), [#384](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/384))
 
 ### Performance Improvements
 - Fused Butina clustering is up to 2.4x faster, depending on the dataset ([#385](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/385))
@@ -30,10 +32,6 @@ nvMolKit 0.8.0 adds three GPU fingerprint-analysis capabilities: BitBIRCH cluste
 ### Bug Fixes
 - Fix AAP similarity always using every CPU core for descriptor generation. The limit is now set with `AAPMetric(num_threads=...)` ([#368](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/368))
 - Fix a crash on Blackwell (sm_100) GPUs in `fused_butina`, and in `fused_leader` and `fused_maxmin` with the AAP metric ([#374](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/374))
-
-### Miscellaneous
-- Benchmarks for BitBIRCH, k-means, and nearest-neighbor search, and fixes to CPU thread-pool handling in the existing benchmarks ([#370](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/370))
-- Type stubs are now linted, and annotations use Python 3.11 syntax ([#396](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/396))
 
 
 ## 0.7.0 - 2026-10-15
