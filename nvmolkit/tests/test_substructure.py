@@ -599,6 +599,29 @@ class TestUniquify:
         # Asymmetric queries should have same count
         assert len(results_uniquify[0][0]) == len(results_no_uniquify[0][0])
 
+    @pytest.mark.parametrize("max_matches", [1, 2, 3, 4])
+    def test_uniquify_before_max_matches(self, max_matches):
+        """The match cap applies to unique matches, on the GPU path and the oversized-target fallback."""
+        targets = [
+            Chem.MolFromSmiles("c1ccccc1Cc1ccccc1Cc1ccccc1"),
+            Chem.MolFromSmiles("c1ccccc1C" * 22 + "c1ccccc1"),
+        ]
+        assert targets[1].GetNumAtoms() > 128
+        query = Chem.MolFromSmarts("c1ccccc1")
+
+        config = SubstructSearchConfig()
+        config.uniquify = True
+        config.maxMatches = max_matches
+        results = getSubstructMatches(targets, [query], config)
+
+        for t_idx, target in enumerate(targets):
+            rdkit_capped = target.GetSubstructMatches(query, uniquify=True, maxMatches=max_matches)
+            rdkit_all = {frozenset(m) for m in target.GetSubstructMatches(query, uniquify=True)}
+            got = [frozenset(m) for m in results[t_idx][0]]
+            assert len(got) == len(rdkit_capped)
+            assert len(set(got)) == len(got)
+            assert set(got) <= rdkit_all
+
     def test_uniquify_single_atom_query(self):
         """Test that uniquify has no effect on single atom queries."""
         target = Chem.MolFromSmiles("CCCC")
