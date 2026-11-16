@@ -16,6 +16,7 @@
 #ifndef NVMOLKIT_FORCEFIELD_CONSTRAINTS_H
 #define NVMOLKIT_FORCEFIELD_CONSTRAINTS_H
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -34,12 +35,16 @@ struct DistanceConstraintSpec {
   double minLen        = 0.0;
   double maxLen        = 0.0;
   double forceConstant = 0.0;
+  //! Index into PerMolConstraints::referencePositions, or -1 to anchor to the positions passed to applyTo.
+  int    referenceIdx  = -1;
 };
 
 struct PositionConstraintSpec {
   int    idx           = -1;
   double maxDispl      = 0.0;
   double forceConstant = 0.0;
+  //! Index into PerMolConstraints::referencePositions, or -1 to anchor to the positions passed to applyTo.
+  int    referenceIdx  = -1;
 };
 
 struct AngleConstraintSpec {
@@ -50,6 +55,8 @@ struct AngleConstraintSpec {
   double minAngleDeg   = 0.0;
   double maxAngleDeg   = 0.0;
   double forceConstant = 0.0;
+  //! Index into PerMolConstraints::referencePositions, or -1 to anchor to the positions passed to applyTo.
+  int    referenceIdx  = -1;
 };
 
 struct TorsionConstraintSpec {
@@ -61,6 +68,8 @@ struct TorsionConstraintSpec {
   double minDihedralDeg = 0.0;
   double maxDihedralDeg = 0.0;
   double forceConstant  = 0.0;
+  //! Index into PerMolConstraints::referencePositions, or -1 to anchor to the positions passed to applyTo.
+  int    referenceIdx   = -1;
 };
 
 void   validateAtomIndex(int idx, int numAtoms, const std::string& what);
@@ -96,25 +105,31 @@ void appendTorsionConstraint(nvMolKit::UFF::EnergyForceContribsHost& contribs,
                              const TorsionConstraintSpec&            spec);
 
 struct PerMolConstraints {
-  std::vector<DistanceConstraintSpec> distance;
-  std::vector<PositionConstraintSpec> position;
-  std::vector<AngleConstraintSpec>    angle;
-  std::vector<TorsionConstraintSpec>  torsion;
+  std::vector<DistanceConstraintSpec>           distance;
+  std::vector<PositionConstraintSpec>           position;
+  std::vector<AngleConstraintSpec>              angle;
+  std::vector<TorsionConstraintSpec>            torsion;
+  //! Coordinate snapshots indexed [referenceIdx][conformer], taken when the constraints were added.
+  std::vector<std::vector<std::vector<double>>> referencePositions;
 
   bool empty() const { return distance.empty() && position.empty() && angle.empty() && torsion.empty(); }
 
-  template <typename Contribs> void applyTo(Contribs& contribs, const std::vector<double>& positions) const {
+  template <typename Contribs>
+  void applyTo(Contribs& contribs, const std::vector<double>& positions, const size_t confIdx) const {
+    const auto anchor = [&](const int referenceIdx) -> const std::vector<double>& {
+      return referenceIdx < 0 ? positions : referencePositions[referenceIdx][confIdx];
+    };
     for (const auto& s : distance) {
-      appendDistanceConstraint(contribs, positions, s);
+      appendDistanceConstraint(contribs, anchor(s.referenceIdx), s);
     }
     for (const auto& s : position) {
-      appendPositionConstraint(contribs, positions, s);
+      appendPositionConstraint(contribs, anchor(s.referenceIdx), s);
     }
     for (const auto& s : angle) {
-      appendAngleConstraint(contribs, positions, s);
+      appendAngleConstraint(contribs, anchor(s.referenceIdx), s);
     }
     for (const auto& s : torsion) {
-      appendTorsionConstraint(contribs, positions, s);
+      appendTorsionConstraint(contribs, anchor(s.referenceIdx), s);
     }
   }
 };

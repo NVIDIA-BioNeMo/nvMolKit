@@ -100,6 +100,7 @@ class _DistanceConstraint:
     min_len: float
     max_len: float
     force_constant: float
+    reference_idx: int
 
 
 @dataclass
@@ -107,6 +108,7 @@ class _PositionConstraint:
     idx: int
     max_displ: float
     force_constant: float
+    reference_idx: int
 
 
 @dataclass
@@ -118,6 +120,7 @@ class _AngleConstraint:
     min_angle_deg: float
     max_angle_deg: float
     force_constant: float
+    reference_idx: int
 
 
 @dataclass
@@ -130,25 +133,37 @@ class _TorsionConstraint:
     min_dihedral_deg: float
     max_dihedral_deg: float
     force_constant: float
+    reference_idx: int
 
 
 def _serialize_distance_constraints(constraints: list[_DistanceConstraint]):
-    return [(c.idx1, c.idx2, c.relative, c.min_len, c.max_len, c.force_constant) for c in constraints]
+    return [(c.idx1, c.idx2, c.relative, c.min_len, c.max_len, c.force_constant, c.reference_idx) for c in constraints]
 
 
 def _serialize_position_constraints(constraints: list[_PositionConstraint]):
-    return [(c.idx, c.max_displ, c.force_constant) for c in constraints]
+    return [(c.idx, c.max_displ, c.force_constant, c.reference_idx) for c in constraints]
 
 
 def _serialize_angle_constraints(constraints: list[_AngleConstraint]):
     return [
-        (c.idx1, c.idx2, c.idx3, c.relative, c.min_angle_deg, c.max_angle_deg, c.force_constant) for c in constraints
+        (c.idx1, c.idx2, c.idx3, c.relative, c.min_angle_deg, c.max_angle_deg, c.force_constant, c.reference_idx)
+        for c in constraints
     ]
 
 
 def _serialize_torsion_constraints(constraints: list[_TorsionConstraint]):
     return [
-        (c.idx1, c.idx2, c.idx3, c.idx4, c.relative, c.min_dihedral_deg, c.max_dihedral_deg, c.force_constant)
+        (
+            c.idx1,
+            c.idx2,
+            c.idx3,
+            c.idx4,
+            c.relative,
+            c.min_dihedral_deg,
+            c.max_dihedral_deg,
+            c.force_constant,
+            c.reference_idx,
+        )
         for c in constraints
     ]
 
@@ -202,7 +217,15 @@ class _BatchElementBase:
         """
         self._parent._validate_atom_indices(self._idx, idx1, idx2)
         self._parent._distance_constraints[self._idx].append(
-            _DistanceConstraint(idx1, idx2, relative, min_len, max_len, force_constant)
+            _DistanceConstraint(
+                idx1,
+                idx2,
+                relative,
+                min_len,
+                max_len,
+                force_constant,
+                self._parent._reference_idx(self._idx, relative),
+            )
         )
         self._parent._dirty = True
 
@@ -221,7 +244,9 @@ class _BatchElementBase:
             force_constant: Constraint force constant.
         """
         self._parent._validate_atom_indices(self._idx, idx)
-        self._parent._position_constraints[self._idx].append(_PositionConstraint(idx, max_displ, force_constant))
+        self._parent._position_constraints[self._idx].append(
+            _PositionConstraint(idx, max_displ, force_constant, self._parent._reference_idx(self._idx, True))
+        )
         self._parent._dirty = True
 
     def add_angle_constraint(
@@ -249,7 +274,16 @@ class _BatchElementBase:
         """
         self._parent._validate_atom_indices(self._idx, idx1, idx2, idx3)
         self._parent._angle_constraints[self._idx].append(
-            _AngleConstraint(idx1, idx2, idx3, relative, min_angle_deg, max_angle_deg, force_constant)
+            _AngleConstraint(
+                idx1,
+                idx2,
+                idx3,
+                relative,
+                min_angle_deg,
+                max_angle_deg,
+                force_constant,
+                self._parent._reference_idx(self._idx, relative),
+            )
         )
         self._parent._dirty = True
 
@@ -282,7 +316,17 @@ class _BatchElementBase:
         """
         self._parent._validate_atom_indices(self._idx, idx1, idx2, idx3, idx4)
         self._parent._torsion_constraints[self._idx].append(
-            _TorsionConstraint(idx1, idx2, idx3, idx4, relative, min_dihedral_deg, max_dihedral_deg, force_constant)
+            _TorsionConstraint(
+                idx1,
+                idx2,
+                idx3,
+                idx4,
+                relative,
+                min_dihedral_deg,
+                max_dihedral_deg,
+                force_constant,
+                self._parent._reference_idx(self._idx, relative),
+            )
         )
         self._parent._dirty = True
 
@@ -351,6 +395,7 @@ class _BatchedForcefieldBase:
         self._position_constraints: list[list[_PositionConstraint]] = [[] for _ in molecules]
         self._angle_constraints: list[list[_AngleConstraint]] = [[] for _ in molecules]
         self._torsion_constraints: list[list[_TorsionConstraint]] = [[] for _ in molecules]
+        self._reference_positions: list[list[list[list[float]]]] = [[] for _ in molecules]
         self._native_ff = None
         self._dirty = True
         self.num_molecules = len(molecules)
@@ -371,6 +416,16 @@ class _BatchedForcefieldBase:
         for idx in indices:
             if idx < 0 or idx >= num_atoms:
                 raise IndexError(f"Atom index {idx} out of range for molecule {batch_idx} with {num_atoms} atoms")
+
+    def _reference_idx(self, batch_idx: int, anchored: bool) -> int:
+        """Snapshot the molecule's conformer coordinates for a constraint anchored at add time, as RDKit does."""
+        if not anchored:
+            return -1
+        positions = [conf.GetPositions().ravel().tolist() for conf in self._molecules[batch_idx].GetConformers()]
+        snapshots = self._reference_positions[batch_idx]
+        if not snapshots or snapshots[-1] != positions:
+            snapshots.append(positions)
+        return len(snapshots) - 1
 
     def _serialized_constraints(self):
         return _serialize_all_constraints(
@@ -560,6 +615,7 @@ class MMFFBatchedForcefield(_BatchedForcefieldBase):
             pos,
             ang,
             tor,
+            self._reference_positions,
             self._hardware_options._as_native(),
             self._precision,
         )
@@ -698,6 +754,7 @@ class UFFBatchedForcefield(_BatchedForcefieldBase):
             pos,
             ang,
             tor,
+            self._reference_positions,
             self._hardware_options._as_native(),
             self._precision,
         )

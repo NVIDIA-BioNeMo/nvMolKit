@@ -181,7 +181,7 @@ UFFMinimizeResult UFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>& mols,
                                                     confInfo.conformerId,
                                                     ignoreInterfragInteractions[confInfo.molIdx]);
         if (!constraints.empty()) {
-          constraints[confInfo.molIdx].applyTo(ffParams, pos);
+          constraints[confInfo.molIdx].applyTo(ffParams, pos, confInfo.confIdx);
         }
         addMoleculeToBatch(ffParams, pos, systemHost, metadata, confInfo.molIdx, static_cast<int>(confInfo.confIdx));
       }
@@ -406,7 +406,7 @@ UFFMinimizeResult UFFMinimizeMoleculesConfsFire(
                                                     confInfo.conformerId,
                                                     ignoreInterfragInteractions[confInfo.molIdx]);
         if (!constraints.empty()) {
-          constraints[confInfo.molIdx].applyTo(ffParams, pos);
+          constraints[confInfo.molIdx].applyTo(ffParams, pos, confInfo.confIdx);
         }
         addMoleculeToBatch(ffParams, pos, systemHost, metadata, confInfo.molIdx, static_cast<int>(confInfo.confIdx));
       }

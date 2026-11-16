@@ -265,7 +265,7 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfs(std::vector<RDKit::ROMol*>&       
 
         auto contribs = it->second.ffParams;
         if (!constraints.empty()) {
-          constraints[confInfo.molIdx].applyTo(contribs, pos);
+          constraints[confInfo.molIdx].applyTo(contribs, pos, confInfo.confIdx);
         }
         nvMolKit::MMFF::addMoleculeToBatch(contribs, pos, systemHost, &metadata, confInfo.molIdx, confInfo.confIdx);
       }
@@ -555,7 +555,7 @@ MMFFMinimizeResult MMFFMinimizeMoleculesConfsFire(
         nvMolKit::confPosToVect(*confInfo.conformer, pos);
         auto contribs = it->second.ffParams;
         if (!constraints.empty()) {
-          constraints[confInfo.molIdx].applyTo(contribs, pos);
+          constraints[confInfo.molIdx].applyTo(contribs, pos, confInfo.confIdx);
         }
         nvMolKit::MMFF::addMoleculeToBatch(contribs, pos, systemHost, &metadata, confInfo.molIdx, confInfo.confIdx);
       }
