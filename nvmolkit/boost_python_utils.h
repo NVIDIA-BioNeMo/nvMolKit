@@ -25,6 +25,23 @@
 
 namespace nvMolKit {
 
+//! Releases the GIL for its lifetime so native worker threads can call back into Python (e.g. RDKit's Python log
+//! sink). Construct it only after all Python arguments are converted and touch no Python object while it is alive.
+//! The destructor re-acquires the GIL, including during exception unwinding, before Boost.Python translates the
+//! exception. Other Python threads run meanwhile and may modify the caller's lists, so callers keep their own
+//! reference to every molecule the native call reads, e.g. by copying the argument list into a tuple, and take
+//! option objects by value rather than referring to the caller's.
+class ScopedGilRelease {
+ public:
+  ScopedGilRelease() : state_(PyEval_SaveThread()) {}
+  ScopedGilRelease(const ScopedGilRelease&)            = delete;
+  ScopedGilRelease& operator=(const ScopedGilRelease&) = delete;
+  ~ScopedGilRelease() { PyEval_RestoreThread(state_); }
+
+ private:
+  PyThreadState* state_;
+};
+
 template <typename T> boost::python::list vectorToList(const std::vector<T>& vec) {
   boost::python::list list;
   for (const auto& value : vec) {
@@ -41,7 +58,7 @@ template <typename T> boost::python::list vectorOfVectorsToList(const std::vecto
   return outerList;
 }
 
-inline std::vector<RDKit::ROMol*> extractMolecules(const boost::python::list& molecules) {
+inline std::vector<RDKit::ROMol*> extractMolecules(const boost::python::object& molecules) {
   const int                  n = boost::python::len(molecules);
   std::vector<RDKit::ROMol*> mols;
   mols.reserve(n);

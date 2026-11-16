@@ -133,23 +133,26 @@ BOOST_PYTHON_MODULE(_substructure) {
 
   def(
     "getSubstructMatches",
-    +[](const list& targets, const list& queries, const nvMolKit::SubstructSearchConfig& config) {
+    +[](const list& targets, const list& queries, const nvMolKit::SubstructSearchConfig config) {
       nvMolKit::ScopedNvtxRange        extractRange("Python: extract mol pointers", nvMolKit::NvtxColor::kYellow);
+      // Keeps every molecule alive while the GIL is released, even if the caller's list changes.
+      const tuple                      heldTargets(targets);
+      const tuple                      heldQueries(queries);
       std::vector<const RDKit::ROMol*> targetsVec;
       std::vector<const RDKit::ROMol*> queriesVec;
 
-      targetsVec.reserve(len(targets));
-      for (int i = 0; i < len(targets); ++i) {
-        const RDKit::ROMol* mol = extract<const RDKit::ROMol*>(object(targets[i]));
+      targetsVec.reserve(len(heldTargets));
+      for (int i = 0; i < len(heldTargets); ++i) {
+        const RDKit::ROMol* mol = extract<const RDKit::ROMol*>(object(heldTargets[i]));
         if (mol == nullptr) {
           throw std::invalid_argument("Invalid target molecule at index " + std::to_string(i));
         }
         targetsVec.push_back(mol);
       }
 
-      queriesVec.reserve(len(queries));
-      for (int i = 0; i < len(queries); ++i) {
-        const RDKit::ROMol* mol = extract<const RDKit::ROMol*>(object(queries[i]));
+      queriesVec.reserve(len(heldQueries));
+      for (int i = 0; i < len(heldQueries); ++i) {
+        const RDKit::ROMol* mol = extract<const RDKit::ROMol*>(object(heldQueries[i]));
         if (mol == nullptr) {
           throw std::invalid_argument("Invalid query molecule at index " + std::to_string(i));
         }
@@ -158,7 +161,10 @@ BOOST_PYTHON_MODULE(_substructure) {
       extractRange.pop();
 
       nvMolKit::SubstructSearchResults results;
-      nvMolKit::getSubstructMatches(targetsVec, queriesVec, results, config.algorithm, nullptr, config);
+      {
+        const nvMolKit::ScopedGilRelease release;
+        nvMolKit::getSubstructMatches(targetsVec, queriesVec, results, config.algorithm, nullptr, config);
+      }
 
       auto csrPtr        = std::make_unique<SubstructMatchesCSR>();
       csrPtr->numTargets = results.numTargets;
@@ -236,23 +242,26 @@ BOOST_PYTHON_MODULE(_substructure) {
 
   def(
     "countSubstructMatches",
-    +[](const list& targets, const list& queries, const nvMolKit::SubstructSearchConfig& config) {
+    +[](const list& targets, const list& queries, const nvMolKit::SubstructSearchConfig config) {
       nvMolKit::ScopedNvtxRange        extractRange("Python: extract mol pointers", nvMolKit::NvtxColor::kYellow);
+      // Keeps every molecule alive while the GIL is released, even if the caller's list changes.
+      const tuple                      heldTargets(targets);
+      const tuple                      heldQueries(queries);
       std::vector<const RDKit::ROMol*> targetsVec;
       std::vector<const RDKit::ROMol*> queriesVec;
 
-      targetsVec.reserve(len(targets));
-      for (int i = 0; i < len(targets); ++i) {
-        const RDKit::ROMol* mol = extract<const RDKit::ROMol*>(object(targets[i]));
+      targetsVec.reserve(len(heldTargets));
+      for (int i = 0; i < len(heldTargets); ++i) {
+        const RDKit::ROMol* mol = extract<const RDKit::ROMol*>(object(heldTargets[i]));
         if (mol == nullptr) {
           throw std::invalid_argument("Invalid target molecule at index " + std::to_string(i));
         }
         targetsVec.push_back(mol);
       }
 
-      queriesVec.reserve(len(queries));
-      for (int i = 0; i < len(queries); ++i) {
-        const RDKit::ROMol* mol = extract<const RDKit::ROMol*>(object(queries[i]));
+      queriesVec.reserve(len(heldQueries));
+      for (int i = 0; i < len(heldQueries); ++i) {
+        const RDKit::ROMol* mol = extract<const RDKit::ROMol*>(object(heldQueries[i]));
         if (mol == nullptr) {
           throw std::invalid_argument("Invalid query molecule at index " + std::to_string(i));
         }
@@ -264,7 +273,10 @@ BOOST_PYTHON_MODULE(_substructure) {
       const int numQueries = static_cast<int>(queriesVec.size());
 
       auto countsPtr = std::make_unique<std::vector<int>>();
-      nvMolKit::countSubstructMatches(targetsVec, queriesVec, *countsPtr, config.algorithm, nullptr, config);
+      {
+        const nvMolKit::ScopedGilRelease release;
+        nvMolKit::countSubstructMatches(targetsVec, queriesVec, *countsPtr, config.algorithm, nullptr, config);
+      }
 
       nvMolKit::ScopedNvtxRange wrapRange("Python: wrap numpy array", nvMolKit::NvtxColor::kGreen);
       int*                      dataPtr = countsPtr->data();
@@ -294,23 +306,26 @@ BOOST_PYTHON_MODULE(_substructure) {
 
   def(
     "hasSubstructMatch",
-    +[](const list& targets, const list& queries, const nvMolKit::SubstructSearchConfig& config) {
+    +[](const list& targets, const list& queries, const nvMolKit::SubstructSearchConfig config) {
       nvMolKit::ScopedNvtxRange        extractRange("Python: extract mol pointers", nvMolKit::NvtxColor::kYellow);
+      // Keeps every molecule alive while the GIL is released, even if the caller's list changes.
+      const tuple                      heldTargets(targets);
+      const tuple                      heldQueries(queries);
       std::vector<const RDKit::ROMol*> targetsVec;
       std::vector<const RDKit::ROMol*> queriesVec;
 
-      targetsVec.reserve(len(targets));
-      for (int i = 0; i < len(targets); ++i) {
-        const RDKit::ROMol* mol = extract<const RDKit::ROMol*>(object(targets[i]));
+      targetsVec.reserve(len(heldTargets));
+      for (int i = 0; i < len(heldTargets); ++i) {
+        const RDKit::ROMol* mol = extract<const RDKit::ROMol*>(object(heldTargets[i]));
         if (mol == nullptr) {
           throw std::invalid_argument("Invalid target molecule at index " + std::to_string(i));
         }
         targetsVec.push_back(mol);
       }
 
-      queriesVec.reserve(len(queries));
-      for (int i = 0; i < len(queries); ++i) {
-        const RDKit::ROMol* mol = extract<const RDKit::ROMol*>(object(queries[i]));
+      queriesVec.reserve(len(heldQueries));
+      for (int i = 0; i < len(heldQueries); ++i) {
+        const RDKit::ROMol* mol = extract<const RDKit::ROMol*>(object(heldQueries[i]));
         if (mol == nullptr) {
           throw std::invalid_argument("Invalid query molecule at index " + std::to_string(i));
         }
@@ -319,7 +334,10 @@ BOOST_PYTHON_MODULE(_substructure) {
       extractRange.pop();
 
       auto resultsPtr = std::make_unique<nvMolKit::HasSubstructMatchResults>();
-      nvMolKit::hasSubstructMatch(targetsVec, queriesVec, *resultsPtr, config.algorithm, nullptr, config);
+      {
+        const nvMolKit::ScopedGilRelease release;
+        nvMolKit::hasSubstructMatch(targetsVec, queriesVec, *resultsPtr, config.algorithm, nullptr, config);
+      }
 
       nvMolKit::ScopedNvtxRange wrapRange("Python: wrap numpy array", nvMolKit::NvtxColor::kGreen);
       const int                 numTargets = resultsPtr->numTargets;

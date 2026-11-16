@@ -17,8 +17,10 @@
 #include <GraphMol/ROMol.h>
 
 #include <boost/python.hpp>
+#include <mutex>
 
 #include "nvmolkit/array_helpers.h"
+#include "nvmolkit/boost_python_utils.h"
 #include "src/morgan_fingerprint.h"
 #include "src/utils/device.h"
 #include "src/utils/nvtx.h"
@@ -37,7 +39,8 @@ PythonMoleculeSequence convertMolecules(const object& mols) {
     PyErr_SetString(PyExc_TypeError, "mols must be a sequence of RDKit molecules");
     throw_error_already_set();
   }
-  PyObject* sequence = PySequence_Fast(mols.ptr(), "mols must be a sequence of RDKit molecules");
+  // A tuple copy keeps every molecule alive while the GIL is released, even if the caller's list changes.
+  PyObject* sequence = PySequence_Tuple(mols.ptr());
   if (sequence == nullptr) {
     throw_error_already_set();
   }
@@ -74,7 +77,11 @@ nvMolKit::PyArray* getFingerprintsDevice(nvMolKit::MorganFingerprintGenerator&  
                                          cudaStream_t                               stream,
                                          const nvMolKit::FingerprintComputeOptions& computeOptions) {
   auto fingerprints = [&]() {
-    nvMolKit::ScopedNvtxRange range("MorganFPBindingNativeCompute", nvMolKit::NvtxColor::kOrange);
+    nvMolKit::ScopedNvtxRange        range("MorganFPBindingNativeCompute", nvMolKit::NvtxColor::kOrange);
+    const nvMolKit::ScopedGilRelease release;
+    // The generator reuses its GPU buffers across calls, so calls must not overlap once the GIL is released.
+    static std::mutex                generatorMutex;
+    const std::lock_guard            lock(generatorMutex);
     return generator.GetFingerprintsGpuBuffer<nBits>(mols, stream, computeOptions);
   }();
 

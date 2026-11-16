@@ -61,13 +61,16 @@ BOOST_PYTHON_MODULE(_embedMolecules) {
 
   bp::def(
     "EmbedMolecules",
-    +[](const bp::list&                             molecules,
-        const RDKit::DGeomHelpers::EmbedParameters& params,
-        int                                         confsPerMolecule,
-        int                                         maxIterations,
-        const nvMolKit::BatchHardwareOptions&       hardwareOptions,
-        const nvMolKit::PrecisionMode&              precision) {
-      auto molsVec = nvMolKit::extractMolecules(molecules);
+    +[](const bp::list&                            molecules,
+        const RDKit::DGeomHelpers::EmbedParameters params,
+        int                                        confsPerMolecule,
+        int                                        maxIterations,
+        const nvMolKit::BatchHardwareOptions       hardwareOptions,
+        const nvMolKit::PrecisionMode&             precision) {
+      // Keeps every molecule alive while the GIL is released, even if the caller's list changes.
+      const bp::tuple                  heldMolecules(molecules);
+      auto                             molsVec = nvMolKit::extractMolecules(heldMolecules);
+      const nvMolKit::ScopedGilRelease release;
       nvMolKit::embedMolecules(molsVec,
                                params,
                                confsPerMolecule,
@@ -100,25 +103,30 @@ BOOST_PYTHON_MODULE(_embedMolecules) {
 
   bp::def(
     "EmbedMoleculesDevice",
-    +[](const bp::list&                             molecules,
-        const RDKit::DGeomHelpers::EmbedParameters& params,
-        int                                         confsPerMolecule,
-        int                                         maxIterations,
-        const nvMolKit::BatchHardwareOptions&       hardwareOptions,
-        int                                         targetGpu,
-        const nvMolKit::PrecisionMode&              precision) -> bp::object {
-      auto molsVec = nvMolKit::extractMolecules(molecules);
-      auto result  = nvMolKit::embedMolecules(molsVec,
-                                             params,
-                                             confsPerMolecule,
-                                             maxIterations,
-                                             /*debugMode=*/false,
-                                             /*failures=*/nullptr,
-                                             hardwareOptions,
-                                             nvMolKit::BfgsBackend::HYBRID,
-                                             nvMolKit::CoordinateOutput::DEVICE,
-                                             targetGpu,
-                                             precision);
+    +[](const bp::list&                            molecules,
+        const RDKit::DGeomHelpers::EmbedParameters params,
+        int                                        confsPerMolecule,
+        int                                        maxIterations,
+        const nvMolKit::BatchHardwareOptions       hardwareOptions,
+        int                                        targetGpu,
+        const nvMolKit::PrecisionMode&             precision) -> bp::object {
+      // Keeps every molecule alive while the GIL is released, even if the caller's list changes.
+      const bp::tuple heldMolecules(molecules);
+      auto            molsVec = nvMolKit::extractMolecules(heldMolecules);
+      auto            result  = [&] {
+        const nvMolKit::ScopedGilRelease release;
+        return nvMolKit::embedMolecules(molsVec,
+                                        params,
+                                        confsPerMolecule,
+                                        maxIterations,
+                                        /*debugMode=*/false,
+                                        /*failures=*/nullptr,
+                                        hardwareOptions,
+                                        nvMolKit::BfgsBackend::HYBRID,
+                                        nvMolKit::CoordinateOutput::DEVICE,
+                                        targetGpu,
+                                        precision);
+      }();
       if (!result.has_value()) {
         throw std::runtime_error("embedMolecules(DEVICE) returned no device result");
       }

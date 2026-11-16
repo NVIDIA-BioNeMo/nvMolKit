@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "nvmolkit/array_helpers.h"
+#include "nvmolkit/boost_python_utils.h"
 #include "src/conformer_rmsd_mol.h"
 #include "src/utils/device.h"
 
@@ -44,20 +45,25 @@ BOOST_PYTHON_MODULE(_conformerRmsd) {
         throw std::invalid_argument("Invalid CUDA stream");
       }
 
-      const int numMols = boost::python::len(mols);
+      // Keeps every molecule alive while the GIL is released, even if the caller's list changes.
+      const boost::python::tuple heldMols(mols);
+      const int                  numMols = boost::python::len(heldMols);
       if (numMols == 0) {
         return boost::python::list();
       }
 
       std::vector<const RDKit::ROMol*> molsVec(numMols);
       for (int i = 0; i < numMols; ++i) {
-        molsVec[i] = boost::python::extract<const RDKit::ROMol*>(boost::python::object(mols[i]));
+        molsVec[i] = boost::python::extract<const RDKit::ROMol*>(boost::python::object(heldMols[i]));
         if (!molsVec[i]) {
           throw std::invalid_argument("Invalid molecule at index " + std::to_string(i));
         }
       }
 
-      auto buffers = nvMolKit::conformerRmsdBatchMatrixMol(molsVec, prealigned, *streamOpt, alignToFirstConformer);
+      auto buffers = [&] {
+        const nvMolKit::ScopedGilRelease release;
+        return nvMolKit::conformerRmsdBatchMatrixMol(molsVec, prealigned, *streamOpt, alignToFirstConformer);
+      }();
 
       boost::python::list results;
       for (int m = 0; m < numMols; ++m) {
@@ -83,7 +89,10 @@ BOOST_PYTHON_MODULE(_conformerRmsd) {
 
       const int     numConfs = mol.getNumConformers();
       const int64_t numPairs = numConfs >= 2 ? static_cast<int64_t>(numConfs) * (numConfs - 1) / 2 : 0;
-      auto          buffer   = nvMolKit::conformerRmsdMatrixMol(mol, prealigned, *streamOpt, alignToFirstConformer);
+      auto          buffer   = [&] {
+        const nvMolKit::ScopedGilRelease release;
+        return nvMolKit::conformerRmsdMatrixMol(mol, prealigned, *streamOpt, alignToFirstConformer);
+      }();
       return toOwnedPyArray(nvMolKit::makePyArray(buffer, boost::python::make_tuple(numPairs)));
     },
     (boost::python::arg("mol"),

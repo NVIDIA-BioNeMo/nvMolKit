@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "nvmolkit/boost_python_utils.h"
 #include "src/mcs/mcs_search.h"
 #include "src/utils/nvtx.h"
 
@@ -72,7 +73,7 @@ nvMolKit::MCSBondCompare parseBondCompare(const std::string& value) {
   throw std::invalid_argument("Unsupported bond_compare value: " + value);
 }
 
-std::vector<const RDKit::ROMol*> molsFromPythonList(const list& mols) {
+std::vector<const RDKit::ROMol*> molsFromPythonList(const object& mols) {
   nvMolKit::ScopedNvtxRange        range("Python MCS: extract mol pointers", nvMolKit::NvtxColor::kYellow);
   std::vector<const RDKit::ROMol*> out;
   out.reserve(len(mols));
@@ -152,8 +153,10 @@ BOOST_PYTHON_MODULE(_mcs) {
   def(
     "_findMCSBatch",
     +[](const list& mols, const list& pairs, const dict& options) {
-      auto molVec  = molsFromPythonList(mols);
-      auto pairVec = pairsFromPythonList(pairs);
+      // Keeps every molecule alive while the GIL is released, even if the caller's list changes.
+      const tuple heldMols(mols);
+      auto        molVec  = molsFromPythonList(heldMols);
+      auto        pairVec = pairsFromPythonList(pairs);
 
       nvMolKit::MCSParameters params;
       params.atomCompare          = parseAtomCompare(optionValue<std::string>(options, "atom_compare", "elements"));
@@ -176,7 +179,10 @@ BOOST_PYTHON_MODULE(_mcs) {
         optionValue<bool>(options, "bond_ring_matches_ring_only", false);
 
       nvMolKit::ScopedNvtxRange mcsRange("Python MCS: findMCSBatch", nvMolKit::NvtxColor::kOrange);
-      auto                      results = nvMolKit::findMCSBatch(molVec, pairVec, nullptr, params);
+      auto                      results = [&] {
+        const nvMolKit::ScopedGilRelease release;
+        return nvMolKit::findMCSBatch(molVec, pairVec, nullptr, params);
+      }();
       mcsRange.pop();
 
       auto buffers = std::make_unique<MCSResultBuffers>();
