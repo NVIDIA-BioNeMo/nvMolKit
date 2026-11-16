@@ -93,7 +93,7 @@ Conda Forge
 Conda is the recommended way to install nvMolKit, in line with RDKit's recommended installation practice. First, ensure
 you have a conda-based environment manager installed and activated, such as `Miniconda <https://docs.conda.io/en/latest/miniconda.html>`_ or `Miniforge <https://conda-forge.org/download/>`_.
 
-nvMolKit v0.7.0 supports RDKit 2025.09.6 and 2026.03.1 through 2026.03.6.
+nvMolKit v0.8.0 supports RDKit 2025.09.6, 2026.03.1 through 2026.03.6, and 2026.09.2. RDKit 2026.09.1 is not supported.
 
 To install with conda, run::
 
@@ -125,7 +125,7 @@ Replace ``cu128`` with another CUDA 12 backend from the PyTorch install page if
 that is compatible with your driver.
 
 The wheel published to PyPI is built against a single RDKit release per
-nvMolKit version (RDKit 2026.03.6 for nvMolKit v0.7.0), due to versioning
+nvMolKit version (RDKit 2026.09.2 for nvMolKit v0.8.0), due to versioning
 limitations in PyPI's dependency management system.
 
 Use this path if you do not have a constraint on which RDKit version to use;
@@ -142,12 +142,12 @@ To install nvMolKit pinned to a particular RDKit:
 .. code-block:: bash
 
     RDKIT_VERSION=2025.9.6
-    NVMOLKIT_VERSION=0.7.0
+    NVMOLKIT_VERSION=0.8.0
     pip install nvmolkit==${NVMOLKIT_VERSION}+rdkit${RDKIT_VERSION} \
         --extra-index-url https://nvidia-bionemo.github.io/nvMolKit/wheels/rdkit${RDKIT_VERSION}/simple/
 
 Replace ``2025.9.6`` with the RDKit version you want. Variants published for
-nvMolKit v0.7.0 cover RDKit 2025.09.6 and 2026.03.1 through 2026.03.6.
+nvMolKit v0.8.0 cover RDKit 2025.09.6, 2026.03.1 through 2026.03.6, and 2026.09.2.
 
 
 From Source
@@ -169,24 +169,32 @@ nvMolKit currently supports the following features:
     * Tanimoto and cosine Similarity
     * Supports all-to-all comparisons between fingerprints in a batch or between two batches of fingerprints
     * Supports compute in chunks to limit GPU memory usage
+    * Exact top-k nearest-neighbor search over a fingerprint library with ``FingerprintSearchIndex``
+    * Atom-Atom Path (AAP) similarity between molecules
 
 * **ETKDG Conformer Generation**: GPU-accelerated 3D conformer generation using Experimental-Torsion Knowledge-based Distance Geometry
     * Batch processing of multiple molecules with multiple conformers per molecule
     * Supports multiple GPUs
-    * Does not support all RDKit `EmbedParameters` options. Defaults in ETKDGv3() are supported with a few exceptions (see API documentation)
+    * Supports all RDKit embedding presets, including ETKDGv4 (RDKit 2026.09 or later), and RDKit's all-in-one refinement
+    * Does not support all RDKit ``EmbedParameters`` options (see API documentation)
+    * Optional single-precision mode (see :doc:`3d_minimizers`)
 
 * **Geometry Relaxation**: GPU-accelerated force field optimization of conformers
-    * MMFF94 and UFF force fields
+    * MMFF94 and UFF force fields, with optional constraints (see :doc:`forcefield`)
+    * BFGS and FIRE minimizers, in double or single precision (see :doc:`3d_minimizers`)
     * Batch optimization of multiple molecules and conformers
     * Supports multiple GPUs
 
 * **Clustering and diversity selection**: GPU-accelerated clustering and diverse subset selection (see :doc:`clustering`)
-    * Supports generic dense similarity matrix inputs from Tanimoto or other methods
-    * Supports fused in-loop Tanimoto/Cosine similarity for large datasets
+    * Butina and directed sphere exclusion (DISE) clustering, and Leader and MaxMin selection
+    * Supports generic dense distance matrix inputs from Tanimoto or other methods
+    * Supports fused in-loop Tanimoto, cosine, and AAP similarity for large datasets
+    * BitBIRCH clustering of binary fingerprints, with optional cluster centroids
+    * k-means clustering of binary fingerprints with Tanimoto or cosine similarity
 
-* **BitBIRCH clustering**: GPU-accelerated clustering of binary fingerprints, with optional cluster centroids
-
-* **k-means clustering**: GPU-accelerated k-means clustering of binary fingerprints with Tanimoto or cosine similarity
+* **3D Descriptors**: GPU-accelerated 3D molecular descriptors for batches of conformers, computed in one fused pass
+    * Moments of inertia and shape descriptors, PBF, WHIM, RDF, MORSE, AUTOCORR3D, USR, USRCAT, GETAWAY, DCLV surface and volume, and EEM partial charges
+    * Supports multiple GPUs
 
 * **Substructure Search**: GPU-accelerated substructure matching against batches of molecules
     * Supports SMILES and recursive SMARTS-based query molecules via RDKit
@@ -239,7 +247,7 @@ the operation runs on. If not specified, the current torch stream is used.
 Hardware targeting
 ------------------
 
-Some operations (currently conformer generation and energy relaxation) support multiple GPUs,and have options for
+Some operations (currently conformer generation, energy relaxation, and 3D descriptors) support multiple GPUs, and have options for
 controlling tunable performance parameters. The ``HardwareOptions`` class can be used to specify these options.
 
 An example:

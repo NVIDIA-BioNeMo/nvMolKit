@@ -24,7 +24,7 @@ Conda is the recommended way to install nvMolKit, matching the recommended distr
 you have a variant of conda installed and activated, such as [Miniconda](https://docs.conda.io/en/latest/miniconda.html) 
 or [Miniforge](https://conda-forge.org/download/).
 
-nvMolKit v0.7.0 supports RDKit 2025.09.6 and 2026.03.1 through 2026.03.6. To install:
+nvMolKit v0.8.0 supports RDKit 2025.09.6, 2026.03.1 through 2026.03.6, and 2026.09.2. RDKit 2026.09.1 is not supported. To install:
 
 ```bash
 conda install -c conda-forge nvmolkit
@@ -59,7 +59,7 @@ Replace `cu128` with another CUDA 12 backend from the PyTorch install page if th
 compatible with your driver.
 
 The wheel published to PyPI is built against a single RDKit release per
-nvMolKit version (RDKit 2026.03.6 for nvMolKit v0.7.0), due to versioning
+nvMolKit version (RDKit 2026.09.2 for nvMolKit v0.8.0), due to versioning
 limitations in PyPI's dependency management system.
 
 Use this path if you do not have a constraint on which RDKit version to use;
@@ -73,12 +73,12 @@ To install nvMolKit pinned to a particular RDKit:
 
 ```bash
 RDKIT_VERSION=2025.9.6
-NVMOLKIT_VERSION=0.7.0
+NVMOLKIT_VERSION=0.8.0
 pip install nvmolkit==${NVMOLKIT_VERSION}+rdkit${RDKIT_VERSION} \
     --extra-index-url https://nvidia-bionemo.github.io/nvMolKit/wheels/rdkit${RDKIT_VERSION}/simple/
 ```
 
-Replace `2025.9.6` with the RDKit version you want. Variants published for nvMolKit v0.7.0 cover RDKit 2025.09.6 and 2026.03.1 through 2026.03.6.
+Replace `2025.9.6` with the RDKit version you want. Variants published for nvMolKit v0.8.0 cover RDKit 2025.09.6, 2026.03.1 through 2026.03.6, and 2026.09.2.
 
 
 ### Installation from Source
@@ -146,7 +146,7 @@ conda create --name nvmolkit_dev_py312 python=3.12.1
 conda activate nvmolkit_dev_py312
 
 # Install RDKit with development headers
-conda install -c conda-forge rdkit=2025.09.1 librdkit-dev=2025.09.1
+conda install -c conda-forge rdkit=2026.09.2 librdkit-dev=2026.09.2
 
 # Install Boost subpackages in case RDKit install did not include them transitively
 conda install -c conda-forge libboost libboost-python libboost-devel libboost-headers libboost-python-devel
@@ -204,10 +204,6 @@ cd ../../ && rm -rf cppcheck-2.14.2 2.14.2.tar.gz
 
 ### Development Build Options
 
-#### Compilers
-
-- **Supported Compilers**: We have tested and support clang-15 and GCC 12. Other compilers may work but are not extensively tested.
-
 #### CMake Build Options
 
 - **`-DCMAKE_BUILD_TYPE=<type>`**: Available options for build type include `Release`, `Debug`, `RelWithDebInfo`, `asan`, `tsan`, and `ubsan`.
@@ -245,8 +241,8 @@ docker build -f admin/container/manylinux_2_28_cuda12.Dockerfile \
   -t nvmolkit-manylinux-cuda12:test .
 pip install cibuildwheel
 CIBW_MANYLINUX_X86_64_IMAGE=nvmolkit-manylinux-cuda12:test \
-  RDKIT_VERSION=2026.3.6 \
-  bash admin/deploy/build_pip_wheels.sh 2026.3.6 wheelhouse
+  RDKIT_VERSION=2026.9.2 \
+  bash admin/deploy/build_pip_wheels.sh 2026.9.2 wheelhouse
 ```
 
 To narrow the matrix while iterating, set `CIBW_BUILD=cp312-manylinux_x86_64` (or whichever python tag you care about) before invoking the script. Wheels land in `wheelhouse/`.

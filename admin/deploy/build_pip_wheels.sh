@@ -23,7 +23,7 @@
 #
 # Arguments:
 #   rdkit_version : entry in admin/distribute/rdkit_build_matrix.yaml
-#                   (e.g., 2025.9.1, 2025.9.6, 2026.3.5)
+#                   (e.g., 2025.9.6, 2026.3.6, 2026.9.2)
 #   output_dir    : where wheels land (default: ./wheelhouse)
 #
 # The pyproject.toml [tool.cibuildwheel.linux].before-build hook runs
