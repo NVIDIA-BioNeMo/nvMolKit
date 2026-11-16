@@ -864,3 +864,30 @@ TEST_F(TFDCpuTest, BatchProcessing) {
     }
   }
 }
+
+TEST_F(TFDCpuTest, BatchSystemBuildPropagatesMoleculeError) {
+  auto mol         = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol("CCCCO"));
+  auto noConformer = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol("CCCCO"));
+  ASSERT_NE(mol, nullptr);
+  ASSERT_NE(noConformer, nullptr);
+  generateConformers(*mol, 3);
+  ASSERT_EQ(mol->getNumConformers(), 3);
+
+  const std::vector<const RDKit::ROMol*> molPtrs = {mol.get(), noConformer.get()};
+  EXPECT_THROW(nvMolKit::buildTFDSystem(molPtrs, nvMolKit::TFDComputeOptions{}), std::runtime_error);
+}
+
+TEST_F(TFDCpuTest, BatchProcessingPropagatesMoleculeError) {
+  auto mol         = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol("CCCCO"));
+  auto unsanitized = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol("CCCCO", 0, /*sanitize=*/false));
+  ASSERT_NE(mol, nullptr);
+  ASSERT_NE(unsanitized, nullptr);
+  generateConformers(*mol, 3);
+  ASSERT_EQ(mol->getNumConformers(), 3);
+  for (auto it = mol->beginConformers(); it != mol->endConformers(); ++it) {
+    unsanitized->addConformer(new RDKit::Conformer(**it), /*assignId=*/true);
+  }
+
+  const std::vector<const RDKit::ROMol*> molPtrs = {mol.get(), unsanitized.get()};
+  EXPECT_ANY_THROW(generator_.GetTFDMatrices(molPtrs, nvMolKit::TFDComputeOptions{}));
+}

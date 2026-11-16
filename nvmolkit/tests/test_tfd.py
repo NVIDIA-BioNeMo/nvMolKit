@@ -458,3 +458,12 @@ class TestEdgeCases:
 
         with pytest.raises(ValueError):
             tfd.GetTFDMatrices(mols)
+
+    def test_no_conformers_in_batch_raises(self, simple_mol_with_conformers):
+        """A molecule without conformers raises from the batch call as it does from the single-molecule call."""
+        no_conformers = Chem.MolFromSmiles("CCCC")
+
+        with pytest.raises(RuntimeError, match="no conformers"):
+            tfd.GetTFDMatrix(no_conformers)
+        with pytest.raises(RuntimeError, match="no conformers"):
+            tfd.GetTFDMatrices([simple_mol_with_conformers, no_conformers])
