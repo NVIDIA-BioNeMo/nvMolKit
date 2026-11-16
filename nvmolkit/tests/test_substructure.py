@@ -1406,3 +1406,23 @@ def test_query_over_atom_limit_is_rejected(oversized):
 
     with pytest.raises(RuntimeError, match="exceeds the maximum of 64"):
         countSubstructMatches(targets, [largest, Chem.MolFromSmarts(oversized)])
+
+
+@pytest.mark.parametrize("algorithm", ["gsi", "dfs"])
+@pytest.mark.parametrize(
+    "smarts",
+    ["C1.C23.C45.C12.C34.C5", "[$(C1.C23.C45.C12.C34.C5)]", "[!$(C1.C23.C45.C12.C34.C5)]"],
+    ids=["query", "recursive_pattern", "negated_recursive_pattern"],
+)
+def test_counts_and_existence_survive_partial_match_overflow(algorithm, smarts):
+    """A hexane chain whose first three query atoms are not bonded to each other has a very wide search frontier."""
+    query = Chem.MolFromSmarts(smarts)
+    targets = [Chem.MolFromSmiles("C" * 40), Chem.MolFromSmiles("CO" * 17 + "CCCCCC")]
+    config = SubstructSearchConfig(algorithm=algorithm)
+
+    counts = countSubstructMatches(targets, [query], config)
+    has_match = hasSubstructMatch(targets, [query], config)
+
+    expected = [len(target.GetSubstructMatches(query, uniquify=False, maxMatches=100000)) for target in targets]
+    assert counts[:, 0].tolist() == expected
+    assert has_match[:, 0].astype(bool).tolist() == [count > 0 for count in expected]

@@ -121,8 +121,13 @@ void MiniBatchResultsDevice::copyMiniBatchToHost(int*     hostMatchCounts,
   overflowFlags_.copyToHost(hostOverflowFlags, miniBatchSize_);
 }
 
-void MiniBatchResultsDevice::copyCountsOnlyToHost(int* hostMatchCounts) const {
+void MiniBatchResultsDevice::copyCountsOnlyToHost(int* hostMatchCounts, uint8_t* hostOverflowFlags) const {
   matchCounts_.copyToHost(hostMatchCounts, miniBatchSize_);
+  overflowFlags_.copyToHost(hostOverflowFlags, miniBatchSize_);
+}
+
+void MiniBatchResultsDevice::zeroOverflowFlags() {
+  overflowFlags_.zero();
 }
 
 // =============================================================================
@@ -276,7 +281,7 @@ void initiateResultsCopyToHost(GpuExecutor& executor, const PinnedHostBuffer& ho
 
 void initiateCountsOnlyCopyToHost(GpuExecutor& executor, const PinnedHostBuffer& hostBuffer) {
   ScopedNvtxRange copyRange("initiateCountsOnlyCopyToHost");
-  executor.deviceResults.copyCountsOnlyToHost(hostBuffer.matchCounts.data());
+  executor.deviceResults.copyCountsOnlyToHost(hostBuffer.matchCounts.data(), hostBuffer.overflowFlags.data());
   cudaCheckError(cudaEventRecord(executor.copyDoneEvent.event(), executor.stream()));
 }
 
@@ -377,17 +382,19 @@ void accumulateMiniBatchResultsBoolean(GpuExecutor&               executor,
                                        const ThreadWorkerContext& ctx,
                                        HasSubstructMatchResults&  results,
                                        std::mutex&                resultsMutex,
-                                       const PinnedHostBuffer&    hostBuffer) {
+                                       const PinnedHostBuffer&    hostBuffer,
+                                       RDKitFallbackQueue*        fallbackQueue) {
   ScopedNvtxRange accumRange("accumulateMiniBatchResultsBoolean");
 
   std::lock_guard<std::mutex> lock(resultsMutex);
 
   for (int i = 0; i < executor.plan.numPairsInMiniBatch; ++i) {
-    if (hostBuffer.matchCounts[i] == 0) {
-      continue;
-    }
     const auto [targetIdx, queryIdx] = resolvePairIndices(i, ctx, hostBuffer);
-    results.setMatch(targetIdx, queryIdx, true);
+    if (hostBuffer.overflowFlags[i] != 0 && fallbackQueue != nullptr) {
+      fallbackQueue->enqueue({targetIdx, queryIdx});
+    } else if (hostBuffer.matchCounts[i] != 0) {
+      results.setMatch(targetIdx, queryIdx, true);
+    }
   }
 }
 
@@ -395,13 +402,18 @@ void accumulateMiniBatchResultsCounts(GpuExecutor&               executor,
                                       const ThreadWorkerContext& ctx,
                                       std::vector<int>&          counts,
                                       std::mutex&                resultsMutex,
-                                      const PinnedHostBuffer&    hostBuffer) {
+                                      const PinnedHostBuffer&    hostBuffer,
+                                      RDKitFallbackQueue*        fallbackQueue) {
   ScopedNvtxRange accumRange("accumulateMiniBatchResultsCounts");
 
   std::lock_guard<std::mutex> lock(resultsMutex);
 
   for (int i = 0; i < executor.plan.numPairsInMiniBatch; ++i) {
-    const auto [targetIdx, queryIdx]           = resolvePairIndices(i, ctx, hostBuffer);
+    const auto [targetIdx, queryIdx] = resolvePairIndices(i, ctx, hostBuffer);
+    if (hostBuffer.overflowFlags[i] != 0 && fallbackQueue != nullptr) {
+      fallbackQueue->enqueue({targetIdx, queryIdx});
+      continue;
+    }
     const int64_t globalPairIdx                = static_cast<int64_t>(targetIdx) * ctx.numQueries + queryIdx;
     counts[static_cast<size_t>(globalPairIdx)] = hostBuffer.matchCounts[i];
   }

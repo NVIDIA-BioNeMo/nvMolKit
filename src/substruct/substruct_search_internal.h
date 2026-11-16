@@ -107,14 +107,18 @@ class MiniBatchResultsDevice {
                            uint8_t* hostOverflowFlags) const;
 
   /**
-   * @brief Copy only match counts to host (for boolean output mode).
+   * @brief Copy only match counts and overflow flags to host (for boolean and count output modes).
    *
    * Skips copying reportedCounts and matchIndices for efficiency when
-   * only existence of matches is needed.
+   * only existence or the number of matches is needed.
    *
    * @param hostMatchCounts Output: match counts for this mini-batch [miniBatchSize]
+   * @param hostOverflowFlags Output: overflow flags for this mini-batch [miniBatchSize]
    */
-  void copyCountsOnlyToHost(int* hostMatchCounts) const;
+  void copyCountsOnlyToHost(int* hostMatchCounts, uint8_t* hostOverflowFlags) const;
+
+  //! Clear the per-pair overflow flags.
+  void zeroOverflowFlags();
 
   void setQueryAtomCounts(const int* queryAtomCounts, size_t count);
 
@@ -309,7 +313,8 @@ void accumulateMiniBatchResultsBoolean(GpuExecutor&               executor,
                                        const ThreadWorkerContext& ctx,
                                        HasSubstructMatchResults&  results,
                                        std::mutex&                resultsMutex,
-                                       const PinnedHostBuffer&    hostBuffer);
+                                       const PinnedHostBuffer&    hostBuffer,
+                                       RDKitFallbackQueue*        fallbackQueue = nullptr);
 
 /**
  * @brief Accumulate match count results from a completed mini-batch.
@@ -318,7 +323,8 @@ void accumulateMiniBatchResultsCounts(GpuExecutor&               executor,
                                       const ThreadWorkerContext& ctx,
                                       std::vector<int>&          counts,
                                       std::mutex&                resultsMutex,
-                                      const PinnedHostBuffer&    hostBuffer);
+                                      const PinnedHostBuffer&    hostBuffer,
+                                      RDKitFallbackQueue*        fallbackQueue = nullptr);
 
 }  // namespace nvMolKit
 

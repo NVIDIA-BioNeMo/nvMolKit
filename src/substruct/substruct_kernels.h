@@ -156,6 +156,7 @@ void launchSubstructMatchKernel(SubstructTemplateConfig       config,
  * @param overflowCapacity Entries per overflow buffer
  * @param labelMatrixBuffer Pre-computed label matrices
  * @param firstTargetIdx First target index for block offset calculation
+ * @param overflowFlags Per-pair overflow flags of the mini-batch, set when a pattern search overflows
  * @param stream CUDA stream
  */
 void launchSubstructPaintKernel(SubstructTemplateConfig    config,
@@ -177,6 +178,7 @@ void launchSubstructPaintKernel(SubstructTemplateConfig    config,
                                 int                        overflowCapacity,
                                 const uint32_t*            labelMatrixBuffer,
                                 int                        firstTargetIdx,
+                                uint8_t*                   overflowFlags,
                                 cudaStream_t               stream);
 
 /**
