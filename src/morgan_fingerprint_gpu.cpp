@@ -399,6 +399,8 @@ AsyncDeviceVector<FlatBitVect<fpSize>> computeFingerprintsCuImpl(const std::vect
   if (numThreadsTotal == 0) {
     numThreadsTotal = std::min(workLarge.size(), static_cast<size_t>(nThreadsActual));
   }
+  int callerDevice = 0;
+  cudaCheckError(cudaGetDevice(&callerDevice));
   detail::OpenMPExceptionRegistry exceptionRegistry;
   ScopedNvtxRange                 rangeParallel("MorganFPParallelPreprocessAndLaunch");
 
@@ -412,13 +414,14 @@ AsyncDeviceVector<FlatBitVect<fpSize>> computeFingerprintsCuImpl(const std::vect
                                                                             work32,            \
                                                                             work64,            \
                                                                             work128,           \
+                                                                            callerDevice,      \
                                                                             exceptionRegistry)
   for (size_t i = 0; i < numThreadsTotal; i++) {
     try {
       std::vector<std::pair<FlatBitVect<fpSize>, int>> largeResults;
 
       auto&             threadCpuBuffers = threadBuffers[omp_get_thread_num()];
-      const WithDevice  dev(0);
+      const WithDevice  dev(callerDevice);
       // Do large molecules while we're waiting for the previous cycle, if possible
       const std::string rangeName =
         "LargeMolecules processing during downtime in main run thread " + std::to_string(omp_get_thread_num());
