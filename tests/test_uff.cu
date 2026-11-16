@@ -238,6 +238,38 @@ INSTANTIATE_TEST_SUITE_P(UFFOneTwoAtoms,
                            return std::string(info.param.name) + precision;
                          });
 
+// A three-coordinate phosphorus has an inversion term with a nonzero cos(2w) coefficient.
+TEST(UFFGpuGradient, TrivalentPhosphorusMatchesFiniteDifference) {
+  auto mol = std::unique_ptr<RDKit::RWMol>(RDKit::SmilesToMol("CP(C)C"));
+  ASSERT_NE(mol, nullptr);
+  RDKit::MolOps::addHs(*mol);
+  ASSERT_EQ(RDKit::DGeomHelpers::EmbedMolecule(*mol, 0, 42), 0);
+
+  const auto                 positions = positionsFromMol(*mol);
+  const auto                 contribs  = constructForcefieldContribs(*mol);
+  BatchedMolecularSystemHost host;
+  addMoleculeToBatch(contribs, positions, host);
+
+  AsyncDeviceVector<double> positionsDevice;
+  positionsDevice.setFromVector(positions);
+  const auto gotGrad = computeGradientViaForcefield(host, positionsDevice);
+
+  constexpr double    step = 1.0e-5;
+  std::vector<double> wantGrad(positions.size(), 0.0);
+  for (size_t i = 0; i < positions.size(); ++i) {
+    auto displaced = positions;
+    displaced[i]   = positions[i] + step;
+    positionsDevice.setFromVector(displaced);
+    const double energyPlus = computeEnergyViaForcefield(host, positionsDevice);
+    displaced[i]            = positions[i] - step;
+    positionsDevice.setFromVector(displaced);
+    const double energyMinus = computeEnergyViaForcefield(host, positionsDevice);
+    wantGrad[i]              = (energyPlus - energyMinus) / (2.0 * step);
+  }
+
+  EXPECT_THAT(gotGrad, ::testing::Pointwise(::testing::DoubleNear(kGradTol), wantGrad));
+}
+
 class UFFValidationPrecisionTest : public ::testing::TestWithParam<nvMolKit::PrecisionMode> {};
 
 TEST_P(UFFValidationPrecisionTest, BatchMatchesRDKitValidationSet) {

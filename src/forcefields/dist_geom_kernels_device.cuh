@@ -760,7 +760,8 @@ static __device__ __forceinline__ void inversionGrad(const DG_REAL* pos,
   const DG_REAL sinTheta    = rawSinTheta > DG_REAL(1.0e-8) ? rawSinTheta : DG_REAL(1.0e-8);
 
   // Calculate dE_dW
-  const DG_REAL dE_dW = -forceConstant * (C1 * cosY - DG_REAL(4.0) * C2 * cosY * sinY);
+  // RDKit releases before 2026.03.2 have the sign of the C2 term inverted (fixed in RDKit PR 9228).
+  const DG_REAL dE_dW = -forceConstant * (C1 * cosY + DG_REAL(4.0) * C2 * cosY * sinY);
 
   // Calculate cross products for gradient terms
   DG_REAL t1x, t1y, t1z;  // rJL × rJK
