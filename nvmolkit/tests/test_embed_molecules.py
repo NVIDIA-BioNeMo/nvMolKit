@@ -708,3 +708,13 @@ def _check_embedding_geometry_and_stereochemistry(precision, device_output, rand
         conformer_id = detected.AddConformer(conformation, assignId=True)
         Chem.AssignStereochemistryFrom3D(detected, confId=conformer_id, replaceExistingTags=True)
         assert Chem.MolToSmiles(detected) == expected_stereochemistry[molecule_index]
+
+
+def test_embed_molecules_rejects_repeated_molecule():
+    """The same Mol object listed twice is rejected before anything is embedded."""
+    mol = Chem.AddHs(Chem.MolFromSmiles("CCO"))
+
+    with pytest.raises(ValueError, match="same molecule object is listed at indices 0 and 1"):
+        embed.EmbedMolecules([mol, mol], rdDistGeom.ETKDGv3(), confsPerMolecule=2)
+
+    assert mol.GetNumConformers() == 0

@@ -37,6 +37,7 @@
 #include "src/etkdg_stage_update_conformers.h"
 #include "src/utils/cccl_compat.h"
 #include "src/utils/device.h"
+#include "src/utils/duplicate_molecules.h"
 #include "src/utils/host_vector.h"
 #include "src/utils/nvtx.h"
 #include "src/utils/openmp_helpers.h"
@@ -118,6 +119,10 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
     if (!paramsCopy.useRandomCoords && mol->getNumAtoms() > 256) {
       throw std::invalid_argument("Eigenvalue coordinate generation supports at most 256 atoms per molecule");
     }
+  }
+  // Conformers are written back per molecule, so a molecule can only be listed once. Device output keeps repeats.
+  if (!deviceOutput) {
+    throwIfDuplicateMolecules(mols, "Use confsPerMolecule for more conformers of one molecule, or pass a copy.");
   }
 
   // Default to 4 batches per GPU and 500 conformers per batch

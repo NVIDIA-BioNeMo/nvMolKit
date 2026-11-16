@@ -23,6 +23,7 @@
 #include <omp.h>
 #endif
 
+#include "src/utils/duplicate_molecules.h"
 #include "src/utils/nvtx.h"
 #include "src/utils/openmp_helpers.h"
 
@@ -208,6 +209,7 @@ std::vector<double> TFDCpuGenerator::GetTFDMatrix(const RDKit::ROMol& mol, const
 std::vector<std::vector<double>> TFDCpuGenerator::GetTFDMatrices(const std::vector<const RDKit::ROMol*>& mols,
                                                                  const TFDComputeOptions&                options) {
   ScopedNvtxRange range("CPU: GetTFDMatrices (" + std::to_string(mols.size()) + " mols)", NvtxColor::kGreen);
+  throwIfDuplicateMolecules(mols, "Pass a copy to include a molecule more than once.");
   std::vector<std::vector<double>> results(mols.size());
   detail::OpenMPExceptionRegistry  exceptionHandler;
 
