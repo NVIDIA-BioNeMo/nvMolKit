@@ -31,6 +31,20 @@
 namespace nvMolKit {
 namespace detail {
 
+namespace {
+
+//! A conformer kept in the result: its result key (molecule, conformer index) and where it lives in its collector.
+struct KeptConformer {
+  int molId;
+  int confIdx;
+  int collectorIdx;
+  int srcConfIdx;
+  int srcAtomStart;
+  int numAtoms;
+};
+
+}  // namespace
+
 DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors,
                                    const int                          targetGpu,
                                    const int                          nMols,
@@ -94,11 +108,6 @@ DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors
     return !filterByAttempt || ranks[collectorIdx][confIdx] >= 0;
   };
 
-  size_t totalEntries = 0;
-  for (const auto& collector : collectors) {
-    totalEntries += collector.atomCounts.size();
-  }
-
   int  totalConformers = 0;
   int  totalAtoms      = 0;
   bool hasEnergies     = false;
@@ -139,9 +148,48 @@ DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors
   std::vector<int32_t> molIndicesHost(static_cast<size_t>(totalConformers), 0);
   std::vector<int32_t> confIndicesHost(static_cast<size_t>(totalConformers), 0);
 
-  // When surplus entries are dropped, copying each run of kept conformers separately costs a copy call per run.
-  // Gather the positions with one kernel instead.
-  const bool                 gatherPositions = static_cast<size_t>(totalConformers) < totalEntries;
+  // Batches land in collectors in completion order. Order the kept conformers by (molecule, conformer index) so the
+  // result is in input order.
+  std::vector<KeptConformer> kept;
+  kept.reserve(static_cast<size_t>(totalConformers));
+  std::unordered_map<int, int> perMolCounter;
+  size_t                       nonEmptyCollectors = 0;
+  for (size_t c = 0; c < collectors.size(); ++c) {
+    const auto& collector = collectors[c];
+    if (!collector.atomCounts.empty()) {
+      ++nonEmptyCollectors;
+    }
+    const bool useExplicitConfIds = !collector.confIds.empty();
+    int        srcAtomStart       = 0;
+    for (int srcConfIdx = 0; srcConfIdx < static_cast<int>(collector.atomCounts.size()); ++srcConfIdx) {
+      const int numAtoms = collector.atomCounts[srcConfIdx];
+      if (isKept(c, srcConfIdx)) {
+        const int molId   = collector.molIds[srcConfIdx];
+        const int confIdx = useExplicitConfIds ? collector.confIds[srcConfIdx] :
+                            filterByAttempt    ? ranks[c][srcConfIdx] :
+                                                 perMolCounter[molId]++;
+        kept.push_back({molId, confIdx, static_cast<int>(c), srcConfIdx, srcAtomStart, numAtoms});
+      }
+      srcAtomStart += numAtoms;
+    }
+  }
+  std::stable_sort(kept.begin(), kept.end(), [](const KeptConformer& a, const KeptConformer& b) {
+    return a.molId != b.molId ? a.molId < b.molId : a.confIdx < b.confIdx;
+  });
+  const auto continuesRun = [&](const size_t i) {
+    return i > 0 && kept[i].collectorIdx == kept[i - 1].collectorIdx &&
+           kept[i].srcConfIdx == kept[i - 1].srcConfIdx + 1;
+  };
+  size_t numRuns = 0;
+  for (size_t i = 0; i < kept.size(); ++i) {
+    if (!continuesRun(i)) {
+      ++numRuns;
+    }
+  }
+
+  // Copy calls are per run of conformers that are contiguous in both source and result. When there are more runs than
+  // collectors (dropped entries or interleaved batches), gather the positions with one kernel instead.
+  const bool                 gatherPositions = numRuns > nonEmptyCollectors;
   std::vector<const double*> gatherSrc;
   std::vector<int>           gatherDstAtomStarts;
   std::vector<int>           gatherAtomCounts;
@@ -172,93 +220,60 @@ DeviceCoordResult finalizeOnTarget(std::vector<DeviceCoordCollector>& collectors
     }
   }
 
-  std::unordered_map<int, int> perMolCounter;
-  int                          confCursor = 0;
-  int                          atomCursor = 0;
-  for (size_t c = 0; c < collectors.size(); ++c) {
-    auto&     collector = collectors[c];
-    const int numConfs  = static_cast<int>(collector.atomCounts.size());
-    if (numConfs == 0) {
-      continue;
+  int dstAtomStart = 0;
+  for (size_t runStart = 0; runStart < kept.size();) {
+    size_t runEnd = runStart + 1;
+    while (runEnd < kept.size() && continuesRun(runEnd)) {
+      ++runEnd;
     }
-
-    // Copy each contiguous run of kept conformers in one go. Without filtering this is a single run.
-    int        srcAtomCursor = 0;
-    int        runSrcAtom    = 0;
-    int        runSrcConf    = 0;
-    int        runAtoms      = 0;
-    int        runConfs      = 0;
-    const auto flushRun      = [&]() {
-      if (runConfs == 0) {
-        return;
-      }
-      if (!gatherPositions) {
-        copyDeviceToDeviceAsync(result.positions.data() + static_cast<size_t>(atomCursor - runAtoms) * 3,
-                                collector.positions.data() + static_cast<size_t>(runSrcAtom) * 3,
-                                static_cast<size_t>(runAtoms) * 3 * sizeof(double),
-                                collector.gpuId,
-                                collector.stream,
-                                targetGpu,
-                                targetStream.stream());
-      }
-      if (hasEnergies && collector.energies.size() > 0) {
-        copyDeviceToDeviceAsync(result.energies.data() + (confCursor - runConfs),
-                                collector.energies.data() + runSrcConf,
-                                static_cast<size_t>(runConfs) * sizeof(double),
-                                collector.gpuId,
-                                collector.stream,
-                                targetGpu,
-                                targetStream.stream());
-      }
-      if (hasConverged && collector.converged.size() > 0) {
-        copyDeviceToDeviceAsync(result.converged.data() + (confCursor - runConfs),
-                                collector.converged.data() + runSrcConf,
-                                static_cast<size_t>(runConfs) * sizeof(int8_t),
-                                collector.gpuId,
-                                collector.stream,
-                                targetGpu,
-                                targetStream.stream());
-      }
-      runAtoms = 0;
-      runConfs = 0;
-    };
-
-    const bool useExplicitConfIds = !collector.confIds.empty();
-    for (int conformerIdx = 0; conformerIdx < numConfs; ++conformerIdx) {
-      const int natoms = collector.atomCounts[conformerIdx];
-      if (!isKept(c, conformerIdx)) {
-        flushRun();
-        srcAtomCursor += natoms;
-        continue;
-      }
-      if (runConfs == 0) {
-        runSrcAtom = srcAtomCursor;
-        runSrcConf = conformerIdx;
-      }
-      atomStartsHost[static_cast<size_t>(confCursor)] = atomCursor;
+    const int runDstAtomStart = dstAtomStart;
+    for (size_t i = runStart; i < runEnd; ++i) {
+      const auto& conf   = kept[i];
+      atomStartsHost[i]  = dstAtomStart;
+      molIndicesHost[i]  = conf.molId;
+      confIndicesHost[i] = conf.confIdx;
       if (gatherPositions) {
-        gatherSrc.push_back(gatherBase[c] + static_cast<size_t>(srcAtomCursor) * 3);
-        gatherDstAtomStarts.push_back(atomCursor);
-        gatherAtomCounts.push_back(natoms);
+        gatherSrc.push_back(gatherBase[conf.collectorIdx] + static_cast<size_t>(conf.srcAtomStart) * 3);
+        gatherDstAtomStarts.push_back(dstAtomStart);
+        gatherAtomCounts.push_back(conf.numAtoms);
       }
-      const int molId                                 = collector.molIds[conformerIdx];
-      molIndicesHost[static_cast<size_t>(confCursor)] = molId;
-      if (useExplicitConfIds) {
-        confIndicesHost[static_cast<size_t>(confCursor)] = collector.confIds[conformerIdx];
-      } else if (filterByAttempt) {
-        confIndicesHost[static_cast<size_t>(confCursor)] = ranks[c][conformerIdx];
-      } else {
-        confIndicesHost[static_cast<size_t>(confCursor)] = perMolCounter[molId]++;
-      }
-      atomCursor += natoms;
-      srcAtomCursor += natoms;
-      runAtoms += natoms;
-      ++runConfs;
-      ++confCursor;
+      dstAtomStart += conf.numAtoms;
     }
-    flushRun();
+
+    // The run [runStart, runEnd) is contiguous in both its collector and the result: copy it in one call per buffer.
+    const auto&  first     = kept[runStart];
+    const auto&  collector = collectors[first.collectorIdx];
+    const size_t runConfs  = runEnd - runStart;
+    if (!gatherPositions) {
+      copyDeviceToDeviceAsync(result.positions.data() + static_cast<size_t>(runDstAtomStart) * 3,
+                              collector.positions.data() + static_cast<size_t>(first.srcAtomStart) * 3,
+                              static_cast<size_t>(dstAtomStart - runDstAtomStart) * 3 * sizeof(double),
+                              collector.gpuId,
+                              collector.stream,
+                              targetGpu,
+                              targetStream.stream());
+    }
+    if (hasEnergies && collector.energies.size() > 0) {
+      copyDeviceToDeviceAsync(result.energies.data() + runStart,
+                              collector.energies.data() + first.srcConfIdx,
+                              runConfs * sizeof(double),
+                              collector.gpuId,
+                              collector.stream,
+                              targetGpu,
+                              targetStream.stream());
+    }
+    if (hasConverged && collector.converged.size() > 0) {
+      copyDeviceToDeviceAsync(result.converged.data() + runStart,
+                              collector.converged.data() + first.srcConfIdx,
+                              runConfs * sizeof(int8_t),
+                              collector.gpuId,
+                              collector.stream,
+                              targetGpu,
+                              targetStream.stream());
+    }
+    runStart = runEnd;
   }
-  atomStartsHost[static_cast<size_t>(totalConformers)] = atomCursor;
+  atomStartsHost[static_cast<size_t>(totalConformers)] = dstAtomStart;
 
   if (gatherPositions) {
     // Collector streams are idle once appendActive returns, but make sure before reading same-GPU buffers directly.
