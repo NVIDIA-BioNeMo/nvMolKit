@@ -20,6 +20,7 @@
 #include <stdexcept>
 
 #include "src/tfd/tfd_kernels.h"
+#include "src/utils/cuda_error_check.h"
 #include "src/utils/nvtx.h"
 
 namespace nvMolKit {
@@ -156,6 +157,9 @@ TFDGpuResult TFDGpuGenerator::GetTFDMatricesGpuBuffer(const std::vector<const RD
                           device_.tfdOutput.data(),
                           stream);
   }
+
+  // The output is handed out as a device buffer that may be read on any stream, so wait for the kernels.
+  cudaCheckError(cudaStreamSynchronize(stream));
 
   // Move output to result (transfer ownership of GPU memory)
   result.tfdValues = std::move(device_.tfdOutput);
