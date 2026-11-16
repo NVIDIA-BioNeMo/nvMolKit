@@ -47,6 +47,7 @@ namespace nvMolKit {
  * @param load_k Current offset in the K dimension for loading.
  * @param A_smem_tile Shared memory tile for matrix A.
  * @param B_smem_tile Shared memory tile for matrix B.
+ * @param rowTileOffset Number of A row tiles before this launch's first block, for launches split over grid Y.
  *
  * ## Input and Output Parameter Ranges
  * - `A`: Non-null, read-only span of size at least `m * k`.
@@ -73,8 +74,8 @@ __device__ void load_gmem_to_smem_tensorop(
   const size_t                   k,
   const size_t                   load_k,
   T                              A_smem_tile[BLOCK_TILE_SIZE_Y][BLOCK_TILE_SIZE_K + 1],
-  T                              B_smem_tile[BLOCK_TILE_SIZE_X][BLOCK_TILE_SIZE_K + 1]  // take care of bank conflict
-) {
+  T                              B_smem_tile[BLOCK_TILE_SIZE_X][BLOCK_TILE_SIZE_K + 1],  // take care of bank conflict
+  const size_t                   rowTileOffset) {
   const size_t warpid = __shfl_sync(0xffffffff, threadIdx.x / 32, 0);
   int          lane_id;
   get_lane(lane_id);
@@ -84,11 +85,11 @@ __device__ void load_gmem_to_smem_tensorop(
 
   NVMOLKIT_UNROLL
   for (int i = lane_id; i < A_ITERS; i += 32) {
-    int       linear_idx = i + warpid * A_ITERS;
-    const int smem_row   = linear_idx / BLOCK_TILE_SIZE_K;
-    const int smem_col   = linear_idx % BLOCK_TILE_SIZE_K;
-    const int gmem_row   = smem_row + BLOCK_TILE_SIZE_Y * blockIdx.y;
-    const int gmem_col   = smem_col + BLOCK_TILE_SIZE_K * load_k;
+    int          linear_idx = i + warpid * A_ITERS;
+    const int    smem_row   = linear_idx / BLOCK_TILE_SIZE_K;
+    const int    smem_col   = linear_idx % BLOCK_TILE_SIZE_K;
+    const size_t gmem_row   = smem_row + BLOCK_TILE_SIZE_Y * (blockIdx.y + rowTileOffset);
+    const int    gmem_col   = smem_col + BLOCK_TILE_SIZE_K * load_k;
 
     if (gmem_row < m && gmem_col < k) {
       A_smem_tile[smem_row][smem_col] = A[gmem_row * k + gmem_col];
@@ -101,11 +102,11 @@ __device__ void load_gmem_to_smem_tensorop(
 
   NVMOLKIT_UNROLL
   for (int i = lane_id; i < B_ITERS; i += 32) {
-    int       linear_idx = i + warpid * B_ITERS;
-    const int smem_row   = linear_idx / BLOCK_TILE_SIZE_K;
-    const int smem_col   = linear_idx % BLOCK_TILE_SIZE_K;
-    const int gmem_row   = smem_row + BLOCK_TILE_SIZE_X * blockIdx.x;
-    const int gmem_col   = smem_col + BLOCK_TILE_SIZE_K * load_k;
+    int          linear_idx = i + warpid * B_ITERS;
+    const int    smem_row   = linear_idx / BLOCK_TILE_SIZE_K;
+    const int    smem_col   = linear_idx % BLOCK_TILE_SIZE_K;
+    const size_t gmem_row   = smem_row + BLOCK_TILE_SIZE_X * blockIdx.x;
+    const int    gmem_col   = smem_col + BLOCK_TILE_SIZE_K * load_k;
 
     if (gmem_row < n && gmem_col < k) {
       B_smem_tile[smem_row][smem_col] = B[gmem_row * k + gmem_col];
@@ -301,6 +302,7 @@ __forceinline__ __device__ void st_m16n8k256_x4(unsigned regs_and[4],
  * @param B_smem_tile Shared memory tile for matrix B.
  * @param A_smem_k_reduced Array to store bit reductions of matrix A.
  * @param B_smem_k_reduced Array to store bit reductions of matrix B.
+ * @param rowTileOffset Number of A row tiles before this launch's first block, for launches split over grid Y.
  *
  * ## Input and Output Parameter Ranges
  * - `A`: Non-null, read-only span of size at least `m * k`.
@@ -325,10 +327,11 @@ __device__ void load_gmem_to_smem_simt(const cuda::std::span<const T> A,
                                        const size_t                   n,
                                        const size_t                   k,
                                        const size_t                   load_k,
-                                       T   A_smem_tile[BLOCK_TILE_SIZE_K][BLOCK_TILE_SIZE_Y + 1],
-                                       T   B_smem_tile[BLOCK_TILE_SIZE_K][BLOCK_TILE_SIZE_X + 1],
-                                       int A_smem_k_reduced[BLOCK_TILE_SIZE_Y],
-                                       int B_smem_k_reduced[BLOCK_TILE_SIZE_X]) {
+                                       T            A_smem_tile[BLOCK_TILE_SIZE_K][BLOCK_TILE_SIZE_Y + 1],
+                                       T            B_smem_tile[BLOCK_TILE_SIZE_K][BLOCK_TILE_SIZE_X + 1],
+                                       int          A_smem_k_reduced[BLOCK_TILE_SIZE_Y],
+                                       int          B_smem_k_reduced[BLOCK_TILE_SIZE_X],
+                                       const size_t rowTileOffset) {
   // little to no effect on perf
   const size_t warpid = __shfl_sync(0xffffffff, threadIdx.x / 32, 0);
   int          lane_id;
@@ -343,8 +346,8 @@ __device__ void load_gmem_to_smem_simt(const cuda::std::span<const T> A,
     const int smem_row = linear_idx / BLOCK_TILE_SIZE_K;
     const int smem_col = linear_idx % BLOCK_TILE_SIZE_K;
 
-    const int gmem_row = smem_row + BLOCK_TILE_SIZE_Y * blockIdx.y;
-    const int gmem_col = smem_col + BLOCK_TILE_SIZE_K * load_k;
+    const size_t gmem_row = smem_row + BLOCK_TILE_SIZE_Y * (blockIdx.y + rowTileOffset);
+    const int    gmem_col = smem_col + BLOCK_TILE_SIZE_K * load_k;
 
     T tmp = {0};
     if (gmem_row < m && gmem_col < k) {
@@ -358,11 +361,11 @@ __device__ void load_gmem_to_smem_simt(const cuda::std::span<const T> A,
 
   NVMOLKIT_UNROLL
   for (int i = lane_id; i < ((BLOCK_TILE_SIZE_X * BLOCK_TILE_SIZE_K) / NUM_WARPS); i += 32) {
-    int       linear_idx = i + warpid * ((BLOCK_TILE_SIZE_X * BLOCK_TILE_SIZE_K) / NUM_WARPS);
-    const int smem_row   = linear_idx / BLOCK_TILE_SIZE_K;
-    const int smem_col   = linear_idx % BLOCK_TILE_SIZE_K;
-    const int gmem_row   = smem_row + BLOCK_TILE_SIZE_X * blockIdx.x;
-    const int gmem_col   = smem_col + BLOCK_TILE_SIZE_K * load_k;
+    int          linear_idx = i + warpid * ((BLOCK_TILE_SIZE_X * BLOCK_TILE_SIZE_K) / NUM_WARPS);
+    const int    smem_row   = linear_idx / BLOCK_TILE_SIZE_K;
+    const int    smem_col   = linear_idx % BLOCK_TILE_SIZE_K;
+    const size_t gmem_row   = smem_row + BLOCK_TILE_SIZE_X * blockIdx.x;
+    const int    gmem_col   = smem_col + BLOCK_TILE_SIZE_K * load_k;
 
     T tmp = {0};
 

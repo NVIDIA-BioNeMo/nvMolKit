@@ -113,6 +113,16 @@ cuda::std::span<const OtherT> castAsSpanOfSmallerType(const AsyncDeviceVector<T>
   return cuda::std::span<OtherT>(reinterpret_cast<OtherT*>(vec.data()), vec.size() * sizeMultiplier);
 }
 
+//! CUDA caps grid Y at 65535 blocks, so larger row tile counts are covered by successive launches, each offset by the
+//! row tiles already launched.
+template <typename LaunchFn>
+void launchOverRowTiles(const unsigned int numColTiles, const unsigned int numRowTiles, LaunchFn&& launch) {
+  constexpr unsigned int kMaxGridDimY = 65535;
+  for (unsigned int rowTileOffset = 0; rowTileOffset < numRowTiles; rowTileOffset += kMaxGridDimY) {
+    launch(dim3{numColTiles, std::min(kMaxGridDimY, numRowTiles - rowTileOffset), 1U}, rowTileOffset);
+  }
+}
+
 // --------------------------------
 // SIMT & TensorOp Kernel Template
 // --------------------------------
@@ -130,7 +140,8 @@ __device__ void crossSimilarityKernelTensorOp(const cuda::std::span<const kThrea
                                               const cuda::std::span<const kThreadReductionType> bitsTwo,
                                               const size_t                                      elementsPerMolecule,
                                               cuda::std::span<T_out>                            similarities,
-                                              const size_t                                      offset) {
+                                              const size_t                                      offset,
+                                              const size_t                                      rowTileOffset) {
   constexpr int WMMA_M = 16;
   constexpr int WMMA_N = 8;
   constexpr int WMMA_K = 256;
@@ -188,7 +199,7 @@ __device__ void crossSimilarityKernelTensorOp(const cuda::std::span<const kThrea
                                BLOCK_TILE_SIZE_X,
                                BLOCK_TILE_SIZE_Y,
                                BLOCK_TILE_SIZE_K,
-                               NUM_THREADS>(bitsOne, k, bitsTwo, k, m, n, k, load_k, A_smem, B_smem);
+                               NUM_THREADS>(bitsOne, k, bitsTwo, k, m, n, k, load_k, A_smem, B_smem, rowTileOffset);
 
     __syncthreads();
 
@@ -250,11 +261,11 @@ __device__ void crossSimilarityKernelTensorOp(const cuda::std::span<const kThrea
 
   NVMOLKIT_UNROLL
   for (int i = lane_id; i < C_ITERS; i += 32) {
-    int       linear_idx = i + warpid * C_ITERS;
-    const int smem_row   = linear_idx / BLOCK_TILE_SIZE_X;
-    const int smem_col   = linear_idx % BLOCK_TILE_SIZE_X;
-    const int gmem_row   = smem_row + BLOCK_TILE_SIZE_Y * blockIdx.y;
-    const int gmem_col   = smem_col + BLOCK_TILE_SIZE_X * blockIdx.x;
+    int          linear_idx = i + warpid * C_ITERS;
+    const int    smem_row   = linear_idx / BLOCK_TILE_SIZE_X;
+    const int    smem_col   = linear_idx % BLOCK_TILE_SIZE_X;
+    const size_t gmem_row   = smem_row + BLOCK_TILE_SIZE_Y * (blockIdx.y + rowTileOffset);
+    const size_t gmem_col   = smem_col + BLOCK_TILE_SIZE_X * blockIdx.x;
 
     if (gmem_row < m && gmem_col < n) {
       const T_out value = C_smem[smem_row * (BLOCK_TILE_SIZE_X + 1) + smem_col];
@@ -279,7 +290,8 @@ __device__ void crossSimilarityKernelSIMT(const cuda::std::span<const kThreadRed
                                           const cuda::std::span<const kThreadReductionType> bitsTwo,
                                           const size_t                                      elementsPerMolecule,
                                           cuda::std::span<T_out>                            similarities,
-                                          const size_t                                      offset) {
+                                          const size_t                                      offset,
+                                          const size_t                                      rowTileOffset) {
   const size_t numMoleculesTotalOne = bitsOne.size() / elementsPerMolecule;
   const size_t numMoleculesTotalTwo = bitsTwo.size() / elementsPerMolecule;
 
@@ -330,7 +342,8 @@ __device__ void crossSimilarityKernelSIMT(const cuda::std::span<const kThreadRed
       A_tile,
       B_tile,
       A_k_reduced,
-      B_k_reduced);
+      B_k_reduced,
+      rowTileOffset);
 
     __syncthreads();
 
@@ -368,7 +381,7 @@ __device__ void crossSimilarityKernelSIMT(const cuda::std::span<const kThreadRed
     NVMOLKIT_UNROLL
     for (size_t thread_tile_col_idx{0U}; thread_tile_col_idx < THREAD_TILE_X; ++thread_tile_col_idx) {
       size_t const C_row_idx{threadIdx.x / (BLOCK_TILE_SIZE_X / THREAD_TILE_X) * THREAD_TILE_Y + thread_tile_row_idx +
-                             blockIdx.y * BLOCK_TILE_SIZE_Y};
+                             (blockIdx.y + rowTileOffset) * BLOCK_TILE_SIZE_Y};
       size_t const C_col_idx{threadIdx.x % (BLOCK_TILE_SIZE_X / THREAD_TILE_X) * THREAD_TILE_X + thread_tile_col_idx +
                              blockIdx.x * BLOCK_TILE_SIZE_X};
 
@@ -401,7 +414,8 @@ __global__ void tanimotoCrossSimilarityKernel(const cuda::std::span<const kThrea
                                               const cuda::std::span<const kThreadReductionType> bitsTwo,
                                               const size_t                                      elementsPerMolecule,
                                               cuda::std::span<double>                           similarities,
-                                              const size_t                                      offset) {
+                                              const size_t                                      offset,
+                                              const size_t                                      rowTileOffset) {
 #if __CUDA_ARCH__ >= 800
   crossSimilarityKernelTensorOp<FingerprintSimilarityMetric::Tanimoto,
                                 kThreadReductionType,
@@ -411,7 +425,12 @@ __global__ void tanimotoCrossSimilarityKernel(const cuda::std::span<const kThrea
                                 BLOCK_TILE_SIZE_K,
                                 THREAD_TILE_X_OR_NUM_WARP_X,
                                 THREAD_TILE_Y_OR_NUM_WARP_Y,
-                                TRANSPOSE_OUTPUT>(bitsOne, bitsTwo, elementsPerMolecule, similarities, offset);
+                                TRANSPOSE_OUTPUT>(bitsOne,
+                                                  bitsTwo,
+                                                  elementsPerMolecule,
+                                                  similarities,
+                                                  offset,
+                                                  rowTileOffset);
 #else
   crossSimilarityKernelSIMT<FingerprintSimilarityMetric::Tanimoto,
                             kThreadReductionType,
@@ -420,7 +439,12 @@ __global__ void tanimotoCrossSimilarityKernel(const cuda::std::span<const kThrea
                             BLOCK_TILE_SIZE_Y,
                             BLOCK_TILE_SIZE_K,
                             THREAD_TILE_X_OR_NUM_WARP_X,
-                            THREAD_TILE_Y_OR_NUM_WARP_Y>(bitsOne, bitsTwo, elementsPerMolecule, similarities, offset);
+                            THREAD_TILE_Y_OR_NUM_WARP_Y>(bitsOne,
+                                                         bitsTwo,
+                                                         elementsPerMolecule,
+                                                         similarities,
+                                                         offset,
+                                                         rowTileOffset);
 
 #endif
 }
@@ -449,17 +473,19 @@ void launchTanimotoTensorKernel(const cuda::std::span<const std::uint32_t> bitsO
   constexpr unsigned int kBlockTileSizeX = static_cast<unsigned int>(BLOCK_TILE_SIZE_X);
   constexpr unsigned int kBlockTileSizeY = static_cast<unsigned int>(BLOCK_TILE_SIZE_Y);
   const dim3             blockDim{kThreadsPerBlock, 1U, 1U};
-  const dim3             gridDim{compat::ceil_div(static_cast<unsigned int>(n), kBlockTileSizeX),
-                     compat::ceil_div(static_cast<unsigned int>(m), kBlockTileSizeY),
-                     1U};
-  tanimotoCrossSimilarityKernel<std::uint32_t,
-                                BLOCK_TILE_SIZE_X,
-                                BLOCK_TILE_SIZE_Y,
-                                kBlockTileSizeK,
-                                NUM_WARP_X,
-                                NUM_WARP_Y,
-                                TRANSPOSE_OUTPUT>
-    <<<gridDim, blockDim, 0, stream>>>(bitsOne, bitsTwo, numBitsPerMolecule, results, offset);
+  launchOverRowTiles(
+    compat::ceil_div(static_cast<unsigned int>(n), kBlockTileSizeX),
+    compat::ceil_div(static_cast<unsigned int>(m), kBlockTileSizeY),
+    [&](const dim3 gridDim, const unsigned int rowTileOffset) {
+      tanimotoCrossSimilarityKernel<std::uint32_t,
+                                    BLOCK_TILE_SIZE_X,
+                                    BLOCK_TILE_SIZE_Y,
+                                    kBlockTileSizeK,
+                                    NUM_WARP_X,
+                                    NUM_WARP_Y,
+                                    TRANSPOSE_OUTPUT>
+        <<<gridDim, blockDim, 0, stream>>>(bitsOne, bitsTwo, numBitsPerMolecule, results, offset, rowTileOffset);
+    });
 }
 
 }  // namespace
@@ -492,21 +518,22 @@ void launchCrossTanimotoSimilarity(const AsyncDeviceVector<internal::kBlockType>
     constexpr unsigned int NUM_THREADS_PER_BLOCK{32 * NUM_WARP_X * NUM_WARP_Y};
 
     dim3 const block_dim{NUM_THREADS_PER_BLOCK, 1U, 1U};
-    dim3 const grid_dim{(static_cast<unsigned int>(n) + BLOCK_TILE_SIZE_X - 1U) / (BLOCK_TILE_SIZE_X),
-                        (static_cast<unsigned int>(m) + BLOCK_TILE_SIZE_Y - 1U) / (BLOCK_TILE_SIZE_Y),
-                        1U};
-
-    tanimotoCrossSimilarityKernel<kThreadReductionType,
-                                  BLOCK_TILE_SIZE_X,
-                                  BLOCK_TILE_SIZE_Y,
-                                  BLOCK_TILE_SIZE_K,
-                                  NUM_WARP_X,
-                                  NUM_WARP_Y>
-      <<<grid_dim, block_dim>>>(castAsSpanOfSmallerType<internal::kBlockType, kThreadReductionType>(bitsOne),
-                                castAsSpanOfSmallerType<internal::kBlockType, kThreadReductionType>(bitsTwo),
-                                numBitsPerMolecule,
-                                toSpan(results),
-                                offset);
+    launchOverRowTiles((static_cast<unsigned int>(n) + BLOCK_TILE_SIZE_X - 1U) / (BLOCK_TILE_SIZE_X),
+                       (static_cast<unsigned int>(m) + BLOCK_TILE_SIZE_Y - 1U) / (BLOCK_TILE_SIZE_Y),
+                       [&](const dim3 grid_dim, const unsigned int rowTileOffset) {
+                         tanimotoCrossSimilarityKernel<kThreadReductionType,
+                                                       BLOCK_TILE_SIZE_X,
+                                                       BLOCK_TILE_SIZE_Y,
+                                                       BLOCK_TILE_SIZE_K,
+                                                       NUM_WARP_X,
+                                                       NUM_WARP_Y><<<grid_dim, block_dim>>>(
+                           castAsSpanOfSmallerType<internal::kBlockType, kThreadReductionType>(bitsOne),
+                           castAsSpanOfSmallerType<internal::kBlockType, kThreadReductionType>(bitsTwo),
+                           numBitsPerMolecule,
+                           toSpan(results),
+                           offset,
+                           rowTileOffset);
+                       });
   } else {
     constexpr unsigned int BLOCK_TILE_SIZE_X{64U};
     constexpr unsigned int BLOCK_TILE_SIZE_Y{128U};
@@ -526,21 +553,22 @@ void launchCrossTanimotoSimilarity(const AsyncDeviceVector<internal::kBlockType>
     static_assert(BLOCK_TILE_SIZE_K * BLOCK_TILE_SIZE_Y % NUM_THREADS_PER_BLOCK == 0U);
 
     dim3 const block_dim{NUM_THREADS_PER_BLOCK, 1U, 1U};
-    dim3 const grid_dim{(static_cast<unsigned int>(n) + BLOCK_TILE_SIZE_X - 1U) / (BLOCK_TILE_SIZE_X),
-                        (static_cast<unsigned int>(m) + BLOCK_TILE_SIZE_Y - 1U) / (BLOCK_TILE_SIZE_Y),
-                        1U};
-
-    tanimotoCrossSimilarityKernel<kThreadReductionType,
-                                  BLOCK_TILE_SIZE_X,
-                                  BLOCK_TILE_SIZE_Y,
-                                  BLOCK_TILE_SIZE_K,
-                                  THREAD_TILE_X,
-                                  THREAD_TILE_Y>
-      <<<grid_dim, block_dim>>>(castAsSpanOfSmallerType<internal::kBlockType, kThreadReductionType>(bitsOne),
-                                castAsSpanOfSmallerType<internal::kBlockType, kThreadReductionType>(bitsTwo),
-                                numBitsPerMolecule,
-                                toSpan(results),
-                                offset);
+    launchOverRowTiles((static_cast<unsigned int>(n) + BLOCK_TILE_SIZE_X - 1U) / (BLOCK_TILE_SIZE_X),
+                       (static_cast<unsigned int>(m) + BLOCK_TILE_SIZE_Y - 1U) / (BLOCK_TILE_SIZE_Y),
+                       [&](const dim3 grid_dim, const unsigned int rowTileOffset) {
+                         tanimotoCrossSimilarityKernel<kThreadReductionType,
+                                                       BLOCK_TILE_SIZE_X,
+                                                       BLOCK_TILE_SIZE_Y,
+                                                       BLOCK_TILE_SIZE_K,
+                                                       THREAD_TILE_X,
+                                                       THREAD_TILE_Y><<<grid_dim, block_dim>>>(
+                           castAsSpanOfSmallerType<internal::kBlockType, kThreadReductionType>(bitsOne),
+                           castAsSpanOfSmallerType<internal::kBlockType, kThreadReductionType>(bitsTwo),
+                           numBitsPerMolecule,
+                           toSpan(results),
+                           offset,
+                           rowTileOffset);
+                       });
   }
 
   cudaCheckError(cudaGetLastError());
@@ -589,17 +617,18 @@ void launchCrossTanimotoSimilarity(const cuda::std::span<const std::uint32_t> bi
     static_assert(BLOCK_TILE_SIZE_K * BLOCK_TILE_SIZE_Y % NUM_THREADS_PER_BLOCK == 0U);
 
     dim3 const block_dim{NUM_THREADS_PER_BLOCK, 1U, 1U};
-    dim3 const grid_dim{(static_cast<unsigned int>(n) + BLOCK_TILE_SIZE_X - 1U) / (BLOCK_TILE_SIZE_X),
-                        (static_cast<unsigned int>(m) + BLOCK_TILE_SIZE_Y - 1U) / (BLOCK_TILE_SIZE_Y),
-                        1U};
-
-    tanimotoCrossSimilarityKernel<std::uint32_t,
-                                  BLOCK_TILE_SIZE_X,
-                                  BLOCK_TILE_SIZE_Y,
-                                  BLOCK_TILE_SIZE_K,
-                                  THREAD_TILE_X,
-                                  THREAD_TILE_Y>
-      <<<grid_dim, block_dim, 0, stream>>>(bitsOne, bitsTwo, numBitsPerMolecule, results, offset);
+    launchOverRowTiles(
+      (static_cast<unsigned int>(n) + BLOCK_TILE_SIZE_X - 1U) / (BLOCK_TILE_SIZE_X),
+      (static_cast<unsigned int>(m) + BLOCK_TILE_SIZE_Y - 1U) / (BLOCK_TILE_SIZE_Y),
+      [&](const dim3 grid_dim, const unsigned int rowTileOffset) {
+        tanimotoCrossSimilarityKernel<std::uint32_t,
+                                      BLOCK_TILE_SIZE_X,
+                                      BLOCK_TILE_SIZE_Y,
+                                      BLOCK_TILE_SIZE_K,
+                                      THREAD_TILE_X,
+                                      THREAD_TILE_Y>
+          <<<grid_dim, block_dim, 0, stream>>>(bitsOne, bitsTwo, numBitsPerMolecule, results, offset, rowTileOffset);
+      });
   }
 
   cudaCheckError(cudaGetLastError());
@@ -627,7 +656,8 @@ __global__ void cosineCrossSimilarityKernel(const cuda::std::span<const kThreadR
                                             const cuda::std::span<const kThreadReductionType> bitsTwo,
                                             const size_t                                      elementsPerMolecule,
                                             cuda::std::span<double>                           similarities,
-                                            const size_t                                      offset) {
+                                            const size_t                                      offset,
+                                            const size_t                                      rowTileOffset) {
 #if __CUDA_ARCH__ >= 800
   crossSimilarityKernelTensorOp<FingerprintSimilarityMetric::Cosine,
                                 kThreadReductionType,
@@ -640,7 +670,8 @@ __global__ void cosineCrossSimilarityKernel(const cuda::std::span<const kThreadR
                                                              bitsTwo,
                                                              elementsPerMolecule,
                                                              similarities,
-                                                             offset);
+                                                             offset,
+                                                             rowTileOffset);
 #else
   crossSimilarityKernelSIMT<FingerprintSimilarityMetric::Cosine,
                             kThreadReductionType,
@@ -649,7 +680,12 @@ __global__ void cosineCrossSimilarityKernel(const cuda::std::span<const kThreadR
                             BLOCK_TILE_SIZE_Y,
                             BLOCK_TILE_SIZE_K,
                             THREAD_TILE_X_OR_NUM_WARP_X,
-                            THREAD_TILE_Y_OR_NUM_WARP_Y>(bitsOne, bitsTwo, elementsPerMolecule, similarities, offset);
+                            THREAD_TILE_Y_OR_NUM_WARP_Y>(bitsOne,
+                                                         bitsTwo,
+                                                         elementsPerMolecule,
+                                                         similarities,
+                                                         offset,
+                                                         rowTileOffset);
 
 #endif
 }
@@ -684,21 +720,22 @@ void launchCrossCosineSimilarity(const AsyncDeviceVector<internal::kBlockType>& 
     constexpr unsigned int NUM_THREADS_PER_BLOCK{32 * NUM_WARP_X * NUM_WARP_Y};
 
     dim3 const block_dim{NUM_THREADS_PER_BLOCK, 1U, 1U};
-    dim3 const grid_dim{(static_cast<unsigned int>(n) + BLOCK_TILE_SIZE_X - 1U) / (BLOCK_TILE_SIZE_X),
-                        (static_cast<unsigned int>(m) + BLOCK_TILE_SIZE_Y - 1U) / (BLOCK_TILE_SIZE_Y),
-                        1U};
-
-    cosineCrossSimilarityKernel<kThreadReductionType,
-                                BLOCK_TILE_SIZE_X,
-                                BLOCK_TILE_SIZE_Y,
-                                BLOCK_TILE_SIZE_K,
-                                NUM_WARP_X,
-                                NUM_WARP_Y>
-      <<<grid_dim, block_dim>>>(castAsSpanOfSmallerType<internal::kBlockType, kThreadReductionType>(bitsOne),
-                                castAsSpanOfSmallerType<internal::kBlockType, kThreadReductionType>(bitsTwo),
-                                numBitsPerMolecule,
-                                toSpan(results),
-                                offset);
+    launchOverRowTiles((static_cast<unsigned int>(n) + BLOCK_TILE_SIZE_X - 1U) / (BLOCK_TILE_SIZE_X),
+                       (static_cast<unsigned int>(m) + BLOCK_TILE_SIZE_Y - 1U) / (BLOCK_TILE_SIZE_Y),
+                       [&](const dim3 grid_dim, const unsigned int rowTileOffset) {
+                         cosineCrossSimilarityKernel<kThreadReductionType,
+                                                     BLOCK_TILE_SIZE_X,
+                                                     BLOCK_TILE_SIZE_Y,
+                                                     BLOCK_TILE_SIZE_K,
+                                                     NUM_WARP_X,
+                                                     NUM_WARP_Y><<<grid_dim, block_dim>>>(
+                           castAsSpanOfSmallerType<internal::kBlockType, kThreadReductionType>(bitsOne),
+                           castAsSpanOfSmallerType<internal::kBlockType, kThreadReductionType>(bitsTwo),
+                           numBitsPerMolecule,
+                           toSpan(results),
+                           offset,
+                           rowTileOffset);
+                       });
   } else {
     constexpr unsigned int BLOCK_TILE_SIZE_X{64U};
     constexpr unsigned int BLOCK_TILE_SIZE_Y{128U};
@@ -718,21 +755,22 @@ void launchCrossCosineSimilarity(const AsyncDeviceVector<internal::kBlockType>& 
     static_assert(BLOCK_TILE_SIZE_K * BLOCK_TILE_SIZE_Y % NUM_THREADS_PER_BLOCK == 0U);
 
     dim3 const block_dim{NUM_THREADS_PER_BLOCK, 1U, 1U};
-    dim3 const grid_dim{(static_cast<unsigned int>(n) + BLOCK_TILE_SIZE_X - 1U) / (BLOCK_TILE_SIZE_X),
-                        (static_cast<unsigned int>(m) + BLOCK_TILE_SIZE_Y - 1U) / (BLOCK_TILE_SIZE_Y),
-                        1U};
-
-    cosineCrossSimilarityKernel<kThreadReductionType,
-                                BLOCK_TILE_SIZE_X,
-                                BLOCK_TILE_SIZE_Y,
-                                BLOCK_TILE_SIZE_K,
-                                THREAD_TILE_X,
-                                THREAD_TILE_Y>
-      <<<grid_dim, block_dim>>>(castAsSpanOfSmallerType<internal::kBlockType, kThreadReductionType>(bitsOne),
-                                castAsSpanOfSmallerType<internal::kBlockType, kThreadReductionType>(bitsTwo),
-                                numBitsPerMolecule,
-                                toSpan(results),
-                                offset);
+    launchOverRowTiles((static_cast<unsigned int>(n) + BLOCK_TILE_SIZE_X - 1U) / (BLOCK_TILE_SIZE_X),
+                       (static_cast<unsigned int>(m) + BLOCK_TILE_SIZE_Y - 1U) / (BLOCK_TILE_SIZE_Y),
+                       [&](const dim3 grid_dim, const unsigned int rowTileOffset) {
+                         cosineCrossSimilarityKernel<kThreadReductionType,
+                                                     BLOCK_TILE_SIZE_X,
+                                                     BLOCK_TILE_SIZE_Y,
+                                                     BLOCK_TILE_SIZE_K,
+                                                     THREAD_TILE_X,
+                                                     THREAD_TILE_Y><<<grid_dim, block_dim>>>(
+                           castAsSpanOfSmallerType<internal::kBlockType, kThreadReductionType>(bitsOne),
+                           castAsSpanOfSmallerType<internal::kBlockType, kThreadReductionType>(bitsTwo),
+                           numBitsPerMolecule,
+                           toSpan(results),
+                           offset,
+                           rowTileOffset);
+                       });
   }
 
   cudaCheckError(cudaGetLastError());
@@ -762,17 +800,18 @@ void launchCrossCosineSimilarity(const cuda::std::span<const std::uint32_t> bits
     constexpr unsigned int NUM_THREADS_PER_BLOCK{32 * NUM_WARP_X * NUM_WARP_Y};
 
     dim3 const block_dim{NUM_THREADS_PER_BLOCK, 1U, 1U};
-    dim3 const grid_dim{(static_cast<unsigned int>(n) + BLOCK_TILE_SIZE_X - 1U) / (BLOCK_TILE_SIZE_X),
-                        (static_cast<unsigned int>(m) + BLOCK_TILE_SIZE_Y - 1U) / (BLOCK_TILE_SIZE_Y),
-                        1U};
-
-    cosineCrossSimilarityKernel<std::uint32_t,
-                                BLOCK_TILE_SIZE_X,
-                                BLOCK_TILE_SIZE_Y,
-                                BLOCK_TILE_SIZE_K,
-                                NUM_WARP_X,
-                                NUM_WARP_Y>
-      <<<grid_dim, block_dim, 0, stream>>>(bitsOne, bitsTwo, numBitsPerMolecule, results, offset);
+    launchOverRowTiles(
+      (static_cast<unsigned int>(n) + BLOCK_TILE_SIZE_X - 1U) / (BLOCK_TILE_SIZE_X),
+      (static_cast<unsigned int>(m) + BLOCK_TILE_SIZE_Y - 1U) / (BLOCK_TILE_SIZE_Y),
+      [&](const dim3 grid_dim, const unsigned int rowTileOffset) {
+        cosineCrossSimilarityKernel<std::uint32_t,
+                                    BLOCK_TILE_SIZE_X,
+                                    BLOCK_TILE_SIZE_Y,
+                                    BLOCK_TILE_SIZE_K,
+                                    NUM_WARP_X,
+                                    NUM_WARP_Y>
+          <<<grid_dim, block_dim, 0, stream>>>(bitsOne, bitsTwo, numBitsPerMolecule, results, offset, rowTileOffset);
+      });
   } else {
     constexpr unsigned int BLOCK_TILE_SIZE_X{64U};
     constexpr unsigned int BLOCK_TILE_SIZE_Y{128U};
@@ -792,17 +831,18 @@ void launchCrossCosineSimilarity(const cuda::std::span<const std::uint32_t> bits
     static_assert(BLOCK_TILE_SIZE_K * BLOCK_TILE_SIZE_Y % NUM_THREADS_PER_BLOCK == 0U);
 
     dim3 const block_dim{NUM_THREADS_PER_BLOCK, 1U, 1U};
-    dim3 const grid_dim{(static_cast<unsigned int>(n) + BLOCK_TILE_SIZE_X - 1U) / (BLOCK_TILE_SIZE_X),
-                        (static_cast<unsigned int>(m) + BLOCK_TILE_SIZE_Y - 1U) / (BLOCK_TILE_SIZE_Y),
-                        1U};
-
-    cosineCrossSimilarityKernel<std::uint32_t,
-                                BLOCK_TILE_SIZE_X,
-                                BLOCK_TILE_SIZE_Y,
-                                BLOCK_TILE_SIZE_K,
-                                THREAD_TILE_X,
-                                THREAD_TILE_Y>
-      <<<grid_dim, block_dim, 0, stream>>>(bitsOne, bitsTwo, numBitsPerMolecule, results, offset);
+    launchOverRowTiles(
+      (static_cast<unsigned int>(n) + BLOCK_TILE_SIZE_X - 1U) / (BLOCK_TILE_SIZE_X),
+      (static_cast<unsigned int>(m) + BLOCK_TILE_SIZE_Y - 1U) / (BLOCK_TILE_SIZE_Y),
+      [&](const dim3 grid_dim, const unsigned int rowTileOffset) {
+        cosineCrossSimilarityKernel<std::uint32_t,
+                                    BLOCK_TILE_SIZE_X,
+                                    BLOCK_TILE_SIZE_Y,
+                                    BLOCK_TILE_SIZE_K,
+                                    THREAD_TILE_X,
+                                    THREAD_TILE_Y>
+          <<<grid_dim, block_dim, 0, stream>>>(bitsOne, bitsTwo, numBitsPerMolecule, results, offset, rowTileOffset);
+      });
   }
 
   cudaCheckError(cudaGetLastError());
