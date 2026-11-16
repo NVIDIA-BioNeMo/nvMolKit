@@ -30,6 +30,7 @@
 #include <unordered_set>
 
 #include "src/utils/nvtx.h"
+#include "src/utils/openmp_helpers.h"
 #include "versions.h"
 
 namespace nvMolKit {
@@ -720,11 +721,17 @@ TFDSystemHost buildTFDSystem(const std::vector<const RDKit::ROMol*>& mols, const
   // This is the expensive part (RDKit fingerprinting, SMARTS matching, etc.)
   std::vector<MolExtraction> extractions(N);
   {
-    ScopedNvtxRange buildRange("Parallel RDKit extraction", NvtxColor::kCyan);
+    ScopedNvtxRange                 buildRange("Parallel RDKit extraction", NvtxColor::kCyan);
+    detail::OpenMPExceptionRegistry exceptionHandler;
 #pragma omp parallel for schedule(dynamic)
     for (int i = 0; i < N; ++i) {
-      extractions[i] = extractMolData(*mols[i], options);
+      try {
+        extractions[i] = extractMolData(*mols[i], options);
+      } catch (...) {
+        exceptionHandler.store(std::current_exception());
+      }
     }
+    exceptionHandler.rethrow();
   }
 
   // ---- Compute global offsets (sequential, ~O(N) with tiny per-element cost) ----
