@@ -26,7 +26,7 @@ from rdkit import Chem
 from rdkit.Chem import rdDistGeom
 
 from nvmolkit.batchedForcefield import MMFFBatchedForcefield, UFFBatchedForcefield
-from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions
+from nvmolkit.types import CoordinateOutput, Device3DResult, FireOptions, HardwareOptions
 
 
 def make_embedded_mol(smiles: str, num_confs: int = 1, seed: int = 0xC0FFEE):
@@ -120,3 +120,25 @@ def test_minimize_device_rejects_cross_gpu_target(ff_cls, two_mols):
         ff = ff_cls(two_mols)
         with pytest.raises(Exception, match="does not support target_gpu"):
             ff.minimize(maxIters=5, output=CoordinateOutput.DEVICE, target_gpu=1)
+
+
+@pytest.mark.parametrize("ff_cls", [MMFFBatchedForcefield, UFFBatchedForcefield])
+def test_minimize_device_multi_batch_keeps_input_order(ff_cls):
+    mols = [make_embedded_mol("CCCCO", num_confs=12, seed=1), make_embedded_mol("CCOCC", num_confs=9, seed=2)]
+    hardware = HardwareOptions(batchSize=4, batchesPerGpu=2, preprocessingThreads=3)
+
+    mols_host = [Chem.Mol(m) for m in mols]
+    ff_host = ff_cls(mols_host, hardwareOptions=hardware)
+    energies_host, _ = ff_host.minimize(maxIters=20)
+
+    ff_device = ff_cls([Chem.Mol(m) for m in mols], hardwareOptions=hardware)
+    result = ff_device.minimize(maxIters=20, output=CoordinateOutput.DEVICE)
+    torch.cuda.synchronize()
+
+    assert result.energies.torch().tolist() == pytest.approx(_flatten(energies_host), abs=1e-3)
+    assert _flatten(ff_device.compute_energy()) == pytest.approx(_flatten(energies_host), abs=1e-3)
+    per_molecule = result.per_molecule()
+    for mol_idx, mol in enumerate(mols_host):
+        for conf_idx, conf in enumerate(mol.GetConformers()):
+            expected = torch.tensor(conf.GetPositions(), dtype=torch.float64)
+            torch.testing.assert_close(per_molecule[mol_idx][conf_idx].cpu(), expected, atol=1e-3, rtol=0)
