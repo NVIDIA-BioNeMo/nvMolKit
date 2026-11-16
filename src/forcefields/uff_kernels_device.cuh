@@ -481,7 +481,8 @@ __device__ __forceinline__ void uffInversionGrad(const auto* pos,
   const real sinThetaSq = real{1.0} - cosTheta * cosTheta;
   const real sinTheta   = NVMOLKIT_FMAX(NVMOLKIT_SQRT(sinThetaSq), real{1.0e-8});
 
-  const real dE_dW = -forceConstant * (C1 * cosY - real{4.0} * C2 * cosY * sinY);
+  // RDKit releases before 2026.03.2 have the sign of the C2 term inverted (fixed in RDKit PR 9228).
+  const real dE_dW = -forceConstant * (C1 * cosY + real{4.0} * C2 * cosY * sinY);
   real       t1x, t1y, t1z, t2x, t2y, t2z, t3x, t3y, t3z;
   crossProduct(rJLx, rJLy, rJLz, rJKx, rJKy, rJKz, t1x, t1y, t1z);
   crossProduct(rJIx, rJIy, rJIz, rJLx, rJLy, rJLz, t2x, t2y, t2z);

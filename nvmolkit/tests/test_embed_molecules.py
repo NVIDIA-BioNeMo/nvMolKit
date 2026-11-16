@@ -594,6 +594,25 @@ def test_embed_molecules_device_output_returns_device3d_no_writeback(precision):
     assert result.converged is None
 
 
+def test_embed_molecules_device_output_multi_batch_is_in_conformer_order():
+    mols = [Chem.AddHs(Chem.MolFromSmiles(smiles)) for smiles in ["CCCCO", "CCOCC", "c1ccccc1O"]]
+    params = EmbedParameters()
+    params.randomSeed = 7
+    hardware = HardwareOptions(batchSize=7, batchesPerGpu=3, preprocessingThreads=4)
+
+    result = embed.EmbedMolecules(
+        mols, params, confsPerMolecule=12, hardwareOptions=hardware, output=CoordinateOutput.DEVICE
+    )
+    torch.cuda.synchronize()
+
+    labels = list(zip(result.mol_indices.torch().tolist(), result.conf_indices.torch().tolist()))
+    assert labels == sorted(labels)
+    dense = result.dense().values
+    for mol_idx, confs in enumerate(result.per_molecule()):
+        for conf_idx, conf in enumerate(confs):
+            assert torch.equal(conf, dense[mol_idx, conf_idx, : conf.shape[0]])
+
+
 def test_embed_molecules_device_output_empty_input_raises():
     params = EmbedParameters()
     params.useRandomCoords = True

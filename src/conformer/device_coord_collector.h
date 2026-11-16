@@ -88,7 +88,8 @@ struct DeviceCoordCollectorCap {
  * Concatenates per-thread positions onto @p targetGpu using @ref copyDeviceToDeviceAsync and
  * computes CSR `atomStarts`. Per-molecule `confIndices` are taken from @ref DeviceCoordCollector::confIds
  * when populated and otherwise assigned deterministically by walking partials in the supplied order
- * and counting per molecule. The result's `energies` / `converged` buffers are allocated and
+ * and counting per molecule. Conformers in the result are ordered by (molecule index, conformer index), independent
+ * of the order batches were collected in. The result's `energies` / `converged` buffers are allocated and
  * concatenated only when at least one collector populates them. All resulting buffers are
  * allocated on @p targetGpu and bound to the default stream of that GPU before returning.
  *

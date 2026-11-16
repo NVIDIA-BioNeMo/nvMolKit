@@ -216,6 +216,120 @@ TEST(EmbedMoleculesDeviceOutput, FinalizeKeepsLowestAttemptIdsPerMolecule) {
   EXPECT_EQ(kept, expected);
 }
 
+TEST(EmbedMoleculesDeviceOutput, FinalizeOrdersByMoleculeAndConformer) {
+  // Two collectors hold interleaved batches of (molecule, conformer) pairs, as when batches finish out of input order.
+  // The result must be in (molecule, conformer) order, with energies and convergence flags moving with their
+  // conformers. One-atom conformers carry 10 * mol + conf as the x coordinate and the energy.
+  const WithDevice withDevice(0);
+  ScopedStream     streamA;
+  ScopedStream     streamB;
+
+  const auto fill =
+    [](detail::DeviceCoordCollector& collector, cudaStream_t stream, const std::vector<std::array<int, 2>>& molConfs) {
+      collector.gpuId  = 0;
+      collector.stream = stream;
+      collector.positions.setStream(stream);
+      collector.energies.setStream(stream);
+      collector.converged.setStream(stream);
+      std::vector<double> positions;
+      std::vector<double> energies;
+      std::vector<int8_t> converged;
+      for (const auto& [mol, conf] : molConfs) {
+        positions.insert(positions.end(), {10.0 * mol + conf, 0.0, 0.0});
+        energies.push_back(10.0 * mol + conf);
+        converged.push_back(static_cast<int8_t>(conf % 2));
+        collector.molIds.push_back(mol);
+        collector.confIds.push_back(conf);
+      }
+      collector.positions.resize(positions.size());
+      collector.positions.copyFromHost(positions);
+      collector.energies.resize(energies.size());
+      collector.energies.copyFromHost(energies);
+      collector.converged.resize(converged.size());
+      collector.converged.copyFromHost(converged);
+      cudaCheckError(cudaStreamSynchronize(stream));
+      collector.atomCounts.assign(molConfs.size(), 1);
+    };
+  std::vector<detail::DeviceCoordCollector> collectors(2);
+  fill(collectors[0],
+       streamA.stream(),
+       {
+         {0, 2},
+         {0, 3},
+         {1, 0}
+  });
+  fill(collectors[1],
+       streamB.stream(),
+       {
+         {0, 0},
+         {0, 1},
+         {1, 1}
+  });
+
+  const auto result     = detail::finalizeOnTarget(collectors, /*targetGpu=*/0, /*nMols=*/2);
+  const auto positions  = downloadDeviceVector(result.positions);
+  const auto molIndices = downloadDeviceVector(result.molIndices);
+  const auto confIdx    = downloadDeviceVector(result.confIndices);
+  const auto energies   = downloadDeviceVector(result.energies);
+  const auto converged  = downloadDeviceVector(result.converged);
+
+  const std::vector<int32_t> expectedMols  = {0, 0, 0, 0, 1, 1};
+  const std::vector<int32_t> expectedConfs = {0, 1, 2, 3, 0, 1};
+  EXPECT_EQ(molIndices, expectedMols);
+  EXPECT_EQ(confIdx, expectedConfs);
+  ASSERT_EQ(positions.size(), 18u);
+  ASSERT_EQ(energies.size(), 6u);
+  ASSERT_EQ(converged.size(), 6u);
+  for (size_t i = 0; i < expectedMols.size(); ++i) {
+    EXPECT_EQ(positions[i * 3], 10.0 * expectedMols[i] + expectedConfs[i]) << "conformer " << i;
+    EXPECT_EQ(energies[i], 10.0 * expectedMols[i] + expectedConfs[i]) << "conformer " << i;
+    EXPECT_EQ(converged[i], expectedConfs[i] % 2) << "conformer " << i;
+  }
+}
+
+TEST(EmbedMoleculesDeviceOutput, FinalizeOrdersAttemptsByRank) {
+  // Without a cap nothing is dropped, but conformers must still come out ranked by attempt ID.
+  const WithDevice withDevice(0);
+  ScopedStream     streamA;
+  ScopedStream     streamB;
+
+  const auto fill = [](detail::DeviceCoordCollector& collector,
+                       cudaStream_t                  stream,
+                       const std::vector<int>&       molIds,
+                       const std::vector<int>&       attemptIds) {
+    collector.gpuId  = 0;
+    collector.stream = stream;
+    collector.positions.setStream(stream);
+    std::vector<double> positions;
+    for (size_t i = 0; i < attemptIds.size(); ++i) {
+      positions.insert(positions.end(), {10.0 * molIds[i] + attemptIds[i], 0.0, 0.0});
+    }
+    collector.positions.resize(positions.size());
+    collector.positions.copyFromHost(positions);
+    cudaCheckError(cudaStreamSynchronize(stream));
+    collector.atomCounts.assign(attemptIds.size(), 1);
+    collector.molIds     = molIds;
+    collector.attemptIds = attemptIds;
+  };
+  std::vector<detail::DeviceCoordCollector> collectors(2);
+  fill(collectors[0], streamA.stream(), {1, 0, 0}, {0, 3, 1});
+  fill(collectors[1], streamB.stream(), {0, 1, 0}, {2, 1, 0});
+
+  const auto result     = detail::finalizeOnTarget(collectors, /*targetGpu=*/0, /*nMols=*/2);
+  const auto positions  = downloadDeviceVector(result.positions);
+  const auto molIndices = downloadDeviceVector(result.molIndices);
+  const auto confIdx    = downloadDeviceVector(result.confIndices);
+
+  const std::vector<int32_t> expectedMols  = {0, 0, 0, 0, 1, 1};
+  const std::vector<int32_t> expectedConfs = {0, 1, 2, 3, 0, 1};
+  EXPECT_EQ(molIndices, expectedMols);
+  EXPECT_EQ(confIdx, expectedConfs);
+  ASSERT_EQ(positions.size(), 18u);
+  for (size_t i = 0; i < expectedMols.size(); ++i) {
+    EXPECT_EQ(positions[i * 3], 10.0 * expectedMols[i] + expectedConfs[i]) << "conformer " << i;
+  }
+}
+
 TEST(EmbedMoleculesDeviceOutput, MultipleMoleculesProduceCorrectIndexing) {
   // Two distinct molecules in one batch. The CSR output must group conformers by global
   // mol index and report the right atom counts; the actual positions are produced by

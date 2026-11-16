@@ -17,7 +17,8 @@
 #
 # Sources of truth: kuelumbus/rdkit-pypi tag list and that tag's conanfile.py.
 #
-# Python coverage policy: target the latest four CPython minors (3.11-3.14).
+# Python coverage policy: CPython 3.11-3.14 for every RDKit version, plus 3.15
+# for the RDKit versions that have a cp315 wheel on PyPI (2026.9.2 onward).
 # RDKit coverage policy: all patch releases in the latest two release series,
 # plus the latest patch release of the preceding series.
 # 2026.9.1 is excluded: its installed development headers are missing or
@@ -62,4 +63,4 @@
 "2026.9.2":
   rdkit_pypi_tag: "2026.09.2"
   boost_version: "1.85.0"
-  python_versions: ["3.11", "3.12", "3.13", "3.14"]
+  python_versions: ["3.11", "3.12", "3.13", "3.14", "3.15"]

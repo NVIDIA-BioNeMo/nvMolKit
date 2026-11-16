@@ -24,6 +24,7 @@
 #endif
 
 #include "src/utils/nvtx.h"
+#include "src/utils/openmp_helpers.h"
 
 namespace nvMolKit {
 
@@ -208,13 +209,19 @@ std::vector<std::vector<double>> TFDCpuGenerator::GetTFDMatrices(const std::vect
                                                                  const TFDComputeOptions&                options) {
   ScopedNvtxRange range("CPU: GetTFDMatrices (" + std::to_string(mols.size()) + " mols)", NvtxColor::kGreen);
   std::vector<std::vector<double>> results(mols.size());
+  detail::OpenMPExceptionRegistry  exceptionHandler;
 
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic)
 #endif
   for (size_t i = 0; i < mols.size(); ++i) {
-    results[i] = GetTFDMatrix(*mols[i], options);
+    try {
+      results[i] = GetTFDMatrix(*mols[i], options);
+    } catch (...) {
+      exceptionHandler.store(std::current_exception());
+    }
   }
+  exceptionHandler.rethrow();
 
   return results;
 }
