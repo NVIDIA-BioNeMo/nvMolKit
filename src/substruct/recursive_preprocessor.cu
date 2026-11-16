@@ -264,7 +264,7 @@ void RecursivePatternPreprocessor::preprocessMiniBatch(
       const BatchedPatternEntry* patternEntriesDevice =
         leafSubpatterns_.allQueriesPatternsAtDepthDevice[currentDepth].data() + patternStart;
 
-      const int    buffersPerBlock = gsiBuffersPerBlock;
+      const int    buffersPerBlock = (algorithm == SubstructAlgorithm::GSI) ? gsiBuffersPerBlock : 0;
       const size_t overflowNeeded  = numBlocksInSubBatch * buffersPerBlock * kOverflowEntriesPerBuffer;
 
       if (scratch.overflow.size() < overflowNeeded) {
@@ -432,7 +432,7 @@ void preprocessRecursiveSmarts(SubstructTemplateConfig           templateConfig,
       }
       prepareRange.pop();
 
-      const int    buffersPerBlock = gsiBuffersPerBlock;
+      const int    buffersPerBlock = (algorithm == SubstructAlgorithm::GSI) ? gsiBuffersPerBlock : 0;
       const size_t overflowNeeded  = numBlocksInSubBatch * buffersPerBlock * kOverflowEntriesPerBuffer;
 
       if (scratch.overflow.size() < overflowNeeded) {
