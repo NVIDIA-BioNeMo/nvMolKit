@@ -1406,3 +1406,15 @@ def test_query_over_atom_limit_is_rejected(oversized):
 
     with pytest.raises(RuntimeError, match="exceeds the maximum of 64"):
         countSubstructMatches(targets, [largest, Chem.MolFromSmarts(oversized)])
+
+
+@pytest.mark.parametrize("algorithm", ["gsi", "dfs"])
+def test_zero_atom_query_matches_nothing(algorithm):
+    """A query without atoms matches nothing, like RDKit."""
+    targets = [Chem.MolFromSmiles(smiles) for smiles in ["CCO", "c1ccccc1O", "CC(=O)N"]]
+    queries = [Chem.MolFromSmarts(smarts) for smarts in ["", "CO"]]
+
+    counts = countSubstructMatches(targets, queries, config=SubstructSearchConfig(algorithm=algorithm))
+
+    expected = [[len(target.GetSubstructMatches(query, uniquify=False)) for query in queries] for target in targets]
+    assert counts.tolist() == expected

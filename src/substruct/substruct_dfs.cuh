@@ -337,7 +337,8 @@ __device__ void dfsSearchPair(const TargetMoleculeView&                       ta
     }
   };
 
-  if (numQueryAtoms > numTargetAtoms) {
+  // A query without atoms matches nothing; it would leave the search no terminal depth.
+  if (numQueryAtoms == 0 || numQueryAtoms > numTargetAtoms) {
     writeEmptyResult();
     return;
   }
