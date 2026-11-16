@@ -43,3 +43,15 @@ TEST(CudaErrorCheck, NoThrowOnGoodCodeNoThrow) {
 TEST(CudaErrorCheck, NoThrowOnBadCodeNoThrow) {
   cudaCheckErrorNoThrow(cudaErrorInvalidValue);
 }
+
+TEST(CudaErrorCheck, ThrowClearsLastError) {
+  void* ptr = nullptr;
+  EXPECT_THROW(cudaCheckError(cudaMalloc(&ptr, size_t{1} << 62)), CudaBadReturnCode);
+  EXPECT_EQ(cudaGetLastError(), cudaSuccess);
+}
+
+TEST(CudaErrorCheck, NoThrowClearsLastError) {
+  void* ptr = nullptr;
+  cudaCheckErrorNoThrow(cudaMalloc(&ptr, size_t{1} << 62));
+  EXPECT_EQ(cudaGetLastError(), cudaSuccess);
+}

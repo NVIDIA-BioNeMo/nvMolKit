@@ -39,6 +39,8 @@ template <bool throw_on_error>
 inline void checkReturnCode(cudaError_t code, [[maybe_unused]] const char* file, [[maybe_unused]] int line) {
   if (code != cudaSuccess) {
     fprintf(stderr, "Bad CUDA return code: %s %s %d\n", cudaGetErrorString(code), file, line);
+    // Reset the last-error state so a later cudaGetLastError() does not report this error again.
+    cudaGetLastError();
     if constexpr (throw_on_error) {
       throw CudaBadReturnCode(code);
     }

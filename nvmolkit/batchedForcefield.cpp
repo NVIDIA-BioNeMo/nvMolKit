@@ -103,6 +103,7 @@ bp::list nestedToList(const std::vector<std::vector<T>>& nested, Convert&& conve
 
 void throwIfCudaError(cudaError_t err, const std::string& context) {
   if (err != cudaSuccess) {
+    cudaGetLastError();
     throw std::runtime_error(context + ": " + cudaGetErrorString(err));
   }
 }
