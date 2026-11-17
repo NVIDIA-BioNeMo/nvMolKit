@@ -4,7 +4,8 @@ Clustering and diversity selection
 ==================================
 
 :mod:`nvmolkit.clustering` provides Butina and directed sphere exclusion (DISE) clustering, and
-:mod:`nvmolkit.pickers` provides Leader and MaxMin selection.
+:mod:`nvmolkit.pickers` provides Leader and MaxMin selection. :mod:`nvmolkit.clustering` also
+provides BitBIRCH and k-means clustering of packed fingerprints (see :ref:`fingerprint-clustering`).
 
 Matrix and fused forms
 ----------------------
@@ -107,3 +108,22 @@ classified differently. For Tanimoto distances this happens only at values that
 ``float32`` cannot represent exactly, such as 0.3; values such as 0.25 and 0.5
 give RDKit's results. A distance matrix built from nvMolKit similarities can
 differ from fused distances in the last ``float32`` bit.
+
+.. _fingerprint-clustering:
+
+BitBIRCH and k-means
+--------------------
+
+:func:`~nvmolkit.clustering.bitbirch` and :func:`~nvmolkit.clustering.kmeans`
+cluster fingerprints directly, without a distance matrix. BitBIRCH takes a
+similarity ``threshold`` and finds the number of clusters itself; k-means takes
+the number of clusters.
+
+.. code-block:: python
+
+    from nvmolkit.clustering import bitbirch, kmeans
+
+    cluster_ids, centroids = bitbirch(fingerprints, 0.65, return_centroids=True)
+
+    result = kmeans(fingerprints, n_clusters=3, metric="tanimoto", random_state=0)
+    labels = result.labels.torch()

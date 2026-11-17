@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.8.0 - 2026-11-19
+
+### Summary
+
+nvMolKit 0.8.0 adds BitBIRCH clustering, k-means clustering, and exact top-k nearest-neighbor search over fingerprints with `FingerprintSearchIndex`. It also adds support for RDKit 2026.09 in ETKDG conformer generation, including the ETKDGv4 preset and RDKit's all-in-one refinement, and adds DCLV surface and volume properties and EEM partial charges to the 3D descriptor API. This release supports RDKit 2025.09.6, 2026.03.1 through 2026.03.6, and 2026.09.2. It does not support RDKit 2026.09.1, whose installed development headers are incomplete ([rdkit/rdkit#9700](https://github.com/rdkit/rdkit/pull/9700)).
+
+### Contributors
+- Bradley Worley (@geekysuavo)
+- Eva Xue (@evasnow1992)
+- Kevin Boyd (@scal444)
+
+### Features
+- BitBIRCH clustering of fingerprints with `nvmolkit.clustering.bitbirch`, with optional cluster centroids ([#321](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/321))
+- k-means clustering of fingerprints with `nvmolkit.clustering.kmeans`, under Tanimoto or cosine similarity. Requires a GPU of compute capability 8.0 or newer ([#381](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/381))
+- Exact top-k fingerprint similarity search with `nvmolkit.similarity.FingerprintSearchIndex`, without forming the full similarity matrix ([#383](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/383), [#392](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/392))
+- ETKDGv4 support in `EmbedMolecules`, including its Gaussian experimental torsions. Requires RDKit 2026.09 or later ([#365](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/365), [#366](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/366))
+- RDKit's all-in-one ETKDG refinement (`useLegacyImplementation=False`) in `EmbedMolecules`, on RDKit 2026.03.4 and later ([#287](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/287))
+- DCLV 3D descriptors in `Calc3DProperties`: surface area, polar surface area, volume, van der Waals volume, polar volume, compactness, and packing density, matching RDKit's `DoubleCubicLatticeVolume` ([#373](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/373))
+- EEM partial charges in `Calc3DProperties` (`Property3D.EEM_CHARGES`), matching RDKit's `CalcEEMcharges` ([#376](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/376))
+- RDKit 2026.09 support, including its changes to ETKDG setup ([#364](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/364), [#384](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/384))
+
+### Performance Improvements
+- Fused Butina clustering is up to 2.4x faster, depending on the dataset ([#385](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/385))
+- GETAWAY 3D descriptors are faster, through a parallel implementation of the leverage clustering behind the ITH and ISH values ([#379](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/379))
+- Python wheels are smaller, because CUDA kernels are no longer duplicated across extension modules ([#390](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/390))
+
+### Breaking Changes
+- On RDKit 2026.09 and later, `EmbedMolecules` raises `ValueError` for `EmbedParameters` settings it does not implement, instead of ignoring them: `embedForceField=MMFF`, `onlyInitialEmbedding=True`, and `initialEmbeddingMode=INTERNAL_COORDINATE_EMBEDDING` ([#384](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/384))
+
+### Bug Fixes
+- Fix AAP similarity always using every CPU core for descriptor generation. The limit is now set with `AAPMetric(num_threads=...)` ([#368](https://github.com/NVIDIA-BioNeMo/nvMolKit/issues/368))
+- Fix a crash on Blackwell (sm_100) GPUs in `fused_butina`, and in `fused_leader` and `fused_maxmin` with the AAP metric ([#374](https://github.com/NVIDIA-BioNeMo/nvMolKit/pull/374))
+
 ## 0.7.0 - 2026-10-15
 
 ### Summary
