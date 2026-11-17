@@ -20,9 +20,12 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <set>
+#include <string>
+#include <thread>
 #include <vector>
 
 #include "src/substruct/molecules.h"
@@ -2120,6 +2123,46 @@ TEST_P(RecursiveSubstructureSearchTest, DeepRecursionMixedWithNormalQueries) {
       EXPECT_EQ(results.matchCount(t, q), static_cast<int>(rdkitMatches.size()))
         << "Target " << t << ", Query " << q << " should match RDKit results";
     }
+  }
+}
+
+TEST_P(RecursiveSubstructureSearchTest, ThreadsSharingOneQueryMatchRDKit) {
+  std::vector<std::unique_ptr<RDKit::ROMol>> targetMols;
+  std::vector<std::unique_ptr<RDKit::ROMol>> queryMols;
+  parseMolecules({"CCC(=O)O", "CC(C)C(=O)N", "OCCO", "CCN", "CC(=O)c1ccccc1"}, {"[$(C=O)]"}, targetMols, queryMols);
+  const auto targets = getRawPtrs(targetMols);
+  const auto queries = getRawPtrs(queryMols);
+
+  std::vector<int> expected;
+  for (const auto& target : targetMols) {
+    expected.push_back(static_cast<int>(getRDKitSubstructMatches(*target, *queryMols[0], false).size()));
+  }
+
+  constexpr int              kSearchesPerThread = 200;
+  std::array<int, 4>         wrongSearches{};
+  std::array<std::string, 4> errors;
+  std::vector<std::thread>   threads;
+  for (std::size_t thread = 0; thread < wrongSearches.size(); ++thread) {
+    threads.emplace_back([&, thread] {
+      try {
+        const ScopedStream stream;
+        for (int search = 0; search < kSearchesPerThread; ++search) {
+          std::vector<int> counts;
+          countSubstructMatches(targets, queries, counts, algorithm(), stream.stream());
+          wrongSearches[thread] += counts != expected;
+        }
+      } catch (const std::exception& e) {
+        errors[thread] = e.what();
+      }
+    });
+  }
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  for (std::size_t thread = 0; thread < wrongSearches.size(); ++thread) {
+    EXPECT_EQ(errors[thread], "");
+    EXPECT_EQ(wrongSearches[thread], 0);
   }
 }
 

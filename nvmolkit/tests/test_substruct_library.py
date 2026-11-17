@@ -153,6 +153,22 @@ def test_matches_rdkit_on_real_molecules_and_query_sets(one_hundred_mols, use_pa
         assert limited.result() == expected[:3], pattern
 
 
+def test_one_recursive_query_searched_by_two_libraries_at_once():
+    targets = [Chem.MolFromSmiles(smiles) for smiles in ["CCC(=O)O", "CC(C)C(=O)N", "OCCO", "CCN", "CC(=O)c1ccccc1"]]
+    libraries = [SubstructLibrary(usePatternFingerprints=False) for _ in range(2)]
+    for library in libraries:
+        library.addMols(targets)
+        library.finalize()
+
+    smarts = "[$(C=O)]"
+    reference = Chem.MolFromSmarts(smarts)
+    expected = [index for index, target in enumerate(targets) if target.HasSubstructMatch(reference)]
+    for _ in range(300):
+        query = Chem.MolFromSmarts(smarts)
+        futures = [library.getMatches(query) for library in libraries]
+        assert [future.result() for future in futures] == [expected, expected]
+
+
 @pytest.mark.parametrize("use_pattern_fingerprints", [False, True])
 def test_pattern_fingerprint_screening_preserves_exact_results(use_pattern_fingerprints):
     config = SubstructSearchConfig(workerThreads=1, preprocessingThreads=2)

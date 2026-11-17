@@ -13,6 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <GraphMol/ROMol.h>
 #include <GraphMol/SmilesParse/SmartsWrite.h>
 
 #include <algorithm>
@@ -53,8 +54,10 @@ void LeafSubpatterns::buildAllPatterns(const MoleculesHost& queriesHost) {
       }
 
       LeafSubpatternKey key{queryIdx, entry.patternId};
-      const std::string patternKey = std::to_string(entry.depth) + ':' + RDKit::MolToSmarts(*entry.queryMol);
-      const auto        uniqueIt   = uniquePatternIndices.find(patternKey);
+      // RDKit's SMARTS writer stores properties on its argument, and the pattern belongs to the caller's query.
+      const std::string patternKey =
+        std::to_string(entry.depth) + ':' + RDKit::MolToSmarts(RDKit::ROMol(*entry.queryMol));
+      const auto uniqueIt = uniquePatternIndices.find(patternKey);
       if (uniqueIt != uniquePatternIndices.end()) {
         patternIndexMap[key] = uniqueIt->second;
         continue;
