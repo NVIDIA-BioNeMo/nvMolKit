@@ -68,19 +68,6 @@ enum AtomQueryFlags : uint32_t {
 using AtomQuery = uint32_t;
 
 /**
- * @brief Bond query data for SMARTS bond queries.
- *
- * Stores the bond type to match and ring bond constraints.
- * For complex OR patterns (e.g., =,#,:), allowedBondTypes is a bitmask where
- * bit N is set if bond type N is allowed (types 0-15 supported).
- */
-struct BondQueryData {
-  uint8_t  bondType         = 0;  ///< 0 = any, 1 = single, 2 = double, 3 = triple, 12 = aromatic
-  uint8_t  queryFlags       = 0;  ///< BondQueryFlags bitmask
-  uint16_t allowedBondTypes = 0;  ///< Bitmask of allowed bond types when BondQueryUseBondMask is set
-};
-
-/**
  * @brief Information about a single recursive SMARTS pattern within a query.
  *
  * Each RecursivePatternEntry represents one $(...) pattern found in the SMARTS query.
