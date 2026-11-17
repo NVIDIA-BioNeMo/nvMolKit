@@ -467,3 +467,13 @@ class TestEdgeCases:
             tfd.GetTFDMatrix(no_conformers)
         with pytest.raises(RuntimeError, match="no conformers"):
             tfd.GetTFDMatrices([simple_mol_with_conformers, no_conformers])
+
+    def test_repeated_molecule_in_batch_raises(self, simple_mol_with_conformers):
+        """The same Mol object listed twice is rejected; a copy is accepted."""
+        mol = simple_mol_with_conformers
+
+        with pytest.raises(ValueError, match="same molecule object is listed at indices 0 and 1"):
+            tfd.GetTFDMatrices([mol, mol])
+
+        first, second = tfd.GetTFDMatrices([mol, Chem.Mol(mol)])
+        assert list(first) == list(second)

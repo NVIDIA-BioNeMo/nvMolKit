@@ -29,6 +29,7 @@
 #include <stdexcept>
 #include <unordered_set>
 
+#include "src/utils/duplicate_molecules.h"
 #include "src/utils/nvtx.h"
 #include "src/utils/openmp_helpers.h"
 #include "versions.h"
@@ -714,6 +715,8 @@ TFDSystemHost buildTFDSystem(const std::vector<const RDKit::ROMol*>& mols, const
   if (mols.size() == 1) {
     return buildTFDSystemImpl(*mols[0], options);
   }
+  // Extraction caches data on the molecule, so two threads must not work on the same one.
+  throwIfDuplicateMolecules(mols, "Pass a copy to include a molecule more than once.");
 
   int N = static_cast<int>(mols.size());
 
