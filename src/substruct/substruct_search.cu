@@ -1020,9 +1020,10 @@ namespace {
  * cyclohexane, matches (0,1,2) and (2,1,0) would be considered duplicates since
  * they both involve target atoms {0,1,2}.
  *
- * This is a postprocessing step applied after all matches are collected.
+ * This is a postprocessing step applied after all matches are collected. When maxMatches is positive, each
+ * pair keeps at most that many unique matches.
  */
-void uniquifyResults(SubstructSearchResults& results) {
+void uniquifyResults(SubstructSearchResults& results, const int maxMatches) {
   ScopedNvtxRange uniquifyRange("uniquifyResults");
 
   std::set<std::vector<int>>    seenSorted;
@@ -1047,6 +1048,9 @@ void uniquifyResults(SubstructSearchResults& results) {
       }
     }
 
+    if (maxMatches > 0 && uniqueMatches.size() > static_cast<size_t>(maxMatches)) {
+      uniqueMatches.resize(maxMatches);
+    }
     matchList = std::move(uniqueMatches);
   }
 }
@@ -1122,6 +1126,10 @@ bool getSubstructMatchesImpl(const std::vector<const RDKit::ROMol*>& targets,
   effectiveConfig.preprocessingThreads  = effectivePreprocessingThreads;
   effectiveConfig.workerThreads         = effectiveWorkerThreads;
   effectiveConfig.gpuIds                = gpuIds;
+  if (boolResults == nullptr && config.uniquify) {
+    // Duplicates must be removed before the match cap is applied, so collect every mapping and truncate afterwards.
+    effectiveConfig.maxMatches = 0;
+  }
 
   {
     ScopedNvtxRange setupRange("Prepare search context");
@@ -1250,7 +1258,7 @@ bool getSubstructMatchesImpl(const std::vector<const RDKit::ROMol*>& targets,
 
   // Create fallback queue to collect overflow and oversized targets.
   RDKitFallbackQueue
-    fallbackQueue(&targets, &queries, &results, &resultsMutex, config.maxMatches, boolResults, countResults);
+    fallbackQueue(&targets, &queries, &results, &resultsMutex, effectiveConfig.maxMatches, boolResults, countResults);
 
   // Enqueue all (target, query) pairs for queries that exceed recursion depth limit.
   {
@@ -1295,7 +1303,7 @@ bool getSubstructMatchesImpl(const std::vector<const RDKit::ROMol*>& targets,
   }
 
   if (!boolResults && config.uniquify) {
-    uniquifyResults(results);
+    uniquifyResults(results, config.maxMatches);
   }
   return screenedTargetIndices == selectedTargetIndices;
 }
