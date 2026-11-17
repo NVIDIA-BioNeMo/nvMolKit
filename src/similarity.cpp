@@ -156,11 +156,14 @@ std::vector<double> crossSimilarityImpl(const cuda::std::span<const std::uint32_
 
   std::vector<double> res(nFps1 * nFps2);
 
+  int callerDevice = 0;
+  cudaCheckError(cudaGetDevice(&callerDevice));
   const size_t                    nBatches = compat::ceil_div(nFps1, batchSizeA);
   detail::OpenMPExceptionRegistry exceptionHandler;
 #pragma omp parallel for num_threads(2) schedule(dynamic) default(shared)
   for (size_t batchIdx = 0; batchIdx < nBatches; ++batchIdx) {
     try {
+      const WithDevice           dev(callerDevice);
       const ScopedNvtxRange      batchRange("CrossSimilarity: batch");
       const int                  tid           = omp_get_thread_num();
       cudaStream_t               currentStream = rotBuffers.streamForThread(tid);
