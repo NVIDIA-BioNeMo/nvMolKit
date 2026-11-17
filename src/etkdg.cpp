@@ -357,6 +357,7 @@ std::optional<DeviceCoordResult> embedMolecules(const std::vector<RDKit::ROMol*>
                                                                              batchEargs,
                                                                              positionsScratch,
                                                                              activeScratch,
+                                                                             std::move(attemptIds),
                                                                              streamPtr));
         } else {
           stages.push_back(std::make_unique<detail::ETKDGCoordGenStage>(paramsCopy,
