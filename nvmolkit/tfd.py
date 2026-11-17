@@ -70,11 +70,8 @@ class _TFDGpuResult:
     def to_tensors(self) -> list[torch.Tensor]:
         """Extract as list of GPU tensors (no D2H copy).
 
-        The TFD kernel runs on the generator's private CUDA stream. Returned
-        tensors are valid for GPU-side ops ordered after this call on the same
-        stream. For CPU-side access (e.g. ``tensor.cpu()``, ``tensor.item()``,
-        ``tensor.numpy()``), call ``torch.cuda.synchronize()`` first to ensure
-        the kernel has completed.
+        The TFD kernels have finished by the time the result is returned, so
+        the tensors can be used on any stream or copied to the host directly.
         """
         n = len(self.output_starts) - 1
         all_values = self.tfd_values.torch()

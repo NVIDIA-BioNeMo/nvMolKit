@@ -227,6 +227,17 @@ class TestGpuResidentOutput:
             for t, l in zip(tensor.cpu().tolist(), lst):
                 assert abs(t - l) < 1e-4
 
+    def test_tensor_readable_after_return(self):
+        """Tensors returned for a large matrix can be copied to the host without a manual synchronize."""
+        mol = generate_conformers(Chem.MolFromSmiles("CCCCCCOCCN"), 8)
+        confs = [Chem.Conformer(conf) for conf in mol.GetConformers()]
+        while mol.GetNumConformers() < 1500:
+            mol.AddConformer(Chem.Conformer(confs[mol.GetNumConformers() % len(confs)]), assignId=True)
+        expected = tfd.GetTFDMatrix(mol, return_type="numpy")
+        for _ in range(3):
+            result = tfd.GetTFDMatrix(mol, return_type="tensor").cpu().numpy()
+            assert abs(result - expected).max() < 1e-4
+
 
 class TestCompareWithRDKit:
     """Tests comparing nvMolKit TFD with RDKit TFD."""
