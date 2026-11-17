@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "nvmolkit/array_helpers.h"
+#include "nvmolkit/boost_python_utils.h"
 #include "src/descriptors3d_mol.h"
 #include "src/precision/precision_mode.h"
 #include "src/utils/device.h"
@@ -66,7 +67,10 @@ bp::object calc3DPropertiesAs(const std::vector<const RDKit::ROMol*>&  mols,
                               cudaStream_t                             stream,
                               const nvMolKit::DeviceCoordView*         view,
                               const int                                preprocessingThreads) {
-  auto result = nvMolKit::calc3DProperties<Real>(mols, properties, options, stream, view, preprocessingThreads);
+  auto result = [&] {
+    const nvMolKit::ScopedGilRelease release;
+    return nvMolKit::calc3DProperties<Real>(mols, properties, options, stream, view, preprocessingThreads);
+  }();
 
   bp::dict output;
   for (const nvMolKit::Property3D property : properties) {
@@ -117,9 +121,11 @@ bp::object calc3DProperties(const bp::list&                mols,
     properties.push_back(nvMolKit::property3DFromName(bp::extract<std::string>(propertyNames[i])()));
   }
 
-  std::vector<const RDKit::ROMol*> molPtrs(bp::len(mols));
+  // Keeps every molecule alive while the GIL is released, even if the caller's list changes.
+  const bp::tuple                  heldMols(mols);
+  std::vector<const RDKit::ROMol*> molPtrs(bp::len(heldMols));
   for (size_t i = 0; i < molPtrs.size(); ++i) {
-    molPtrs[i] = bp::extract<const RDKit::ROMol*>(bp::object(mols[i]));
+    molPtrs[i] = bp::extract<const RDKit::ROMol*>(bp::object(heldMols[i]));
   }
 
   std::optional<nvMolKit::DeviceCoordView> view;

@@ -17,6 +17,7 @@
 
 #include <boost/python.hpp>
 #include <boost/python/manage_new_object.hpp>
+#include <mutex>
 
 #include "nvmolkit/array_helpers.h"
 #include "nvmolkit/boost_python_utils.h"
@@ -27,7 +28,7 @@ namespace {
 
 using namespace boost::python;
 
-std::vector<const RDKit::ROMol*> extractConstMolecules(const boost::python::list& mols) {
+std::vector<const RDKit::ROMol*> extractConstMolecules(const boost::python::object& mols) {
   auto nonConst = nvMolKit::extractMolecules(mols);
   return {nonConst.begin(), nonConst.end()};
 }
@@ -74,10 +75,19 @@ BOOST_PYTHON_MODULE(_TFD) {
         const std::string&         maxDev,
         int                        symmRadius,
         bool                       ignoreColinearBonds) -> boost::python::object {
-      auto molsVec = extractConstMolecules(mols);
-      auto options = buildOptions(useWeights, maxDev, symmRadius, ignoreColinearBonds);
+      // Keeps every molecule alive while the GIL is released, even if the caller's list changes.
+      const tuple heldMols(mols);
+      auto        molsVec = extractConstMolecules(heldMols);
+      auto        options = buildOptions(useWeights, maxDev, symmRadius, ignoreColinearBonds);
 
-      auto gpuResult = getGpuGenerator().GetTFDMatricesGpuBuffer(molsVec, options);
+      auto gpuResult = [&] {
+        const nvMolKit::ScopedGilRelease release;
+        // The shared generator reuses its stream and device buffers, so calls must not overlap once the GIL is
+        // released.
+        static std::mutex                generatorMutex;
+        const std::lock_guard            lock(generatorMutex);
+        return getGpuGenerator().GetTFDMatricesGpuBuffer(molsVec, options);
+      }();
 
       nvMolKit::ScopedNvtxRange range("GPU: C++ to Python tuple", nvMolKit::NvtxColor::kYellow);
       boost::python::list       outputStarts = nvMolKit::vectorToList(gpuResult.tfdOutputStarts);

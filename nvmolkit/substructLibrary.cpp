@@ -9,22 +9,14 @@
 #include <cstddef>
 #include <vector>
 
+#include "nvmolkit/boost_python_utils.h"
 #include "src/substruct/substruct_library.h"
 
 namespace {
 
 using namespace boost::python;
 
-class ScopedGilRelease {
- public:
-  ScopedGilRelease() : state_(PyEval_SaveThread()) {}
-  ScopedGilRelease(const ScopedGilRelease&)            = delete;
-  ScopedGilRelease& operator=(const ScopedGilRelease&) = delete;
-  ~ScopedGilRelease() { PyEval_RestoreThread(state_); }
-
- private:
-  PyThreadState* state_;
-};
+using nvMolKit::ScopedGilRelease;
 
 unsigned int addMolecule(nvMolKit::SubstructLibrary& library, const RDKit::ROMol& molecule) {
   const ScopedGilRelease release;

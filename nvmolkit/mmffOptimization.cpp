@@ -74,31 +74,35 @@ MinimizerKind parseMinimizerKind(const std::string& name) {
 BOOST_PYTHON_MODULE(_mmffOptimization) {
   bp::def(
     "MMFFOptimizeMoleculesConfs",
-    +[](const bp::list&                       molecules,
-        int                                   maxIters,
-        const bp::list&                       propertiesList,
-        const nvMolKit::BatchHardwareOptions& hardwareOptions,
-        const std::string&                    backend,
-        const std::string&                    minimizerKind,
-        const nvMolKit::FireOptions&          fireOptions,
-        const nvMolKit::PrecisionMode&        precision) -> bp::list {
-      auto       molsVec    = nvMolKit::extractMolecules(molecules);
-      const auto properties = nvMolKit::extractMMFFPropertiesList(propertiesList, static_cast<int>(molsVec.size()));
-      const auto kind       = parseMinimizerKind(minimizerKind);
-      const auto result     = kind == MinimizerKind::FIRE ?
-                                nvMolKit::MMFF::MMFFOptimizeMoleculesConfsFire(molsVec,
-                                                                           maxIters,
-                                                                           fireOptions,
-                                                                           properties,
-                                                                           hardwareOptions,
-                                                                           parseFireBackend(backend),
-                                                                           precision) :
-                                nvMolKit::MMFF::MMFFOptimizeMoleculesConfsBfgs(molsVec,
-                                                                           maxIters,
-                                                                           properties,
-                                                                           hardwareOptions,
-                                                                           parseBfgsBackend(backend),
-                                                                           precision);
+    +[](const bp::list&                      molecules,
+        int                                  maxIters,
+        const bp::list&                      propertiesList,
+        const nvMolKit::BatchHardwareOptions hardwareOptions,
+        const std::string&                   backend,
+        const std::string&                   minimizerKind,
+        const nvMolKit::FireOptions          fireOptions,
+        const nvMolKit::PrecisionMode&       precision) -> bp::list {
+      // Keeps every molecule alive while the GIL is released, even if the caller's list changes.
+      const bp::tuple heldMolecules(molecules);
+      auto            molsVec = nvMolKit::extractMolecules(heldMolecules);
+      const auto properties   = nvMolKit::extractMMFFPropertiesList(propertiesList, static_cast<int>(molsVec.size()));
+      const auto kind         = parseMinimizerKind(minimizerKind);
+      const auto result       = [&] {
+        const nvMolKit::ScopedGilRelease release;
+        return kind == MinimizerKind::FIRE ? nvMolKit::MMFF::MMFFOptimizeMoleculesConfsFire(molsVec,
+                                                                                            maxIters,
+                                                                                            fireOptions,
+                                                                                            properties,
+                                                                                            hardwareOptions,
+                                                                                            parseFireBackend(backend),
+                                                                                            precision) :
+                                                   nvMolKit::MMFF::MMFFOptimizeMoleculesConfsBfgs(molsVec,
+                                                                                            maxIters,
+                                                                                            properties,
+                                                                                            hardwareOptions,
+                                                                                            parseBfgsBackend(backend),
+                                                                                            precision);
+      }();
       return nvMolKit::vectorOfVectorsToList(result);
     },
     (bp::arg("molecules"),
@@ -125,40 +129,45 @@ BOOST_PYTHON_MODULE(_mmffOptimization) {
 
   bp::def(
     "MMFFOptimizeMoleculesConfsDevice",
-    +[](const bp::list&                       molecules,
-        int                                   maxIters,
-        const bp::list&                       propertiesList,
-        const nvMolKit::BatchHardwareOptions& hardwareOptions,
-        int                                   targetGpu,
-        const std::string&                    backend,
-        const std::string&                    minimizerKind,
-        const nvMolKit::FireOptions&          fireOptions,
-        const nvMolKit::PrecisionMode&        precision) -> bp::object {
-      auto       molsVec    = nvMolKit::extractMolecules(molecules);
-      const auto properties = nvMolKit::extractMMFFPropertiesList(propertiesList, static_cast<int>(molsVec.size()));
-      const auto kind       = parseMinimizerKind(minimizerKind);
-      auto       result     = kind == MinimizerKind::FIRE ?
-                                nvMolKit::MMFF::MMFFMinimizeMoleculesConfsFire(molsVec,
-                                                                     maxIters,
-                                                                     fireOptions,
-                                                                     properties,
-                                                                     /*constraints=*/{},
-                                                                     hardwareOptions,
-                                                                     parseFireBackend(backend),
-                                                                     nvMolKit::CoordinateOutput::DEVICE,
-                                                                     targetGpu,
-                                                                     precision) :
-                                nvMolKit::MMFF::MMFFMinimizeMoleculesConfs(molsVec,
-                                                                 maxIters,
-                                                                 /*gradTol=*/1e-4,
-                                                                 properties,
-                                                                 /*constraints=*/{},
-                                                                 hardwareOptions,
-                                                                 parseBfgsBackend(backend),
-                                                                 nvMolKit::CoordinateOutput::DEVICE,
-                                                                 targetGpu,
-                                                                 nullptr,
-                                                                 precision);
+    +[](const bp::list&                      molecules,
+        int                                  maxIters,
+        const bp::list&                      propertiesList,
+        const nvMolKit::BatchHardwareOptions hardwareOptions,
+        int                                  targetGpu,
+        const std::string&                   backend,
+        const std::string&                   minimizerKind,
+        const nvMolKit::FireOptions          fireOptions,
+        const nvMolKit::PrecisionMode&       precision) -> bp::object {
+      // Keeps every molecule alive while the GIL is released, even if the caller's list changes.
+      const bp::tuple heldMolecules(molecules);
+      auto            molsVec = nvMolKit::extractMolecules(heldMolecules);
+      const auto properties   = nvMolKit::extractMMFFPropertiesList(propertiesList, static_cast<int>(molsVec.size()));
+      const auto kind         = parseMinimizerKind(minimizerKind);
+      auto       result       = [&] {
+        const nvMolKit::ScopedGilRelease release;
+        return kind == MinimizerKind::FIRE ?
+                             nvMolKit::MMFF::MMFFMinimizeMoleculesConfsFire(molsVec,
+                                                                maxIters,
+                                                                fireOptions,
+                                                                properties,
+                                                                /*constraints=*/{},
+                                                                hardwareOptions,
+                                                                parseFireBackend(backend),
+                                                                nvMolKit::CoordinateOutput::DEVICE,
+                                                                targetGpu,
+                                                                precision) :
+                             nvMolKit::MMFF::MMFFMinimizeMoleculesConfs(molsVec,
+                                                            maxIters,
+                                                            /*gradTol=*/1e-4,
+                                                            properties,
+                                                            /*constraints=*/{},
+                                                            hardwareOptions,
+                                                            parseBfgsBackend(backend),
+                                                            nvMolKit::CoordinateOutput::DEVICE,
+                                                            targetGpu,
+                                                            nullptr,
+                                                            precision);
+      }();
       if (!result.device.has_value()) {
         throw std::runtime_error("MMFFMinimizeMoleculesConfs(DEVICE) returned no device result");
       }

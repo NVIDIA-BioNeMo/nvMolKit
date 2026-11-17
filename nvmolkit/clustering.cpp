@@ -136,7 +136,7 @@ FingerprintInput parseFingerprints(const boost::python::dict& fingerprints) {
 }
 
 //! Converts molecules for AAP, keeping None as nullptr so AAP can report every invalid input together.
-std::vector<const RDKit::ROMol*> moleculePointers(const boost::python::list& molecules) {
+std::vector<const RDKit::ROMol*> moleculePointers(const boost::python::object& molecules) {
   const auto                       count = boost::python::len(molecules);
   std::vector<const RDKit::ROMol*> result;
   result.reserve(count);
@@ -257,6 +257,8 @@ BOOST_PYTHON_MODULE(_clustering) {
                                          sinkhornIterations,
                                          sinkhornTemperature,
                                          numThreads};
+
+      const nvMolKit::ScopedGilRelease release;
       return nvMolKit::aapSimilarityGpu(left, right, options, *streamOpt);
     },
     (boost::python::arg("left"),
@@ -286,8 +288,14 @@ BOOST_PYTHON_MODULE(_clustering) {
                                          sinkhornIterations,
                                          sinkhornTemperature,
                                          numThreads};
-      auto                       result =
-        nvMolKit::aapLeader(moleculePointers(molecules), cutoff, options, pickSize, extractIndices(firstPicks), stream);
+      // Keeps every molecule alive while the GIL is released, even if the caller's list changes.
+      const boost::python::tuple heldMolecules(molecules);
+      const auto                 mols   = moleculePointers(heldMolecules);
+      const auto                 picks  = extractIndices(firstPicks);
+      auto                       result = [&] {
+        const nvMolKit::ScopedGilRelease release;
+        return nvMolKit::aapLeader(mols, cutoff, options, pickSize, picks, stream);
+      }();
       return wrapPickerResult(result);
     },
     (boost::python::arg("molecules"),
@@ -320,13 +328,14 @@ BOOST_PYTHON_MODULE(_clustering) {
                                          sinkhornIterations,
                                          sinkhornTemperature,
                                          numThreads};
-      auto                       result = nvMolKit::aapMaxMin(moleculePointers(molecules),
-                                        pickSize,
-                                        options,
-                                        extractIndices(firstPicks),
-                                        seed,
-                                        threshold,
-                                        stream);
+      // Keeps every molecule alive while the GIL is released, even if the caller's list changes.
+      const boost::python::tuple heldMolecules(molecules);
+      const auto                 mols   = moleculePointers(heldMolecules);
+      const auto                 picks  = extractIndices(firstPicks);
+      auto                       result = [&] {
+        const nvMolKit::ScopedGilRelease release;
+        return nvMolKit::aapMaxMin(mols, pickSize, options, picks, seed, threshold, stream);
+      }();
       return wrapPickerResult(result);
     },
     (boost::python::arg("molecules"),
@@ -359,10 +368,14 @@ BOOST_PYTHON_MODULE(_clustering) {
                                          sinkhornIterations,
                                          sinkhornTemperature,
                                          numThreads};
-      return wrapClusteringResult(
-        nvMolKit::aapDise(moleculePointers(molecules), cutoff, options, nearestAssignment, stream),
-        deviceOutput,
-        stream);
+      // Keeps every molecule alive while the GIL is released, even if the caller's list changes.
+      const boost::python::tuple heldMolecules(molecules);
+      const auto                 mols   = moleculePointers(heldMolecules);
+      auto                       result = [&] {
+        const nvMolKit::ScopedGilRelease release;
+        return nvMolKit::aapDise(mols, cutoff, options, nearestAssignment, stream);
+      }();
+      return wrapClusteringResult(result, deviceOutput, stream);
     },
     (boost::python::arg("molecules"),
      boost::python::arg("cutoff"),
