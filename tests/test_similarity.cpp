@@ -21,6 +21,7 @@
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <string>
 #include <tuple>
 
@@ -569,3 +570,42 @@ INSTANTIATE_TEST_SUITE_P(CrossCpuCosineSimilarity,
                                           testing::Values(1, 10, 100),
                                           testing::Values(128, 2048)),
                          CrossCpuCosTestName);
+
+TEST(CrossSimilarityLargeInputTest, MoreRowTilesThanGridYLimit) {
+  // CUDA caps grid Y at 65535 blocks. The tensor-op path uses 64-row tiles and the SIMT fallback 128-row tiles, so
+  // this size needs a second launch on both. Matches sit on the first row of each path's second launch and at the end.
+  constexpr size_t           kNumLarge  = 65535 * 128 + 2;
+  constexpr int              kNumBits   = 32;
+  constexpr std::uint32_t    kFp        = 0b1011;
+  const std::vector<size_t>  kMatchRows = {65535 * 64, 65535 * 128, kNumLarge - 1};
+  std::vector<std::uint32_t> largeHost(kNumLarge, 0);
+  for (const size_t row : kMatchRows) {
+    largeHost[row] = kFp;
+  }
+  const std::vector<std::uint32_t> smallHost = {kFp};
+
+  AsyncDeviceVector<std::uint32_t> largeGpu(largeHost.size());
+  AsyncDeviceVector<std::uint32_t> smallGpu(smallHost.size());
+  largeGpu.copyFromHost(largeHost);
+  smallGpu.copyFromHost(smallHost);
+  const cuda::std::span<const std::uint32_t> large(largeGpu.data(), largeGpu.size());
+  const cuda::std::span<const std::uint32_t> small(smallGpu.data(), smallGpu.size());
+
+  for (const auto metric : {SimMetric::Tanimoto, SimMetric::Cosine}) {
+    for (const bool largeFirst : {true, false}) {
+      const auto& first  = largeFirst ? large : small;
+      const auto& second = largeFirst ? small : large;
+      auto        got    = (metric == SimMetric::Tanimoto) ? crossTanimotoSimilarityGpuResult(first, second, kNumBits) :
+                                                             crossCosineSimilarityGpuResult(first, second, kNumBits);
+      std::vector<double> gotHost(got.size());
+      got.copyToHost(gotHost);
+      cudaDeviceSynchronize();
+      ASSERT_EQ(gotHost.size(), kNumLarge);
+      for (const size_t row : kMatchRows) {
+        EXPECT_EQ(gotHost[row], 1.0) << SimMetricToString(metric) << " largeFirst=" << largeFirst << " row=" << row;
+      }
+      EXPECT_EQ(std::count(gotHost.begin(), gotHost.end(), 0.0), kNumLarge - kMatchRows.size())
+        << SimMetricToString(metric) << " largeFirst=" << largeFirst;
+    }
+  }
+}
