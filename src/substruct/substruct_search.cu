@@ -272,7 +272,7 @@ void uploadAndLaunchMiniBatch(GpuExecutor&                        executor,
   // DFS keeps all per-pair state lane-local, so only GSI needs the ping-pong
   // partial-match overflow slab.
   cudaStream_t executorStream     = executor.stream();
-  const int    numBuffersPerBlock = (algorithm == SubstructAlgorithm::GSI) ? 2 : 1;
+  const int    numBuffersPerBlock = (algorithm == SubstructAlgorithm::GSI) ? 2 : 0;
 
   if (executor.plan.maxPipelineDepthInMiniBatch == 0) {
     ScopedNvtxRange nonRecursiveRange("Non-recursive path");
