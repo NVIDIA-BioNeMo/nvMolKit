@@ -278,12 +278,6 @@ __global__ void labelMatrixPaintKernelT(TargetMoleculesDeviceView  targets,
     }
   }
 
-  if (zeroBuffers.overflowFlagsSize > 0 && zeroBuffers.overflowFlags != nullptr) {
-    for (int i = tid; i < zeroBuffers.overflowFlagsSize; i += stride) {
-      zeroBuffers.overflowFlags[i] = 0;
-    }
-  }
-
   constexpr std::size_t kLabelMatrixBitsT = MaxTargetAtoms * MaxQueryAtoms;
   using LabelMatrixStorageT               = FlatBitVect<kLabelMatrixBitsT>;
 
@@ -466,9 +460,6 @@ __global__ void substructMatchKernelT(TargetMoleculesDeviceView                 
     __shared__ PartialMatchT<MaxQueryAtoms> gsiPartials[kMaxPartialsT * 2];
 
     uint8_t* pairOverflowFlag = results.overflowFlags ? &results.overflowFlags[miniBatchIdx] : nullptr;
-    if (pairOverflowFlag != nullptr && threadIdx.x == 0) {
-      *pairOverflowFlag = 0;
-    }
     gsiBFSSearchGPU<MaxTargetAtoms, MaxQueryAtoms, MaxBondsPerAtom>(target,
                                                                     query,
                                                                     labelMatrix,
@@ -526,7 +517,8 @@ __global__ void substructPaintKernelT(TargetMoleculesDeviceView     targets,
                                       PartialMatchT<MaxQueryAtoms>* overflowB,
                                       int                           overflowCapacity,
                                       const uint32_t*               labelMatrixBuffer,
-                                      int                           firstTargetIdx) {
+                                      int                           firstTargetIdx,
+                                      uint8_t*                      overflowFlags) {
   const int localTargetIdx  = blockIdx.x / numPatterns;
   const int targetIdx       = firstTargetIdx + localTargetIdx;
   const int localPatternIdx = blockIdx.x % numPatterns;
@@ -633,7 +625,11 @@ __global__ void substructPaintKernelT(TargetMoleculesDeviceView     targets,
       nullptr,
       0,
       0,
-      paintParams);
+      paintParams,
+      -1,
+      false,
+      nullptr,
+      overflowFlags ? &overflowFlags[batchLocalPairIdx] : nullptr);
   }
 }
 
@@ -817,7 +813,8 @@ __launch_bounds__(dfs::kBlockSize, dfs::minBlocksPerSM<MaxTargetAtoms, MaxQueryA
     PartialMatchT<MaxQ>*,                                                                    \
     int,                                                                                     \
     const uint32_t*,                                                                         \
-    int);
+    int,                                                                                     \
+    uint8_t*);
 
 // Target 32, Query 16
 INSTANTIATE_SUBSTRUCT_KERNELS(32, 16, 4)
@@ -1166,6 +1163,7 @@ void launchSubstructPaintKernelForConfig(SubstructAlgorithm         algorithm,
                                          int                        overflowCapacity,
                                          const uint32_t*            labelMatrixBuffer,
                                          int                        firstTargetIdx,
+                                         uint8_t*                   overflowFlags,
                                          cudaStream_t               stream) {
   constexpr int kBlockSize = getBlockSizeForConfig<MaxTargetAtoms>();
   switch (algorithm) {
@@ -1209,7 +1207,8 @@ void launchSubstructPaintKernelForConfig(SubstructAlgorithm         algorithm,
                                                reinterpret_cast<PartialMatchT<MaxQueryAtoms>*>(overflowB),
                                                overflowCapacity,
                                                labelMatrixBuffer,
-                                               firstTargetIdx);
+                                               firstTargetIdx,
+                                               overflowFlags);
       break;
   }
 }
@@ -1235,6 +1234,7 @@ void launchSubstructPaintKernel(SubstructTemplateConfig    config,
                                 int                        overflowCapacity,
                                 const uint32_t*            labelMatrixBuffer,
                                 int                        firstTargetIdx,
+                                uint8_t*                   overflowFlags,
                                 cudaStream_t               stream) {
   DISPATCH_BY_TQB_CONFIG(config,
                          launchSubstructPaintKernelForConfig,
@@ -1256,6 +1256,7 @@ void launchSubstructPaintKernel(SubstructTemplateConfig    config,
                          overflowCapacity,
                          labelMatrixBuffer,
                          firstTargetIdx,
+                         overflowFlags,
                          stream);
 }
 

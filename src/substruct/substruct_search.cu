@@ -287,6 +287,7 @@ void uploadAndLaunchMiniBatch(GpuExecutor&                        executor,
                                              maxMatchesToFind,
                                              ctx.countOnly);
     executor.deviceResults.setQueryAtomCounts(ctx.queryAtomCounts, ctx.numQueries);
+    executor.deviceResults.zeroOverflowFlags();
 
     launchLabelMatrixKernel(ctx.templateConfig,
                             targetsDevice.view<MoleculeType::Target>(),
@@ -328,6 +329,7 @@ void uploadAndLaunchMiniBatch(GpuExecutor&                        executor,
                                            maxMatchesToFind,
                                            ctx.countOnly);
   executor.deviceResults.setQueryAtomCounts(ctx.queryAtomCounts, ctx.numQueries);
+  executor.deviceResults.zeroOverflowFlags();
 
   cudaCheckError(cudaEventRecord(executor.allocDoneEvent.event(), executorStream));
 
@@ -498,9 +500,9 @@ void runnerWorkerPipelineUnified(int                                 workerIdx,
 
   auto accumulate = [&](GpuExecutor& executor, const ThreadWorkerContext& ctx, const PinnedHostBuffer& hostBuffer) {
     if (boolResults) {
-      accumulateMiniBatchResultsBoolean(executor, ctx, *boolResults, resultsMutex, hostBuffer);
+      accumulateMiniBatchResultsBoolean(executor, ctx, *boolResults, resultsMutex, hostBuffer, fallbackQueue);
     } else if (countResults) {
-      accumulateMiniBatchResultsCounts(executor, ctx, *countResults, resultsMutex, hostBuffer);
+      accumulateMiniBatchResultsCounts(executor, ctx, *countResults, resultsMutex, hostBuffer, fallbackQueue);
     } else {
       accumulateMiniBatchResults(executor, ctx, *results, resultsMutex, hostBuffer, fallbackQueue);
     }

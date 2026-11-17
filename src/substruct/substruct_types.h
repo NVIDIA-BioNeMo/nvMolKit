@@ -33,8 +33,6 @@ namespace nvMolKit {
 struct ZeroBuffersSpec {
   uint32_t* recursiveBits     = nullptr;
   int       recursiveBitsSize = 0;
-  uint8_t*  overflowFlags     = nullptr;
-  int       overflowFlagsSize = 0;
 };
 
 /**

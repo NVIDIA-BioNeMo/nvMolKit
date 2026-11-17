@@ -280,10 +280,8 @@ void RecursivePatternPreprocessor::preprocessMiniBatch(
 
       std::optional<ZeroBuffersSpec> zeroBuffers;
       if (isFirstLabelKernel) {
-        zeroBuffers = ZeroBuffersSpec{miniBatchResults.recursiveMatchBits(),
-                                      miniBatchSize * miniBatchResults.maxTargetAtoms(),
-                                      miniBatchResults.overflowFlags(),
-                                      miniBatchSize};
+        zeroBuffers =
+          ZeroBuffersSpec{miniBatchResults.recursiveMatchBits(), miniBatchSize * miniBatchResults.maxTargetAtoms()};
       }
       isFirstLabelKernel = false;
 
@@ -322,6 +320,7 @@ void RecursivePatternPreprocessor::preprocessMiniBatch(
                                  kOverflowEntriesPerBuffer,
                                  scratch.labelMatrixBuffer.data(),
                                  firstTargetInMiniBatch,
+                                 miniBatchResults.overflowFlags(),
                                  stream);
     }
 
@@ -455,10 +454,8 @@ void preprocessRecursiveSmarts(SubstructTemplateConfig           templateConfig,
 
       std::optional<ZeroBuffersSpec> zeroBuffers;
       if (isFirstLabelKernel) {
-        zeroBuffers = ZeroBuffersSpec{miniBatchResults.recursiveMatchBits(),
-                                      miniBatchSize * miniBatchResults.maxTargetAtoms(),
-                                      miniBatchResults.overflowFlags(),
-                                      miniBatchSize};
+        zeroBuffers =
+          ZeroBuffersSpec{miniBatchResults.recursiveMatchBits(), miniBatchSize * miniBatchResults.maxTargetAtoms()};
       }
       isFirstLabelKernel = false;
 
@@ -497,6 +494,7 @@ void preprocessRecursiveSmarts(SubstructTemplateConfig           templateConfig,
                                  kOverflowEntriesPerBuffer,
                                  scratch.labelMatrixBuffer.data(),
                                  firstTargetInMiniBatch,
+                                 miniBatchResults.overflowFlags(),
                                  stream);
     }
 
