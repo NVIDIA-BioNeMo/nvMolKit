@@ -561,17 +561,22 @@ AsyncDeviceVector<FlatBitVect<fpSize>> computeFingerprintsCuImpl(const std::vect
       exceptionRegistry.store(std::current_exception());
     }
   }
-  exceptionRegistry.rethrow();
   rangeParallel.pop();
 
-  // Make external stream wait on all per-thread work completion
+  // Make external stream wait on all per-thread work completion. This must happen before rethrowing a worker error,
+  // since freeing the output buffer on the external stream would otherwise race with kernels still writing to it.
   ScopedNvtxRange rangeJoin("MorganFPJoinWorkerStreams");
-  for (const auto& buf : threadBuffers) {
-    ScopedCudaEvent workDone;
-    cudaCheckError(cudaEventRecord(workDone.event(), buf.stream.stream()));
-    cudaCheckError(cudaStreamWaitEvent(stream, workDone.event(), 0));
+  try {
+    for (const auto& buf : threadBuffers) {
+      ScopedCudaEvent workDone;
+      cudaCheckError(cudaEventRecord(workDone.event(), buf.stream.stream()));
+      cudaCheckError(cudaStreamWaitEvent(stream, workDone.event(), 0));
+    }
+  } catch (...) {
+    exceptionRegistry.store(std::current_exception());
   }
   rangeJoin.pop();
+  exceptionRegistry.rethrow();
 
   return outputAccumulator;
 }

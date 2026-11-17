@@ -18,6 +18,7 @@
 #include <GraphMol/SmilesParse/SmilesParse.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <fstream>
 #include <memory>
 #include <tuple>
@@ -528,6 +529,39 @@ TEST(MorganFingerprintGpuTest, HighDegreeMoleculeUsesCpuFallback) {
     for (size_t bitId = 0; bitId < fpSize; ++bitId) {
       EXPECT_EQ(actual[molIdx][bitId], expected->getBit(bitId)) << "molecule " << molIdx << ", bit " << bitId;
     }
+  }
+}
+
+TEST(MorganFingerprintGpuTest, FailedCallDoesNotCorruptLaterResults) {
+  constexpr unsigned int              radius  = 3;
+  constexpr unsigned int              fpSize  = 2048;
+  constexpr size_t                    numMols = 16384;
+  // Long chains keep the GPU busy long enough for a premature free of the output to be observable.
+  const std::string                   smiles(100, 'C');
+  const std::unique_ptr<RDKit::ROMol> goodMol(RDKit::SmilesToMol(smiles));
+  const std::unique_ptr<RDKit::ROMol> unsanitizedMol(RDKit::SmilesToMol(smiles, 0, false));
+  const RDKit::ROMol                  emptyMol;
+  ASSERT_NE(goodMol, nullptr);
+  ASSERT_NE(unsanitizedMol, nullptr);
+
+  std::vector<const RDKit::ROMol*> failingMols(numMols, goodMol.get());
+  failingMols.front() = unsanitizedMol.get();
+  const std::vector<const RDKit::ROMol*> emptyMols(numMols, &emptyMol);
+
+  auto                                generator = nvMolKit::MorganFingerprintGenerator(radius, fpSize);
+  nvMolKit::FingerprintComputeOptions options;
+  options.backend       = nvMolKit::FingerprintComputeBackend::GPU;
+  options.numCpuThreads = 4;
+  for (int attempt = 0; attempt < 5; ++attempt) {
+    EXPECT_ANY_THROW(generator.GetFingerprintsGpuBuffer<fpSize>(failingMols, nullptr, options));
+    const auto results = generator.GetFingerprintsGpuBuffer<fpSize>(emptyMols, nullptr, options);
+    std::vector<nvMolKit::FlatBitVect<fpSize>> resultsHost(results.size());
+    results.copyToHost(resultsHost);
+    cudaDeviceSynchronize();
+    const nvMolKit::FlatBitVect<fpSize> emptyFp(false);
+    const auto                          numNonEmpty =
+      std::count_if(resultsHost.begin(), resultsHost.end(), [&](const auto& fp) { return !(fp == emptyFp); });
+    EXPECT_EQ(numNonEmpty, 0) << "attempt " << attempt;
   }
 }
 
