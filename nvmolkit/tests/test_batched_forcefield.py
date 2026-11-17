@@ -1052,3 +1052,83 @@ def test_uff_batched_minimize_multi_gpu_matches_single_gpu(precision):
         single_converged,
         _MINIMIZE_RUNS_TOLERANCE[precision],
     )
+
+
+@pytest.mark.parametrize("forcefield_type", ["MMFF", "UFF"])
+def test_batched_forcefield_constraint_anchors_hold_across_minimize_calls(forcefield_type):
+    mol = perturb_conformers(make_embedded_mol("CCCCO"), amplitude=0.5)
+    start = mol.GetConformer().GetPositions()
+
+    rd_mol = Chem.Mol(mol)
+    if forcefield_type == "MMFF":
+        rd_ff = make_rdkit_mmff_forcefield(rd_mol)
+        rd_ff.MMFFAddPositionConstraint(0, 0.0, 100.0)
+        rd_ff.MMFFAddDistanceConstraint(1, 4, True, 0.0, 0.0, 100.0)
+        ff_mol = Chem.Mol(mol)
+        ff = MMFFBatchedForcefield([ff_mol])
+    else:
+        rd_ff = make_rdkit_uff_forcefield(rd_mol)
+        rd_ff.UFFAddPositionConstraint(0, 0.0, 100.0)
+        rd_ff.UFFAddDistanceConstraint(1, 4, True, 0.0, 0.0, 100.0)
+        ff_mol = Chem.Mol(mol)
+        ff = UFFBatchedForcefield([ff_mol])
+    ff[0].add_position_constraint(0, 0.0, 100.0)
+    ff[0].add_distance_constraint(1, 4, True, 0.0, 0.0, 100.0)
+    rd_ff.Initialize()
+
+    for _ in range(20):
+        rd_ff.Minimize(maxIts=10)
+        energies, _ = ff.minimize(maxIters=10)
+
+    got = ff_mol.GetConformer().GetPositions()
+    want = rd_mol.GetConformer().GetPositions()
+    assert math.dist(got[0], start[0]) == pytest.approx(math.dist(want[0], start[0]), abs=0.02)
+    assert math.dist(got[1], got[4]) == pytest.approx(math.dist(want[1], want[4]), abs=0.02)
+
+    want_energy = rd_ff.CalcEnergy(got.reshape(-1).tolist())
+    assert energies[0][0] == pytest.approx(want_energy, rel=1e-4, abs=1e-4)
+    assert ff.compute_energy()[0][0] == pytest.approx(want_energy, rel=1e-4, abs=1e-4)
+
+
+@pytest.mark.parametrize("forcefield_type", ["MMFF", "UFF"])
+@pytest.mark.parametrize("change", ["add_constraint", "rebuild"])
+def test_batched_forcefield_constraint_anchors_survive_rebuild(forcefield_type, change):
+    mol = perturb_conformers(make_embedded_mol("CCCCO", num_confs=2), amplitude=0.5)
+    rd_mol = Chem.Mol(mol)
+    ff_mol = Chem.Mol(mol)
+    conf_ids = [conf.GetId() for conf in mol.GetConformers()]
+    if forcefield_type == "MMFF":
+        rd_ffs = [make_rdkit_mmff_forcefield(rd_mol, conf_id=cid) for cid in conf_ids]
+        rd_add_position = [rd_ff.MMFFAddPositionConstraint for rd_ff in rd_ffs]
+        rd_add_distance = [rd_ff.MMFFAddDistanceConstraint for rd_ff in rd_ffs]
+        ff = MMFFBatchedForcefield([ff_mol])
+    else:
+        rd_ffs = [make_rdkit_uff_forcefield(rd_mol, conf_id=cid) for cid in conf_ids]
+        rd_add_position = [rd_ff.UFFAddPositionConstraint for rd_ff in rd_ffs]
+        rd_add_distance = [rd_ff.UFFAddDistanceConstraint for rd_ff in rd_ffs]
+        ff = UFFBatchedForcefield([ff_mol])
+    for add in rd_add_position:
+        add(0, 0.0, 5.0)
+    ff[0].add_position_constraint(0, 0.0, 5.0)
+    for rd_ff in rd_ffs:
+        rd_ff.Initialize()
+
+    for _ in range(10):
+        for rd_ff in rd_ffs:
+            rd_ff.Minimize(maxIts=10)
+        ff.minimize(maxIters=10)
+        if change == "add_constraint":
+            for add in rd_add_distance:
+                add(1, 4, True, 0.0, 0.0, 5.0)
+            ff[0].add_distance_constraint(1, 4, True, 0.0, 0.0, 5.0)
+        else:
+            ff.rebuild()
+
+    energies = ff.compute_energy()[0]
+    for conf_idx, cid in enumerate(conf_ids):
+        start = mol.GetConformer(cid).GetPositions()
+        got = ff_mol.GetConformer(cid).GetPositions()
+        want = rd_mol.GetConformer(cid).GetPositions()
+        assert math.dist(got[0], start[0]) == pytest.approx(math.dist(want[0], start[0]), abs=0.02)
+        want_energy = rd_ffs[conf_idx].CalcEnergy(got.reshape(-1).tolist())
+        assert energies[conf_idx] == pytest.approx(want_energy, rel=1e-4, abs=1e-4)
