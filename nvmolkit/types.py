@@ -572,7 +572,7 @@ def _atom_row_index(
     if n_rows is not None:
         valid &= starts[1:] <= n_rows
     sizes = torch.where(valid, sizes, torch.zeros_like(sizes))
-    max_confs = int(torch.bincount(mols, minlength=n_mols).max().item()) if mols.numel() else 0
+    max_confs = int(confs.max().item()) + 1 if confs.numel() else 0
     max_atoms = int(sizes.max().item()) if sizes.numel() else 0
 
     conf_mask = torch.zeros((n_mols, max_confs), dtype=torch.bool, device=device)
