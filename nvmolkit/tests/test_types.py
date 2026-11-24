@@ -254,13 +254,12 @@ def test_device_3d_result_dense_distinguishes_per_mol_conformer_counts():
 
 
 def test_device_3d_result_dense_handles_non_contiguous_conf_indices():
-    """A molecule whose surviving conf_indices skip a value (e.g. a dropped
-    conformer upstream) must not crash or under-size the conformer axis.
+    """A molecule whose surviving conf_indices skip a value must not crash.
 
-    mol 0 keeps conf_indices 0 and 2 (conf 1 was dropped elsewhere), so its own
-    count is 2 but the largest conf_index it uses is 2. Sizing max_confs from
-    per-molecule counts instead of the actual conf_index range used to index
-    out of bounds here.
+    E.g. a dropped conformer upstream: mol 0 keeps conf_indices 0 and 2 (conf 1
+    was dropped elsewhere), so its own count is 2 but the largest conf_index it
+    uses is 2. Sizing max_confs from per-molecule counts instead of the actual
+    conf_index range used to index out of bounds here.
     """
     result = _make_device_3d_result(
         atom_counts_per_conformer=[2, 2, 3],
