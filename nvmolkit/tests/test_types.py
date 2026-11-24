@@ -253,6 +253,28 @@ def test_device_3d_result_dense_distinguishes_per_mol_conformer_counts():
     assert math.isnan(out.values[2, 2, 0, 0].item())
 
 
+def test_device_3d_result_dense_handles_non_contiguous_conf_indices():
+    """A molecule whose surviving conf_indices skip a value must not crash.
+
+    E.g. a dropped conformer upstream: mol 0 keeps conf_indices 0 and 2 (conf 1
+    was dropped elsewhere), so its own count is 2 but the largest conf_index it
+    uses is 2. Sizing max_confs from per-molecule counts instead of the actual
+    conf_index range used to index out of bounds here.
+    """
+    result = _make_device_3d_result(
+        atom_counts_per_conformer=[2, 2, 3],
+        mol_indices=[0, 0, 1],
+        n_mols=2,
+        conf_indices=[0, 2, 0],
+    )
+    out = result.dense()
+    torch.cuda.synchronize()
+
+    assert out.conf_mask.shape == (2, 3)
+    assert out.conf_mask[0].tolist() == [True, False, True]
+    assert out.conf_mask[1].tolist() == [True, False, False]
+
+
 def test_device_3d_result_dense_conf_mask_marks_failed_molecules():
     """A molecule with zero conformers gets a fully-False conf_mask row."""
     result = _make_device_3d_result(
